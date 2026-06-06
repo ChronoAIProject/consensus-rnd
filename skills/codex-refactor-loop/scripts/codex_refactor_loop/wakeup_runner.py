@@ -1417,8 +1417,9 @@ class WakeupRunner:
             if status == "applied":
                 if _is_remote_ci_red_dispatch(action):
                     continue
-                if self._applied_spawn_is_stale(action):
-                    self._append_pending_event(f"WAKEUP_RUNNER_STALE_SPAWN_LEDGER:{action_id}:target-log-absent")
+                stale_spawn_reason = self._applied_spawn_stale_reason(action)
+                if stale_spawn_reason:
+                    self._append_pending_event(f"WAKEUP_RUNNER_STALE_SPAWN_LEDGER:{action_id}:{stale_spawn_reason}")
                     continue
                 return True
             if status == "blocked" and _terminal_blocked_reason(str(row.get("reason") or "")):
@@ -1453,11 +1454,20 @@ class WakeupRunner:
                 attempts[key] = value
         return attempts
 
-    def _applied_spawn_is_stale(self, action: Mapping[str, Any]) -> bool:
+    def _applied_spawn_stale_reason(self, action: Mapping[str, Any]) -> str:
         if action.get("controller_action") != "spawn_codex_harness_background":
-            return False
+            return ""
         log = Path(str(action.get("log") or ""))
-        return not log.is_absolute() or not log.exists()
+        if not log.is_absolute() or not log.exists():
+            return "target-log-absent"
+        if is_implement_log(log):
+            state = classify_implement_attempt(repo_root=self.ctx.repo_root, log_path=log, command_runner=self.command_runner)
+            if state.redispatch:
+                return f"target-log-redispatchable:{state.reason}"
+            return ""
+        if _spawn_log_suppresses_retry(log):
+            return ""
+        return "target-log-terminal-failed"
 
     def _blocked(self, action: Mapping[str, Any], reason: str) -> RunnerResult:
         self._append_pending_event(f"WAKEUP_RUNNER_BLOCKED:{action.get('action_id', '')}:{reason}")
