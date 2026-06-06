@@ -412,6 +412,16 @@ def load_open_managed_work_snapshot(ctx: LoopContext) -> ManagedWorkSnapshotResu
     return ManagedWorkSnapshot(ctx).load()
 
 
+def invalidate_open_managed_work_snapshot(ctx: LoopContext) -> None:
+    """Drop the local read-only managed work cache after controller-owned GitHub writes."""
+    state_path = ctx.repo_root / STATE_RELATIVE_PATH
+    tmp_path = state_path.with_name(f".{state_path.name}.tmp.{os.getpid()}")
+    with contextlib.suppress(FileNotFoundError):
+        tmp_path.unlink()
+    with contextlib.suppress(FileNotFoundError):
+        state_path.unlink()
+
+
 def _ctx_host_env_int(ctx: LoopContext, name: str, default: int) -> int:
     try:
         return int(ctx.host_env.get(name, str(default)))
