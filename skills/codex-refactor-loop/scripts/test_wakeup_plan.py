@@ -1118,6 +1118,16 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         for name in restart_managed_daemon_names():
             (heartbeats / f"{name}.ts").write_text(now, encoding="utf-8")
 
+    def set_audit_fallback_enable(self, value: str) -> None:
+        host_env = self.repo / ".config" / "consensus-rnd" / "host.env"
+        lines = [
+            line
+            for line in host_env.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith(("AUDIT_FALLBACK_ENABLE=", "export AUDIT_FALLBACK_ENABLE="))
+        ]
+        lines.append(f'AUDIT_FALLBACK_ENABLE="{value}"')
+        host_env.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
     def run_plan(self, *, fixture: str = "empty", ps_count: int = 5, active_audit: bool = False) -> dict:
         return self.run_plan_with_stdout(fixture=fixture, ps_count=ps_count, active_audit=active_audit)[0]
 
@@ -4758,7 +4768,26 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(plan["hard_gate"]["active"])
         self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
 
-    def test_fixed_point_keeps_hard_gate_and_audit_fallback(self) -> None:
+    def test_fixed_point_keeps_hard_gate_but_default_disables_audit_fallback(self) -> None:
+        (self.logs / "audit-iter-8.log").write_text(
+            "AUDIT_DONE:none:0\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan, stdout = self.run_plan_with_stdout(ps_count=0)
+
+        self.assertEqual(plan["concurrency"]["deficit"], 5)
+        self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
+        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertIsNone(plan["hard_gate"]["reason"])
+        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertFalse(any(str(action.get("action_id", "")).startswith("audit-fallback:") for action in plan["actions"]))
+        self.assertFalse((self.repo / ".refactor-loop" / "prompts" / "audit-iter-9.md").exists())
+        pending = (self.repo / ".refactor-loop" / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertNotIn("audit_fallback=audit-iter-9", pending)
+
+    def test_fixed_point_keeps_hard_gate_and_enabled_audit_fallback(self) -> None:
+        self.set_audit_fallback_enable("true")
         (self.logs / "audit-iter-8.log").write_text(
             "AUDIT_DONE:none:0\nEXIT=0\n",
             encoding="utf-8",
@@ -4795,6 +4824,120 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         for runtime_placeholder in ("$REPO_ROOT", "$SOURCE_GLOBS"):
             self.assertIn(runtime_placeholder, rendered)
 
+    def test_audit_fallback_false_like_and_invalid_values_are_disabled_noop(self) -> None:
+        for raw_value in ("false", "0", "no", "off", "", "maybe"):
+            with self.subTest(raw_value=raw_value):
+                self.set_audit_fallback_enable(raw_value)
+                (self.logs / "audit-iter-8.log").write_text(
+                    "AUDIT_DONE:none:0\nEXIT=0\n",
+                    encoding="utf-8",
+                )
+                pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+                pending.write_text("", encoding="utf-8")
+                prompt = self.repo / ".refactor-loop" / "prompts" / "audit-iter-9.md"
+                prompt.unlink(missing_ok=True)
+
+                plan, stdout = self.run_plan_with_stdout(ps_count=0)
+
+                self.assertTrue(plan["hard_gate"]["active"])
+                self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
+                self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
+                self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+                self.assertFalse(any(str(action.get("action_id", "")).startswith("audit-fallback:") for action in plan["actions"]))
+                self.assertFalse(prompt.exists())
+                self.assertNotIn("audit_fallback=", pending.read_text(encoding="utf-8"))
+
+    def test_audit_fallback_accepts_true_like_opt_in_values(self) -> None:
+        for raw_value in ("true", "1", "yes", "on"):
+            with self.subTest(raw_value=raw_value):
+                self.set_audit_fallback_enable(raw_value)
+                (self.logs / "audit-iter-8.log").write_text(
+                    "AUDIT_DONE:none:0\nEXIT=0\n",
+                    encoding="utf-8",
+                )
+                pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+                pending.write_text("", encoding="utf-8")
+                prompt = self.repo / ".refactor-loop" / "prompts" / "audit-iter-9.md"
+                prompt.unlink(missing_ok=True)
+
+                plan, _stdout = self.run_plan_with_stdout(ps_count=0)
+
+                self.assertIsNone(plan["recommendation"])
+                self.assertTrue(any(action.get("action_id") == "audit-fallback:audit-iter-9" for action in plan["actions"]))
+                self.assertTrue(prompt.exists())
+                self.assertIn("HARD_GATE:dispatch_required=5:audit_fallback=audit-iter-9", pending.read_text(encoding="utf-8"))
+
+    def test_audit_fallback_reuses_pending_marker_when_target_log_absent(self) -> None:
+        self.set_audit_fallback_enable("true")
+        (self.logs / "audit-iter-1.log").write_text(
+            "AUDIT_DONE:none:0\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        pending.write_text("HARD_GATE:dispatch_required=3:audit_fallback=audit-iter-2\n", encoding="utf-8")
+        prompt = self.repo / ".refactor-loop" / "prompts" / "audit-iter-2.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("old prompt\n", encoding="utf-8")
+
+        plan, stdout = self.run_plan_with_stdout(ps_count=0)
+
+        self.assertIn("HARD_GATE:dispatch_required=3:audit_fallback=audit-iter-2", stdout)
+        self.assertFalse((self.repo / ".refactor-loop" / "prompts" / "audit-iter-3.md").exists())
+        action = next(action for action in plan["actions"] if action["action_id"] == "audit-fallback:audit-iter-2")
+        self.assertEqual(action["controller_action"], "spawn_codex_harness_background")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertEqual(
+            action["preconditions"],
+            ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent"],
+        )
+        self.assertEqual(action["target"], {"kind": "codex", "task_id": "audit-iter-2"})
+        self.assertEqual(action["source_marker"], "HARD_GATE:dispatch_required=3:audit_fallback=audit-iter-2")
+        self.assertEqual(
+            pending.read_text(encoding="utf-8").count("HARD_GATE:dispatch_required=3:audit_fallback=audit-iter-2"),
+            1,
+        )
+
+    def test_audit_fallback_reuses_pending_marker_after_retryable_failure(self) -> None:
+        self.set_audit_fallback_enable("true")
+        (self.logs / "audit-iter-1.log").write_text(
+            "AUDIT_DONE:none:0\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        (self.logs / "audit-iter-2.log").write_text("spawn failed\nEXIT=127\n", encoding="utf-8")
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        pending.write_text("HARD_GATE:dispatch_required=3:audit_fallback=audit-iter-2\n", encoding="utf-8")
+
+        plan, _stdout = self.run_plan_with_stdout(ps_count=0)
+
+        self.assertFalse((self.repo / ".refactor-loop" / "prompts" / "audit-iter-3.md").exists())
+        action = next(action for action in plan["actions"] if action["action_id"] == "audit-fallback:audit-iter-2")
+        self.assertEqual(action["log"], str((self.repo / ".refactor-loop" / "logs" / "audit-iter-2.log").resolve()))
+        self.assertEqual(action["source_marker"], "HARD_GATE:dispatch_required=3:audit_fallback=audit-iter-2")
+
+    def test_audit_fallback_suppresses_pending_marker_with_in_flight_or_clean_log(self) -> None:
+        self.set_audit_fallback_enable("true")
+        (self.logs / "audit-iter-1.log").write_text(
+            "AUDIT_DONE:none:0\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+
+        for log_text in ("worker running\n", "AUDIT_DONE:none:0\nEXIT=0\n"):
+            with self.subTest(log_text=log_text):
+                (self.logs / "audit-iter-2.log").write_text(log_text, encoding="utf-8")
+                pending.write_text("HARD_GATE:dispatch_required=3:audit_fallback=audit-iter-2\n", encoding="utf-8")
+                prompt3 = self.repo / ".refactor-loop" / "prompts" / "audit-iter-3.md"
+                prompt3.unlink(missing_ok=True)
+
+                plan, stdout = self.run_plan_with_stdout(ps_count=0)
+
+                self.assertFalse(any(action.get("action_id") == "audit-fallback:audit-iter-2" for action in plan["actions"]))
+                self.assertFalse(any(action.get("action_id") == "audit-fallback:audit-iter-3" for action in plan["actions"]))
+                self.assertFalse(prompt3.exists())
+                self.assertNotIn("HARD_GATE:dispatch_required=5:audit_fallback=audit-iter-3", stdout)
+
     def test_single_active_audit_boundary_reports_wait_not_positive_hard_gate(self) -> None:
         plan, stdout = self.run_plan_with_stdout(ps_count=0, active_audit=True)
 
@@ -4810,6 +4953,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(any(action.get("action_id") == "audit-fallback:audit-iter-9" for action in plan["actions"]))
 
     def test_no_active_audit_after_audit_done_none_still_recommends_audit(self) -> None:
+        self.set_audit_fallback_enable("true")
         (self.logs / "audit-iter-8.log").write_text(
             "AUDIT_DONE:none:0\nEXIT=0\n",
             encoding="utf-8",
