@@ -24,6 +24,7 @@ from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.implement_lifecycle import (
     classify_implement_attempt,
     clear_redispatchable_implement_log,
+    _implement_run_artifact_done_marker,
     is_implement_log,
 )
 from codex_refactor_loop.implementation_pr_artifacts import (
@@ -879,7 +880,10 @@ def completed_marker_actions(
         ctx = LoopContext.load(repo_root=repo_root, env=_repo_local_context_env(repo_root, os.environ), cwd=repo_root, read_only=True)
     candidates: list[CompletedMarkerCandidate] = []
     for log_path in sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
-        marker = read_worker_terminal_marker(log_path).marker
+        marker_read = read_worker_terminal_marker(log_path)
+        marker = marker_read.marker
+        if not marker and marker_read.reason == "duplicate_or_conflicting_log_marker" and is_implement_log(log_path):
+            marker = _implement_run_artifact_done_marker(log_path)
         if not marker:
             continue
         if marker.startswith("AUDIT_DONE:none:0"):
@@ -2501,6 +2505,30 @@ def serialize_conflicting_consensus_implementation_actions(actions: list[dict[st
         executable.append((index, scope))
 
 
+def suppress_publish_superseded_implementation_spawn_intents(actions: list[dict[str, Any]]) -> None:
+    publish_ready_issues = {
+        int(action["target_number"])
+        for action in actions
+        if action.get("controller_action") == "publish_implementation_output"
+        and not action.get("status_only")
+        and action.get("target_kind") == "issue"
+        and isinstance(action.get("target_number"), int)
+    }
+    if not publish_ready_issues:
+        return
+    for action in actions:
+        if action.get("kind") != "harness-spawn-intent":
+            continue
+        issue = _consensus_implementation_spawn_intent_issue(action)
+        if issue not in publish_ready_issues:
+            continue
+        action["status_only"] = True
+        action["no_lifecycle_authority"] = True
+        action["suppressed_reason"] = "implementation_ready_to_publish"
+        action.pop("runner_authority", None)
+        action.pop("no_generic_command", None)
+
+
 def _normalized_consensus_scope_paths(raw_scope_paths: Any) -> tuple[str, ...]:
     paths: set[str] = set()
     for raw_line in str(raw_scope_paths or "").splitlines():
@@ -3293,6 +3321,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     if gh_items_loaded and not has_dispatchable_action(actions):
         actions.extend(repository_stalled_meta_reflector_actions(repo_root, ctx, gh_items, monitor))
     suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)
+    suppress_publish_superseded_implementation_spawn_intents(actions)
     actions.sort(key=action_priority_sort_key)
     serialize_conflicting_consensus_implementation_actions(actions)
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)

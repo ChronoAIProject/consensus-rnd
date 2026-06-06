@@ -2037,7 +2037,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_wakeup_plan_source_regression_has_shared_reader_only_implement_marker_detection(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
-        self.assertIn("read_worker_terminal_marker(log_path).marker", source)
+        self.assertIn("marker_read = read_worker_terminal_marker(log_path)", source)
+        self.assertIn("_implement_run_artifact_done_marker(log_path)", source)
         self.assertNotIn("_synthetic_markerless_implement_marker", source)
         self.assertNotIn('return f"IMPLEMENT_DONE:issue-{issue}:ok"', source)
         self.assertNotIn("_canonical_markerless_implement_has_output", source)
@@ -2165,6 +2166,56 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("no_conflicting_open_implementation_pr", action["preconditions"])
         self.assertEqual(action["target_pr_number"], 320)
         self.assertNotIn("verified_pr_head", action["preconditions"])
+
+    def test_artifact_backed_completed_implementation_supersedes_stale_spawn_intent(self) -> None:
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
+        (self.logs / "implement-issue-20.log").write_text(
+            "summary\n⟦AI:AUTO-LOOP⟧\nIMPLEMENT_DONE:issue-20:ok\n"
+            "later echo\nIMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        self.write_run_artifact("implement-issue-20", "summary", "⟦AI:AUTO-LOOP⟧", "IMPLEMENT_DONE:issue-20:ok")
+        self.write_consensus_artifact()
+        self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:20",
+            task_id="implement-issue-20",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-20.log",
+        )
+
+        plan = self.run_plan(fixture="local_iter_branch_issue20", ps_count=0)
+
+        publish = next(
+            action
+            for action in plan["actions"]
+            if action.get("controller_action") == "publish_implementation_output"
+            and action.get("target_kind") == "issue"
+            and action.get("target_number") == 20
+        )
+        self.assertFalse(publish.get("status_only"))
+        self.assertEqual(publish["source_marker"], "IMPLEMENT_DONE:issue-20:ok")
+        self.assertEqual(publish["head_ref"], "refactor/iter20-issue-20")
+        self.assertEqual(Path(publish["worktree"]).resolve(), (self.repo / ".worktrees/iter20-issue-20").resolve())
+        stale_spawn = next(
+            action
+            for action in plan["actions"]
+            if action.get("kind") == "harness-spawn-intent"
+            and action.get("intent_id") == "dispatch-consensus-implementation:20"
+        )
+        self.assertTrue(stale_spawn["status_only"])
+        self.assertEqual(stale_spawn["suppressed_reason"], "implementation_ready_to_publish")
+        self.assertNotIn("runner_authority", stale_spawn)
+        self.assertFalse(
+            [
+                action
+                for action in plan["actions"]
+                if action.get("controller_action") == "dispatch_consensus_implementation"
+                and action.get("target_number") == 20
+                and not action.get("status_only")
+            ]
+        )
 
     def test_publish_implementation_marker_without_pr_artifacts_is_status_only(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
