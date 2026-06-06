@@ -3,12 +3,18 @@
 
 from __future__ import annotations
 
+import sys
 import unittest
 from pathlib import Path
 
 
 SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
+
+sys.path.insert(0, str(SKILL_ROOT / "scripts"))
+
+from codex_refactor_loop.restart import DAEMON_COMMANDS, SUPERVISOR_DAEMON_COMMAND
+
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 RESTART_MODULE = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "restart.py"
 RUNTIME_EXCEPTIONS = SKILL_ROOT / "authorizations" / "runtime-exceptions.md"
@@ -88,7 +94,14 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
                 self.assertIn(name, self.restart)
                 self.assertIn('"consensus-rnd-cli"', self.restart)
                 self.assertIn(f'"{op}"', self.restart)
-        self.assertEqual(8, self.restart.count('"--daemon"'))
+
+        # Fix (remote-ci/contract-tests): keep the anti-stop contract scoped to
+        # the canonical legacy daemon allowlist; opt-in supervisor commands also
+        # use --daemon but must not change the legacy eight count.
+        self.assertEqual(8, len(DAEMON_COMMANDS))
+        self.assertNotIn(SUPERVISOR_DAEMON_COMMAND[0], {name for name, _command in DAEMON_COMMANDS})
+        self.assertEqual(8, sum(command.count("--daemon") for _name, command in DAEMON_COMMANDS))
+        self.assertIn("--daemon", SUPERVISOR_DAEMON_COMMAND[1])
 
     def test_restart_module_has_no_controller_lifecycle_authority(self) -> None:
         for token in ("gh ", "git ", "pr merge", "issue close", "git tag", "gh release"):
