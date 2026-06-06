@@ -1992,6 +1992,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 ]
                 self.assertEqual(publish, [])
 
+    def test_terminal_non_ok_implement_result_does_not_count_expected_worker(self) -> None:
+        self.write_consensus_artifact(issue=537, round_no=5)
+        self.write_implement_result(issue=537, status="partial")
+
+        plan, stdout = self.run_plan_with_stdout(fixture="open_issue_537", ps_count=0)
+
+        self.assertNotIn(
+            {"expected": 1, "id": "#537", "kind": "issue", "phase": label_catalog.PHASE_IMPLEMENTING},
+            plan["concurrency"]["expected_breakdown"],
+        )
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
+        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+
     def test_partial_implement_without_valid_decomposition_plan_does_not_project_apply_action(self) -> None:
         for name, mutate in (
             ("missing", lambda: None),
@@ -2499,6 +2513,25 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         )
         self.assertFalse(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+
+    def test_noop_implementation_done_empty_scoped_diff_does_not_count_expected_worker(self) -> None:
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
+        log = self.logs / "implement-issue20.log"
+        log.write_text(
+            "no code change required\nIMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan, stdout = self.run_plan_with_stdout(fixture="local_iter_branch_issue20_noop", ps_count=0)
+
+        self.assertNotIn(
+            {"expected": 1, "id": "#20", "kind": "issue", "phase": label_catalog.PHASE_IMPLEMENTING},
+            plan["concurrency"]["expected_breakdown"],
+        )
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
+        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
 
     def test_artifact_backed_completed_implementation_supersedes_stale_spawn_intent(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)

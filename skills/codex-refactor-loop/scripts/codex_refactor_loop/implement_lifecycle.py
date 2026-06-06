@@ -13,6 +13,7 @@ from .worker_markers import read_worker_terminal_marker
 IMPLEMENT_DONE_OK_RE = re.compile(r"^IMPLEMENT_DONE:.+:ok$")
 IMPLEMENT_DONE_TERMINAL_NON_OK_RE = re.compile(r"^IMPLEMENT_DONE:.+:(?:partial|blocked)$")
 IMPLEMENT_LOG_RE = re.compile(r"^implement-(?P<cluster>[A-Za-z0-9._-]+)\.log$")
+IMPLEMENT_DONE_ISSUE_RE = re.compile(r"^IMPLEMENT_DONE:issue-?([1-9][0-9]*):(?:ok|partial|blocked)$")
 
 
 CommandRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
@@ -120,6 +121,35 @@ def is_implement_log(path: Path) -> bool:
     return IMPLEMENT_LOG_RE.fullmatch(path.name) is not None
 
 
+def implement_attempt_suppresses_expected_worker(
+    repo_root: Path,
+    issue: int,
+    *,
+    integration_branch: str = "",
+    command_runner: CommandRunner | None = None,
+) -> bool:
+    logs_dir = repo_root / ".refactor-loop" / "logs"
+    if not logs_dir.is_dir():
+        return False
+    for log_path in sorted(logs_dir.glob("implement-*.log")):
+        match = IMPLEMENT_LOG_RE.fullmatch(log_path.name)
+        if not match:
+            continue
+        marker = read_worker_terminal_marker(log_path).marker
+        if _issue_from_any_implement_marker(marker) != issue:
+            continue
+        state = classify_implement_attempt(
+            repo_root=repo_root,
+            action={"target_number": issue, "iteration": str(issue), "cluster_id": match.group("cluster")},
+            log_path=log_path,
+            integration_branch=integration_branch,
+            command_runner=command_runner,
+        )
+        if state.terminal_non_ok or (state.redispatch and state.reason == "empty_scoped_diff"):
+            return True
+    return False
+
+
 def _implement_run_artifact_done_marker(log_path: Path) -> str:
     if not is_implement_log(log_path):
         return ""
@@ -171,6 +201,11 @@ def _issue_from_marker(marker: str) -> int | None:
     if not match:
         return None
     return int(match.group(1))
+
+
+def _issue_from_any_implement_marker(marker: str) -> int | None:
+    match = IMPLEMENT_DONE_ISSUE_RE.fullmatch(marker)
+    return int(match.group(1)) if match else None
 
 
 def clear_redispatchable_implement_log(

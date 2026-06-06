@@ -19,6 +19,7 @@ from ..active_controller import require_active_controller, write_active_controll
 from ..context import LoopContext, LoopContextError
 from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
+from ..implement_lifecycle import implement_attempt_suppresses_expected_worker
 from .. import labels as label_catalog
 from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..state import read_json, write_json
@@ -372,6 +373,8 @@ class ConcurrencyMonitor:
             phase = label_catalog.normalize_label_set([str(item.phase)]).phase or ""
             expected = label_catalog.phase_expected_workers(phase)
             if expected > 0:
+                if item.kind == "issue" and implement_attempt_suppresses_expected_worker(self.repo_root, item.number):
+                    continue
                 breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase, "expected": expected})
                 total += expected
         return total, breakdown

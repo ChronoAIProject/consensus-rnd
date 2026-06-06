@@ -24,6 +24,7 @@ from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.implement_lifecycle import (
     classify_implement_attempt,
     clear_redispatchable_implement_log,
+    implement_attempt_suppresses_expected_worker,
     _implement_run_artifact_done_marker,
     is_implement_log,
 )
@@ -954,6 +955,7 @@ def _draft_suppressed_release_rollup_numbers(actions: list[Mapping[str, Any]] | 
 def expected_from_open_items(
     items: list[GhItem],
     *,
+    repo_root: Path | None = None,
     release_rollup_actions: list[Mapping[str, Any]] | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     breakdown: list[dict[str, Any]] = []
@@ -971,9 +973,20 @@ def expected_from_open_items(
         expected = label_catalog.phase_expected_workers(phase_label)
         if expected <= 0:
             continue
+        if repo_root is not None and item.kind == "issue" and _issue_has_terminal_implement_projection(repo_root, item.number):
+            continue
         breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase_label, "expected": expected})
         total += expected
     return total, breakdown
+
+
+def _issue_has_terminal_implement_projection(repo_root: Path, issue: int) -> bool:
+    return implement_attempt_suppresses_expected_worker(
+        repo_root,
+        issue,
+        integration_branch=_integration_branch_from_env(),
+        command_runner=lambda command: git_text(list(command), cwd=repo_root),
+    )
 
 
 def concurrency_plan(
@@ -990,7 +1003,11 @@ def concurrency_plan(
     if monitor is None:
         monitor = build_concurrency_monitor(repo_root, concurrency_module)
     actual = canonical_actual_count(repo_root, monitor)
-    expected, breakdown = expected_from_open_items(gh_items or [], release_rollup_actions=release_rollup_actions)
+    expected, breakdown = expected_from_open_items(
+        gh_items or [],
+        repo_root=repo_root,
+        release_rollup_actions=release_rollup_actions,
+    )
     if expected == 0:
         expected, breakdown = canonical_expected_from_active_tasks(
             monitor,
