@@ -282,7 +282,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(forbidden=needle):
                 self.assertNotIn(needle, python_policy)
 
-    def test_issue_decomposition_discoverability_uses_pending_events_completed_marker_and_peek_not_wakeup_projection(self) -> None:
+    def test_issue_decomposition_discoverability_requires_plan_level_judge_fields(self) -> None:
         section = section_after_anchor(self.skill, "large-issue-decomposition")
         for needle in (
             "IssueDecompositionPlan",
@@ -298,9 +298,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "phase9-router-fallback",
             "completed_marker_actions()",
             "kind: completed-marker",
+            "first `consensus:decompose`, solver artifacts, prompt body, validator result, worker output, and `.refactor-loop/host.env` are not apply authorization",
             "exact named `controller_action=\"apply_issue_decomposition_plan\"`",
+            "plan_level_design_consensus_judge_artifact",
             "plan path, digest, and proof",
-            "wakeup_runner.py` then revalidates clean source marker",
+            "wakeup_runner.py` then revalidates clean plan-level judge source marker",
             "live parent open/tracking",
             "sentinel idempotency",
             "wakeup_plan.py` is not the #403 read-model/status/authorization owner",
@@ -1826,10 +1828,31 @@ class WakeupRunnerContractTests(unittest.TestCase):
                 self.assertNotIn(stale, self.skill)
 
     def test_no_shared_controller_runtime_registry_or_tick_envelope_scaffold(self) -> None:
+        inventory = section_after_anchor_until_heading(self.skill, "tier0-scaffold-inventory", level=3)
+        for needle in (
+            "prose-only and non-authoritative",
+            "not a machine-readable catalog, registry, runtime scaffold, or package API",
+            "not imported by runtime code",
+            "no dispatch, write, state-transition, or authorization authority",
+            "restart.py::DAEMON_COMMANDS",
+            "restart_managed_daemon_names()",
+            "cli.py::COMMANDS[*].authority",
+            "SKILL.md#work-unit-contract",
+            "ctx.paths.pending_events",
+            ".refactor-loop/.controller-pending-events.log",
+            "no pending-events authority",
+            "owner-local files",
+            "shared `TickOutcome`, `tick_helpers.py`, or controller-runtime catalog",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, inventory)
+
         package_root = SKILL_ROOT / "scripts" / "codex_refactor_loop"
         forbidden_path_names = {
             "controller_runtime_scaffold.py",
             "controller_runtime_capabilities.py",
+            "controller_runtime_catalog.py",
+            "tick_helpers.py",
             "tick_outcome.py",
             "tick_outcomes.py",
             "daemon_registry.json",
@@ -1849,6 +1872,7 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "class TickOutcome",
             "TickOutcome(",
             "ControllerRuntimeScaffold",
+            "ControllerRuntimeCatalog",
             "ControllerRuntimeCapabilities",
             "ControllerRuntimeRegistry",
             "DaemonRegistry",

@@ -1393,9 +1393,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "---\nissue: 403\ncluster: issue-403\nconvergence_round: 6\ndecision: consensus\n---\n\n"
             "## If consensus\n"
             '- controller_action="apply_issue_decomposition_plan"\n'
+            f"- plan_level_design_consensus_judge_artifact: {consensus}\n"
             f"- issue_decomposition_plan_path: {plan_path}\n"
             f"- issue_decomposition_plan_digest: {digest}\n"
-            f"- issue_decomposition_proof: plan {plan_path} digest {digest} reached consensus for parent issue #{issue}\n\n"
+            f"- issue_decomposition_proof: plan-level judge {consensus} validated plan {plan_path} digest {digest} reached consensus for parent issue #{issue}\n\n"
             "META_JUDGE_DONE:consensus:decompose\n",
             encoding="utf-8",
         )
@@ -1967,28 +1968,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
                 self.assertEqual(self.harness_spawn_actions(plan), [])
 
-    def test_terminal_non_ok_implement_with_valid_decomposition_plan_projects_existing_apply_action(self) -> None:
+    def test_terminal_non_ok_implement_with_valid_decomposition_plan_does_not_project_apply_action(self) -> None:
         for status in ("partial", "blocked"):
             with self.subTest(status=status):
                 self.tmp.cleanup()
                 self.setUp()
-                plan_path, digest = self.write_issue_decomposition_plan_artifacts(issue=537)
+                self.write_issue_decomposition_plan_artifacts(issue=537)
                 self.write_consensus_artifact(issue=537, round_no=5)
                 self.write_implement_result(issue=537, status=status)
 
                 plan = self.run_plan(fixture="open_issue_537")
 
-                apply_actions = issue_decomposition_apply_actions(plan)
-                self.assertEqual(1, len(apply_actions))
-                apply_action = apply_actions[0]
-                self.assertEqual("completed-marker", apply_action["kind"])
-                self.assertEqual("issue", apply_action["target_kind"])
-                self.assertEqual(537, apply_action["target_number"])
-                self.assertEqual(plan_path, apply_action["issue_decomposition_plan_path"])
-                self.assertEqual(digest, apply_action["issue_decomposition_plan_digest"])
-                self.assertEqual(f"IMPLEMENT_DONE:issue-537:{status}", apply_action["source_marker"])
-                self.assertIn("apply_issue_decomposition_plan", apply_action["action_id"])
-                self.assertFalse(apply_action.get("status_only", False))
+                self.assertEqual(issue_decomposition_apply_actions(plan), [])
 
                 publish = [
                     action
@@ -2817,6 +2808,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target_number"], 403)
         self.assertEqual(action["issue_decomposition_plan_path"], plan_path)
         self.assertEqual(action["issue_decomposition_plan_digest"], digest)
+        self.assertEqual(
+            action["plan_level_design_consensus_judge_artifact"],
+            ".refactor-loop/runs/phase9-issue403-r6-judge.md",
+        )
+        self.assertIn(".refactor-loop/runs/phase9-issue403-r6-judge.md", action["issue_decomposition_proof"])
         self.assertIn(plan_path, action["issue_decomposition_proof"])
         self.assertIn(digest, action["issue_decomposition_proof"])
         self.assertEqual(
@@ -2825,6 +2821,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 "active_controller_owner",
                 "clean_exit_source_marker",
                 "durable_consensus_artifact",
+                "plan_level_design_consensus_judge_artifact",
                 "issue_decomposition_plan_digest_match",
                 "live_parent_open_tracking",
                 "github_sentinel_idempotency_owner",
@@ -2843,6 +2840,22 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, rendered)
+
+    def test_judge_artifact_missing_plan_level_field_does_not_project_issue_decomposition_apply(self) -> None:
+        self.write_issue_decomposition_artifacts()
+        artifact = self.repo / ".refactor-loop/runs/phase9-issue403-r6-judge.md"
+        artifact.write_text(
+            artifact.read_text(encoding="utf-8").replace(
+                "- plan_level_design_consensus_judge_artifact: .refactor-loop/runs/phase9-issue403-r6-judge.md\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
+
+        plan = self.run_plan(fixture="open_issue_403")
+
+        self.assertEqual(issue_decomposition_apply_actions(plan), [])
 
     def test_issue_decomposition_has_no_private_action_dialect_or_public_commands(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
