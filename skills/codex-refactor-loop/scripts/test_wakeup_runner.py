@@ -12,6 +12,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from string import Template
 from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -27,6 +28,7 @@ from codex_refactor_loop import labels
 from codex_refactor_loop.wakeup_runner import (
     WakeupRunner,
     RunnerResult,
+    SUPPORTED_CONTROLLER_ACTIONS,
     _log_tick_status,
     _run_once_with_periodic_heartbeat,
     _wakeup_tick_action,
@@ -180,6 +182,10 @@ class FakeActions:
         self.calls.append(("dispatch_reviewers", dict(action)))
         return 0
 
+    def render_template(self, input_path: str, output_path: str, env: dict | None = None) -> None:
+        values = dict(env or {})
+        Path(output_path).write_text(Template(Path(input_path).read_text(encoding="utf-8")).safe_substitute(values), encoding="utf-8")
+
     def dispatch_pr_rebase_resolve(self, action: dict) -> int:
         self.calls.append(("dispatch_pr_rebase_resolve", dict(action)))
         return 0
@@ -190,6 +196,10 @@ class FakeActions:
 
     def open_release_rollup_pr_from_action(self, action: dict) -> int:
         self.calls.append(("open_release_rollup_pr_from_action", dict(action)))
+        return 0
+
+    def auto_merge_release_rollup_pr_from_action(self, action: dict) -> int:
+        self.calls.append(("auto_merge_release_rollup_pr_from_action", dict(action)))
         return 0
 
     def apply_issue_decomposition_plan(self, plan_path: str) -> tuple[tuple[int, str], ...]:
@@ -528,6 +538,27 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             handle.write(marker + "\n")
         return action
 
+    def remote_ci_fix_action(self, **overrides) -> dict:
+        action = {
+            "kind": "ci-red",
+            "action_id": "ci-red:77:" + "a" * 40 + ":contract-tests",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["active_controller_owner", "live_open_target", "checks_red"],
+            "source_artifact": "github-check-runs",
+            "source_marker": "ci-red:77:" + "a" * 40 + ":contract-tests",
+            "target_kind": "PR",
+            "target_number": 77,
+            "target": {"kind": "PR", "number": 77},
+            "controller_action": "dispatch_remote_ci_fix",
+            "no_generic_command": True,
+            "head_sha": "a" * 40,
+            "check_name": "contract-tests",
+            "check_names": ["contract-tests"],
+            "run_url": "https://checks/contract-tests",
+        }
+        action.update(overrides)
+        return action
+
     def review_gate_action(self, **overrides) -> dict:
         marker = "REVIEW_GATE_READY:77"
         pending = self.repo / ".refactor-loop/.controller-pending-events.log"
@@ -745,6 +776,33 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "no_generic_command": True,
             "event": {"integration_sha": "abc123"},
             "body_file": ".refactor-loop/runs/release-rollup-pr-body.md",
+        }
+        action.update(overrides)
+        return action
+
+    def rollup_auto_merge_action(self, **overrides) -> dict:
+        action = {
+            "kind": "release-rollup-auto-merge",
+            "action_id": "release-rollup-auto-merge:88:abc123",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "live_open_target",
+                "rollup_head_prefix",
+                "review_base_target",
+                "required_checks_green_exact_head",
+                "rollup_auto_merge_enabled",
+            ],
+            "source_artifact": "github-open-managed-work-snapshot",
+            "source_marker": "RELEASE_ROLLUP_AUTO_MERGE:88:abc123",
+            "target_kind": "PR",
+            "target_number": 88,
+            "target": {"kind": "PR", "number": 88},
+            "controller_action": "auto_merge_release_rollup_pr_from_action",
+            "no_generic_command": True,
+            "head_ref": "rollup/abc123",
+            "head_sha": "abc123",
+            "base_ref": "dev",
         }
         action.update(overrides)
         return action
@@ -1499,6 +1557,83 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("WAKEUP_RUNNER_REVIEW_FIX_WORKTREE_MISSING:77:refactor/iter77-worker", pending)
 
+    def test_wakeup_runner_review_fix_worktree_gap_does_not_starve_later_ci_red_dispatch(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "reject"), ("quality", "comment")):
+            (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r1.md").write_text(
+                f"head_sha: {'a' * 40}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/runs" / f"review-pr77-{role}-r1.md").write_text(
+                f"---\nverdict: {verdict}\n---\nREVIEW_DONE:77:{role}:{verdict}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/logs" / f"review-pr77-{role}-r1.log").write_text(
+                f"REVIEW_DONE:77:{role}:{verdict}\nEXIT=0\n",
+                encoding="utf-8",
+            )
+        blocked_gate = self.review_gate_action(action_id="review-gate:77:missing-fix-worktree-before-ci-red")
+        ci_red = self.remote_ci_fix_action(
+            action_id="ci-red:78:" + "b" * 40 + ":contract-tests",
+            target_number=78,
+            target={"kind": "PR", "number": 78},
+            head_sha="b" * 40,
+            source_marker="ci-red:78:" + "b" * 40 + ":contract-tests",
+        )
+        actions = FakeReviewFixActions(self.repo)
+
+        def command_runner(command):
+            repo_root = self.ctx.repo_root
+            if command[:2] == ["gh", "api"]:
+                endpoint = str(command[2]) if len(command) > 2 else ""
+                if endpoint in {"repos/owner/repo/pulls/77", "repos/owner/repo/pulls/78"}:
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": "a" * 40}}), "")
+                if endpoint == f"repos/owner/repo/commits/{'a' * 40}/check-runs":
+                    payload = [{"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}]
+                    return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+                return subprocess.CompletedProcess(command, 0, "{}", "")
+            if command[:3] == ["gh", "pr", "view"]:
+                target = command[3] if len(command) > 3 else ""
+                if "headRefName" in command and "--jq" not in command:
+                    branch = "refactor/iter77-worker" if target == "77" else "refactor/iter78-worker"
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"headRefName": branch}), "")
+                if ".headRefOid" in command:
+                    return subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", "")
+                if "mergeable,isDraft" in command:
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False}), "")
+            if command == ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    f"worktree {repo_root}\nbranch refs/heads/auto-refact-dev\n\n"
+                    f"worktree {repo_root / '.worktrees' / 'iter78-worker'}\nbranch refs/heads/refactor/iter78-worker\n\n",
+                    "",
+                )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        runner = WakeupRunner(
+            self.ctx,
+            plan_loader=lambda _repo: self.batch_plan([blocked_gate, ci_red], dispatch_required=2, deficit=2),
+            actions=actions,
+            supervisor=self.supervisor,
+            command_runner=command_runner,
+        )
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = runner.run_once()
+
+        self.assertEqual(
+            [(result.action_id, result.status, result.reason) for result in results],
+            [
+                ("review-gate:77:missing-fix-worktree-before-ci-red", "blocked", "helper_exit:3"),
+                ("ci-red:78:" + "b" * 40 + ":contract-tests", "applied", ""),
+            ],
+        )
+        self.assertEqual(actions.rendered, [(77, 1)])
+        launch.assert_called_once()
+        self.assertEqual(Path(launch.call_args.kwargs["cd"]).resolve(), (self.repo / ".worktrees" / "iter78-worker").resolve())
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("WAKEUP_RUNNER_REVIEW_FIX_WORKTREE_MISSING:77:refactor/iter77-worker", pending)
+
     def test_wakeup_runner_skips_blocked_spawn_validation_and_scans_later_actions(self) -> None:
         first = self.spawn_action(action_id="spawn:first", log=str(self.repo / ".refactor-loop/logs/first.log"))
         blocked = self.spawn_action(action_id="spawn:blocked", log=str(self.repo / ".refactor-loop/logs/blocked.log"))
@@ -1557,14 +1692,85 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([(result.action_id, result.status, result.reason) for result in results], [("spawn:failed-target-log", "applied", "")])
         launch.assert_called_once()
 
-    def test_forbidden_fields_fail_closed(self) -> None:
-        for field in ("argv", "command_line", "lifecycle_authority", "lifecycle_owner", "target_ref"):
+    def test_effect_admission_boundary_rejects_minimum_forbidden_command_and_lifecycle_fields(self) -> None:
+        minimum_forbidden_fields = (
+            "cmd",
+            "argv",
+            "shell",
+            "command_line",
+            "commands",
+            "env",
+            "git",
+            "gh",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+        )
+        for field in minimum_forbidden_fields:
             with self.subTest(field=field):
                 results = self.run_result(self.base_plan(self.spawn_action(action_id=f"forbidden:{field}", **{field: "forbidden"})))
 
                 self.assertEqual(results[0].status, "blocked")
                 self.assertEqual(results[0].reason, f"forbidden_fields:{field}")
                 self.assertEqual(self.supervisor.calls, [])
+                pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+                self.assertIn(f"WAKEUP_RUNNER_BLOCKED:forbidden:{field}:forbidden_fields:{field}", pending)
+                self.assert_blocked_ledger(f"forbidden:{field}", f"forbidden_fields:{field}")
+
+    def test_effect_admission_boundary_keeps_compatibility_extra_forbidden_fields(self) -> None:
+        for field in (
+            "args",
+            "target_ref",
+        ):
+            with self.subTest(field=field):
+                results = self.run_result(self.base_plan(self.spawn_action(action_id=f"forbidden:{field}", **{field: "forbidden"})))
+
+                self.assertEqual(results[0].status, "blocked")
+                self.assertEqual(results[0].reason, f"forbidden_fields:{field}")
+                self.assertEqual(self.supervisor.calls, [])
+                pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+                self.assertIn(f"WAKEUP_RUNNER_BLOCKED:forbidden:{field}:forbidden_fields:{field}", pending)
+                self.assert_blocked_ledger(f"forbidden:{field}", f"forbidden_fields:{field}")
+
+    def test_effect_admission_boundary_is_concrete_controller_action_allowlist_only(self) -> None:
+        expected_actions = {
+            "spawn_codex_harness_background",
+            "safe_push",
+            "dispatch_consensus_implementation",
+            "publish_implementation_output",
+            "publish_worker_output_from_action",
+            "dispatch_reviewers",
+            "dispatch_remote_ci_fix",
+            "dispatch_pr_rebase_resolve",
+            "commit_push_resolved_pr_rebase",
+            "open_release_rollup_pr_from_action",
+            "close_managed_item_from_drop_marker",
+            "review_gate",
+            "auto_merge_release_rollup_pr_from_action",
+            "publish_release_candidate",
+            "apply_issue_decomposition_plan",
+        }
+
+        self.assertEqual(SUPPORTED_CONTROLLER_ACTIONS, expected_actions)
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
+        for forbidden_runtime_abstraction in (
+            "ControllerEffectAdapter",
+            "WakeupActionAdmission",
+            "WakeupActionResult",
+        ):
+            with self.subTest(forbidden_runtime_abstraction=forbidden_runtime_abstraction):
+                self.assertNotIn(forbidden_runtime_abstraction, source)
+
+    def test_nested_forbidden_fields_fail_closed(self) -> None:
+        action = self.issue_decomposition_action(
+            action_id="decompose:nested-forbidden",
+            proof_payload={"executor": "shell", "nested": [{"env": {"TOKEN": "x"}}]},
+        )
+
+        results = self.run_result(self.base_plan(action), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "forbidden_fields:proof_payload.executor,proof_payload.nested[0].env")
 
     def test_nested_forbidden_fields_fail_closed(self) -> None:
         action = self.issue_decomposition_action(
@@ -1636,19 +1842,160 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assert_blocked_before_dispatch(results, "clean-exit:missing", "clean_exit_marker_missing", actions)
 
-    def test_unknown_executable_controller_action_fails_closed_without_unapplied_success(self) -> None:
-        action = self.spawn_action(controller_action="dispatch_remote_ci_fix", action_id="ci-red:31:sha")
+    def test_ci_red_dispatch_spawns_remote_ci_fix_worker_and_records_attempt(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter77-worker"
+        worktree.mkdir(parents=True, exist_ok=True)
+        actions = FakeActions()
 
-        results = self.run_result(self.base_plan(action))
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(self.remote_ci_fix_action()), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(Path(launch.call_args.kwargs["cd"]).resolve(), worktree.resolve())
+        prompt = Path(launch.call_args.kwargs["prompt"])
+        self.assertEqual(prompt.name, f"remote-ci-fix-pr77-contract-tests-{'a' * 12}-a1.md")
+        self.assertIn("PR: `77`", prompt.read_text(encoding="utf-8"))
+        self.assertIn("failed check: `contract-tests`", prompt.read_text(encoding="utf-8").replace("失败 check", "failed check"))
+        attempts = json.loads((self.repo / ".refactor-loop/state/remote-ci-fix-attempts.json").read_text(encoding="utf-8"))
+        self.assertEqual(attempts[f"pr77:{'a' * 40}:contract-tests"], 1)
+        self.assertEqual(actions.calls, [])
+
+    def test_ci_red_dispatch_retry_cap_stops_third_attempt_per_check(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter77-worker"
+        worktree.mkdir(parents=True, exist_ok=True)
+        action = self.remote_ci_fix_action()
+        attempts_path = self.repo / ".refactor-loop/state/remote-ci-fix-attempts.json"
+        attempts_path.write_text(json.dumps({f"pr77:{'a' * 40}:contract-tests": 2}), encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor") as launch:
+            results = self.run_result(self.base_plan(action), actions=FakeActions())
 
         self.assertEqual(results[0].status, "blocked")
-        self.assertEqual(results[0].reason, "unsupported_controller_action:dispatch_remote_ci_fix")
-        ledger = (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").read_text(encoding="utf-8")
-        self.assertIn('"status": "blocked"', ledger)
-        self.assertNotIn('"status": "applied"', ledger)
+        self.assertEqual(results[0].reason, "helper_exit:3")
+        launch.assert_not_called()
         pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("WAKEUP_RUNNER_BLOCKED:ci-red:31:sha:unsupported_controller_action:dispatch_remote_ci_fix", pending)
-        self.assertNotIn("WAKEUP_RUNNER_UNAPPLIED", pending)
+        self.assertIn(f"WAKEUP_RUNNER_REMOTE_CI_FIX_RETRY_CAP:pr77:{'a' * 40}:contract-tests:2", pending)
+
+    def test_remote_ci_fix_done_commits_and_pushes_worker_output(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True, exist_ok=True)
+        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
+        log = self.repo / ".refactor-loop/logs/remote-ci-fix-pr77-contract-tests.log"
+        log.write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+        action = self.remote_ci_fix_action(
+            kind="completed-marker",
+            action_id=f"completed-marker:{log.name}:{marker}",
+            source_artifact=".refactor-loop/logs/remote-ci-fix-pr77-contract-tests.log",
+            source_marker=marker,
+            preconditions=["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present"],
+            head_sha=None,
+            check_name=None,
+        )
+        seen: list[list[str]] = []
+
+        def command_runner(command):
+            cmd = [str(part) for part in command]
+            seen.append(cmd)
+            if cmd[:3] == ["gh", "api", "repos/owner/repo/pulls/77"]:
+                return subprocess.CompletedProcess(cmd, 0, json.dumps({"state": "open"}), "")
+            if cmd[:3] == ["gh", "pr", "view"] and "headRefName" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, json.dumps({"headRefName": "refactor/iter77-issue-77"}), "")
+            if cmd[:2] == ["git", "-C"] and len(cmd) > 3 and Path(cmd[2]).resolve() == self.repo.resolve() and cmd[3] == "worktree":
+                return subprocess.CompletedProcess(
+                    cmd,
+                    0,
+                    f"worktree {self.repo}\nbranch refs/heads/auto-refact-dev\n\n"
+                    f"worktree {worktree}\nbranch refs/heads/refactor/iter77-issue-77\n\n",
+                    "",
+                )
+            if "status" in cmd and "--porcelain" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, " M skills/x.py\n", "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        actions = FakeActions()
+        runner = WakeupRunner(self.ctx, plan_loader=lambda _repo: self.base_plan(action), actions=actions, command_runner=command_runner)
+        results = runner.run_once()
+
+        self.assertEqual(results[0].status, "applied")
+        git_subcmds = [cmd[3] for cmd in seen if cmd[0] == "git" and len(cmd) > 3]
+        self.assertIn("add", git_subcmds)
+        self.assertIn("commit", git_subcmds)
+        self.assertEqual(actions.calls[0][0], "safe_push")
+        self.assertEqual(actions.calls[0][1]["branch"], "refactor/iter77-issue-77")
+        self.assertEqual(Path(actions.calls[0][1]["worktree"]).resolve(), worktree.resolve())
+
+    def test_duplicate_remote_ci_fix_done_commits_and_pushes_worker_output(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True, exist_ok=True)
+        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
+        log = self.repo / ".refactor-loop/logs/remote-ci-fix-pr77-contract-tests.log"
+        log.write_text(f"{marker}\n{marker}\ntokens used\nEXIT=0\n", encoding="utf-8")
+        action = self.remote_ci_fix_action(
+            kind="completed-marker",
+            action_id=f"completed-marker:{log.name}:{marker}",
+            source_artifact=".refactor-loop/logs/remote-ci-fix-pr77-contract-tests.log",
+            source_marker=marker,
+            preconditions=["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present"],
+            head_sha=None,
+            check_name=None,
+        )
+        seen: list[list[str]] = []
+
+        def command_runner(command):
+            cmd = [str(part) for part in command]
+            seen.append(cmd)
+            if cmd[:3] == ["gh", "api", "repos/owner/repo/pulls/77"]:
+                return subprocess.CompletedProcess(cmd, 0, json.dumps({"state": "open"}), "")
+            if cmd[:3] == ["gh", "pr", "view"] and "headRefName" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, json.dumps({"headRefName": "refactor/iter77-issue-77"}), "")
+            if cmd[:2] == ["git", "-C"] and len(cmd) > 3 and Path(cmd[2]).resolve() == self.repo.resolve() and cmd[3] == "worktree":
+                return subprocess.CompletedProcess(
+                    cmd,
+                    0,
+                    f"worktree {self.repo}\nbranch refs/heads/auto-refact-dev\n\n"
+                    f"worktree {worktree}\nbranch refs/heads/refactor/iter77-issue-77\n\n",
+                    "",
+                )
+            if "status" in cmd and "--porcelain" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, " M skills/x.py\n", "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        actions = FakeActions()
+        runner = WakeupRunner(self.ctx, plan_loader=lambda _repo: self.base_plan(action), actions=actions, command_runner=command_runner)
+        results = runner.run_once()
+
+        self.assertEqual(results[0].status, "applied")
+        git_subcmds = [cmd[3] for cmd in seen if cmd[0] == "git" and len(cmd) > 3]
+        self.assertIn("add", git_subcmds)
+        self.assertIn("commit", git_subcmds)
+        self.assertEqual(actions.calls[0][0], "safe_push")
+
+    def test_conflicting_remote_ci_fix_done_does_not_satisfy_source_marker(self) -> None:
+        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
+        log = self.repo / ".refactor-loop/logs/remote-ci-fix-pr77-contract-tests.log"
+        log.write_text(
+            "REMOTE_CI_FIX_DONE:contract-tests:blocked\n"
+            f"{marker}\n"
+            "tokens used\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+        action = self.remote_ci_fix_action(
+            kind="completed-marker",
+            action_id=f"completed-marker:{log.name}:{marker}",
+            source_artifact=".refactor-loop/logs/remote-ci-fix-pr77-contract-tests.log",
+            source_marker=marker,
+            preconditions=["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present"],
+            head_sha=None,
+            check_name=None,
+        )
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "clean_exit_marker_missing")
+        self.assertEqual(actions.calls, [])
 
     def test_safe_push_routes_to_named_helper_after_head_and_clean_diff_revalidation(self) -> None:
         actions = FakeActions()
@@ -2707,6 +3054,33 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             with self.subTest(name=name):
                 actions = FakeActions()
                 results = self.run_result(self.base_plan(action), actions=actions)
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
+    def test_rollup_auto_merge_routes_to_named_helper_after_narrow_validation(self) -> None:
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(self.rollup_auto_merge_action()), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "auto_merge_release_rollup_pr_from_action")
+
+    def test_rollup_auto_merge_blocks_non_rollup_or_wrong_base_before_dispatch(self) -> None:
+        cases = (
+            ("wrong-head", {"head_ref": "refactor/iter88-work"}, "rollup_auto_merge_invalid_head_ref"),
+            ("wrong-base", {"base_ref": "auto-refact-dev"}, "rollup_auto_merge_base_mismatch"),
+            (
+                "missing-check-precondition",
+                {"preconditions": ["active_controller_owner", "live_open_target", "rollup_head_prefix", "review_base_target", "rollup_auto_merge_enabled"]},
+                "rollup_auto_merge_missing_precondition:required_checks_green_exact_head",
+            ),
+        )
+        for name, overrides, reason in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                action = self.rollup_auto_merge_action(action_id=f"rollup-auto:{name}", **overrides)
+
+                results = self.run_result(self.base_plan(action), actions=actions)
+
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
     def test_daemon_run_once_periodically_renews_heartbeat_during_long_tick(self) -> None:

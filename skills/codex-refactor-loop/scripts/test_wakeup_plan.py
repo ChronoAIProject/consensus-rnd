@@ -31,6 +31,7 @@ from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     GhItem,
     _revive_stale_redispatchable_implement_log,
+    ci_red_actions,
     close_projection_actions,
     force_revive_stuck_implements,
     completed_marker_actions,
@@ -45,7 +46,9 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     rebase_resolve_actions,
     rebase_resolve_completed_marker_actions,
     release_countdown_actions,
+    release_rollup_auto_merge_actions,
     release_rollup_actions,
+    review_evidence_redispatch_actions,
     restore_hard_gate_for_dispatchable_actions,
     resolve_repo_root,
     stale_revival_seconds,
@@ -1561,7 +1564,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertLess(kinds.index("ci-red"), kinds.index("no-gap-violation"))
         self.assertLess(kinds.index("no-gap-violation"), kinds.index("harness-spawn-intent"))
         ci_action = next(action for action in plan["actions"] if action["kind"] == "ci-red")
-        self.assertTrue(ci_action["status_only"])
+        self.assertNotIn("status_only", ci_action)
+        self.assertEqual(ci_action["controller_action"], "dispatch_remote_ci_fix")
+        self.assertEqual(ci_action["runner_authority"], "wakeup-runner-396")
 
     def test_status_only_completed_marker_keeps_completed_marker_priority_class(self) -> None:
         self.append_harness_spawn_intent(
@@ -2821,7 +2826,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertLess(kinds.index("unpushed-worker-output"), kinds.index("completed-marker"))
         self.assertLess(kinds.index("unpushed-worker-output"), kinds.index("existing-issue"))
 
-    def test_unimplemented_dispatch_projections_are_status_only(self) -> None:
+    def test_dispatch_projection_authority_matches_runner_support(self) -> None:
         self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
 
         plan = self.run_plan(fixture="ci_red")
@@ -2829,12 +2834,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         by_kind = {action["kind"]: action for action in plan["actions"]}
         by_kind["existing-issue"] = [action for action in existing_plan["actions"] if action["kind"] == "existing-issue"][0]
-        for kind in ("ci-red", "existing-issue"):
-            with self.subTest(kind=kind):
-                self.assertTrue(by_kind[kind]["status_only"])
-                self.assertTrue(by_kind[kind]["no_lifecycle_authority"])
-                self.assertNotIn("runner_authority", by_kind[kind])
-                self.assertNotIn("no_generic_command", by_kind[kind])
+        self.assertNotIn("status_only", by_kind["ci-red"])
+        self.assertEqual(by_kind["ci-red"]["controller_action"], "dispatch_remote_ci_fix")
+        self.assertEqual(by_kind["ci-red"]["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(by_kind["ci-red"]["no_generic_command"])
+        self.assertTrue(by_kind["existing-issue"]["status_only"])
+        self.assertTrue(by_kind["existing-issue"]["no_lifecycle_authority"])
+        self.assertNotIn("runner_authority", by_kind["existing-issue"])
+        self.assertNotIn("no_generic_command", by_kind["existing-issue"])
         self.assertTrue(str(by_kind["ci-red"]["controller_action"]).startswith("dispatch_"))
         self.assertNotIn("controller_action", by_kind["existing-issue"])
 
@@ -2856,6 +2863,56 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("review_thread_completion_evidence", action["preconditions"])
         for forbidden in ("argv", "shell", "cmd", "command_line", "commands", "env", "git", "gh", "executor"):
             self.assertNotIn(forbidden, action)
+
+    def test_remote_ci_fix_done_completed_marker_projects_executable_ci_fix_publish(self) -> None:
+        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
+        (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+
+        plan = self.run_plan(fixture="open_pr_77")
+
+        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-pr77-contract-tests")
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertNotIn("status_only", action)
+        self.assertEqual(action["phase"], "ci-watch")
+        self.assertEqual(action["actor"], "remote-ci-fix-codex")
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 77)
+        self.assertIn("clean_exit_source_marker", action["preconditions"])
+        for forbidden in ("argv", "shell", "cmd", "command_line", "commands", "env", "git", "gh", "executor"):
+            self.assertNotIn(forbidden, action)
+
+    def test_remote_ci_fix_done_duplicate_marker_projects_executable_ci_fix_publish(self) -> None:
+        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
+        (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(
+            f"{marker}\n{marker}\ntokens used\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_77")
+
+        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-pr77-contract-tests")
+        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
+        self.assertEqual(action["marker"], marker)
+        self.assertEqual(action["source_marker"], marker)
+        self.assertNotIn("status_only", action)
+
+    def test_remote_ci_fix_done_conflicting_duplicate_marker_fails_closed(self) -> None:
+        (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(
+            "REMOTE_CI_FIX_DONE:contract-tests:blocked\n"
+            "REMOTE_CI_FIX_DONE:contract-tests:ok\n"
+            "tokens used\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_77")
+
+        rendered = json.dumps(plan, sort_keys=True)
+        self.assertNotIn("completed-marker:remote-ci-fix-pr77-contract-tests", rendered)
+        self.assertNotIn("REMOTE_CI_FIX_DONE:contract-tests:ok", rendered)
 
     def test_reviewing_pr_with_missing_reviewer_heads_projects_dispatch_reviewers(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
@@ -3359,6 +3416,48 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(1, len(actions))
         self.assertEqual(actions[0]["event"]["integration_sha"], "integration-sha")
 
+    def test_rollup_pr_is_excluded_from_reviewer_and_ci_fix_projection(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=88,
+            title="发布 rollup",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="rollup/integration-sha",
+            head_sha="integration-sha",
+        )
+        ctx = mock.Mock(host_env={"REVIEW_BASE_BRANCH": "review"})
+
+        with mock.patch("codex_refactor_loop.wakeup_plan.PrChecksProjection") as checks_projection:
+            review_actions = review_evidence_redispatch_actions(self.repo, [item], ctx)
+            ci_actions = ci_red_actions(self.repo, [item], ctx)
+
+        self.assertEqual([], review_actions)
+        self.assertEqual([], ci_actions)
+        checks_projection.assert_not_called()
+
+    def test_rollup_pr_projects_ci_only_auto_merge_action(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=88,
+            title="发布 rollup",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="rollup/integration-sha",
+            head_sha="integration-sha",
+        )
+        ctx = mock.Mock(host_env={"REVIEW_BASE_BRANCH": "review"})
+
+        actions = release_rollup_auto_merge_actions(ctx, [item])
+
+        self.assertEqual(1, len(actions))
+        action = actions[0]
+        self.assertEqual("release-rollup-auto-merge", action["kind"])
+        self.assertEqual("auto_merge_release_rollup_pr_from_action", action["controller_action"])
+        self.assertEqual("rollup/integration-sha", action["head_ref"])
+        self.assertEqual("review", action["base_ref"])
+        self.assertIn("required_checks_green_exact_head", action["preconditions"])
+        self.assertNotIn("dispatch_reviewers", json.dumps(action))
+        self.assertNotIn("review_gate", json.dumps(action))
+
     def test_consensus_marker_after_exit_zero_with_harness_done_at_projects_implementation(self) -> None:
         artifact = self.write_consensus_artifact(issue=449, round_no=2)
         self.write_completed_log("phase9-issue449-r2-judge.log", "META_JUDGE_DONE:consensus:minimal")
@@ -3743,6 +3842,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 "publish_implementation_output",
                 "dispatch_reviewers",
                 "open_release_rollup_pr_from_action",
+                "auto_merge_release_rollup_pr_from_action",
             },
         )
         self.assertNotIn("HeadlessLifecycleAction", projection.class_names)

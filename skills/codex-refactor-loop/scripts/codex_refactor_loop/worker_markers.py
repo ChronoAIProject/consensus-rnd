@@ -17,6 +17,7 @@ DONE_PREFIXES = (
     "VERIFY_DONE",
     "REVIEW_DONE",
     "FIX_DONE",
+    "REMOTE_CI_FIX_DONE",
     "TEST_ADD_DONE",
     "TRIAGE_DECISION_DONE",
 )
@@ -158,6 +159,8 @@ def _sentinel_adjacent_marker(lines: list[str]) -> WorkerMarkerRead:
     all_unique = set(all_markers)
     if markers and len(unique) == 1 and len(all_unique) == 1:
         return WorkerMarkerRead(marker=markers[-1], source="log")
+    if not markers and len(all_markers) >= 2 and len(all_unique) == 1:
+        return WorkerMarkerRead(marker=all_markers[-1], source="log")
     if len(unique) > 1 or len(all_unique) > 1 or all_markers:
         return WorkerMarkerRead(reason="duplicate_or_conflicting_log_marker")
     return WorkerMarkerRead()

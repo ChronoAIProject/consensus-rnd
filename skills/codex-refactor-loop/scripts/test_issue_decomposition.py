@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import json
+import inspect
 import shutil
 import tempfile
 import unittest
-import inspect
 from pathlib import Path
 from typing import Any, Callable
 
@@ -130,34 +130,54 @@ class IssueDecompositionTests(unittest.TestCase):
         self.assertEqual(plan.children[0].slug, "first-child")
         self.assertEqual(plan.parent_comment_artifact_path, ".refactor-loop/runs/parent-comment.md")
 
-    def test_rejects_command_like_lifecycle_fields_absolute_paths_and_lifecycle_authority(self) -> None:
-        forbidden_fields = (
+    def test_rejects_minimum_command_lifecycle_fields_in_every_plan_object(self) -> None:
+        minimum_forbidden_fields = (
             "cmd",
             "argv",
             "shell",
+            "command_line",
+            "commands",
+            "env",
             "gh",
             "git",
-            "close",
-            "assignee",
-            "milestone",
-            "lifecycle_owner",
-            "lifecycle_authority",
-            "proof",
-            "digest",
-            "plan_digest",
-            "controller_action",
-            "kind",
             "executor",
-            "env",
-            "commands",
-            "command_line",
+            "lifecycle_authority",
+            "lifecycle_owner",
         )
-        for field in forbidden_fields:
+        for field in minimum_forbidden_fields:
             with self.subTest(field=field):
                 payload = self.valid_payload()
                 payload[field] = "forbidden"
                 with self.assertRaisesRegex(IssueDecompositionError, "forbidden lifecycle/command fields"):
                     load_issue_decomposition_plan(self.ctx, self.write_plan(payload))
+
+        for field in minimum_forbidden_fields:
+            with self.subTest(parent_update_forbidden_field=field):
+                payload = self.valid_payload()
+                payload["parent_update"][field] = "forbidden"
+                with self.assertRaisesRegex(IssueDecompositionError, "parent_update contains forbidden lifecycle/command fields"):
+                    load_issue_decomposition_plan(self.ctx, self.write_plan(payload))
+
+        for field in minimum_forbidden_fields:
+            with self.subTest(child_forbidden_field=field):
+                payload = self.valid_payload()
+                payload["children"][0][field] = "forbidden"
+                with self.assertRaisesRegex(IssueDecompositionError, r"children\[0\] contains forbidden lifecycle/command fields"):
+                    load_issue_decomposition_plan(self.ctx, self.write_plan(payload))
+
+    def test_rejects_compatibility_extra_lifecycle_fields_without_making_them_new_schema(self) -> None:
+        for field in ("args", "close", "assignee", "milestone", "proof", "digest", "plan_digest", "controller_action", "kind"):
+            with self.subTest(compatibility_forbidden_field=field):
+                payload = self.valid_payload()
+                payload["children"][0][field] = "forbidden"
+                with self.assertRaisesRegex(IssueDecompositionError, r"children\[0\] contains forbidden lifecycle/command fields"):
+                    load_issue_decomposition_plan(self.ctx, self.write_plan(payload))
+
+    def test_rejects_absolute_paths_path_traversal_and_single_child_plans(self) -> None:
+        payload = self.valid_payload()
+        payload["children"][0]["scope"] = {"cmd": "forbidden"}
+        with self.assertRaisesRegex(IssueDecompositionError, "forbidden lifecycle/command fields"):
+            load_issue_decomposition_plan(self.ctx, self.write_plan(payload))
 
         payload = self.valid_payload()
         payload["children"][0]["scope"] = {"cmd": "forbidden"}
@@ -334,30 +354,34 @@ class IssueDecompositionTests(unittest.TestCase):
             {"slug", "title", "scope", "non_goals", "body_artifact_path"},
         )
         self.assertEqual(issue_decomposition.PARENT_UPDATE_FIELDS, {"comment_artifact_path"})
-        self.assertEqual(
-            issue_decomposition.FORBIDDEN_PLAN_FIELDS,
-            {
-                "lifecycle_owner",
-                "lifecycle_authority",
-                "cmd",
-                "argv",
-                "shell",
-                "gh",
-                "git",
-                "close",
-                "assignee",
-                "milestone",
-                "proof",
-                "digest",
-                "plan_digest",
-                "controller_action",
-                "kind",
-                "executor",
-                "env",
-                "commands",
-                "command_line",
-            },
-        )
+        minimum_forbidden_fields = {
+            "cmd",
+            "argv",
+            "shell",
+            "command_line",
+            "commands",
+            "env",
+            "git",
+            "gh",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+        }
+        self.assertEqual(minimum_forbidden_fields, issue_decomposition.MINIMUM_FORBIDDEN_PLAN_FIELDS)
+        self.assertLessEqual(issue_decomposition.MINIMUM_FORBIDDEN_PLAN_FIELDS, issue_decomposition.FORBIDDEN_PLAN_FIELDS)
+        compatibility_forbidden_fields = {
+            "args",
+            "close",
+            "assignee",
+            "milestone",
+            "proof",
+            "digest",
+            "plan_digest",
+            "controller_action",
+            "kind",
+        }
+        self.assertLessEqual(compatibility_forbidden_fields, issue_decomposition.COMPATIBILITY_FORBIDDEN_PLAN_FIELDS)
+        self.assertLessEqual(compatibility_forbidden_fields, issue_decomposition.FORBIDDEN_PLAN_FIELDS)
 
         validator_source = inspect.getsource(issue_decomposition.validate_issue_decomposition_plan)
         for needle in (

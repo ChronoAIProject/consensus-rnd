@@ -99,11 +99,13 @@ RUNNER_NAMED_HELPER_ACTIONS = {
     "publish_implementation_output",
     "publish_worker_output_from_action",
     "dispatch_reviewers",
+    "dispatch_remote_ci_fix",
     "dispatch_pr_rebase_resolve",
     "commit_push_resolved_pr_rebase",
     "open_release_rollup_pr_from_action",
     "close_managed_item_from_drop_marker",
     "review_gate",
+    "auto_merge_release_rollup_pr_from_action",
     "publish_release_candidate",
     "apply_issue_decomposition_plan",
 }
@@ -130,6 +132,7 @@ EXECUTABLE_ACTION_KINDS = {
     "completed-marker",
     "release-rollup-needed",
     "ci-red",
+    "release-rollup-auto-merge",
     "review-evidence-redispatch",
 }
 NON_ACTION_PHASE_LABELS = {
@@ -1657,10 +1660,12 @@ def pending_review_spawn_exists(repo_root: Path, pr_number: int) -> bool:
     return False
 
 
-def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem]) -> list[dict[str, Any]]:
+def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem], ctx: LoopContext | None = None) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     for item in gh_items:
         if item.kind != "PR":
+            continue
+        if is_release_rollup_pr(item, ctx):
             continue
         if not item.mergeable and not item.merge_state_status:
             item = _with_live_mergeability(repo_root, item)
@@ -1721,6 +1726,8 @@ def phase_from_marker(marker: str) -> str:
         return "review-gate"
     if marker.startswith("FIX_DONE"):
         return "review-gate"
+    if marker.startswith("REMOTE_CI_FIX_DONE"):
+        return "ci-watch"
     if marker.startswith("TEST_ADD_DONE"):
         return "ci-watch"
     if marker.startswith("AUDIT_DONE"):
@@ -1747,6 +1754,7 @@ def route_from_marker(marker: str) -> str | None:
             "VERIFY_DONE",
             "REVIEW_DONE",
             "FIX_DONE",
+            "REMOTE_CI_FIX_DONE",
             "TEST_ADD_DONE",
         )
     ):
@@ -1763,6 +1771,8 @@ def actor_from_marker(marker: str) -> str:
         return "controller-or-fix-codex"
     if marker.startswith("FIX_DONE"):
         return "reviewer-codex"
+    if marker.startswith("REMOTE_CI_FIX_DONE"):
+        return "remote-ci-fix-codex"
     if marker.startswith("TEST_ADD_DONE"):
         return "controller"
     if marker.startswith("AUDIT_DONE"):
@@ -2011,6 +2021,17 @@ def safe_head_ref(value: str | None) -> str | None:
     return value
 
 
+def is_release_rollup_pr(item: GhItem, ctx: LoopContext | None = None) -> bool:
+    if item.kind != "PR":
+        return False
+    head_ref = safe_head_ref(item.head_ref or "")
+    if not head_ref or not head_ref.startswith("rollup/"):
+        return False
+    if ctx is None:
+        return True
+    return bool(str(ctx.host_env.get("REVIEW_BASE_BRANCH") or os.environ.get("REVIEW_BASE_BRANCH") or "").strip())
+
+
 def rebase_resolve_actions(
     repo_root: Path,
     ctx: LoopContext,
@@ -2214,44 +2235,103 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
     return actions
 
 
-def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]:
+def ci_red_actions(repo_root: Path, items: list[GhItem], ctx: LoopContext | None = None) -> list[dict[str, Any]]:
     slug = github_repo_slug()
     if not slug:
         return []
-    projection = PrChecksProjection(cwd=repo_root)
+    projection: PrChecksProjection | None = None
     actions: list[dict[str, Any]] = []
     for item in items:
         if item.kind != "PR":
             continue
+        if is_release_rollup_pr(item, ctx):
+            continue
+        if projection is None:
+            projection = PrChecksProjection(cwd=repo_root)
         status = projection.check_pr(slug, item.number)
         if not status.ok:
             continue
-        fail_count = sum(1 for check in status.runs if check.bucket == "fail")
+        failed_checks = [check for check in status.runs if check.bucket == "fail"]
+        fail_count = len(failed_checks)
         if fail_count <= 0:
+            continue
+        check_names = [check.name for check in failed_checks]
+        for check in failed_checks:
+            actions.append(
+                {
+                    "priority": 4,
+                    "kind": "ci-red",
+                    "action_id": f"ci-red:{item.number}:{status.head_sha}:{_ci_check_action_token(check.name)}",
+                    "item": item.item,
+                    "phase": "ci-watch",
+                    "actor": "remote-ci-fix-codex",
+                    "fail_count": fail_count,
+                    "head_sha": status.head_sha,
+                    "check_name": check.name,
+                    "check_names": check_names,
+                    "run_url": check.link,
+                    "source_artifact": "github-check-runs",
+                    "source_marker": f"ci-red:{item.number}:{status.head_sha}:{check.name}",
+                    "target_kind": "PR",
+                    "target_number": item.number,
+                    "target": {"kind": "PR", "number": item.number},
+                    "preconditions": ["active_controller_owner", "live_open_target", "checks_red"],
+                    "controller_action": "dispatch_remote_ci_fix",
+                    "runner_authority": RUNNER_AUTHORITY,
+                    "no_generic_command": True,
+                }
+            )
+    return actions
+
+
+def release_rollup_auto_merge_actions(ctx: LoopContext, items: list[GhItem]) -> list[dict[str, Any]]:
+    review_base = str(ctx.host_env.get("REVIEW_BASE_BRANCH") or os.environ.get("REVIEW_BASE_BRANCH") or "").strip()
+    if not review_base:
+        return []
+    actions: list[dict[str, Any]] = []
+    for item in items:
+        if not is_release_rollup_pr(item, ctx):
+            continue
+        head_ref = safe_head_ref(item.head_ref or "")
+        if not head_ref or not item.head_sha:
             continue
         actions.append(
             {
-                "priority": 4,
-                "kind": "ci-red",
-                "action_id": f"ci-red:{item.number}:{status.head_sha}",
+                "priority": 3,
+                "kind": "release-rollup-auto-merge",
+                "action_id": f"release-rollup-auto-merge:{item.number}:{item.head_sha}",
                 "item": item.item,
-                "phase": "ci-watch",
-                "actor": "remote-ci-fix-codex",
-                "fail_count": fail_count,
-                "head_sha": status.head_sha,
-                "check_names": [check.name for check in status.runs if check.bucket == "fail"],
-                "source_artifact": "github-check-runs",
-                "source_marker": f"ci-red:{item.number}:{status.head_sha}",
+                "phase": "publish",
+                "actor": "controller",
+                "route": "release-rollup-auto-merge",
+                "rollup_kind": "release-rollup",
                 "target_kind": "PR",
                 "target_number": item.number,
                 "target": {"kind": "PR", "number": item.number},
-                "preconditions": ["active_controller_owner", "live_open_target", "checks_red"],
-                "controller_action": "dispatch_remote_ci_fix",
+                "head_ref": head_ref,
+                "head_sha": item.head_sha,
+                "base_ref": review_base,
+                "source_artifact": "github-open-managed-work-snapshot",
+                "source_marker": f"RELEASE_ROLLUP_AUTO_MERGE:{item.number}:{item.head_sha}",
+                "preconditions": [
+                    "active_controller_owner",
+                    "live_open_target",
+                    "rollup_head_prefix",
+                    "review_base_target",
+                    "required_checks_green_exact_head",
+                    "rollup_auto_merge_enabled",
+                ],
+                "controller_action": "auto_merge_release_rollup_pr_from_action",
                 "runner_authority": RUNNER_AUTHORITY,
                 "no_generic_command": True,
             }
         )
     return actions
+
+
+def _ci_check_action_token(check_name: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9._-]+", "-", check_name.strip()).strip("-")
+    return token or "check"
 
 
 def release_rollup_actions(repo_root: Path) -> list[dict[str, Any]]:
@@ -3000,6 +3080,8 @@ def controller_action_from_marker(marker: str) -> str:
         return "review_gate"
     if marker.startswith("FIX_DONE"):
         return "dispatch_reviewers"
+    if marker.startswith("REMOTE_CI_FIX_DONE"):
+        return "dispatch_remote_ci_fix"
     if marker.startswith("TEST_ADD_DONE"):
         return "dispatch_ci_watch"
     if marker.startswith("META_RESOLVED:drop:"):
@@ -3384,13 +3466,14 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(harness_spawn_intent_actions(repo_root, ctx, monitor, gh_items, gh_items_loaded))
     actions.extend(maintainer_comment_actions(repo_root, gh_items))
     actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
-    actions.extend(review_evidence_redispatch_actions(repo_root, gh_items if gh_items_loaded else []))
+    actions.extend(review_evidence_redispatch_actions(repo_root, gh_items if gh_items_loaded else [], ctx))
     actions.extend(rebase_resolve_actions(repo_root, ctx, gh_items if gh_items_loaded else [], monitor))
     completed_marker_open_targets = _open_managed_targets(gh_items) if gh_items_loaded else None
     actions.extend(completed_marker_actions(repo_root, ctx, completed_marker_open_targets, gh_items if gh_items_loaded else None, monitor))
     actions.extend(rebase_resolve_completed_marker_actions(repo_root, gh_items if gh_items_loaded else []))
     actions.extend(release_rollup_actions(repo_root))
-    actions.extend(ci_red_actions(repo_root, gh_items))
+    actions.extend(release_rollup_auto_merge_actions(ctx, gh_items if gh_items_loaded else []))
+    actions.extend(ci_red_actions(repo_root, gh_items, ctx))
     actions.extend(no_gap_actions(repo_root))
     host_actions, host_spec_error = load_host_workflow_projection(repo_root)
     if host_spec_error:

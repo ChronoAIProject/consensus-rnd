@@ -40,11 +40,11 @@ TARGET_ANCHORS = {
     "runtime-retention-437": "## Named runtime exception - RuntimeRetention(per #437)",
     "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
     "controller-release-publisher-334": "## Named runtime exception — release-publication(per #322)",
+    "rollup-autonomous-merge-2026-06-06": "## Named runtime exception - rollup-autonomous-merge(maintainer-directive 2026-06-06)",
     "gh-usage-accounting-455": "## Named runtime exception — gh usage accounting(per #455)",
     "repository-stalled-meta-reflector-506": "Repository-stalled meta-reflector(per #506)",
     "global-dashboard-status-card-504": "## Named runtime exception - global-dashboard-status-card(per #504)",
     "patrol-inspector-issue-intake-541": "## Named runtime exception - patrol-inspector issue-intake(per #541)",
-    "controller-tick-supervisor-553": "## ControllerTickSupervisor(per #553)",
 }
 
 MAINTAINER_DIRECTIVE_ANCHORS = {
@@ -188,6 +188,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
         for needle in (
             "active-controller owner only",
+            "existing `ControllerActions.apply_issue_decomposition_plan()` helper's private validation gate",
             "IssueDecompositionPlan",
             "children:[{slug,title,scope,non_goals,body_artifact_path}]",
             "parent_update:{comment_artifact_path}",
@@ -197,10 +198,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "read-only `peek` pending-events tail",
             "no daemon/worker issue creation",
             "no public issue factory",
+            "no public command bus",
+            "no executor layer",
+            "no generic effect-adapter runtime abstraction",
             "no public CLI command",
             "no wakeup-plan decompose projection except the #396 evidence-bound named `controller_action=\"apply_issue_decomposition_plan\"`",
+            "no second #403 apply schema",
             "no parent issue close/reopen/body-title edit",
-            "no lifecycle_owner/lifecycle_authority/cmd/argv/shell/gh/git/close fields",
+            "no lifecycle_owner/lifecycle_authority/cmd/argv/args/shell/command_line/commands/env/gh/git/executor/close fields",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, entry)
@@ -233,6 +238,60 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, wakeup_source)
         self.assertIn("wakeup_plan.py` is not the #403 read-model/status/authorization owner", skill_section)
+
+    def test_issue_403_and_wakeup_runner_396_share_effect_admission_boundary_language(self) -> None:
+        issue_entry = mirror_entry(self.mirror, "issue-decomposition-403")
+        runner_entry = mirror_entry(self.mirror, "wakeup-runner-396")
+        issue_section = self.skill[self.skill.index("## Large issue decomposition(per #403)") :]
+        runner_section = self.skill[self.skill.index("## Named runtime exception - wakeup-runner(per #396)") :]
+
+        for text in (
+            "not a second apply schema, public command bus, executor layer, or generic effect-adapter runtime abstraction",
+            "ControllerActions.apply_issue_decomposition_plan()",
+        ):
+            with self.subTest(issue_boundary_text=text):
+                self.assertIn(text, issue_entry)
+                self.assertIn(text, issue_section)
+        for text in (
+            "effect-adapter boundary is only the owner-local admission contract",
+            "effects are allowed only by concrete `controller_action` or helper name",
+            "ordinary rejection uses grep-able one-line runner diagnostics",
+            "helper-owned durable result/diagnostic artifacts",
+            "`.refactor-loop/host.env` may be skill-private runtime/cache/log read state only",
+        ):
+            with self.subTest(runner_boundary_text=text):
+                self.assertIn(text.lower(), runner_entry.lower())
+                self.assertIn(text.lower(), runner_section.lower())
+
+    def test_effect_admission_forbidden_field_floor_is_mirrored_and_implemented(self) -> None:
+        runner_entry = mirror_entry(self.mirror, "wakeup-runner-396")
+        issue_entry = mirror_entry(self.mirror, "issue-decomposition-403")
+        issue_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "issue_decomposition.py")
+        wakeup_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_runner.py")
+        minimum_forbidden_fields = (
+            "cmd",
+            "argv",
+            "shell",
+            "command_line",
+            "commands",
+            "env",
+            "git",
+            "gh",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+        )
+
+        self.assertIn("the fixed forbidden field set is at least", runner_entry)
+        for field in minimum_forbidden_fields:
+            with self.subTest(field=field):
+                self.assertIn(field, runner_entry)
+                self.assertIn(field, issue_entry)
+                self.assertIn(f'"{field}"', issue_source)
+                self.assertIn(f'"{field}"', wakeup_source)
+        self.assertIn("existing extra `args` rejection retained", runner_entry)
+        self.assertIn('"args"', issue_source)
+        self.assertIn('"args"', wakeup_source)
 
     def test_runtime_retention_437_preserves_narrow_local_gc_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "runtime-retention-437")
@@ -341,6 +400,36 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for forbidden in ("prompt.read_text", "worker prose", "discussion"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, holistic_source)
+
+    def test_rollup_autonomous_merge_2026_06_06_is_singleton_ci_only(self) -> None:
+        entry = mirror_entry(self.mirror, "rollup-autonomous-merge-2026-06-06")
+        skill_section = self.skill[self.skill.index("## Named runtime exception - rollup-autonomous-merge(maintainer-directive 2026-06-06)") :]
+        for needle in (
+            "maintainer-directive-2026-06-06",
+            "rollup 只要ci过了就可以,不用review",
+            "exactly one open rollup PR",
+            "head starts with `rollup/`",
+            "`git push --force-with-lease origin <integration_sha>:refs/heads/<existing-rollup-head>`",
+            "exclude rollup PRs from reviewer dispatch, review-fix, and remote-ci-fix",
+            "`auto_merge_release_rollup_pr_from_action`",
+            "ReleaseRequiredChecksProjection",
+            "`gh pr merge <N> --squash --delete-branch`",
+            "no generic merge-to-review-base authority",
+            "no #322 release publication change",
+            "branch-protection/host-policy merge failure",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, entry)
+        for needle in (
+            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#rollup-autonomous-merge-2026-06-06",
+            ".refactor-loop/runs/maintainer-directives/2026-06-06-rollup-autonomous-merge.md",
+            "$ROLLUP_AUTO_MERGE",
+            "head_ref=rollup/*",
+            "required checks",
+            "no cluster PR review policy change",
+        ):
+            with self.subTest(skill_needle=needle):
+                self.assertIn(needle, skill_section)
 
     def test_issue_541_patrol_inspector_issue_intake_is_narrow(self) -> None:
         entry = mirror_entry(self.mirror, "patrol-inspector-issue-intake-541")
@@ -751,6 +840,18 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("action `head_sha` cannot substitute for reviewer-head authority", entry)
         self.assertIn("all required reviewer heads equal live PR head", entry)
         self.assertIn("all required reviewer heads equal live PR head", self.skill)
+        for required in (
+            "effect-adapter boundary",
+            "owner-local admission contract",
+            "concrete `controller_action`",
+            "durable artifact",
+            "ConsensusGate/meta-judge or review truth table",
+            "helper-owned durable result/diagnostic artifacts",
+            "`.refactor-loop/host.env` may be skill-private runtime/cache/log read state only",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
         self.assertIn(
             "Consensus→implement projection durable fact source is the consensus judge artifact frontmatter, `## If consensus`, `Implementation owner`, and Implement plan structured fields `scope_paths`, `old_pattern`, `new_principle`, and optional `verification_hints`; parser failure emits no implementation action.",
             self.skill,
@@ -768,13 +869,23 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "generic codex fallback",
             "prompt-body decision",
             "standalone authorization from `wakeup-plan`",
-            "argv/shell/cmd/command_line/commands/env/git/gh/executor/lifecycle_authority/lifecycle_owner/generic command fields",
+            "the fixed forbidden field set is at least",
+            "existing extra `args` rejection retained",
             "new lifecycle authority",
             "`ControllerTurnDecision`",
             "controller-turn worker",
             "active-active scheduler",
             "`.refactor-loop/host.env` as host production SSOT",
             "generic lifecycle actor",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+                self.assertIn(forbidden, self.skill)
+
+        for forbidden in (
+            "no generic effect-adapter runtime abstraction",
+            "no public command bus",
+            "no executor layer",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, entry)
@@ -1398,7 +1509,20 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for forbidden in sorted(forbidden_action_fields):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, combined_authority)
-        self.assertIn("test_forbidden_fields_fail_closed", read(SKILL_ROOT / "scripts" / "test_wakeup_runner.py"))
+        runner_projection = python_projection(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_runner.py")
+        for forbidden_name in (
+            "ControllerEffectAdapter",
+            "WakeupActionAdmission",
+            "WakeupActionResult",
+            "ControllerTurnDecision",
+        ):
+            with self.subTest(forbidden_name=forbidden_name):
+                self.assertNotIn(forbidden_name, runner_projection.class_names)
+                self.assertNotIn(forbidden_name, runner_projection.string_literals)
+        self.assertIn(
+            "test_effect_admission_boundary_rejects_minimum_forbidden_command_and_lifecycle_fields",
+            read(SKILL_ROOT / "scripts" / "test_wakeup_runner.py"),
+        )
 
     def test_observability_comment_writers_owner_local_contract_is_locked(self) -> None:
         heading = "## Named runtime exception — observability-comment-writers(per #53)"

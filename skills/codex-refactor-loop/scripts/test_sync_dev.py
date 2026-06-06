@@ -412,7 +412,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertEqual([], self.pending_events())
         self.assertEqual([], self.operation_jsons())
 
-    def test_release_rollup_open_stale_throwaway_head_does_not_suppress_event(self) -> None:
+    def test_release_rollup_open_stale_throwaway_head_suppresses_new_event_for_singleton(self) -> None:
         fake = FakeGit(
             merge_base_adopted=True,
             release_ahead=3,
@@ -422,7 +422,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
         )
         self.daemon(fake, release_rollup_min_commits=1).tick()
 
-        self.assertTrue(self.pending_events()[0].startswith("DEV_SYNC_PENDING:release-rollup-needed:"))
+        self.assertEqual([], self.pending_events())
         self.assertEqual([], self.operation_jsons())
 
     def test_release_rollup_open_pr_query_nonzero_appends_ambiguous_event_and_suppresses_rollup(self) -> None:

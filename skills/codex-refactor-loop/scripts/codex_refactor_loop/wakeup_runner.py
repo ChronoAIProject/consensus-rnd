@@ -78,11 +78,13 @@ SUPPORTED_CONTROLLER_ACTIONS = {
     "publish_implementation_output",
     "publish_worker_output_from_action",
     "dispatch_reviewers",
+    "dispatch_remote_ci_fix",
     "dispatch_pr_rebase_resolve",
     "commit_push_resolved_pr_rebase",
     "open_release_rollup_pr_from_action",
     "close_managed_item_from_drop_marker",
     "review_gate",
+    "auto_merge_release_rollup_pr_from_action",
     "publish_release_candidate",
     "apply_issue_decomposition_plan",
 }
@@ -93,6 +95,9 @@ SUPPORTED_CONTROLLER_ACTIONS = {
 SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(
     {"spawn_codex_harness_background"}
 )
+REMOTE_CI_FIX_ATTEMPT_CAP = 2
+REMOTE_CI_FIX_DONE_RE = re.compile(r"^REMOTE_CI_FIX_DONE:([^:]+):(ok|infra|blocked)$")
+SAFE_CI_CHECK_TOKEN_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 @dataclass(frozen=True)
@@ -242,8 +247,9 @@ class WakeupRunner:
             if result.status != "applied":
                 if result.status in {"blocked", "skipped"} and not consumes_spawn_budget:
                     continue
-                if result.status == "blocked" and consumes_spawn_budget and not _spawn_launch_failure(result):
-                    continue
+                if result.status == "blocked" and consumes_spawn_budget:
+                    if not is_spawn_action or not _spawn_launch_failure(result):
+                        continue
                 break
             if consumes_spawn_budget:
                 applied_spawns += 1
@@ -253,7 +259,7 @@ class WakeupRunner:
 
     def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:
         controller_action = str(action.get("controller_action") or "")
-        if controller_action == "dispatch_reviewers":
+        if controller_action in {"dispatch_reviewers", "dispatch_remote_ci_fix"}:
             return True
         if controller_action == "review_gate":
             if self._validate_action(action) is not None:
@@ -398,12 +404,16 @@ class WakeupRunner:
             return self._validate_publish_implementation(action)
         if controller_action == "dispatch_reviewers":
             return self._validate_dispatch_reviewers(action)
+        if controller_action == "dispatch_remote_ci_fix":
+            return self._validate_dispatch_remote_ci_fix(action)
         if controller_action == "dispatch_pr_rebase_resolve":
             return self._validate_dispatch_pr_rebase_resolve(action)
         if controller_action == "commit_push_resolved_pr_rebase":
             return self._validate_commit_push_resolved_pr_rebase(action)
         if controller_action == "open_release_rollup_pr_from_action":
             return self._validate_release_rollup(action)
+        if controller_action == "auto_merge_release_rollup_pr_from_action":
+            return self._validate_release_rollup_auto_merge(action)
         if controller_action == "close_managed_item_from_drop_marker":
             return self._validate_close_managed_drop(action)
         return None
@@ -670,6 +680,27 @@ class WakeupRunner:
             return "dispatch_reviewers_target_missing"
         return None
 
+    def _validate_dispatch_remote_ci_fix(self, action: Mapping[str, Any]) -> str | None:
+        if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
+            return "dispatch_remote_ci_fix_target_missing"
+        marker = str(action.get("source_marker") or "")
+        if marker.startswith("REMOTE_CI_FIX_DONE:"):
+            match = REMOTE_CI_FIX_DONE_RE.fullmatch(marker)
+            if match is None:
+                return "dispatch_remote_ci_fix_invalid_marker"
+            return None
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "dispatch_remote_ci_fix_missing_preconditions"
+        for required in ("active_controller_owner", "live_open_target", "checks_red"):
+            if required not in preconditions:
+                return f"dispatch_remote_ci_fix_missing_precondition:{required}"
+        if not str(action.get("head_sha") or "").strip():
+            return "dispatch_remote_ci_fix_head_sha_missing"
+        if not str(action.get("check_name") or "").strip():
+            return "dispatch_remote_ci_fix_check_name_missing"
+        return None
+
     def _validate_dispatch_pr_rebase_resolve(self, action: Mapping[str, Any]) -> str | None:
         if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
             return "dispatch_pr_rebase_resolve_target_missing"
@@ -728,6 +759,34 @@ class WakeupRunner:
         body_file = self.ctx.repo_root / str(action.get("body_file") or "")
         if not body_file.is_file():
             return "release_rollup_body_missing"
+        return None
+
+    def _validate_release_rollup_auto_merge(self, action: Mapping[str, Any]) -> str | None:
+        if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
+            return "rollup_auto_merge_target_missing"
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "rollup_auto_merge_missing_preconditions"
+        for required in (
+            "active_controller_owner",
+            "live_open_target",
+            "rollup_head_prefix",
+            "review_base_target",
+            "required_checks_green_exact_head",
+            "rollup_auto_merge_enabled",
+        ):
+            if required not in preconditions:
+                return f"rollup_auto_merge_missing_precondition:{required}"
+        head_ref = str(action.get("head_ref") or "")
+        if not _safe_branch_name(head_ref) or not head_ref.startswith("rollup/"):
+            return "rollup_auto_merge_invalid_head_ref"
+        head_sha = str(action.get("head_sha") or "").strip()
+        if not re.fullmatch(r"[0-9A-Za-z._-]+", head_sha):
+            return "rollup_auto_merge_invalid_head_sha"
+        base_ref = str(action.get("base_ref") or "").strip()
+        expected_base = str(self.ctx.host_env.get("REVIEW_BASE_BRANCH") or "").strip()
+        if not expected_base or base_ref != expected_base:
+            return "rollup_auto_merge_base_mismatch"
         return None
 
     def _validate_no_conflicting_open_implementation_pr(self, action: Mapping[str, Any]) -> str | None:
@@ -828,12 +887,16 @@ class WakeupRunner:
                 if fix_publish_rc != 0:
                     return fix_publish_rc
             return self.actions.dispatch_reviewers(dict(action))
+        if controller_action == "dispatch_remote_ci_fix":
+            return self._dispatch_remote_ci_fix(action)
         if controller_action == "dispatch_pr_rebase_resolve":
             return self.actions.dispatch_pr_rebase_resolve(dict(action))
         if controller_action == "commit_push_resolved_pr_rebase":
             return self.actions.commit_push_resolved_pr_rebase(dict(action))
         if controller_action == "open_release_rollup_pr_from_action":
             return self.actions.open_release_rollup_pr_from_action(dict(action))
+        if controller_action == "auto_merge_release_rollup_pr_from_action":
+            return self.actions.auto_merge_release_rollup_pr_from_action(dict(action))
         if controller_action == "close_managed_item_from_drop_marker":
             return self.actions.close_managed_item_from_drop_marker(dict(action))
         if controller_action == "review_gate":
@@ -910,6 +973,126 @@ class WakeupRunner:
             stall=5400,
             add_dirs=(self.ctx.repo_root,),
         )
+
+    def _dispatch_remote_ci_fix(self, action: Mapping[str, Any]) -> int:
+        marker = str(action.get("source_marker") or "")
+        if marker.startswith("REMOTE_CI_FIX_DONE:"):
+            match = REMOTE_CI_FIX_DONE_RE.fullmatch(marker)
+            if match is None:
+                return 2
+            if match.group(2) != "ok":
+                self._append_pending_event(
+                    f"WAKEUP_RUNNER_REMOTE_CI_FIX_NOT_PUBLISHABLE:{action.get('target_number')}:{match.group(1)}:{match.group(2)}"
+                )
+                return 3
+            return self._commit_and_push_remote_ci_fix_output(action)
+        return self._spawn_remote_ci_fix(action)
+
+    def _spawn_remote_ci_fix(self, action: Mapping[str, Any]) -> int:
+        target = action.get("target_number")
+        if not isinstance(target, int) or target <= 0:
+            return 2
+        check_name = str(action.get("check_name") or "").strip()
+        head_sha = str(action.get("head_sha") or "").strip()
+        if not check_name or not head_sha:
+            return 2
+        attempt_key = _remote_ci_attempt_key(target, head_sha, check_name)
+        attempts = self._remote_ci_fix_attempt_count(attempt_key)
+        if attempts >= REMOTE_CI_FIX_ATTEMPT_CAP:
+            self._append_pending_event(f"WAKEUP_RUNNER_REMOTE_CI_FIX_RETRY_CAP:{attempt_key}:{attempts}")
+            return 3
+        head_ref = self._pr_head_ref_from_json(target)
+        if not head_ref:
+            self._append_pending_event(f"WAKEUP_RUNNER_REMOTE_CI_FIX_HEAD_REF_MISSING:{target}")
+            return 3
+        worktree = self._worktree_for_branch(head_ref)
+        if worktree is None:
+            self._append_pending_event(f"WAKEUP_RUNNER_REMOTE_CI_FIX_WORKTREE_MISSING:{target}:{head_ref}")
+            return 3
+        prompt = self._render_remote_ci_fix_prompt(action, target, check_name, head_sha, head_ref, worktree, attempts + 1)
+        log = self.ctx.paths.logs / f"remote-ci-fix-pr{target}-{_safe_ci_check_token(check_name)}-{head_sha[:12]}-a{attempts + 1}.log"
+        self._record_remote_ci_fix_attempt(attempt_key)
+        exit_code = launch_spawn_codex_supervisor(
+            repo_root=self.ctx.repo_root,
+            cd=worktree,
+            prompt=prompt,
+            log=log,
+            stall=5400,
+            add_dirs=(self.ctx.repo_root,),
+            env=self.ctx.env_for_subprocess(),
+        )
+        return exit_code
+
+    def _render_remote_ci_fix_prompt(
+        self,
+        action: Mapping[str, Any],
+        target: int,
+        check_name: str,
+        head_sha: str,
+        head_ref: str,
+        worktree: Path,
+        attempt: int,
+    ) -> Path:
+        token = _safe_ci_check_token(check_name)
+        sha_short = head_sha[:12]
+        prompt = self.ctx.paths.prompts / f"remote-ci-fix-pr{target}-{token}-{sha_short}-a{attempt}.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        self.actions.render_template(
+            str(self.ctx.skill_root / "prompts" / "remote-ci-fix.md"),
+            str(prompt),
+            env={
+                "PR_NUMBER": str(target),
+                "CHECK_NAME": check_name,
+                "RUN_URL": str(action.get("run_url") or ""),
+                "FAILURE_LOG_PATH": str(action.get("failure_log_path") or ""),
+                "WORKTREE_PATH": str(worktree),
+                "BRANCH": head_ref,
+                "BASE_BRANCH": str(getattr(self.actions, "integration_branch", "") or getattr(self.actions, "review_base_branch", "")),
+                "SHA_SHORT": sha_short,
+                "PROJECT_RULES": "CLAUDE.md",
+                "HOST_REFACTOR_COMMENT_POLICY": "none",
+            },
+        )
+        self._replace_remote_ci_fix_shell_defaults(prompt)
+        self._ensure_remote_ci_fix_prompt_fully_rendered(prompt)
+        return prompt
+
+    def _replace_remote_ci_fix_shell_defaults(self, prompt: Path) -> None:
+        text = prompt.read_text(encoding="utf-8")
+        text = text.replace("${PROJECT_RULES:-CLAUDE.md}", "CLAUDE.md")
+        prompt.write_text(text, encoding="utf-8")
+
+    def _ensure_remote_ci_fix_prompt_fully_rendered(self, prompt: Path) -> None:
+        text = prompt.read_text(encoding="utf-8")
+        unresolved = sorted(set(re.findall(r"\$\{[^}]+\}", text)))
+        if unresolved:
+            raise RuntimeError(f"remote-ci-fix prompt render left unresolved placeholders: {', '.join(unresolved)}")
+
+    def _commit_and_push_remote_ci_fix_output(self, action: Mapping[str, Any]) -> int:
+        target = action.get("target_number")
+        if not isinstance(target, int) or target <= 0:
+            return 2
+        worktree = self._review_fix_worktree(target)
+        if worktree is None:
+            return 3
+        status = self.command_runner(["git", "-C", str(worktree), "status", "--porcelain"])
+        if status.returncode != 0:
+            self._append_pending_event(f"WAKEUP_RUNNER_REMOTE_CI_FIX_STATUS_FAILED:{target}")
+            return 2
+        if not status.stdout.strip():
+            return 0
+        if self.command_runner(["git", "-C", str(worktree), "add", "-A"]).returncode != 0:
+            return 2
+        commit = self.command_runner(
+            ["git", "-C", str(worktree), "commit", "-m", f"PR #{target} remote-ci-fix output"]
+        )
+        if commit.returncode != 0:
+            self._append_pending_event(f"WAKEUP_RUNNER_REMOTE_CI_FIX_COMMIT_FAILED:{target}")
+            return 2
+        head_ref = self._pr_head_ref_from_json(target)
+        if not head_ref:
+            return 3
+        return self.actions.safe_push(branch=head_ref, worktree=worktree)
 
     def _review_fix_worktree(self, pr_number: int) -> Path | None:
         head_ref = self._pr_head_ref_from_json(pr_number)
@@ -1232,6 +1415,8 @@ class WakeupRunner:
             if status == "dry-run":
                 return True
             if status == "applied":
+                if _is_remote_ci_red_dispatch(action):
+                    continue
                 if self._applied_spawn_is_stale(action):
                     self._append_pending_event(f"WAKEUP_RUNNER_STALE_SPAWN_LEDGER:{action_id}:target-log-absent")
                     continue
@@ -1239,6 +1424,34 @@ class WakeupRunner:
             if status == "blocked" and _terminal_blocked_reason(str(row.get("reason") or "")):
                 return True
         return False
+
+    @property
+    def remote_ci_fix_attempts_path(self) -> Path:
+        return self.ctx.paths.state / "remote-ci-fix-attempts.json"
+
+    def _remote_ci_fix_attempt_count(self, attempt_key: str) -> int:
+        attempts = self._read_remote_ci_fix_attempts()
+        value = attempts.get(attempt_key)
+        return value if isinstance(value, int) and value > 0 else 0
+
+    def _record_remote_ci_fix_attempt(self, attempt_key: str) -> None:
+        attempts = self._read_remote_ci_fix_attempts()
+        attempts[attempt_key] = self._remote_ci_fix_attempt_count(attempt_key) + 1
+        self.remote_ci_fix_attempts_path.parent.mkdir(parents=True, exist_ok=True)
+        self.remote_ci_fix_attempts_path.write_text(json.dumps(attempts, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+    def _read_remote_ci_fix_attempts(self) -> dict[str, int]:
+        try:
+            payload = json.loads(self.remote_ci_fix_attempts_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        attempts: dict[str, int] = {}
+        for key, value in payload.items():
+            if isinstance(key, str) and isinstance(value, int) and value > 0:
+                attempts[key] = value
+        return attempts
 
     def _applied_spawn_is_stale(self, action: Mapping[str, Any]) -> bool:
         if action.get("controller_action") != "spawn_codex_harness_background":
@@ -1307,6 +1520,19 @@ def _source_log_has_clean_rebase_resolve_marker(path: Path, marker: str) -> bool
 
 def _safe_branch_name(value: str) -> bool:
     return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)
+
+
+def _safe_ci_check_token(check_name: str) -> str:
+    token = SAFE_CI_CHECK_TOKEN_RE.sub("-", check_name.strip()).strip("-")
+    return token or "check"
+
+
+def _remote_ci_attempt_key(pr_number: int, head_sha: str, check_name: str) -> str:
+    return f"pr{pr_number}:{head_sha}:{_safe_ci_check_token(check_name)}"
+
+
+def _is_remote_ci_red_dispatch(action: Mapping[str, Any]) -> bool:
+    return action.get("kind") == "ci-red" and action.get("controller_action") == "dispatch_remote_ci_fix"
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:

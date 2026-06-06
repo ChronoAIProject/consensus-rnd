@@ -479,7 +479,7 @@ class IntegrationSyncDaemon:
                 continue
             head = str(row.get("headRefName") or "")
             head_sha = str(row.get("headRefOid") or "")
-            if head == self.integration or (head.startswith("rollup/") and head_sha == integration_sha):
+            if head == self.integration or head.startswith("rollup/"):
                 return True
         return False
 
