@@ -46,6 +46,25 @@ class StatuslineCliTests(unittest.TestCase):
         elapsed_ms = (time.monotonic() - start) * 1000
         self.assertLess(elapsed_ms, 200, output)
 
+    def test_entrypoint_statusline_does_not_import_full_router(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-X",
+                "importtime",
+                str(CLI),
+                "statusline",
+            ],
+            env={"REPO_ROOT": str(self.tmp)},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("⏸ no-snapshot", result.stdout)
+        self.assertNotIn("codex_refactor_loop.cli", result.stderr)
+
     def test_no_snapshot_returns_placeholder(self) -> None:
         self.assertEqual("⏸ no-snapshot", self.run_statusline())
 
