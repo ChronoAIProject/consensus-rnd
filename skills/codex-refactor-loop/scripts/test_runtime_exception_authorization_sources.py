@@ -699,6 +699,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "matching `decision_digest`",
             "matching `target_ref`",
             "mapped manifest `from_version`",
+            "matching coordinate policy when present",
+            "mandatory `coordinate_policy.transition=beta_core_promotion` evidence for beta core promotion",
             "required checks green",
             "python3 .github/scripts/bump_version.py --version <to_version>",
             "git add .version-bump.json <mapped manifests>",
