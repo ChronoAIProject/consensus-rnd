@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from unittest import mock
@@ -1287,6 +1288,38 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
                 self.assertEqual(self.commands, [])
                 self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["262-1-minimal"])
+
+    def test_phase9_router_recovers_missing_ledgered_actor_during_capacity_hard_gate(self) -> None:
+        now = datetime.now(timezone.utc)
+        self.write_ledger_entry(
+            key="262-1-minimal",
+            marker="DesignConsensusIssueIntake",
+            log_path=".refactor-loop/logs/phase9-issue262-r1-minimal.log",
+            dispatched_at=(now - timedelta(minutes=3)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        self.router.ctx.host_env["STALE_REVIVAL_HOURS"] = "3"
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending.write_text(
+            f"{now.strftime('%Y-%m-%dT%H:%M:%SZ')} HARD_GATE:dispatch_required=20:actual=5 expected=25 queue=0\n",
+            encoding="utf-8",
+        )
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        intent = self.commands[0]
+        self.assertEqual(intent["route"], "actor_health_recovery")
+        self.assertEqual(intent["controller_action"], "spawn_codex_harness_background")
+        self.assertEqual(intent["log"], ".refactor-loop/logs/phase9-issue262-r1-minimal.log")
+        self.assertEqual(intent["command"], "spawn-codex")
+        self.assertTrue(intent["run_in_background_required"])
+        self.assertTrue(intent["no_lifecycle_authority"])
+        recovery_rows = [
+            entry
+            for entry in self.ledger_entries()
+            if entry.get("key") == "262-1-minimal" and entry.get("route") == "actor_health_recovery"
+        ]
+        self.assertEqual(len(recovery_rows), 1)
 
     def test_phase9_router_wrong_issue_solver_identity_fails_closed_without_prompt_or_ledger(self) -> None:
         markers = [
