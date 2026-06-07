@@ -1262,6 +1262,31 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.action_id for result in results], [actions[0]["action_id"], actions[1]["action_id"]])
         self.assertEqual(launch.call_count, 2)
 
+    def test_wakeup_runner_prioritizes_reviewer_spawn_intent_over_stale_fallback_spawn(self) -> None:
+        fallback = self.spawn_action(
+            action_id="audit-fallback:audit-iter-9",
+            route="audit-fallback",
+            intent_id="audit-fallback:audit-iter-9",
+            log=str(self.repo / ".refactor-loop/logs/audit-iter-9.log"),
+        )
+        reviewer = self.spawn_action(
+            action_id="harness-spawn-intent:dispatch-reviewers:632:{architect,tests,quality}:r1",
+            route="dispatch-reviewers",
+            intent_id="dispatch-reviewers:632:{architect,tests,quality}:r1",
+            target={"kind": "codex", "task_id": "review-pr632-architect-r1"},
+            prompt=str(self.repo / ".refactor-loop/prompts/review-pr632-architect-r1.md"),
+            log=str(self.repo / ".refactor-loop/logs/review-pr632-architect-r1.log"),
+        )
+
+        Path(reviewer["prompt"]).write_text("review PR 632\n", encoding="utf-8")
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.batch_plan([fallback, reviewer], dispatch_required=1, deficit=1))
+
+        self.assertEqual([result.action_id for result in results], [reviewer["action_id"]])
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(launch.call_count, 1)
+        self.assertEqual(str(launch.call_args.kwargs["log"]), reviewer["log"])
+
     def test_wakeup_runner_stale_applied_spawn_ledger_retries_headless_intent(self) -> None:
         action = self.design_consensus_spawn_action(action_id="harness-spawn-intent:phase9-router:104:1:minimal-retry")
         ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"

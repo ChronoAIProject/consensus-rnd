@@ -282,10 +282,14 @@ class WakeupRunner:
             return list(actions)
         return sorted(actions, key=self._hard_gate_apply_priority)
 
-    def _hard_gate_apply_priority(self, action: Any) -> int:
-        if isinstance(action, Mapping) and _unblocks_pr_mergeability(action):
-            return 0
-        return 1
+    def _hard_gate_apply_priority(self, action: Any) -> tuple[int, int]:
+        if not isinstance(action, Mapping):
+            return (3, 0)
+        if _unblocks_pr_mergeability(action):
+            return (0, 0)
+        if _is_reviewer_harness_spawn_intent(action):
+            return (1, 0)
+        return (2, 0)
 
     def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:
         controller_action = str(action.get("controller_action") or "")
@@ -1808,6 +1812,16 @@ def _unblocks_pr_mergeability(action: Mapping[str, Any]) -> bool:
         "dispatch_pr_rebase_resolve",
         "commit_push_resolved_pr_rebase",
     }
+
+
+def _is_reviewer_harness_spawn_intent(action: Mapping[str, Any]) -> bool:
+    if action.get("kind") != "harness-spawn-intent":
+        return False
+    if action.get("controller_action") != "spawn_codex_harness_background":
+        return False
+    if action.get("route") == "dispatch-reviewers":
+        return True
+    return str(action.get("intent_id") or "").startswith("dispatch-reviewers:")
 
 
 def _terminal_blocked_reason(reason: str) -> bool:
