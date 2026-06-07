@@ -1748,6 +1748,31 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(launch.call_count, 2)
         self.assertEqual(actions.calls, [("merge_pr", "77")])
 
+    def test_hard_gate_release_rollup_open_pr_is_not_starved_by_spawn_budget(self) -> None:
+        rollup = self.release_rollup_action(action_id="release-rollup-needed:priority-current")
+        spawns = [
+            self.spawn_action(
+                action_id=f"spawn:publish-implementation-fallback:{index}",
+                log=str(self.repo / f".refactor-loop/logs/publish-implementation-fallback-{index}.log"),
+            )
+            for index in range(2)
+        ]
+        ordinary_lifecycle = self.implementation_output_action(action_id="completed-marker:implement-before-rollup")
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(
+                self.batch_plan([*spawns, ordinary_lifecycle, rollup], dispatch_required=2, deficit=2),
+                actions=actions,
+                duplicate_prs=[],
+                git_diff_code=1,
+            )
+
+        self.assertEqual([result.action_id for result in results[:1]], [rollup["action_id"]])
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual([call[0] for call in actions.calls], ["open_release_rollup_pr_from_action"])
+        self.assertEqual(launch.call_count, 2)
+
     def test_review_gate_reject_routes_to_fix_even_when_ci_is_red(self) -> None:
         runner = WakeupRunner(self.ctx)
         action = self.review_gate_action()
