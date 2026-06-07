@@ -8,12 +8,16 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Mapping
+from typing import Literal, Mapping
 
 
 class LoopContextError(RuntimeError):
     """Raised when host context cannot be loaded safely."""
 
+
+HostWorkLanguage = Literal["en", "zh"]
+HOST_WORK_LANGUAGE_DEFAULT: HostWorkLanguage = "en"
+HOST_WORK_LANGUAGE_ALLOWED: frozenset[str] = frozenset({"en", "zh"})
 
 _ASSIGNMENT_RE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
@@ -254,6 +258,16 @@ def parse_host_env(path: Path) -> dict[str, str]:
             raise LoopContextError(f"invalid host.env assignment for {key}: {exc}") from exc
         values[key] = parsed[0] if parsed else ""
     return values
+
+
+def normalize_host_work_language(raw: str | None = None, *, env: Mapping[str, str] | None = None) -> HostWorkLanguage:
+    source = os.environ if env is None else env
+    value = (raw if raw is not None else source.get("HOST_WORK_LANGUAGE", "")).strip()
+    if not value or value == "default":
+        return HOST_WORK_LANGUAGE_DEFAULT
+    if value in HOST_WORK_LANGUAGE_ALLOWED:
+        return value  # type: ignore[return-value]
+    raise LoopContextError(f"invalid HOST_WORK_LANGUAGE: {value}")
 
 
 def _validate_repo_override(repo_root: Path, raw_override: str, source: str) -> None:

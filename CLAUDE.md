@@ -92,7 +92,7 @@ Refactor (iter343/issue-343):
   Old pattern: README 单一(非英文默认),CLAUDE.md 文档分层称 README 为权威源;无英文 canonical + 中文 companion 双文件,语言策略未给 README pair carve-out
   New principle: README.md 英文 canonical 公开身份文档 + README.zh-CN.md 中文 companion(双向交叉链接,大段顺序对齐不要求逐句对等);CLAUDE.md 文档分层/根.md收口/语言 carve-out 与 SKILL.md 语言策略窄改:README pair 是唯一英文-canonical 公开文档 carve-out,GitHub issue/PR/commit/design artifact 等工作态仍中文默认。严格按 DESIGN_DECISION_PATH verbatim Concrete plan;不碰 .version-bump.json/额外根文档/runtime/host.env/marker/daemon/workflow
 -->
-- **公开身份文档语言例外**:README pair 是唯一英文 canonical 公开文档 carve-out(only English-canonical public-doc carve-out):`README.md` 用英文作为 canonical public identity document,`README.zh-CN.md` 是中文 companion,二者双向交叉链接且大段顺序对齐即可,不要求逐句对等。GitHub issue/PR/commit/design artifact 等工作态仍按 skill 语言策略中文默认。
+- **公开身份文档语言例外与工作语言**:README pair 是唯一英文 canonical 公开文档 carve-out(only English-canonical public-doc carve-out):`README.md` 用英文作为 canonical public identity document,`README.zh-CN.md` 是中文 companion,二者双向交叉链接且大段顺序对齐即可,不要求逐句对等。External user-facing artifact language comes from host.env `HOST_WORK_LANGUAGE`:default `en`,explicit `zh` for Chinese; source files remain English-only.
 
 ## Python 代码规范
 

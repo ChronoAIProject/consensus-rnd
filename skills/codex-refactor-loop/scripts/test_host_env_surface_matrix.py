@@ -239,7 +239,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         host_rows = {
             key: row
             for key, row in self.rows.items()
-            if key.startswith("HOST_") and key != "HOST_REFACTOR_COMMENT_POLICY"
+            if key.startswith("HOST_") and key not in {"HOST_REFACTOR_COMMENT_POLICY", "HOST_WORK_LANGUAGE"}
         }
         self.assertGreaterEqual(len(host_rows), 7)
         for key, row in host_rows.items():
@@ -271,6 +271,28 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertEqual("600", self.exports["HOST_HOLISTIC_STATUS_INTERVAL_SECONDS"]["value"])
         self.assertIn("PATCH this exact issue comment only", self.rows["HOST_HOLISTIC_STATUS_COMMENT_ID"]["Missing/empty behavior"])
         self.assertIn("must not create a comment", self.rows["HOST_HOLISTIC_STATUS_COMMENT_ID"]["Missing/empty behavior"])
+
+    def test_work_language_policy_is_defaulted_and_registered(self) -> None:
+        key = "HOST_WORK_LANGUAGE"
+        self.assertIn(key, self.rows)
+        self.assertIn(key, self.exports)
+
+        row = self.rows[key]
+        self.assertEqual("defaulted", row["Category"])
+        self.assertEqual("work language policy", row["Owner"])
+        self.assertIn("prompt templates", row["Consumer"])
+        self.assertIn("GitHub body renderer", row["Consumer"])
+        self.assertIn("`en`", row["Default/example"])
+        self.assertEqual("en", self.exports[key]["value"])
+        self.assertIn("single external user-facing artifact language fact", row["Missing/empty behavior"])
+        self.assertIn("allowed values are `en` and `zh`", row["Missing/empty behavior"])
+        self.assertIn("missing/empty/default normalizes to `en`", row["Missing/empty behavior"])
+        self.assertIn("invalid values fail closed", row["Missing/empty behavior"])
+        self.assertIn("explicit `zh` preserves Chinese working artifacts", row["Missing/empty behavior"])
+        self.assertIn("test_work_language_policy.py", row["Test owner"])
+        self.assertIn("test_github_body_renderer.py", row["Test owner"])
+        self.assertIn("defaulted", self.exports[key]["section"])
+        self.assertIn("HOST_WORK_LANGUAGE=\"en\"", read(HOST_ENV_EXAMPLE))
 
     def test_refactor_comment_policy_is_defaulted_and_registered(self) -> None:
         key = "HOST_REFACTOR_COMMENT_POLICY"
@@ -315,13 +337,14 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertLessEqual(placeholders, set(self.rows))
         for key in placeholders:
             with self.subTest(key=key):
-                if key == "HOST_REFACTOR_COMMENT_POLICY":
+                if key in {"HOST_REFACTOR_COMMENT_POLICY", "HOST_WORK_LANGUAGE"}:
                     self.assertEqual("defaulted", self.rows[key]["Category"])
                 else:
                     self.assertEqual("prompt-empty-infer", self.rows[key]["Category"])
 
         rejected_aliases = {
             "HOST_LANGUAGE",
+            "HOST_DEFAULT_LANGUAGE",
             "HOST_FRAMEWORK",
             "HOST_TEST_FRAMEWORK",
             "HOST_SCHEMA_LANGUAGE",

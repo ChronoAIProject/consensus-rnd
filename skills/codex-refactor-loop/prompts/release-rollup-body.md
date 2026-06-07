@@ -23,7 +23,7 @@ $RELEASE_ROLLUP_EVENT_JSON
 
 ## Body Requirements
 
-Write a concise Chinese PR body for a release-rollup PR from the integration branch to the review base branch. Use only facts present in the event JSON. Include:
+Write a concise PR body that follows ${HOST_WORK_LANGUAGE} for a release-rollup PR from the integration branch to the review base branch. Use only facts present in the event JSON. Include:
 
 - Why this rollup exists.
 - Integration branch and review base branch.
