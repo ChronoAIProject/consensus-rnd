@@ -592,9 +592,10 @@ class WakeupRunner:
             return "release_auto_opt_in_missing"
         candidate = self.ctx.paths.state / "release-candidate.json"
         if candidate.exists():
+            decision = read_json(self.ctx.paths.state / "release-decision.json", {})
             if (
                 "release_candidate_target_ref_invalid" not in preconditions
-                or not release_candidate_target_ref_invalid(read_json(candidate, {}))
+                or not release_candidate_target_ref_invalid(read_json(candidate, {}), decision)
             ):
                 return "release_candidate_already_exists"
         if not str(action.get("from_version") or "").strip() or not str(action.get("to_version") or "").strip():
@@ -1576,7 +1577,8 @@ class WakeupRunner:
         if not isinstance(preconditions, list) or "release_candidate_target_ref_invalid" not in preconditions:
             return ""
         candidate = self.ctx.paths.state / "release-candidate.json"
-        if not release_candidate_target_ref_invalid(read_json(candidate, {})):
+        decision = read_json(self.ctx.paths.state / "release-decision.json", {})
+        if not release_candidate_target_ref_invalid(read_json(candidate, {}), decision):
             return ""
         return "target_ref_invalid"
 

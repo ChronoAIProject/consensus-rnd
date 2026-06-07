@@ -41,7 +41,7 @@ from codex_refactor_loop.issue_decomposition import (
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
-from codex_refactor_loop.release.gate import decide_release_artifact
+from codex_refactor_loop.release.gate import canonical_digest, decide_release_artifact, parse_time
 from codex_refactor_loop.restart import restart_managed_daemon_names
 from codex_refactor_loop.state import read_json
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
@@ -3441,9 +3441,11 @@ def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) ->
     if os.environ.get("RELEASE_AUTO_ENABLE") != "true":
         return []
     candidate_path = repo_root / ".refactor-loop" / "state" / "release-candidate.json"
+    decision_path = repo_root / ".refactor-loop" / "state" / "release-decision.json"
+    decision = read_json(decision_path, {})
     if candidate_path.exists():
         candidate = read_json(candidate_path, {})
-        if not release_candidate_target_ref_invalid(candidate):
+        if not release_candidate_target_ref_invalid(candidate, decision):
             return []
     score = _release_countdown_score(repo_root, scorer=scorer)
     if not score.get("ready"):
@@ -3487,19 +3489,39 @@ def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) ->
     ]
 
 
-def release_candidate_target_ref_invalid(candidate: Any) -> bool:
+def release_candidate_target_ref_invalid(candidate: Any, decision: Any | None = None) -> bool:
     if not isinstance(candidate, dict):
         return False
     if "target_ref" not in candidate:
         return True
     target_ref = candidate.get("target_ref")
-    return not isinstance(target_ref, str) or not target_ref.strip()
+    if not isinstance(target_ref, str) or not target_ref.strip():
+        return True
+    generated_at = parse_time(candidate.get("generated_at"))
+    expires_at = parse_time(candidate.get("expires_at"))
+    now = datetime.now(timezone.utc)
+    if generated_at is not None and (now - generated_at).total_seconds() > 120 * 60:
+        return True
+    if expires_at is not None and expires_at <= now:
+        return True
+    if not isinstance(decision, dict) or not decision:
+        return False
+    if candidate.get("ready") is not True:
+        return True
+    for field in ("from_version", "to_version", "bump_type", "coordinate_policy"):
+        if candidate.get(field) != decision.get(field):
+            return True
+    expected_digest = candidate.get("decision_digest")
+    return not isinstance(expected_digest, str) or canonical_digest(decision) != expected_digest
 
 
 def release_publish_actions(repo_root: Path) -> list[dict[str, Any]]:
     candidate_path = repo_root / ".refactor-loop" / "state" / "release-candidate.json"
     candidate = read_json(candidate_path, {})
     if not isinstance(candidate, dict) or candidate.get("ready") is not True:
+        return []
+    decision = read_json(repo_root / ".refactor-loop" / "state" / "release-decision.json", {})
+    if release_candidate_target_ref_invalid(candidate, decision):
         return []
     target_ref = str(candidate.get("target_ref") or "").strip()
     to_version = str(candidate.get("to_version") or "").strip()

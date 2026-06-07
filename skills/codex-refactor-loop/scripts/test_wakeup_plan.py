@@ -12,6 +12,7 @@ import textwrap
 import time
 import unittest
 from contextlib import redirect_stderr
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from unittest import mock
@@ -26,6 +27,7 @@ from codex_refactor_loop import labels as label_catalog  # noqa: E402
 from codex_refactor_loop.context import LoopContext  # noqa: E402
 from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest  # noqa: E402
 from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult  # noqa: E402
+from codex_refactor_loop.release.gate import canonical_digest, isoformat  # noqa: E402
 from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E402
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 from codex_refactor_loop.wakeup_plan import (  # noqa: E402
@@ -79,6 +81,39 @@ def issue_decomposition_apply_actions(plan: dict) -> list[dict]:
         for action in plan["actions"]
         if action.get("controller_action") == "apply_issue_decomposition_plan"
     ]
+
+
+def release_decision(from_version: str, to_version: str) -> dict:
+    return {
+        "from_version": from_version,
+        "to_version": to_version,
+        "bump_type": "patch",
+        "coordinate_policy": None,
+        "ready": True,
+        "signals": {"fresh_heartbeats": {"passed": True}},
+        "blocked_reasons": [],
+    }
+
+
+def release_candidate(decision: dict, *, expires_at: str | None = None, target_ref: str = "origin/review") -> dict:
+    now = datetime.now(timezone.utc)
+    return {
+        "schema": "decision-artifact-only/v2",
+        "generated_at": isoformat(now),
+        "expires_at": expires_at or isoformat(now + timedelta(minutes=120)),
+        "decision_artifact": ".refactor-loop/state/release-decision.json",
+        "from_version": decision.get("from_version"),
+        "to_version": decision.get("to_version"),
+        "bump_type": decision.get("bump_type"),
+        "coordinate_policy": decision.get("coordinate_policy"),
+        "ready": decision.get("ready"),
+        "target_ref": target_ref,
+        "required_signals": {"fresh_heartbeats": {"passed": True}},
+        "decision_digest": canonical_digest(decision),
+        "publish_preflight": "controller-release-publish-preflight",
+        "host_opt_in": "RELEASE_AUTO_ENABLE=true",
+        "lifecycle_owner": "controller",
+    }
 
 
 class WakeupPlanBehaviorTests(unittest.TestCase):
@@ -5355,6 +5390,60 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             )
 
         self.assertEqual(actions, [])
+
+    def test_release_gate_dispatch_refreshes_decision_mismatched_candidate(self) -> None:
+        current = release_decision("1.0.0-beta.8", "1.0.0-beta.9")
+        stale = release_decision("1.0.0-beta.7", "1.0.0-beta.8")
+        (self.repo / ".refactor-loop/state/release-decision.json").write_text(json.dumps(current), encoding="utf-8")
+        (self.repo / ".refactor-loop/state/release-candidate.json").write_text(
+            json.dumps(release_candidate(stale)),
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "true"}):
+            actions = release_gate_dispatch_actions(
+                self.repo,
+                scorer=lambda _: {
+                    "from_version": "1.0.0-beta.8",
+                    "to_version": "1.0.0-beta.9",
+                    "stability_score": 100,
+                    "ready": True,
+                    "signals": {},
+                    "blocked_reasons": [],
+                },
+            )
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["controller_action"], "dispatch_release_candidate")
+        self.assertEqual(actions[0]["action_id"], "release-gate-dispatch:1.0.0-beta.8->1.0.0-beta.9")
+        self.assertIn("release_candidate_target_ref_invalid", actions[0]["preconditions"])
+        self.assertEqual(release_publish_actions(self.repo), [])
+
+    def test_release_gate_dispatch_refreshes_expired_candidate(self) -> None:
+        current = release_decision("1.2.3-beta.4", "1.2.3-beta.5")
+        (self.repo / ".refactor-loop/state/release-decision.json").write_text(json.dumps(current), encoding="utf-8")
+        (self.repo / ".refactor-loop/state/release-candidate.json").write_text(
+            json.dumps(release_candidate(current, expires_at=isoformat(datetime.now(timezone.utc) - timedelta(minutes=1)))),
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "true"}):
+            actions = release_gate_dispatch_actions(
+                self.repo,
+                scorer=lambda _: {
+                    "from_version": "1.2.3-beta.4",
+                    "to_version": "1.2.3-beta.5",
+                    "stability_score": 100,
+                    "ready": True,
+                    "signals": {},
+                    "blocked_reasons": [],
+                },
+            )
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["controller_action"], "dispatch_release_candidate")
+        self.assertIn("release_candidate_target_ref_invalid", actions[0]["preconditions"])
+        self.assertEqual(release_publish_actions(self.repo), [])
 
     def test_release_gate_dispatch_recovers_ready_gate_when_candidate_target_ref_is_empty(self) -> None:
         candidate = self.repo / ".refactor-loop/state/release-candidate.json"
