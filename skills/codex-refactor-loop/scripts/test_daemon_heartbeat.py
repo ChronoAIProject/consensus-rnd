@@ -146,6 +146,8 @@ class DaemonHeartbeatLeaseTests(unittest.TestCase):
         )
         expected = [object()]
         original_beat = lease.beat
+        original_replace = os.replace
+        replace_sources: list[Path] = []
 
         def beat() -> None:
             original_beat()
@@ -154,15 +156,20 @@ class DaemonHeartbeatLeaseTests(unittest.TestCase):
 
         lease.beat = beat
 
+        def record_replace(src: Path | str, dst: Path | str) -> None:
+            replace_sources.append(Path(src))
+            original_replace(src, dst)
+
         with mock.patch("codex_refactor_loop.heartbeat.threading.Event", ScriptedEvent), mock.patch(
             "codex_refactor_loop.heartbeat.threading.Thread",
             InlineThread,
-        ):
+        ), mock.patch("codex_refactor_loop.heartbeat.os.replace", side_effect=record_replace):
 
             def callback():
                 assert ScriptedEvent.coordinator is not None
                 ScriptedEvent.coordinator.enter_callback()
                 self.assertTrue(ScriptedEvent.coordinator.wait_for_heartbeat_while_callback_is_pending())
+                lease.beat()
                 return expected
 
             result = lease.run_with_lease(callback)
@@ -175,7 +182,11 @@ class DaemonHeartbeatLeaseTests(unittest.TestCase):
         self.assertTrue(InlineThread.instances[0].daemon)
         self.assertEqual(InlineThread.instances[0].name, "python-daemon-heartbeat-renewer")
         self.assertEqual(InlineThread.instances[0].join_timeouts, [1.0])
-        self.assertEqual("2000", (self.repo / ".refactor-loop" / "heartbeats" / "python-daemon.ts").read_text().strip())
+        self.assertEqual(2, len(replace_sources))
+        self.assertEqual(2, len(set(replace_sources)))
+        self.assertTrue(all(path.name.startswith(".python-daemon.ts.tmp.") for path in replace_sources))
+        self.assertIn((self.repo / ".refactor-loop" / "heartbeats" / "python-daemon.ts").read_text().strip(), {"2000", "2001"})
+        self.assertEqual([], list((self.repo / ".refactor-loop" / "heartbeats").glob("*.tmp.*")))
         ScriptedEvent.coordinator = None
 
     def test_run_with_lease_propagates_exception_and_stops_renewer(self) -> None:

@@ -53,7 +53,7 @@ class DaemonHeartbeatLease:
     def beat(self) -> None:
         """Atomically write the current integer epoch heartbeat."""
         self.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.heartbeat_file.with_name(f".{self.heartbeat_file.name}.tmp.{os.getpid()}")
+        tmp = self.heartbeat_file.with_name(f".{self.heartbeat_file.name}.tmp.{os.getpid()}.{threading.get_ident()}")
         tmp.write_text(f"{int(self.clock())}\n", encoding="utf-8")
         os.replace(tmp, self.heartbeat_file)
 
