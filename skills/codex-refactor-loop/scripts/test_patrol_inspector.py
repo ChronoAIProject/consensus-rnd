@@ -204,7 +204,10 @@ class PatrolInspectorTests(unittest.TestCase):
 
     def test_daemon_main_constructs_context_bound_heartbeat_lease(self) -> None:
         class FakeLease:
-            def __init__(self) -> None:
+            calls: list[tuple[object, object]] = []
+
+            def __init__(self, name: object, repo_root: object) -> None:
+                self.calls.append((name, repo_root))
                 self.beats = 0
 
             def beat(self) -> None:
@@ -213,20 +216,18 @@ class PatrolInspectorTests(unittest.TestCase):
             def sleep_with_lease(self, _seconds: int) -> None:
                 raise KeyboardInterrupt()
 
-        fake_lease = FakeLease()
         decisions = type(
             "Decision",
             (),
             {"allowed": False, "owner_device": "other", "status": "not-owner", "action": "patrol-inspector", "lease_id": "", "expires_at": ""},
         )()
         with patch("codex_refactor_loop.patrol.require_active_controller", return_value=decisions):
-            with patch("codex_refactor_loop.patrol._patrol_daemon_heartbeat_lease", return_value=fake_lease) as lease_factory:
+            with patch("codex_refactor_loop.patrol.DaemonHeartbeatLease", FakeLease):
                 with patch("codex_refactor_loop.patrol.LoopContext.load", return_value=self.ctx):
                     with self.assertRaises(KeyboardInterrupt):
                         main(["--daemon", "--interval-seconds", "1"])
 
-        lease_factory.assert_called_once()
-        self.assertEqual(self.ctx.repo_root, lease_factory.call_args.args[0].repo_root)
+        self.assertEqual([("patrol_inspector_daemon", self.ctx.repo_root)], FakeLease.calls)
 
 
 if __name__ == "__main__":
