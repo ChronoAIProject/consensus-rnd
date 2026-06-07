@@ -25,6 +25,7 @@ from .implement_lifecycle import (
     _implement_run_artifact_done_marker,
     classify_implement_attempt,
     clear_redispatchable_implement_log,
+    committed_implementation_delta,
     implement_attempt_is_terminal_or_noop_completion,
     is_implement_log,
 )
@@ -986,6 +987,13 @@ class WakeupRunner:
             return None
         diff = self.command_runner(["git", "-C", str(worktree), "diff", "HEAD", "--quiet"])
         if diff.returncode == 0:
+            integration_branch = str(getattr(self.actions, "integration_branch", "") or self.ctx.host_env.get("INTEGRATION_BRANCH", "")).strip()
+            if integration_branch:
+                committed_delta = committed_implementation_delta(worktree, integration_branch, self.command_runner)
+                if committed_delta is True:
+                    return None
+                if committed_delta is None:
+                    return "publish_implementation_diff_unavailable"
             return "publish_implementation_empty_scoped_diff"
         if diff.returncode != 1:
             return "publish_implementation_diff_unavailable"

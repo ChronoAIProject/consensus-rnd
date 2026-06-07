@@ -2607,6 +2607,28 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             2,
         )
 
+    def test_publish_implementation_create_pull_request_rate_limit_blocked_ledger_retries(self) -> None:
+        actions = FakeActions()
+
+        def rate_limited_publish(action: dict) -> int:
+            actions.calls.append(("publish_implementation_output", dict(action)))
+            raise RuntimeError(
+                "open_pr_with_label: failed to extract PR num from: "
+                "pull request create failed: GraphQL: was submitted too quickly (createPullRequest)"
+            )
+
+        actions.publish_implementation_output = rate_limited_publish
+        action = self.implementation_output_action(action_id="publish-implementation:create-pull-request-rate-limit")
+
+        first = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+        second = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+
+        self.assertEqual(first[0].status, "blocked")
+        self.assertIn("submitted too quickly", first[0].reason)
+        self.assertEqual(second[0].status, "blocked")
+        self.assertIn("createPullRequest", second[0].reason)
+        self.assertEqual([call[0] for call in actions.calls], ["publish_implementation_output", "publish_implementation_output"])
+
     def test_safe_push_stale_head_blocks_before_helper(self) -> None:
         actions = FakeActions()
 
