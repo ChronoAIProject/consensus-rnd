@@ -3728,6 +3728,22 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("runner_authority", action)
         self.assertNotIn("no_generic_command", action)
 
+    def test_remote_ci_fix_done_when_read_model_unavailable_is_status_only(self) -> None:
+        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
+        (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+
+        plan = self.run_plan(fixture="gh_failure")
+
+        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-pr77-contract-tests")
+        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 77)
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertEqual(action["suppressed_reason"], "open_managed_read_model_unavailable")
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+
     def test_remote_ci_fix_done_conflicting_duplicate_marker_fails_closed(self) -> None:
         (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(
             "REMOTE_CI_FIX_DONE:contract-tests:blocked\n"
