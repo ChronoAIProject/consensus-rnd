@@ -271,6 +271,29 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, python_policy)
 
+    def test_issue_651_main_checkout_follow_boundary_is_documented(self) -> None:
+        claude = read(REPO_ROOT / "CLAUDE.md")
+        integration = section_after_heading(self.skill, "Named runtime exception — integration sync daemon(per #53)")
+        daemon_body = section_after_anchor_until_heading(self.skill, "daemon-command-bodies", 2)
+
+        for needle in (
+            "integration publish/write authority remains only in the dedicated integration worktree",
+            "safe_sync_main",
+            "branch==`$INTEGRATION_BRANCH`",
+            "tracked-clean",
+            "no in-progress git operation",
+            "remote-only-ahead",
+            "git merge --ff-only origin/$INTEGRATION_BRANCH",
+            "main checkout HEAD as publish authorization",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, claude)
+                self.assertIn(needle, integration)
+        self.assertIn("LOCAL_AHEAD_PENDING_ONLY", daemon_body)
+        self.assertIn("DEV_SYNC_PENDING:local-ahead-managed-adoption-required:<json>", daemon_body)
+        self.assertNotIn("push-local-ahead", daemon_body)
+        self.assertNotIn("direct push", integration)
+
     def test_default_issue_intake_claim_anchor_and_contract_are_documented(self) -> None:
         available = reference_anchors(self.skill)
         anchor = "named-runtime-exception---default-issue-intake-claimper-623"

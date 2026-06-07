@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Behavior tests for codex_refactor_loop/controller_actions.py safe_push + safe_sync_main helpers.
-
-Refactor (iter4/skill-safe-push-helper): Old pattern: controller manually ran
-pull --rebase after non-fast-forward push. New principle: safe_push includes
-fetch and rebase --autostash when needed before push; safe_sync_main
-proactively catches up with remote before commit, avoiding the rebase path.
-"""
+"""Behavior tests for codex_refactor_loop/controller_actions.py safe_push + safe_sync_main helpers."""
 
 from __future__ import annotations
 
@@ -72,7 +66,12 @@ class SafePushHelperTests(unittest.TestCase):
         env = os.environ.copy()
         host_env = self.local / ".refactor-loop" / "host.env"
         host_env.parent.mkdir(parents=True, exist_ok=True)
-        host_env.write_text(f"export REPO_ROOT={self.local}\n", encoding="utf-8")
+        host_env.write_text(
+            f"export REPO_ROOT={self.local}\n"
+            "export INTEGRATION_BRANCH=main\n"
+            "export REVIEW_BASE_BRANCH=main\n",
+            encoding="utf-8",
+        )
         env.update(
             {
                 "REPO_ROOT": str(self.local),
@@ -155,11 +154,24 @@ class SafePushHelperTests(unittest.TestCase):
         self.assertNotEqual(local_before, local_after, "safe_sync_main should advance local HEAD")
         log = git(self.local, "log", "--oneline").stdout
         self.assertIn("remote-only", log)
+        self.assertNotIn("rebase", result.stdout + result.stderr)
 
     def test_safe_sync_main_noop_when_already_current(self) -> None:
         result = self._run_helper("safe_sync_main origin main")
         self.assertEqual(result.returncode, 0)
         self.assertIn("already up to date", result.stdout)
+
+    def test_safe_sync_main_uses_integration_branch_when_branch_argument_missing(self) -> None:
+        (self.other / "x.txt").write_text("x", encoding="utf-8")
+        git(self.other, "add", ".")
+        git(self.other, "commit", "-m", "remote-only")
+        git(self.other, "push", "origin", "main")
+
+        result = self._run_helper("safe_sync_main origin")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = git(self.local, "log", "--oneline").stdout
+        self.assertIn("remote-only", log)
 
     def test_safe_push_aborts_on_detached_head(self) -> None:
         commit_sha = git(self.local, "rev-parse", "HEAD").stdout.strip()
@@ -168,6 +180,59 @@ class SafePushHelperTests(unittest.TestCase):
         result = self._run_helper("safe_push origin")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("cannot determine branch", result.stderr)
+
+    def test_safe_sync_main_skips_and_records_event_for_local_ahead(self) -> None:
+        (self.local / "local.txt").write_text("local\n", encoding="utf-8")
+        git(self.local, "add", ".")
+        git(self.local, "commit", "-m", "local-only")
+
+        result = self._run_helper("safe_sync_main origin main")
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("local-ahead", result.stderr)
+        events = self.local / ".refactor-loop" / ".controller-pending-events.log"
+        self.assertIn("SAFE_SYNC_MAIN_PENDING:local-ahead:main:ahead=1:behind=0", events.read_text(encoding="utf-8"))
+        bare_log = git(self.bare, "log", "--oneline", "main").stdout
+        self.assertNotIn("local-only", bare_log)
+
+    def test_safe_sync_main_skips_and_records_event_for_diverged_checkout(self) -> None:
+        (self.other / "remote.txt").write_text("remote\n", encoding="utf-8")
+        git(self.other, "add", ".")
+        git(self.other, "commit", "-m", "remote-only")
+        git(self.other, "push", "origin", "main")
+        (self.local / "local.txt").write_text("local\n", encoding="utf-8")
+        git(self.local, "add", ".")
+        git(self.local, "commit", "-m", "local-only")
+
+        result = self._run_helper("safe_sync_main origin main")
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("diverged", result.stderr)
+        events = self.local / ".refactor-loop" / ".controller-pending-events.log"
+        self.assertIn("SAFE_SYNC_MAIN_PENDING:diverged:main:ahead=1:behind=1", events.read_text(encoding="utf-8"))
+        local_log = git(self.local, "log", "--oneline").stdout
+        self.assertIn("local-only", local_log)
+        self.assertNotIn("remote-only", local_log)
+
+    def test_safe_sync_main_skips_non_target_branch(self) -> None:
+        git(self.local, "checkout", "-b", "feature")
+
+        result = self._run_helper("safe_sync_main origin main")
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("not target main", result.stderr)
+        events = self.local / ".refactor-loop" / ".controller-pending-events.log"
+        self.assertIn("SAFE_SYNC_MAIN_PENDING:branch-mismatch:feature:main", events.read_text(encoding="utf-8"))
+
+    def test_safe_sync_main_skips_dirty_tracked_worktree(self) -> None:
+        (self.local / "README.md").write_text("dirty\n", encoding="utf-8")
+
+        result = self._run_helper("safe_sync_main origin main")
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("tracked worktree changes", result.stderr)
+        events = self.local / ".refactor-loop" / ".controller-pending-events.log"
+        self.assertIn("SAFE_SYNC_MAIN_PENDING:tracked-dirty:main", events.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

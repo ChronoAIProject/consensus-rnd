@@ -552,15 +552,18 @@ class IntegrationSyncDaemon:
         if head.returncode != 0 or not expected:
             self.append_pending_event("local-ahead-operation-ambiguous", "missing-head-or-remote")
             return True
-        self.execute_sync_operation(
-            IntegrationSyncOperation(
-                kind="push-local-ahead",
-                integration_branch=self.integration,
-                review_base_branch=self.review_base,
-                worktree_head=head.stdout.strip(),
-                expected_remote_sha=expected,
-                evidence={"ahead_count": ahead_n, "reason": "local-head-ahead-of-integration"},
-            )
+        event = {
+            "integration_branch": self.integration,
+            "review_base_branch": self.review_base,
+            "worktree_head": head.stdout.strip(),
+            "expected_remote_sha": expected,
+            "ahead_count": ahead_n,
+            "reason": "local-head-ahead-of-integration",
+            "recovery": "managed-adoption-pr-review",
+        }
+        self.append_pending_event(
+            "local-ahead-managed-adoption-required",
+            json.dumps(event, sort_keys=True),
         )
         return True
 
@@ -773,7 +776,7 @@ class IntegrationSyncDaemon:
             return
 
         if self.execute_clean_local_ahead(cwd):
-            self.log("dev-sync: tick dispatched clean-local-ahead")
+            self.log("dev-sync: tick pending clean-local-ahead-adoption")
             return
 
         rollup = self.detect_merged_rollup(cwd)

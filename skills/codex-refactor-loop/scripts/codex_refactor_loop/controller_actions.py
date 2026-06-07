@@ -259,30 +259,82 @@ class ControllerActions:
     def safe_sync_main(self, remote: str = "origin", branch: str = "") -> int:
         if not self._require_owner_or_return("safe-sync-main", code=3):
             return 3
-        branch = branch or self._current_branch()
-        if not branch or branch == "HEAD":
+        branch = branch or self.integration_branch
+        if not branch:
+            sys.stderr.write("safe_sync_main: missing target integration branch; skipping\n")
+            return 2
+        current_branch = self._current_branch()
+        if not current_branch or current_branch == "HEAD":
             sys.stderr.write("safe_sync_main: cannot determine branch; skipping\n")
+            return 0
+        if current_branch != branch:
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:branch-mismatch:{current_branch}:{branch}")
+            sys.stderr.write(f"safe_sync_main: current branch {current_branch} is not target {branch}; skipping\n")
+            return 0
+        if not self._tracked_tree_clean(self.ctx.repo_root):
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:tracked-dirty:{branch}")
+            sys.stderr.write("safe_sync_main: tracked worktree changes present; skipping\n")
+            return 0
+        in_progress = self._git_operation_in_progress(self.ctx.repo_root)
+        if in_progress:
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:git-operation-in-progress:{branch}:{in_progress}")
+            sys.stderr.write(f"safe_sync_main: git operation in progress ({in_progress}); skipping\n")
             return 0
         fetch = self.git(["fetch", remote, branch], check=False)
         if fetch.stdout:
             print(fetch.stdout, end="")
         if fetch.stderr:
             print("\n".join(fetch.stderr.splitlines()[-3:]))
+        if fetch.returncode != 0:
+            sys.stderr.write(f"safe_sync_main: fetch failed for {remote}/{branch}\n")
+            return fetch.returncode
+        ahead_count = self._rev_count(f"{remote}/{branch}..HEAD")
         behind = self.git(["rev-list", "--count", f"HEAD..{remote}/{branch}"], check=False)
         try:
             behind_count = int((behind.stdout or "0").strip() or "0")
         except ValueError:
             behind_count = 0
+        if ahead_count > 0:
+            state = "diverged" if behind_count > 0 else "local-ahead"
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:{state}:{branch}:ahead={ahead_count}:behind={behind_count}")
+            sys.stderr.write(
+                f"safe_sync_main: {state} from {remote}/{branch} "
+                f"(ahead={ahead_count}, behind={behind_count}); adoption PR/review recovery required\n"
+            )
+            return 0
         if behind_count > 0:
-            print(f"safe_sync_main: local behind {remote}/{branch} by {behind_count}; pulling --rebase --autostash")
-            pull = self.git(["pull", "--rebase", "--autostash", remote, branch], check=False)
-            if pull.stdout:
-                print(pull.stdout, end="")
-            if pull.stderr:
-                sys.stderr.write(pull.stderr)
-            return pull.returncode
+            print(f"safe_sync_main: remote-only ahead {remote}/{branch} by {behind_count}; merging --ff-only")
+            merge = self.git(["merge", "--ff-only", f"{remote}/{branch}"], check=False)
+            if merge.stdout:
+                print(merge.stdout, end="")
+            if merge.stderr:
+                sys.stderr.write(merge.stderr)
+            return merge.returncode
         print(f"safe_sync_main: already up to date with {remote}/{branch}")
         return 0
+
+    def _rev_count(self, revision_range: str) -> int:
+        result = self.git(["rev-list", "--count", revision_range], check=False)
+        try:
+            return int((result.stdout or "0").strip() or "0")
+        except ValueError:
+            return 0
+
+    def _tracked_tree_clean(self, worktree: Path) -> bool:
+        unstaged = self._git_in(worktree, ["diff", "--quiet"], check=False)
+        staged = self._git_in(worktree, ["diff", "--cached", "--quiet"], check=False)
+        return unstaged.returncode == 0 and staged.returncode == 0
+
+    def _git_operation_in_progress(self, worktree: Path) -> str:
+        for name in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REBASE_HEAD"):
+            git_path = self._git_in(worktree, ["rev-parse", "--git-path", name], check=False)
+            if git_path.returncode == 0 and Path(git_path.stdout.strip()).exists():
+                return name
+        for name in ("rebase-merge", "rebase-apply"):
+            git_path = self._git_in(worktree, ["rev-parse", "--git-path", name], check=False)
+            if git_path.returncode == 0 and Path(git_path.stdout.strip()).exists():
+                return name
+        return ""
 
     def safe_worktree(self, iteration: str, cluster: str, base: str) -> tuple[Path, str]:
         _validate_safe_worktree_fields(str(iteration), cluster)
