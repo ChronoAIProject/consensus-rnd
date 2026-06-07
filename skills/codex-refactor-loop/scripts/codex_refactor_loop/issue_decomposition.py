@@ -239,6 +239,7 @@ def _wakeup_runner_has_applied_issue_decomposition_action(ctx: LoopContext, plan
         return False
     source_log = Path(plan.source_consensus_artifact).with_suffix(".log").name
     action_prefix = f"completed-marker:{source_log}:"
+    action_statuses: dict[str, tuple[bool, str, str]] = {}
     try:
         lines = ledger.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -249,13 +250,26 @@ def _wakeup_runner_has_applied_issue_decomposition_action(ctx: LoopContext, plan
         except json.JSONDecodeError:
             continue
         action_id = str(row.get("action_id") or "")
-        if row.get("status") != "applied":
-            continue
         if row.get("kind") not in (None, "completed-marker"):
             continue
-        if action_id.startswith(action_prefix) and ":META_JUDGE_DONE:consensus:decompose" in action_id:
-            return True
-    return False
+        if not action_id.startswith(action_prefix):
+            continue
+        if not _completed_marker_action_id_is_decomposition_consensus(action_id, action_prefix):
+            continue
+        if row.get("status") == "applied":
+            action_statuses[action_id] = (True, "applied", "")
+        elif row.get("status") == "skipped" and row.get("reason") == "duplicate":
+            was_applied = action_statuses.get(action_id, (False, "", ""))[0]
+            action_statuses[action_id] = (was_applied, "skipped", "duplicate")
+    return any(
+        was_applied and (status == "applied" or (status == "skipped" and reason == "duplicate"))
+        for was_applied, status, reason in action_statuses.values()
+    )
+
+
+def _completed_marker_action_id_is_decomposition_consensus(action_id: str, action_prefix: str) -> bool:
+    marker = action_id.removeprefix(action_prefix)
+    return marker.startswith("META_JUDGE_DONE:consensus:")
 
 
 def _resolve_input_path(ctx: LoopContext, plan_path: str | Path) -> Path:

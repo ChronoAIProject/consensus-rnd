@@ -107,7 +107,14 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             "state": "open",
         }
 
-    def write_applied_issue_decomposition_evidence(self, *, issue: int = 537, round_no: int = 6) -> tuple[str, str]:
+    def write_applied_issue_decomposition_evidence(
+        self,
+        *,
+        issue: int = 537,
+        round_no: int = 6,
+        marker: str = "META_JUDGE_DONE:consensus:decompose:real",
+        ledger_rows: tuple[tuple[str, str], ...] = (("applied", ""),),
+    ) -> tuple[str, str]:
         from codex_refactor_loop.context import LoopContext
         from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest
 
@@ -167,17 +174,21 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         (self.repo / consensus).write_text("META_JUDGE_DONE:consensus:decompose\n", encoding="utf-8")
         ledger = self.refactor_loop / "state" / "wakeup-runner-ledger.jsonl"
         ledger.parent.mkdir(parents=True, exist_ok=True)
+        action_id = f"completed-marker:phase9-issue{issue}-r{round_no}-judge.log:{marker}"
         ledger.write_text(
-            json.dumps(
-                {
-                    "action_id": f"completed-marker:phase9-issue{issue}-r{round_no}-judge.log:META_JUDGE_DONE:consensus:decompose:real",
-                    "kind": "completed-marker",
-                    "reason": "",
-                    "status": "applied",
-                },
-                sort_keys=True,
-            )
-            + "\n",
+            "".join(
+                json.dumps(
+                    {
+                        "action_id": action_id,
+                        "kind": "completed-marker",
+                        "reason": reason,
+                        "status": status,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+                for status, reason in ledger_rows
+            ),
             encoding="utf-8",
         )
         return plan_path, digest
@@ -298,6 +309,60 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
         self.assertEqual(expected, 0)
         self.assertEqual(breakdown, [])
+
+    def test_compute_expected_suppresses_hybrid_applied_duplicate_decomposition_parent(self) -> None:
+        _plan_path, digest = self.write_applied_issue_decomposition_evidence(
+            issue=537,
+            round_no=1,
+            marker="META_JUDGE_DONE:consensus:hybrid-A+B:bounded decomposition only; stage0 first, later runtime/gate/headless cleanup as child design issues",
+            ledger_rows=(("applied", ""), ("skipped", "duplicate")),
+        )
+
+        def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+            if command == ["gh", "issue", "view", "537", "--json", "comments"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"comments": [{"body": f"IssueDecompositionPlan digest: {digest}\n⟦AI:AUTO-LOOP⟧\n"}]}),
+                    "",
+                )
+            return subprocess.CompletedProcess(command, 1, "", "unexpected command")
+
+        expected, breakdown = self.monitor.compute_expected(
+            [self.design_issue_item(537)],
+            command_runner=runner,
+        )
+
+        self.assertEqual(expected, 0)
+        self.assertEqual(breakdown, [])
+
+    def test_compute_expected_keeps_only_duplicate_decomposition_parent_tracking_issue(self) -> None:
+        _plan_path, digest = self.write_applied_issue_decomposition_evidence(
+            issue=537,
+            round_no=6,
+            ledger_rows=(("skipped", "duplicate"),),
+        )
+
+        def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+            if command == ["gh", "issue", "view", "537", "--json", "comments"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"comments": [{"body": f"IssueDecompositionPlan digest: {digest}\n⟦AI:AUTO-LOOP⟧\n"}]}),
+                    "",
+                )
+            return subprocess.CompletedProcess(command, 1, "", "unexpected command")
+
+        expected, breakdown = self.monitor.compute_expected(
+            [self.design_issue_item(537)],
+            command_runner=runner,
+        )
+
+        self.assertEqual(expected, 1)
+        self.assertEqual(
+            breakdown,
+            [{"id": "#537", "kind": "issue", "phase": self.labels.PHASE_DESIGN_SOLVING, "expected": 1}],
+        )
 
     def test_compute_expected_keeps_unapplied_decomposition_parent_tracking_issue(self) -> None:
         self.write_applied_issue_decomposition_evidence(issue=537, round_no=6)
