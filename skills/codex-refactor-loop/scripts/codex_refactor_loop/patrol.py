@@ -188,8 +188,8 @@ def _find_log_exceptions(log_dir: Path) -> tuple[PatrolFinding, ...]:
     findings = []
     for path in sorted(log_dir.glob("*.log"))[-200:]:
         lines = _read_tail_or_fail(path, 80)
-        matched = _exception_signal_lines(lines)
-        if not matched:
+        evidence = _exception_signal_lines(lines)
+        if not evidence:
             continue
         findings.append(
             PatrolFinding(
@@ -197,7 +197,7 @@ def _find_log_exceptions(log_dir: Path) -> tuple[PatrolFinding, ...]:
                 source=_repo_local_source(path),
                 summary=f"runtime log reports exception signals in {path.name}",
                 severity="high",
-                evidence=tuple(matched[-10:]),
+                evidence=evidence[-10:],
             )
         )
     return tuple(findings)
@@ -274,15 +274,55 @@ def _item_ref(item: GhItem | Mapping[str, object]) -> str:
     return f"{kind or 'item'} #{number or '?'}"
 
 
-def _line_has_exception_signal(line: str) -> bool:
+def _extract_log_diagnostic_evidence(lines: Sequence[str]) -> tuple[str, ...]:
+    evidence: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line == "Traceback (most recent call last):":
+            block, next_index = _extract_traceback_block(lines, index)
+            if block:
+                evidence.extend(block)
+            index = next_index
+            continue
+        if _is_single_line_diagnostic(line) or _is_command_failure_summary(line):
+            evidence.append(line)
+        index += 1
+    return tuple(evidence)
+
+
+def _extract_traceback_block(lines: Sequence[str], start: int) -> tuple[tuple[str, ...], int]:
+    block = [lines[start]]
+    index = start + 1
+    while index < len(lines):
+        line = lines[index]
+        block.append(line)
+        index += 1
+        if _is_python_exception_line(line):
+            return tuple(block), index
+    return (), index
+
+
+def _is_single_line_diagnostic(line: str) -> bool:
+    return line.startswith(("FATAL:", "POST_FAILED:", "RuntimeError:"))
+
+
+def _is_command_failure_summary(line: str) -> bool:
     lowered = line.lower()
-    return any(token in lowered for token in ("traceback", "exception", "runtimeerror", "fatal:", "failed"))
+    return lowered.startswith(("command failed:", "command failure:", "cmd failed:"))
+
+
+def _is_python_exception_line(line: str) -> bool:
+    if line.startswith((" ", "\t")):
+        return False
+    exception_type = line.split(":", 1)[0].strip()
+    return exception_type.endswith(("Error", "Exception")) or exception_type in {"KeyboardInterrupt", "SystemExit"}
 
 
 def _exception_signal_lines(lines: Sequence[str]) -> tuple[str, ...]:
     if _tail_has_clean_exit(lines):
         return tuple(line for line in lines if _line_is_worker_self_post_failure(line))
-    return tuple(line for line in lines if _line_has_exception_signal(line))
+    return _extract_log_diagnostic_evidence(lines)
 
 
 def _tail_has_clean_exit(lines: Sequence[str]) -> bool:
