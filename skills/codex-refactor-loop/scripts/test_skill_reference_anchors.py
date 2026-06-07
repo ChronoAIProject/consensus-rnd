@@ -1953,19 +1953,22 @@ class WakeupRunnerContractTests(unittest.TestCase):
     def test_no_shared_controller_runtime_registry_or_tick_envelope_scaffold(self) -> None:
         inventory = section_after_anchor_until_heading(self.skill, "tier0-scaffold-inventory", level=3)
         for needle in (
-            "prose-only and non-authoritative",
-            "not a machine-readable catalog, registry, runtime scaffold, or package API",
-            "not imported by runtime code",
-            "no dispatch, write, state-transition, or authorization authority",
+            "prose plus the single test-owned/data-only `controller_runtime_inventory.py`",
+            "remains non-authoritative",
+            "not a runtime scaffold, package API, or executable registry",
+            "Runtime execution paths must not import/read `controller_runtime_inventory.py`",
+            "no dispatch, write, state-transition, pending-events, label mutation, GitHub/git, or authorization authority",
             "restart.py::DAEMON_COMMANDS",
             "restart_managed_daemon_names()",
+            "daemon name, owner module/CLI command, tick import path, authority note, and test owner",
+            "callable, argv/shell/cmd/env, git/gh, executor, dispatch, authorization, pending-events, state-transition, or lifecycle owner fields",
             "cli.py::COMMANDS[*].authority",
             "SKILL.md#work-unit-contract",
             "ctx.paths.pending_events",
             ".refactor-loop/.controller-pending-events.log",
             "no pending-events authority",
             "owner-local files",
-            "shared `TickOutcome`, `tick_helpers.py`, or controller-runtime catalog",
+            "shared `TickOutcome`, `DaemonReconcileTick`, `ReconcileTickResult`, `tick_helpers.py`, `reconcile_ticks.py`, `reconcile_registry.py`, or controller-runtime catalog",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, inventory)
@@ -1978,6 +1981,8 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "tick_helpers.py",
             "tick_outcome.py",
             "tick_outcomes.py",
+            "reconcile_ticks.py",
+            "reconcile_registry.py",
             "daemon_registry.json",
             "daemon_registry.yaml",
             "daemon_registry.yml",

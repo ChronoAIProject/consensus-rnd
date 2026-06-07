@@ -686,11 +686,15 @@ class ConcurrencyMonitor:
         lease = DaemonHeartbeatLease("concurrency_monitor", self.repo_root)
         while True:
             try:
-                lease.run_with_lease(self.tick)
+                lease.run_with_lease(lambda: run_concurrency_reconcile_tick(self))
             except Exception as exc:
                 log(f"EXCEPTION in tick: {exc!r}")
             lease.beat()
             lease.sleep_with_lease(self.interval)
+
+
+def run_concurrency_reconcile_tick(monitor: ConcurrencyMonitor) -> None:
+    monitor.tick()
 
 
 def load_monitor(*, read_only: bool = False, allow_git_root_fallback: bool | None = None, cwd: str | Path | None = None) -> ConcurrencyMonitor:
@@ -799,7 +803,7 @@ def top_up_from_dispatch_queue(actual: int, floor: int) -> int:
 
 
 def tick() -> None:
-    _default_monitor().tick()
+    run_concurrency_reconcile_tick(_default_monitor())
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -826,7 +830,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(line)
         return 0
     if args.once:
-        monitor.tick()
+        run_concurrency_reconcile_tick(monitor)
         return 0
     return monitor.run_forever()
 

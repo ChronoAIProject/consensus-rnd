@@ -61,7 +61,7 @@ class ProgressReporter:
     def run_forever(self) -> int:
         while True:
             self.log_msg("tick")
-            self.heartbeat.run_with_lease(self.tick)
+            self.heartbeat.run_with_lease(lambda: run_progress_reporter_reconcile_tick(self))
             self.heartbeat.beat()
             self.heartbeat.sleep_with_lease(self.interval)
 
@@ -203,6 +203,10 @@ class ProgressReporter:
         print(f"[{ts}] progress-reporter: tick {action}", flush=True)
 
 
+def run_progress_reporter_reconcile_tick(reporter: ProgressReporter) -> None:
+    reporter.tick()
+
+
 @contextmanager
 def temp_body_file(body: str):
     import tempfile
@@ -274,7 +278,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f"{exc}\n")
         return 2
     if args.once or os.environ.get("TEST_NO_LOOP") == "1":
-        reporter.tick()
+        run_progress_reporter_reconcile_tick(reporter)
         return 0
     return reporter.run_forever()
 

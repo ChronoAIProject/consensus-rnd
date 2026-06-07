@@ -30,6 +30,7 @@ from codex_refactor_loop.wakeup_runner import (
     _wakeup_tick_action,
     main as wakeup_runner_main,
     _source_log_has_clean_marker,
+    run_wakeup_runner_reconcile_tick,
 )
 
 
@@ -3934,6 +3935,13 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             out.getvalue().strip(),
             r"^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] wakeup-runner: tick dispatched spawn:1$",
         )
+
+    def test_reconcile_tick_wrapper_preserves_wakeup_runner_results(self) -> None:
+        runner = mock.Mock(spec=WakeupRunner)
+        runner.run_once.return_value = [RunnerResult("action-1", "applied")]
+
+        self.assertEqual([RunnerResult("action-1", "applied")], run_wakeup_runner_reconcile_tick(runner))
+        runner.run_once.assert_called_once_with()
 
     def test_refactor_loop_host_env_is_not_production_topology_ssot(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
