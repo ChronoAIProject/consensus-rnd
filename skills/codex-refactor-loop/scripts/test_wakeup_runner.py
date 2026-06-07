@@ -1430,6 +1430,30 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.status for result in results], ["applied"])
         self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
 
+    def test_hard_gate_dispatch_pr_rebase_resolve_is_not_starved_by_spawn_budget(self) -> None:
+        spawns = [
+            self.spawn_action(
+                action_id=f"spawn:publish-implementation-fallback:{index}",
+                route="publish-implementation-fallback",
+                log=str(self.repo / f".refactor-loop/logs/publish-implementation-fallback-{index}.log"),
+            )
+            for index in range(3)
+        ]
+        rebase = self.rebase_dispatch_action(action_id="dispatch-pr-rebase-resolve:77:priority-current")
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(
+                self.batch_plan([*spawns, rebase], dispatch_required=2, deficit=2),
+                gh_state="OPEN",
+                actions=actions,
+            )
+
+        self.assertEqual([result.action_id for result in results[:1]], [rebase["action_id"]])
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
+        self.assertEqual(launch.call_count, 2)
+
     def test_wakeup_runner_routes_commit_push_resolved_pr_rebase_action(self) -> None:
         action = self.rebase_commit_action()
         actions = FakeActions()

@@ -248,7 +248,7 @@ class WakeupRunner:
         results: list[RunnerResult] = []
         applied_spawns = 0
         worker_top_up_only = False
-        for action in plan.get("actions", []):
+        for action in self._actions_for_apply(plan.get("actions", []), budget):
             if not isinstance(action, dict) or action.get("status_only") is True:
                 continue
             is_spawn_action = budget.is_spawn_action(action)
@@ -276,6 +276,16 @@ class WakeupRunner:
                 continue
             break
         return results
+
+    def _actions_for_apply(self, actions: Sequence[Any], budget: WakeupApplyBudget) -> list[Any]:
+        if not budget.hard_gate_active:
+            return list(actions)
+        return sorted(actions, key=self._hard_gate_apply_priority)
+
+    def _hard_gate_apply_priority(self, action: Any) -> int:
+        if isinstance(action, Mapping) and _unblocks_pr_mergeability(action):
+            return 0
+        return 1
 
     def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:
         controller_action = str(action.get("controller_action") or "")
@@ -1791,6 +1801,13 @@ def _target_from_text(text: str) -> tuple[str, int] | None:
 
 def _managed_pr_head_ref(value: str) -> bool:
     return bool(re.fullmatch(r"refactor/iter[1-9][0-9]*-[A-Za-z0-9._-]+", value))
+
+
+def _unblocks_pr_mergeability(action: Mapping[str, Any]) -> bool:
+    return str(action.get("controller_action") or "") in {
+        "dispatch_pr_rebase_resolve",
+        "commit_push_resolved_pr_rebase",
+    }
 
 
 def _terminal_blocked_reason(reason: str) -> bool:
