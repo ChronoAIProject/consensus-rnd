@@ -21,7 +21,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
-from codex_refactor_loop.monitors.comment import CommentMonitor, is_controller_post, run_comment_monitor_reconcile_tick
+from codex_refactor_loop.monitors.comment import CommentMonitor, is_controller_post, main as comment_monitor_main, run_comment_monitor_reconcile_tick
 from test_support.authorization_projection import project_python
 
 
@@ -334,6 +334,20 @@ class CommentMonitorTests(unittest.TestCase):
         )
         self.assertNotIn("TickOutcome", line)
         self.assertNotIn("registry", line)
+
+    def test_once_cli_invokes_reconcile_tick_wrapper_and_exits_zero(self) -> None:
+        monitor = mock.Mock(spec=CommentMonitor)
+
+        with (
+            mock.patch("codex_refactor_loop.monitors.comment.LoopContext.load", return_value=self.ctx) as load_context,
+            mock.patch("codex_refactor_loop.monitors.comment.CommentMonitor", return_value=monitor) as monitor_class,
+            mock.patch("codex_refactor_loop.monitors.comment.run_comment_monitor_reconcile_tick") as wrapper,
+        ):
+            self.assertEqual(0, comment_monitor_main(["--once"]))
+
+        load_context.assert_called_once()
+        monitor_class.assert_called_once_with(self.ctx)
+        wrapper.assert_called_once_with(monitor)
 
     def test_last_updated_at_persists_and_reload_skips_unchanged_item(self) -> None:
         calls: list[str] = []
