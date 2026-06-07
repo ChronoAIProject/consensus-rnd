@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
@@ -146,7 +145,7 @@ def _signal_id(signal: PatrolCandidateSignal) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def _default_codex_command(output_path: Path) -> Sequence[str]:
+def _default_codex_command(_output_path: Path) -> Sequence[str]:
     return ("codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "-")
 
 

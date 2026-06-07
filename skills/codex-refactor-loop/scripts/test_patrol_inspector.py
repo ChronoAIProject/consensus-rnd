@@ -53,6 +53,11 @@ class FakeAnalysisProvider:
         )
 
 
+class ExplodingAnalysisProvider:
+    def analyze(self, signal: PatrolCandidateSignal) -> PatrolAnalysisDecision:
+        raise AssertionError(f"analysis provider should not run for {signal.source}")
+
+
 def false_decision() -> PatrolAnalysisDecision:
     return PatrolAnalysisDecision(
         is_real_issue=False,
@@ -104,6 +109,40 @@ class PatrolInspectorTests(unittest.TestCase):
 
         self.assertEqual(1, len(analyzer.signals))
         self.assertEqual((), findings)
+
+    def test_disabled_run_does_not_spawn_analysis(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("EXIT=1\n", encoding="utf-8")
+        inspector = PatrolInspector(
+            self.ctx,
+            config=PatrolInspectorConfig(enabled=False, interval_seconds=7200, max_findings=25),
+            analysis_provider=ExplodingAnalysisProvider(),
+            github_items=(),
+        )
+
+        self.assertEqual(0, inspector.run_once())
+
+        state = json.loads((self.tmp / ".refactor-loop" / "state" / "patrol-inspector.json").read_text(encoding="utf-8"))
+        self.assertEqual("disabled", state["status"])
+
+    def test_not_active_controller_owner_does_not_spawn_analysis(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("EXIT=1\n", encoding="utf-8")
+        inspector = PatrolInspector(
+            self.ctx,
+            config=PatrolInspectorConfig(enabled=True, interval_seconds=7200, max_findings=25),
+            analysis_provider=ExplodingAnalysisProvider(),
+            github_items=(),
+        )
+        decisions = type(
+            "Decision",
+            (),
+            {"allowed": False, "owner_device": "other", "status": "not-owner", "action": "patrol-inspector", "lease_id": "", "expires_at": ""},
+        )()
+
+        with patch("codex_refactor_loop.patrol.require_active_controller", return_value=decisions):
+            self.assertEqual(0, inspector.run_once())
+
+        state = json.loads((self.tmp / ".refactor-loop" / "state" / "patrol-inspector.json").read_text(encoding="utf-8"))
+        self.assertEqual("noop:not-owner", state["status"])
 
     def test_analysis_decision_constructs_publishable_finding_without_raw_evidence(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("RuntimeError: secret raw line\n", encoding="utf-8")
@@ -160,9 +199,15 @@ class PatrolInspectorTests(unittest.TestCase):
         class FakeSupervisor:
             def __init__(self) -> None:
                 self.stdin: Path | None = None
+                self.command = None
+                self.log: Path | None = None
+                self.stall: int | None = None
 
             def supervise(self, command, *, stdin, log, stall, env) -> int:
+                self.command = command
                 self.stdin = stdin
+                self.log = log
+                self.stall = stall
                 output_path = Path(command[-1])
                 output_path.write_text(
                     json.dumps(
@@ -194,9 +239,35 @@ class PatrolInspectorTests(unittest.TestCase):
 
         self.assertEqual("analyzed patrol signal", decision.summary)
         self.assertIsNotNone(supervisor.stdin)
+        self.assertIsNotNone(supervisor.log)
+        self.assertEqual(900, supervisor.stall)
+        self.assertEqual("patrol-analysis", supervisor.stdin.parent.name)
+        self.assertEqual(".md", supervisor.stdin.suffix)
+        self.assertEqual("logs", supervisor.log.parent.name)
+        self.assertTrue(supervisor.log.name.startswith("patrol-analysis-"))
+        self.assertTrue(str(supervisor.command[-1]).endswith(".json"))
+        self.assertIn(".refactor-loop/runs/patrol-analysis/", str(supervisor.command[-1]))
         prompt = supervisor.stdin.read_text(encoding="utf-8")
         self.assertIn("RuntimeError: raw diagnostic", prompt)
         self.assertIn("Do not copy raw log lines", prompt)
+
+    def test_codex_analysis_provider_failure_fails_closed_with_log_path(self) -> None:
+        class FailingSupervisor:
+            def supervise(self, command, *, stdin, log, stall, env) -> int:
+                return 23
+
+        provider = CodexPatrolAnalysisProvider(self.ctx, supervisor=FailingSupervisor(), command_builder=lambda output: ("fake-codex", str(output)))
+
+        with self.assertRaisesRegex(RuntimeError, r"patrol analysis failed: source=.refactor-loop/logs/router.log exit=23 log=.*patrol-analysis-.*\.log"):
+            provider.analyze(
+                PatrolCandidateSignal(
+                    kind="exception-log",
+                    source=".refactor-loop/logs/router.log",
+                    summary="runtime signal",
+                    severity="high",
+                    evidence=("RuntimeError: raw diagnostic",),
+                )
+            )
 
     def test_clean_exit_worker_log_ignores_prompt_and_diff_exception_words(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
@@ -290,11 +361,11 @@ class PatrolInspectorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        findings = PatrolInspector(self.ctx, analysis_provider=FakeAnalysisProvider(), github_items=()).collect_findings()
+        signals = PatrolInspector(self.ctx, github_items=()).collect_candidate_signals()
 
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual("analysis root cause", exception_findings[0].root_cause)
+        exception_signals = [signal for signal in signals if signal.kind == "exception-log"]
+        self.assertEqual(1, len(exception_signals))
+        self.assertEqual(("ValueError: broken",), exception_signals[0].evidence)
 
     def test_clean_exit_worker_log_reports_standalone_post_failure(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
@@ -302,11 +373,11 @@ class PatrolInspectorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        findings = PatrolInspector(self.ctx, analysis_provider=FakeAnalysisProvider(), github_items=()).collect_findings()
+        signals = PatrolInspector(self.ctx, github_items=()).collect_candidate_signals()
 
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual("analysis root cause", exception_findings[0].root_cause)
+        exception_signals = [signal for signal in signals if signal.kind == "exception-log"]
+        self.assertEqual(1, len(exception_signals))
+        self.assertEqual(("POST_FAILED: gh comment failed",), exception_signals[0].evidence)
 
     def test_clean_exit_worker_log_ignores_indented_prompt_post_failure_example(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
@@ -331,12 +402,12 @@ class PatrolInspectorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        findings = PatrolInspector(self.ctx, analysis_provider=FakeAnalysisProvider(), github_items=()).collect_findings()
+        signals = PatrolInspector(self.ctx, github_items=()).collect_candidate_signals()
 
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual("analysis root cause", exception_findings[0].root_cause)
-        self.assertIn("EXIT=1", exception_findings[0].summary)
+        exception_signals = [signal for signal in signals if signal.kind == "exception-log"]
+        self.assertEqual(1, len(exception_signals))
+        self.assertEqual(("worker output", "diagnostic text", "EXIT=1"), exception_signals[0].evidence)
+        self.assertIn("EXIT=1", exception_signals[0].summary)
 
     def test_spawn_failed_terminal_envelope_creates_finding_with_spawn_evidence(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
@@ -344,12 +415,12 @@ class PatrolInspectorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        findings = PatrolInspector(self.ctx, analysis_provider=FakeAnalysisProvider(), github_items=()).collect_findings()
+        signals = PatrolInspector(self.ctx, github_items=()).collect_candidate_signals()
 
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual("analysis root cause", exception_findings[0].root_cause)
-        self.assertIn("EXIT=127", exception_findings[0].summary)
+        exception_signals = [signal for signal in signals if signal.kind == "exception-log"]
+        self.assertEqual(1, len(exception_signals))
+        self.assertEqual(("SPAWN_FAILED=missing executable", "EXIT=127"), exception_signals[0].evidence)
+        self.assertIn("EXIT=127", exception_signals[0].summary)
 
     def test_stall_kill_terminal_envelope_creates_finding(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
@@ -357,12 +428,12 @@ class PatrolInspectorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        findings = PatrolInspector(self.ctx, analysis_provider=FakeAnalysisProvider(), github_items=()).collect_findings()
+        signals = PatrolInspector(self.ctx, github_items=()).collect_candidate_signals()
 
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual("analysis root cause", exception_findings[0].root_cause)
-        self.assertIn("EXIT=137", exception_findings[0].summary)
+        exception_signals = [signal for signal in signals if signal.kind == "exception-log"]
+        self.assertEqual(1, len(exception_signals))
+        self.assertEqual(("STALL_KILL_AFTER=600", "EXIT=137"), exception_signals[0].evidence)
+        self.assertIn("EXIT=137", exception_signals[0].summary)
 
     def test_log_traceback_block_without_exit_is_reported_as_bounded_evidence(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
@@ -380,11 +451,19 @@ class PatrolInspectorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        findings = PatrolInspector(self.ctx, analysis_provider=FakeAnalysisProvider(), github_items=()).collect_findings()
+        signals = PatrolInspector(self.ctx, github_items=()).collect_candidate_signals()
 
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual("analysis root cause", exception_findings[0].root_cause)
+        exception_signals = [signal for signal in signals if signal.kind == "exception-log"]
+        self.assertEqual(1, len(exception_signals))
+        self.assertEqual(
+            (
+                "Traceback (most recent call last):",
+                '  File "worker.py", line 4, in <module>',
+                "    main()",
+                "ValueError: broken",
+            ),
+            exception_signals[0].evidence,
+        )
 
     def test_non_clean_worker_log_reports_terminal_exit_window(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
@@ -392,11 +471,11 @@ class PatrolInspectorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        findings = PatrolInspector(self.ctx, analysis_provider=FakeAnalysisProvider(), github_items=()).collect_findings()
+        signals = PatrolInspector(self.ctx, github_items=()).collect_candidate_signals()
 
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual("analysis root cause", exception_findings[0].root_cause)
+        exception_signals = [signal for signal in signals if signal.kind == "exception-log"]
+        self.assertEqual(1, len(exception_signals))
+        self.assertEqual(("Traceback (most recent call last):", "RuntimeError: broken", "EXIT=1"), exception_signals[0].evidence)
 
     def test_log_command_failure_summary_is_reported(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
@@ -404,11 +483,11 @@ class PatrolInspectorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        findings = PatrolInspector(self.ctx, analysis_provider=FakeAnalysisProvider(), github_items=()).collect_findings()
+        signals = PatrolInspector(self.ctx, github_items=()).collect_candidate_signals()
 
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual("analysis root cause", exception_findings[0].root_cause)
+        exception_signals = [signal for signal in signals if signal.kind == "exception-log"]
+        self.assertEqual(1, len(exception_signals))
+        self.assertEqual(("command failed: exit=2 cmd=python3 -m pytest",), exception_signals[0].evidence)
 
     def test_nonzero_exit_status_is_reported(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
@@ -416,11 +495,11 @@ class PatrolInspectorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        findings = PatrolInspector(self.ctx, analysis_provider=FakeAnalysisProvider(), github_items=()).collect_findings()
+        signals = PatrolInspector(self.ctx, github_items=()).collect_candidate_signals()
 
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual("analysis root cause", exception_findings[0].root_cause)
+        exception_signals = [signal for signal in signals if signal.kind == "exception-log"]
+        self.assertEqual(1, len(exception_signals))
+        self.assertEqual(("EXIT=2",), exception_signals[0].evidence)
 
     def test_nonzero_exited_status_is_reported(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
@@ -428,11 +507,11 @@ class PatrolInspectorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        findings = PatrolInspector(self.ctx, analysis_provider=FakeAnalysisProvider(), github_items=()).collect_findings()
+        signals = PatrolInspector(self.ctx, github_items=()).collect_candidate_signals()
 
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual("analysis root cause", exception_findings[0].root_cause)
+        exception_signals = [signal for signal in signals if signal.kind == "exception-log"]
+        self.assertEqual(1, len(exception_signals))
+        self.assertEqual(("spawn supervisor: process exited 127",), exception_signals[0].evidence)
 
     def test_daemon_log_without_exit_still_reports_fatal_line(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
@@ -440,11 +519,11 @@ class PatrolInspectorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        findings = PatrolInspector(self.ctx, analysis_provider=FakeAnalysisProvider(), github_items=()).collect_findings()
+        signals = PatrolInspector(self.ctx, github_items=()).collect_candidate_signals()
 
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual("analysis root cause", exception_findings[0].root_cause)
+        exception_signals = [signal for signal in signals if signal.kind == "exception-log"]
+        self.assertEqual(1, len(exception_signals))
+        self.assertEqual(("FATAL: route failed",), exception_signals[0].evidence)
 
     def test_run_once_publishes_findings_and_writes_dashboard_state(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("EXIT=1\n", encoding="utf-8")

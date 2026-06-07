@@ -582,6 +582,16 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for needle in (
             "#541 是唯一 patrol-inspector issue-intake carveout",
             "host opt-in",
+            "PatrolCandidateSignal",
+            "PatrolAnalysisDecision",
+            "is_real_issue=true",
+            "codex exec",
+            "prompts/patrol-analysis.md",
+            ".refactor-loop/prompts/patrol-analysis/<signal>.md",
+            ".refactor-loop/logs/patrol-analysis-<signal>.log",
+            ".refactor-loop/runs/patrol-analysis/<signal>.json",
+            "非 generic codex fallback",
+            "无 git/GitHub/lifecycle authority",
             "PatrolFinding",
             "fingerprint create/update patrol-owned issue",
             "update 仅改该 patrol issue body",
@@ -609,6 +619,12 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("class PatrolAnalysisDecision", analysis_source)
         self.assertIn("is_real_issue", analysis_source)
         self.assertIn("PATROL_ANALYSIS_PROMPT", analysis_source)
+        self.assertIn('"codex", "exec"', analysis_source)
+        self.assertIn('"--dangerously-bypass-approvals-and-sandbox"', analysis_source)
+        self.assertIn('ctx.paths.prompts / "patrol-analysis"', analysis_source)
+        self.assertIn('ctx.paths.logs / f"patrol-analysis-{_signal_id(signal)}.log"', analysis_source)
+        self.assertIn('ctx.paths.runs / "patrol-analysis"', analysis_source)
+        self.assertIn("PATROL_ANALYSIS_STALL_SECONDS", analysis_source)
         self.assertIn("PATROL_LABEL_BUNDLE", publisher_source)
         self.assertIn('"create"', publisher_source)
         self.assertIn('"edit"', publisher_source)
@@ -616,7 +632,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("patrol-inspector.json", holistic_source)
         for forbidden in ("git push", "git commit", "gh pr", "issue close", "issue reopen", "release create"):
             with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, (patrol_source + publisher_source).lower())
+                self.assertNotIn(forbidden, (patrol_source + analysis_source + publisher_source).lower())
 
     def test_maintainer_directive_entries_have_required_fields(self) -> None:
         self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 6)
