@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 from ..state import read_json
 from .coordinates import validate_coordinate_policy
@@ -18,6 +19,7 @@ from .versions import compare_semver
 
 REQUIRED_CANDIDATE_SCHEMA = "decision-artifact-only/v2"
 PUBLISH_PREFLIGHT_NAME = "controller-release-publish-preflight"
+Runner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,7 @@ class PublishPreflightResult:
     target_ref: str
     version: str
     candidate_digest: str
+    already_bumped_reentry: bool = False
 
 
 class ReleasePublishPreflight:
@@ -48,10 +51,12 @@ class ReleasePublishPreflight:
         *,
         now: Callable[[], datetime] | None = None,
         max_age_minutes: int = 120,
+        runner: Runner | None = None,
     ) -> None:
         self.repo_root = repo_root
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.max_age_minutes = max_age_minutes
+        self.runner = runner or run_command
 
     def validate(
         self,
@@ -82,7 +87,7 @@ class ReleasePublishPreflight:
         self._validate_time(candidate, reasons)
         self._validate_target_ref(candidate, target_ref, reasons)
         version = manifest_version if manifest_version is not None else self._current_manifest_version(reasons)
-        self._validate_version(candidate, decision, version, reasons)
+        already_bumped_reentry = self._validate_version(candidate, decision, version, reasons)
         self._validate_required_signals(candidate, decision, reasons)
         self._validate_decision_digest(candidate, decision, reasons)
         digest = canonical_digest(candidate) if candidate else ""
@@ -97,6 +102,7 @@ class ReleasePublishPreflight:
             target_ref=str(candidate.get("target_ref") or target_ref or ""),
             version=str(candidate.get("to_version") or version or ""),
             candidate_digest=digest,
+            already_bumped_reentry=already_bumped_reentry,
         )
 
     def _resolve_repo_path(self, path: str | Path) -> tuple[Path, str | None]:
@@ -194,20 +200,23 @@ class ReleasePublishPreflight:
             return ""
         return next(iter(versions))
 
-    def _validate_version(self, candidate: dict[str, Any], decision: dict[str, Any], version: str, reasons: list[str]) -> None:
+    def _validate_version(self, candidate: dict[str, Any], decision: dict[str, Any], version: str, reasons: list[str]) -> bool:
         to_version = candidate.get("to_version")
         if not isinstance(to_version, str) or not to_version:
             reasons.append("candidate_version_missing")
-            return
+            return False
         from_version = candidate.get("from_version")
         if not isinstance(from_version, str) or not from_version:
             reasons.append("candidate_from_version_missing")
-            return
+            return False
         try:
             versions_match = compare_semver(version, from_version) == 0
         except ValueError:
             versions_match = False
+        already_bumped_reentry = False
         if not versions_match:
+            already_bumped_reentry = self._already_bumped_reentry_allowed(version, to_version)
+        if not versions_match and not already_bumped_reentry:
             reasons.append("manifest_version_mismatch")
         if decision and decision.get("to_version") != to_version:
             reasons.append("decision_version_mismatch")
@@ -220,6 +229,15 @@ class ReleasePublishPreflight:
         )
         if coordinate_reason is not None:
             reasons.append(coordinate_reason)
+        return already_bumped_reentry
+
+    def _already_bumped_reentry_allowed(self, manifest_version: str, to_version: str) -> bool:
+        if manifest_version != to_version:
+            return False
+        result = self.runner(["git", "show", "-s", "--format=%s", "HEAD"], self.repo_root)
+        if result.returncode != 0:
+            return False
+        return result.stdout.strip() == f"Release v{to_version}"
 
     def _validate_required_signals(self, candidate: dict[str, Any], decision: dict[str, Any], reasons: list[str]) -> None:
         signals = candidate.get("required_signals")
@@ -286,6 +304,10 @@ def load_manifest_targets(repo_root: Path) -> list[dict[str, Any]]:
 def canonical_digest(data: Any) -> str:
     payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def run_command(cmd: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(list(cmd), cwd=cwd, capture_output=True, text=True, check=False)
 
 
 def default_candidate_expiry(now: datetime) -> str:

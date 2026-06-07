@@ -62,8 +62,10 @@ class ReleasePublisher:
     ) -> None:
         self.repo_root = repo_root
         self.runner = runner or run_command
-        self.preflight = preflight or ReleasePublishPreflight(repo_root)
         self.now = now or (lambda: datetime.now(timezone.utc))
+        if preflight is None:
+            preflight = ReleasePublishPreflight(repo_root, runner=self.runner, now=self.now)
+        self.preflight = preflight
 
     @property
     def result_path(self) -> Path:
@@ -122,6 +124,15 @@ class ReleasePublisher:
     def _inspect_publication_state(self, result: PublishPreflightResult) -> ReleasePublicationState:
         version = result.version
         tag = f"v{version}" if version else ""
+        if result.allowed and result.already_bumped_reentry:
+            return ReleasePublicationState(
+                phase="already_bumped",
+                version=version,
+                tag=tag,
+                release_target_ref=None,
+                skip_bump_commit=True,
+                reason="preflight_already_bumped_reentry",
+            )
         if result.allowed:
             return ReleasePublicationState(
                 phase="first_run",
