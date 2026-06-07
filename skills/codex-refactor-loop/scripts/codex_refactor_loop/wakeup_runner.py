@@ -45,6 +45,7 @@ from .wakeup_plan import (
     build_plan,
     consensus_implementation_suppressed_reason,
     release_candidate_target_ref_invalid,
+    zero_code_implementation_completion_proven,
 )
 from .worker_markers import read_worker_terminal_marker
 
@@ -553,7 +554,30 @@ class WakeupRunner:
         for required in ("active_controller_owner", "live_open_target", "live_managed_target"):
             if required not in preconditions:
                 return f"close_managed_drop_missing_precondition:{required}"
-        if not str(action.get("source_marker") or "").startswith("META_RESOLVED:drop:"):
+        marker = str(action.get("source_marker") or "")
+        zero_code_completion = "zero_code_implementation_completion" in preconditions
+        if zero_code_completion:
+            if not re.fullmatch(r"IMPLEMENT_DONE:issue-?[1-9][0-9]*:ok", marker):
+                return "close_managed_drop_invalid_zero_code_marker"
+            target_number = action.get("target_number")
+            if not isinstance(target_number, int):
+                return "close_managed_drop_target_missing"
+            state = classify_implement_attempt(
+                repo_root=self.ctx.repo_root,
+                action=action,
+                log_path=self.ctx.repo_root / str(action.get("source_artifact") or ""),
+                integration_branch=str(self.ctx.host_env.get("INTEGRATION_BRANCH") or "auto-refact-dev"),
+                command_runner=self.command_runner,
+            )
+            if not zero_code_implementation_completion_proven(
+                action,
+                self.ctx.repo_root,
+                target_number,
+                state,
+                require_action_proof=True,
+            ):
+                return f"close_managed_drop_zero_code_not_empty_scoped_diff:{state.status}:{state.reason}"
+        elif not marker.startswith("META_RESOLVED:drop:"):
             return "close_managed_drop_invalid_marker"
         kind = str(action.get("target_kind") or "").lower()
         if kind not in {"issue", "pr"}:

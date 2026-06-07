@@ -689,6 +689,42 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         action.update(overrides)
         return action
 
+    def write_zero_code_completion_artifacts(self, issue: int = 77, cluster: str | None = None) -> dict[str, str]:
+        cluster_id = cluster or f"issue-{issue}"
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (runs / f"phase9-issue{issue}-r1-judge.md").write_text(
+            "---\ndecision: consensus\n---\n"
+            "## If consensus\n"
+            "- Chosen framing: delete\n"
+            "- Implement plan (structured fields read by wakeup-plan from this judge artifact only, not from solver artifacts or prompt-body free text):\n"
+            "  - scope_paths:\n"
+            "    - none\n"
+            "  - old_pattern: old\n"
+            "  - new_principle: new\n"
+            f"- Implementation owner: dispatch implement codex with cluster_id={cluster_id}, design_decision_path=.refactor-loop/runs/phase9-issue{issue}-r1-judge.md\n"
+            "META_JUDGE_DONE:consensus:delete\n",
+            encoding="utf-8",
+        )
+        (runs / f"implement-{cluster_id}.md").write_text(
+            f"worker artifact: 0 LOC no source changes\nIMPLEMENT_DONE:issue-{issue}:ok\n",
+            encoding="utf-8",
+        )
+        (runs / f"implementation-pr-{cluster_id}-body.md").write_text(
+            "## 修改文件\n\n- 0 LOC no source changes\n\n"
+            "## 测试结果\n\n- no-op verification only\n\n"
+            "## deviation 记录\n\n- none\n\n"
+            f"Closes #{issue}\n\n"
+            "⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        return {
+            "classification": "empty_scoped_diff",
+            "consensus_scope_paths": "- none",
+            "implementation_artifact": f".refactor-loop/runs/implement-{cluster_id}.md",
+            "body_file": f".refactor-loop/runs/implementation-pr-{cluster_id}-body.md",
+        }
+
     def rebase_dispatch_action(self, **overrides) -> dict:
         action = {
             "kind": "stale-base-conflicting-pr",
@@ -3839,6 +3875,79 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(helper_action["source_artifact"], ".refactor-loop/logs/phase9-issue554-r4-reflector.log")
         self.assertEqual(helper_action["source_marker"], marker)
         self.assertEqual(helper_action["target_number"], 554)
+
+    def test_zero_code_implementation_completion_routes_to_close_helper_after_empty_diff_revalidation(self) -> None:
+        actions = FakeActions()
+        marker = "IMPLEMENT_DONE:issue-77:ok"
+        action = self.close_action(
+            action_id="completed-marker:implement-issue-77.log:" + marker,
+            preconditions=[
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_open_target",
+                "live_managed_target",
+                "zero_code_implementation_completion",
+            ],
+            source_artifact=".refactor-loop/logs/implement-issue-77.log",
+            source_marker=marker,
+            target_number=77,
+            target={"kind": "issue", "number": 77},
+            zero_code_completion_proof=self.write_zero_code_completion_artifacts(issue=77),
+        )
+        log = self.repo / ".refactor-loop/logs/implement-issue-77.log"
+        log.write_text("worker artifact: 0 LOC no source changes\n" + marker + "\nEXIT=0\n", encoding="utf-8")
+        (self.repo / ".worktrees" / "iter77-issue-77").mkdir(parents=True, exist_ok=True)
+
+        results = self.run_result(
+            self.base_plan(action),
+            git_diff_code=0,
+            implementation_status="",
+            implementation_issue=77,
+            actions=actions,
+        )
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual([call[0] for call in actions.calls], ["close_managed_item_from_drop_marker"])
+        helper_action = actions.calls[0][1]
+        self.assertEqual(helper_action["source_marker"], marker)
+        self.assertIn("zero_code_implementation_completion", helper_action["preconditions"])
+
+    def test_zero_code_implementation_close_blocks_when_diff_not_empty(self) -> None:
+        actions = FakeActions()
+        marker = "IMPLEMENT_DONE:issue-77:ok"
+        action = self.close_action(
+            action_id="completed-marker:implement-issue-77.log:" + marker,
+            preconditions=[
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_open_target",
+                "live_managed_target",
+                "zero_code_implementation_completion",
+            ],
+            source_artifact=".refactor-loop/logs/implement-issue-77.log",
+            source_marker=marker,
+            target_number=77,
+            target={"kind": "issue", "number": 77},
+            zero_code_completion_proof=self.write_zero_code_completion_artifacts(issue=77),
+        )
+        log = self.repo / ".refactor-loop/logs/implement-issue-77.log"
+        log.write_text(marker + "\nEXIT=0\n", encoding="utf-8")
+        (self.repo / ".worktrees" / "iter77-issue-77").mkdir(parents=True, exist_ok=True)
+
+        results = self.run_result(
+            self.base_plan(action),
+            git_diff_code=1,
+            implementation_status="M  changed.py\n",
+            implementation_issue=77,
+            actions=actions,
+        )
+
+        self.assert_blocked_before_dispatch(
+            results,
+            "completed-marker:implement-issue-77.log:" + marker,
+            "close_managed_drop_zero_code_not_empty_scoped_diff:publish_ready:",
+            actions,
+        )
 
     def test_close_managed_item_from_drop_marker_blocks_non_managed_open_target_before_helper(self) -> None:
         actions = FakeActions()

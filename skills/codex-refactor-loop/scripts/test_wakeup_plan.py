@@ -2665,9 +2665,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
         self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
 
-    def test_stale_base_noop_implementation_done_is_status_only_and_not_expected_worker(self) -> None:
+    def test_zero_code_noop_implementation_done_projects_close_helper_and_not_expected_worker(self) -> None:
         (self.repo / ".worktrees" / "iter581-issue-581").mkdir(parents=True)
-        self.write_implementation_pr_artifacts(issue=581, cluster="issue-581")
+        _title, body = self.write_implementation_pr_artifacts(issue=581, cluster="issue-581")
+        body.write_text(
+            "## 修改文件\n\n- 0 LOC no source changes\n\n"
+            "## 测试结果\n\n- no-op verification only\n\n"
+            "## deviation 记录\n\n- none\n\n"
+            "Closes #581\n\n"
+            "⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        self.write_consensus_artifact(issue=581, scope_paths="none")
+        self.write_run_artifact(
+            "implement-issue-581",
+            "worker artifact: 0 LOC no source changes",
+            "IMPLEMENT_DONE:issue-581:ok",
+        )
         log = self.logs / "implement-issue-581.log"
         log.write_text(
             "worker artifact: 0 LOC 收口，没有修改任何仓库源码\nIMPLEMENT_DONE:issue-581:ok\nEXIT=0\n",
@@ -2677,11 +2691,24 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan, stdout = self.run_plan_with_stdout(fixture="local_iter_branch_issue581_stale_base_noop", ps_count=0)
 
         action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue-581"))
-        self.assertEqual(action["controller_action"], "publish_implementation_output")
-        self.assertTrue(action["status_only"])
-        self.assertEqual(action["suppressed_reason"], "implementation_noop_empty_scoped_diff")
-        self.assertNotIn("runner_authority", action)
-        self.assertNotIn("no_generic_command", action)
+        self.assertEqual(action["controller_action"], "close_managed_item_from_drop_marker")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertNotIn("status_only", action)
+        self.assertEqual(action["target_kind"], "issue")
+        self.assertEqual(action["target_number"], 581)
+        self.assertEqual(
+            action["preconditions"],
+            [
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_open_target",
+                "live_managed_target",
+                "zero_code_implementation_completion",
+            ],
+        )
+        self.assertIn("none", action["zero_code_completion_proof"]["consensus_scope_paths"])
+        self.assertEqual(action["zero_code_completion_proof"]["classification"], "empty_scoped_diff")
         self.assertFalse(
             [
                 item
@@ -2699,6 +2726,24 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
         self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
+
+    def test_noop_implementation_without_zero_code_proof_stays_status_only(self) -> None:
+        (self.repo / ".worktrees" / "iter581-issue-581").mkdir(parents=True)
+        self.write_implementation_pr_artifacts(issue=581, cluster="issue-581")
+        log = self.logs / "implement-issue-581.log"
+        log.write_text(
+            "no code change required\nIMPLEMENT_DONE:issue-581:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="local_iter_branch_issue581_stale_base_noop", ps_count=0)
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue-581"))
+        self.assertEqual(action["controller_action"], "publish_implementation_output")
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "implementation_noop_empty_scoped_diff")
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
 
     def test_stale_spawn_intent_for_noop_implementation_does_not_reopen_hard_gate(self) -> None:
         (self.repo / ".worktrees" / "iter581-issue-581").mkdir(parents=True)

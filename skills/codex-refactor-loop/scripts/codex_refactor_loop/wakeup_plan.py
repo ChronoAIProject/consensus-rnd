@@ -3818,6 +3818,8 @@ def _stale_publish_implementation_reason(
         command_runner=lambda command: git_text(list(command), cwd=repo_root),
     )
     if state.redispatch and state.reason == "empty_scoped_diff":
+        if _convert_zero_code_implementation_to_close_action(action, repo_root, target, state):
+            return None
         return "implementation_noop_empty_scoped_diff"
     if state.redispatch:
         clear_redispatchable_implement_log(
@@ -3854,6 +3856,122 @@ def _stale_publish_implementation_reason(
         preconditions.remove("verified_pr_head")
     action["preconditions"] = preconditions
     return None
+
+
+NOOP_COMPLETION_TEXT_RE = re.compile(r"(?i)\b(?:0\s*LOC|zero[- ]code|no[- ]op|no code changes?|no source changes?)\b")
+
+
+def _convert_zero_code_implementation_to_close_action(
+    action: dict[str, Any],
+    repo_root: Path,
+    target: tuple[str, int] | None,
+    state: Any,
+) -> bool:
+    if target is None or target[0] != "issue":
+        return False
+    if not zero_code_implementation_completion_proven(action, repo_root, target[1], state):
+        return False
+    source_marker = str(action.get("source_marker") or "")
+    action["phase"] = "publish"
+    action["route"] = "close-zero-code-implementation"
+    action["controller_action"] = "close_managed_item_from_drop_marker"
+    action["preconditions"] = [
+        "active_controller_owner",
+        "clean_exit_source_marker",
+        "live_open_target",
+        "live_managed_target",
+        "zero_code_implementation_completion",
+    ]
+    action["source_marker"] = source_marker
+    action["target_kind"] = "issue"
+    action["target_number"] = target[1]
+    action["target"] = {"kind": "issue", "number": target[1]}
+    consensus = latest_consensus_implementation_for_issue(repo_root, target[1])
+    action["zero_code_completion_proof"] = {
+        "classification": "empty_scoped_diff",
+        "consensus_scope_paths": str(consensus.get("scope_paths") or ""),
+        "implementation_artifact": _implementation_summary_path(
+            repo_root,
+            str(action.get("source_artifact") or ""),
+            _implementation_cluster_id(action, target[1]),
+        ),
+        "body_file": str(action.get("body_file") or ""),
+    }
+    action.pop("title_file", None)
+    action.pop("body_file", None)
+    action.pop("head_ref", None)
+    action.pop("worktree", None)
+    action.pop("status_only", None)
+    action.pop("no_lifecycle_authority", None)
+    action["runner_authority"] = RUNNER_AUTHORITY
+    action["no_generic_command"] = True
+    return True
+
+
+def zero_code_implementation_completion_proven(
+    action: Mapping[str, Any],
+    repo_root: Path,
+    issue: int,
+    state: Any,
+    *,
+    require_action_proof: bool = False,
+) -> bool:
+    marker = str(getattr(state, "marker", "") or action.get("source_marker") or "")
+    if not marker.startswith("IMPLEMENT_DONE:") or not marker.endswith(":ok"):
+        return False
+    if not (getattr(state, "redispatch", False) and getattr(state, "reason", "") == "empty_scoped_diff"):
+        return False
+    if require_action_proof and not _zero_code_action_proof_matches(action, issue):
+        return False
+    consensus = latest_consensus_implementation_for_issue(repo_root, issue)
+    if not _consensus_scope_paths_is_none(consensus.get("scope_paths")):
+        return False
+    source_artifact = str(action.get("source_artifact") or "")
+    cluster_id = _implementation_cluster_id(action, issue)
+    summary = repo_root / _implementation_summary_path(repo_root, source_artifact, cluster_id)
+    if not _path_contains_noop_completion_proof(summary):
+        return False
+    proof = action.get("zero_code_completion_proof")
+    proof_body = proof.get("body_file") if isinstance(proof, Mapping) else ""
+    body_file = repo_root / str(action.get("body_file") or proof_body or "")
+    if not _path_contains_noop_completion_proof(body_file):
+        return False
+    return True
+
+
+def _zero_code_action_proof_matches(action: Mapping[str, Any], issue: int) -> bool:
+    proof = action.get("zero_code_completion_proof")
+    if not isinstance(proof, Mapping):
+        return False
+    if proof.get("classification") != "empty_scoped_diff":
+        return False
+    if not _consensus_scope_paths_is_none(proof.get("consensus_scope_paths")):
+        return False
+    cluster_id = _implementation_cluster_id(action, issue)
+    expected_artifact = f".refactor-loop/runs/implement-{cluster_id}.md"
+    expected_body = f".refactor-loop/runs/implementation-pr-{cluster_id}-body.md"
+    return proof.get("implementation_artifact") == expected_artifact and proof.get("body_file") == expected_body
+
+
+def _consensus_scope_paths_is_none(value: Any) -> bool:
+    normalized: list[str] = []
+    for raw_line in str(value or "").splitlines():
+        text = raw_line.strip()
+        if not text:
+            continue
+        text = re.sub(r"^(?:[-*]\s+|\d+\.\s+)", "", text).strip()
+        text = text.strip("`'\"").lower()
+        if text:
+            normalized.append(text)
+    return normalized == ["none"]
+
+
+def _path_contains_noop_completion_proof(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return bool(NOOP_COMPLETION_TEXT_RE.search(text))
 
 
 def _matching_open_pr_error(
