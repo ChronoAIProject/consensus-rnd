@@ -13,10 +13,25 @@ import sys
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.controller_actions import ControllerActions
 from codex_refactor_loop.prompt_contracts import (  # noqa: E402
     GITHUB_POST_RULES_CONTRACT_TOKEN,
     PromptContractError,
     inline_prompt_contracts,
+)
+
+SKILL_ROOT = SCRIPT_DIR.parent
+DIRECT_POST_PROMPTS = (
+    "reviewer-tests.md",
+    "reviewer-architect.md",
+    "reviewer-quality.md",
+    "review-fix.md",
+    "solver-minimal.md",
+    "solver-structural.md",
+    "solver-delete.md",
+    "meta-judge.md",
+    "design-issue-reply.md",
 )
 
 
@@ -53,6 +68,30 @@ class PromptContractInlinerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(PromptContractError, "missing GitHub post rules contract"):
             inline_prompt_contracts(GITHUB_POST_RULES_CONTRACT_TOKEN, skill_root=self.skill_root)
+
+    def test_direct_post_prompts_render_selected_host_work_language(self) -> None:
+        ctx = LoopContext.load(repo_root=self.tmp, skill_root=SKILL_ROOT, env={"REPO_ROOT": str(self.tmp)})
+        actions = ControllerActions(ctx)
+
+        for language in ("en", "zh"):
+            for prompt_name in DIRECT_POST_PROMPTS:
+                with self.subTest(language=language, prompt=prompt_name):
+                    output = self.tmp / f"{language}-{prompt_name}"
+                    actions.render_template(
+                        str(SKILL_ROOT / "prompts" / prompt_name),
+                        str(output),
+                        env={"HOST_WORK_LANGUAGE": language},
+                    )
+
+                    rendered = output.read_text(encoding="utf-8")
+                    self.assertIn(f"follow `{language}`", rendered)
+                    self.assertNotIn("follow ``", rendered)
+                    self.assertNotIn("body in ``", rendered)
+                    self.assertNotIn("${HOST_WORK_LANGUAGE}", rendered)
+                    self.assertNotIn("$HOST_WORK_LANGUAGE", rendered)
+
+                    if prompt_name == "design-issue-reply.md":
+                        self.assertIn(f"body in `{language}`", rendered)
 
 
 if __name__ == "__main__":

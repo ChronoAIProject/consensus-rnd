@@ -84,13 +84,13 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 - 不要敷衍。reviewer 投了时间评论；你也必须投匹配的时间分析
 - 不要用"我们会..."的市场话术。每句话必须能被证据支撑
 - 不要在回复里塞 "auto-loop 机制说明"（issue body 已经有了；重复占空间）
-- 语言完整性：self-check that the body in `` contains evidence, trade-offs, and next steps；缺任一项就重写。
+- 语言完整性：self-check that the body in `$HOST_WORK_LANGUAGE` contains evidence, trade-offs, and next steps；缺任一项就重写。
 
 开始执行。
 
 ## GitHub post(强制)
 
-After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow ``**. Follow the render-time shared rules:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 

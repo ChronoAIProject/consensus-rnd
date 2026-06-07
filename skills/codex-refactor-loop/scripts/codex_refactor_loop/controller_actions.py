@@ -16,7 +16,7 @@ from typing import Any, Mapping, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
 from .banners import BannerRequest, build_status_banner, gh_comment_command
-from .context import LoopContext
+from .context import LoopContext, normalize_host_work_language
 from .default_issue_intake import DefaultIssueIntakeClaim, DefaultIssueIntakeResult
 from .gh_invoke import build_gh_argv
 from .github_actor import GitHubActorAdmission, GitHubAuthenticatedActor
@@ -2009,9 +2009,13 @@ class ControllerActions:
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)
-        values.setdefault("HOST_WORK_LANGUAGE", self.ctx.host_env.get("HOST_WORK_LANGUAGE") or "en")
+        values["HOST_WORK_LANGUAGE"] = normalize_host_work_language(
+            raw=self.ctx.host_env.get("HOST_WORK_LANGUAGE") or values.get("HOST_WORK_LANGUAGE"),
+            env=values,
+        )
         if env:
             values.update(env)
+            values["HOST_WORK_LANGUAGE"] = normalize_host_work_language(env=values)
         aliases = {
             "work_unit_id": values.get("WORK_UNIT_ID") or values.get("CLUSTER_ID") or "",
             "cluster_id": values.get("CLUSTER_ID", ""),
