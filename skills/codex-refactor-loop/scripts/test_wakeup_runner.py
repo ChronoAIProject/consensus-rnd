@@ -1479,6 +1479,91 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
         self.assertEqual(launch.call_count, 2)
 
+    def test_hard_gate_publishes_dirty_review_fix_before_same_pr_rebase_resolve(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter77-worker"
+        worktree.mkdir(parents=True, exist_ok=True)
+        seen: list[list[str]] = []
+
+        def command_runner(command):
+            cmd = [str(part) for part in command]
+            seen.append(cmd)
+            if cmd[:2] == ["gh", "api"]:
+                endpoint = cmd[2] if len(cmd) > 2 else ""
+                if "/pulls/" in endpoint or "/issues/" in endpoint:
+                    return subprocess.CompletedProcess(cmd, 0, json.dumps({"state": "open"}), "")
+                return subprocess.CompletedProcess(cmd, 0, "{}", "")
+            if cmd[:3] == ["gh", "pr", "view"]:
+                if "labels,body" in cmd:
+                    return subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}),
+                        "",
+                    )
+                if "headRefName" in cmd:
+                    if "--jq" in cmd:
+                        return subprocess.CompletedProcess(cmd, 0, "refactor/iter77-worker\n", "")
+                    return subprocess.CompletedProcess(cmd, 0, json.dumps({"headRefName": "refactor/iter77-worker"}), "")
+                return subprocess.CompletedProcess(cmd, 0, "OPEN\n", "")
+            if (
+                len(cmd) >= 6
+                and cmd[:2] == ["git", "-C"]
+                and Path(cmd[2]).resolve() == self.repo.resolve()
+                and cmd[3:] == ["worktree", "list", "--porcelain"]
+            ):
+                return subprocess.CompletedProcess(
+                    cmd,
+                    0,
+                    f"worktree {self.repo}\nbranch refs/heads/dev\n\n"
+                    f"worktree {worktree}\nbranch refs/heads/refactor/iter77-worker\n\n",
+                    "",
+                )
+            if (
+                len(cmd) >= 5
+                and cmd[:2] == ["git", "-C"]
+                and Path(cmd[2]).resolve() == worktree.resolve()
+                and cmd[3:] == ["status", "--porcelain"]
+            ):
+                return subprocess.CompletedProcess(cmd, 0, " M skills/x.py\n", "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        actions = FakeActions()
+        runner = WakeupRunner(
+            self.ctx,
+            plan_loader=lambda _repo: self.batch_plan(
+                [
+                    self.rebase_dispatch_action(),
+                    self.reviewer_dispatch_action(
+                        action_id="publish-review-fix-output:77",
+                        controller_action="publish_review_fix_output_from_action",
+                    ),
+                ],
+                dispatch_required=2,
+                deficit=2,
+            ),
+            actions=actions,
+            supervisor=self.supervisor,
+            command_runner=command_runner,
+        )
+
+        results = runner.run_once()
+
+        self.assertEqual(
+            [result.action_id for result in results],
+            ["publish-review-fix-output:77"],
+        )
+        self.assertEqual([result.status for result in results], ["applied"])
+        self.assertEqual(
+            [call[0] for call in actions.calls],
+            ["safe_push", "dispatch_reviewers"],
+        )
+        git_subcmds = [
+            cmd[3]
+            for cmd in seen
+            if len(cmd) > 3 and cmd[:2] == ["git", "-C"] and Path(cmd[2]).resolve() == worktree.resolve()
+        ]
+        self.assertIn("commit", git_subcmds)
+
     def test_wakeup_runner_routes_commit_push_resolved_pr_rebase_action(self) -> None:
         action = self.rebase_commit_action()
         actions = FakeActions()
