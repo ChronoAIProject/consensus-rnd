@@ -1183,11 +1183,13 @@ def completed_marker_actions(
             action["preconditions"] = ["active_controller_owner", "clean_exit_source_marker", "live_open_target", "live_managed_target"]
         if action["controller_action"] == "publish_implementation_output":
             _attach_implementation_pr_artifacts(repo_root, action)
+        _apply_remote_ci_fix_done_target_gate(action, open_targets)
         target = _action_target_key(action)
         if (
             open_targets is not None
             and target is not None
             and target not in open_targets
+            and not action.get("status_only")
             and not marker.startswith("META_JUDGE_DONE:consensus")
             and controller_action_from_marker(marker) != "close_managed_item_from_drop_marker"
         ):
@@ -1432,6 +1434,35 @@ def _action_target_key(action: dict[str, Any]) -> tuple[str, int] | None:
     number = action.get("target_number")
     if kind in {"PR", "issue"} and isinstance(number, int):
         return kind, number
+    return None
+
+
+def _apply_remote_ci_fix_done_target_gate(action: dict[str, Any], open_targets: set[tuple[str, int]] | None) -> None:
+    if action.get("controller_action") != "dispatch_remote_ci_fix":
+        return
+    reason = _remote_ci_fix_done_target_suppressed_reason(action, open_targets)
+    if not reason:
+        return
+    action["status_only"] = True
+    action["no_lifecycle_authority"] = True
+    action["suppressed_reason"] = reason
+    action.pop("runner_authority", None)
+    action.pop("no_generic_command", None)
+
+
+def _remote_ci_fix_done_target_suppressed_reason(
+    action: dict[str, Any],
+    open_targets: set[tuple[str, int]] | None,
+) -> str | None:
+    target = _action_target_key(action)
+    if target is None:
+        return "remote_ci_fix_target_missing"
+    if target[0] != "PR":
+        return "remote_ci_fix_target_not_pr"
+    if open_targets is None:
+        return "open_managed_read_model_unavailable"
+    if target not in open_targets:
+        return "target_not_open"
     return None
 
 
