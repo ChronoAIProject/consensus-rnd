@@ -247,6 +247,28 @@ class PrMergeReadinessProjectionTests(unittest.TestCase):
             ],
         )
 
+    def test_missing_target_required_check_is_reported(self) -> None:
+        responses = {
+            ("gh", "pr", "view", "31", "--repo", "owner/repo", "--json", "baseRefName,headRefOid,mergeStateStatus"): subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps({"baseRefName": "main", "headRefOid": "abc123", "mergeStateStatus": "DIRTY"}), ""
+            ),
+            ("gh", "api", "repos/owner/repo/branches/main/protection/required_status_checks"): subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps({"contexts": ["ci"]}), ""
+            ),
+            ("gh", "api", "repos/owner/repo/commits/abc123/check-runs", "--paginate", "--slurp"): subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps({"check_runs": [{"name": "docs", "status": "completed", "conclusion": "success"}]}), ""
+            ),
+        }
+
+        status, _calls = self.run_projection(responses)
+
+        self.assertTrue(status.ok)
+        self.assertEqual(("ci",), status.required_check_names)
+        self.assertEqual(("ci",), status.missing_required)
+        self.assertEqual((), status.required_passed)
+        self.assertEqual((), status.required_pending)
+        self.assertEqual((), status.required_failed)
+
     def test_non_blocked_pr_without_required_rule_evidence_treats_checks_as_advisory(self) -> None:
         responses = {
             ("gh", "pr", "view", "31", "--repo", "owner/repo", "--json", "baseRefName,headRefOid,mergeStateStatus"): subprocess.CompletedProcess(

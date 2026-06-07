@@ -96,6 +96,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         live_head: str = "a" * 40,
         check_status: str = "completed",
         check_conclusion: str = "success",
+        check_name: str = "ci",
         required_checks: tuple[str, ...] = ("ci",),
         mergeable: str = "MERGEABLE",
         is_draft: bool = False,
@@ -124,7 +125,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/rules/branches/main":
                 return subprocess.CompletedProcess(command, 1, "", "404 Not Found")
             if command[:2] == ["gh", "api"] and command[2] == f"repos/owner/repo/commits/{live_head}/check-runs":
-                payload = {"check_runs": [{"name": "ci", "status": check_status, "conclusion": check_conclusion}]}
+                payload = {"check_runs": [{"name": check_name, "status": check_status, "conclusion": check_conclusion}]}
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
             if command == ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"]:
                 return subprocess.CompletedProcess(
@@ -352,6 +353,17 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
                 self.assertEqual(result.status, "blocked")
                 self.assertEqual(result.reason, f"WAIT_OR_REDISPATCH:{reason}")
                 self.assertEqual(self.actions.merged, [])
+
+    def test_missing_target_required_ci_fails_closed_without_merge(self) -> None:
+        self.write_review("architect", "approve")
+        self.write_review("tests", "approve")
+        self.write_review("quality", "comment")
+
+        result = self.run_action(self.action(action_id="review:12:required-ci-missing"), check_name="docs")
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:required_ci_missing")
+        self.assertEqual(self.actions.merged, [])
 
     def test_advisory_ci_pending_or_failed_does_not_block_merge(self) -> None:
         for status, conclusion in (
