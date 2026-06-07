@@ -72,183 +72,29 @@ class ProgressReporterTests(unittest.TestCase):
 
         self.assertEqual(7, reporter.interval)
 
-    def test_exit_failed_posts_and_keeps_failed_state(self) -> None:
+    def test_worker_log_status_does_not_create_edit_delete_or_read_progress_comments(self) -> None:
         log = self.tmp / ".refactor-loop" / "logs" / "fix-pr47-round2.log"
         log.write_text("important failure\nEXIT=17\n", encoding="utf-8")
         reporter = ProgressReporter(self.ctx)
 
-        def fake_run(command, cwd, *, check):
-            del cwd, check
-            text = " ".join(command)
-            if "api repos/owner/repo/issues/47" in text:
-                return mock.Mock(returncode=0, stdout=json.dumps({"pull_request": {}}), stderr="")
-            if "pr comment 47" in text:
-                return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/47#issuecomment-24680\n", stderr="")
-            return mock.Mock(returncode=1, stdout="", stderr="")
-
-        with mock.patch("codex_refactor_loop.monitors.progress._run", side_effect=fake_run):
-            reporter.post_or_update("fix-pr47-round2", log)
-            reporter.post_or_update("fix-pr47-round2", log)
-
-        state = json.loads((self.tmp / ".refactor-loop" / "codex-progress-state.json").read_text(encoding="utf-8"))
-        self.assertEqual(state["fix-pr47-round2"]["finished"], "failed")
-        self.assertEqual(state["fix-pr47-round2"]["comment_id"], 24680)
-
-    def test_in_flight_progress_body_omits_raw_log_tail(self) -> None:
-        log = self.tmp / ".refactor-loop" / "logs" / "phase9-issue81-r10-minimal.log"
-        log.write_text("secret raw worker prose\nSOLVER_DONE:minimal:echo\n", encoding="utf-8")
-        reporter = ProgressReporter(self.ctx)
-
-        body = reporter.build_body(log.stem, log, "false")
-
-        self.assertIn("Task id: `phase9-issue81-r10-minimal`", body)
-        self.assertIn("Raw log tail is intentionally omitted", body)
-        self.assertNotIn("secret raw worker prose", body)
-        self.assertNotIn("SOLVER_DONE:minimal:echo", body)
-
-    def test_failed_progress_body_keeps_bounded_tail_as_exception_diagnostic(self) -> None:
-        log = self.tmp / ".refactor-loop" / "logs" / "fix-pr47-round2.log"
-        log.write_text("important failure diagnostic\nEXIT=17\n", encoding="utf-8")
-        reporter = ProgressReporter(self.ctx)
-
-        body = reporter.build_body(log.stem, log, "failed")
-
-        self.assertIn("异常诊断 tail (non-zero EXIT only)", body)
-        self.assertIn("important failure diagnostic", body)
-
-    def test_orphan_delete_retry_keeps_state_when_delete_fails_and_comment_exists(self) -> None:
-        state_file = self.tmp / ".refactor-loop" / "codex-progress-state.json"
-        state_file.write_text(json.dumps({"fix-pr47-r1": {"target": "47", "kind": "pr", "comment_id": 123, "last_md5": "x", "finished": "false"}}), encoding="utf-8")
-        log = self.tmp / ".refactor-loop" / "logs" / "fix-pr47-r1.log"
-        log.write_text("done\nEXIT=0\n", encoding="utf-8")
-        reporter = ProgressReporter(self.ctx)
-
-        def fake_run(command, cwd, *, check):
-            del cwd, check
-            text = " ".join(command)
-            if "-X DELETE" in text:
-                return mock.Mock(returncode=1, stdout="", stderr="rate limit")
-            if "issues/comments/123" in text:
-                return mock.Mock(returncode=0, stdout="{}", stderr="")
-            return mock.Mock(returncode=0, stdout="", stderr="")
-
-        with mock.patch("codex_refactor_loop.monitors.progress._run", side_effect=fake_run):
-            reporter.post_or_update("fix-pr47-r1", log)
-
-        state = json.loads(state_file.read_text(encoding="utf-8"))
-        self.assertEqual(state["fix-pr47-r1"]["comment_id"], 123)
-        self.assertEqual(state["fix-pr47-r1"]["finished"], "false")
-
-    # Refactor (impl/issue191-single-active-controller): Old pattern:
-    # progress reporters on multiple devices could create/edit/delete GitHub
-    # comments. New principle: non-owner progress reporter does not mutate
-    # GitHub state.
-    def test_non_owner_progress_reporter_does_not_call_github_or_write_state(self) -> None:
-        log = self.tmp / ".refactor-loop" / "logs" / "phase9-issue191-r2-minimal.log"
-        log.write_text("running\n", encoding="utf-8")
-        reporter = ProgressReporter(self.ctx)
-        decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="progress-reporter-write", lease_id="", expires_at="")
-
-        with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
-            with mock.patch.object(reporter, "gh", side_effect=AssertionError("gh should not be called")):
-                with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("gh api should not be called")):
-                    reporter.post_or_update(log.stem, log)
+        with mock.patch.object(reporter, "gh", side_effect=AssertionError("per-worker gh comments are deleted")):
+            with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("per-worker gh api comments are deleted")):
+                reporter.post_or_update("fix-pr47-round2", log)
 
         self.assertEqual({}, reporter._state())
 
-    def test_owner_progress_reporter_keeps_existing_create_comment_path(self) -> None:
-        log = self.tmp / ".refactor-loop" / "logs" / "phase9-issue191-r2-minimal.log"
-        log.write_text("running\n", encoding="utf-8")
-        reporter = ProgressReporter(self.ctx)
-        decision = mock.Mock(allowed=True, owner_device="device-b", status="owner", action="progress-reporter-write", lease_id="lease", expires_at="")
-        gh_calls: list[list[str]] = []
-
-        def fake_gh(args, check=True):
-            gh_calls.append(list(args))
-            return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/issues/191#issuecomment-55\n", stderr="")
-
-        with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
-            with mock.patch.object(reporter, "gh_api", return_value=mock.Mock(returncode=0, stdout=json.dumps({}), stderr="")):
-                with mock.patch.object(reporter, "gh", side_effect=fake_gh):
-                    reporter.post_or_update(log.stem, log)
-
-        self.assertTrue(any(call[:2] == ["issue", "comment"] for call in gh_calls), gh_calls)
-        self.assertIn(log.stem, reporter._state())
-
-    def test_parse_kind_uses_rest_issue_pull_request_projection(self) -> None:
-        reporter = ProgressReporter(self.ctx)
-        calls: list[list[str]] = []
-
-        def fake_gh_api(args, check=True):
-            del check
-            calls.append(list(args))
-            if args == ["repos/owner/repo/issues/47"]:
-                return mock.Mock(returncode=0, stdout=json.dumps({"number": 47, "pull_request": {"url": "x"}}), stderr="")
-            if args == ["repos/owner/repo/issues/48"]:
-                return mock.Mock(returncode=0, stdout=json.dumps({"number": 48}), stderr="")
-            return mock.Mock(returncode=1, stdout="", stderr="")
-
-        with mock.patch.object(reporter, "gh_api", side_effect=fake_gh_api):
-            self.assertEqual("pr", reporter.parse_kind("47"))
-            self.assertEqual("issue", reporter.parse_kind("48"))
-            self.assertEqual("issue", reporter.parse_kind("49"))
-
-        self.assertEqual(
-            calls,
-            [
-                ["repos/owner/repo/issues/47"],
-                ["repos/owner/repo/issues/48"],
-                ["repos/owner/repo/issues/49"],
-            ],
-        )
-
-    def test_parse_kind_does_not_use_pr_view(self) -> None:
+    def test_tick_scans_worker_logs_without_per_worker_github_calls(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "phase9-issue81-r10-minimal.log").write_text("running\n", encoding="utf-8")
         reporter = ProgressReporter(self.ctx)
 
-        with mock.patch.object(reporter, "gh", side_effect=AssertionError("gh pr view must not be called")):
-            with mock.patch.object(reporter, "gh_api", return_value=mock.Mock(returncode=0, stdout=json.dumps({"pull_request": {}}), stderr="")):
-                self.assertEqual("pr", reporter.parse_kind("47"))
+        with mock.patch("codex_refactor_loop.monitors.progress.graphql_headroom_ok", return_value=True):
+            with mock.patch.object(reporter, "sync_global_status_card") as sync_global_status_card:
+                with mock.patch.object(reporter, "gh", side_effect=AssertionError("per-worker gh comments are deleted")):
+                    with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("per-worker gh api comments are deleted")):
+                        reporter.tick()
 
-    def test_parse_target_accepts_exact_owner_local_log_names(self) -> None:
-        reporter = ProgressReporter(self.ctx)
-        cases = {
-            "review-pr47-quality-r2": "47",
-            "fix-pr47-r2": "47",
-            "fix-pr47-round2": "47",
-            "fix-pr47-round-2": "47",
-            "fix-pr47-round-2-retry": "47",
-            "phase9-issue81-r10-minimal": "81",
-            "phase9-issue81-r10-structural": "81",
-            "phase9-issue81-r10-delete": "81",
-            "phase9-issue81-r10-judge": "81",
-            "phase9-issue81-r10-reflector": "81",
-        }
-        for base, expected in cases.items():
-            with self.subTest(base=base):
-                self.assertEqual(expected, reporter.parse_target(base))
-
-    def test_parse_target_rejects_malformed_near_misses_without_prompt_fallback(self) -> None:
-        reporter = ProgressReporter(self.ctx)
-        for base in (
-            "review-pr47",
-            "review-pr47-quality",
-            "fix-pr47",
-            "fix-pr47-r",
-            "phase9-issueX-r10-minimal",
-            "phase9-issue81-r10-architect",
-            "phase9-issue81-anything",
-        ):
-            with self.subTest(base=base):
-                self.assertEqual("", reporter.parse_target(base))
-
-    def test_parse_target_uses_prompt_fallback_only_when_prompt_exists(self) -> None:
-        reporter = ProgressReporter(self.ctx)
-        base = "phase9-issue81-r10-architect"
-        self.assertEqual("", reporter.parse_target(base))
-        prompt = self.tmp / ".refactor-loop" / "prompts" / f"{base}.md"
-        prompt.parent.mkdir(parents=True, exist_ok=True)
-        prompt.write_text("Discuss #80 then final target #81.\n", encoding="utf-8")
-        self.assertEqual("81", reporter.parse_target(base))
+        sync_global_status_card.assert_called_once()
+        self.assertEqual({}, reporter._state())
 
     def test_global_status_card_disabled_noops_without_github(self) -> None:
         reporter = ProgressReporter(self.ctx)
@@ -259,16 +105,7 @@ class ProgressReporterTests(unittest.TestCase):
         self.assertEqual({}, reporter._state())
 
     def test_global_status_card_non_owner_noops_without_patch(self) -> None:
-        host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
-        host_env.write_text(
-            f'export REPO_ROOT="{self.tmp}"\n'
-            'export GH_REPO_SLUG="owner/repo"\n'
-            'export HOST_HOLISTIC_STATUS_ENABLE="true"\n'
-            'export HOST_HOLISTIC_STATUS_ISSUE_NUMBER="9"\n'
-            'export HOST_HOLISTIC_STATUS_COMMENT_ID="123"\n',
-            encoding="utf-8",
-        )
-        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        ctx = self._ctx_with_global_status()
         reporter = ProgressReporter(ctx)
         decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="global-dashboard-status-card", lease_id="", expires_at="")
 
@@ -279,17 +116,7 @@ class ProgressReporterTests(unittest.TestCase):
         self.assertEqual({}, reporter._state())
 
     def test_global_status_card_same_hash_skip_does_not_patch(self) -> None:
-        host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
-        host_env.write_text(
-            f'export REPO_ROOT="{self.tmp}"\n'
-            'export GH_REPO_SLUG="owner/repo"\n'
-            'export HOST_HOLISTIC_STATUS_ENABLE="true"\n'
-            'export HOST_HOLISTIC_STATUS_ISSUE_NUMBER="9"\n'
-            'export HOST_HOLISTIC_STATUS_COMMENT_ID="123"\n'
-            'export HOST_HOLISTIC_STATUS_INTERVAL_SECONDS="0"\n',
-            encoding="utf-8",
-        )
-        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        ctx = self._ctx_with_global_status(extra='export HOST_HOLISTIC_STATUS_INTERVAL_SECONDS="0"\n')
         reporter = ProgressReporter(ctx)
         body = "stable body\n"
         state_file = self.tmp / ".refactor-loop" / "codex-progress-state.json"
@@ -311,17 +138,8 @@ class ProgressReporterTests(unittest.TestCase):
 
         self.assertEqual("issue-comment", reporter._state()["__global_dashboard_status_card__"]["kind"])
 
-    def test_global_status_card_patches_fixed_issue_comment_only(self) -> None:
-        host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
-        host_env.write_text(
-            f'export REPO_ROOT="{self.tmp}"\n'
-            'export GH_REPO_SLUG="owner/repo"\n'
-            'export HOST_HOLISTIC_STATUS_ENABLE="true"\n'
-            'export HOST_HOLISTIC_STATUS_ISSUE_NUMBER="9"\n'
-            'export HOST_HOLISTIC_STATUS_COMMENT_ID="123"\n',
-            encoding="utf-8",
-        )
-        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+    def test_global_status_card_patches_fixed_issue_comment_only_after_return_validation(self) -> None:
+        ctx = self._ctx_with_global_status()
         reporter = ProgressReporter(ctx)
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="global-dashboard-status-card", lease_id="", expires_at="")
         calls: list[list[str]] = []
@@ -329,7 +147,7 @@ class ProgressReporterTests(unittest.TestCase):
         def fake_gh_api(args, check=True):
             del check
             calls.append(list(args))
-            return mock.Mock(returncode=0, stdout="{}", stderr="")
+            return mock.Mock(returncode=0, stdout=json.dumps({"id": 123, "html_url": "https://github.test/x#issuecomment-123"}), stderr="")
 
         with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
             with mock.patch.object(reporter, "build_global_status_body", return_value="changed body\n"):
@@ -344,6 +162,38 @@ class ProgressReporterTests(unittest.TestCase):
         self.assertEqual("issue-comment", state["kind"])
         self.assertEqual("9", state["target"])
         self.assertEqual("123", state["comment_id"])
+
+    def test_global_status_card_rejects_wrong_patch_object_and_records_secondary_backoff(self) -> None:
+        ctx = self._ctx_with_global_status()
+        reporter = ProgressReporter(ctx)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="global-dashboard-status-card", lease_id="", expires_at="")
+        result = mock.Mock(
+            returncode=1,
+            stdout="",
+            stderr="You have exceeded a secondary rate limit and have been temporarily blocked from content creation",
+        )
+
+        with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
+            with mock.patch.object(reporter, "build_global_status_body", return_value="changed body\n"):
+                with mock.patch.object(reporter, "gh_api", return_value=result):
+                    reporter.sync_global_status_card()
+
+        backoff = json.loads((self.tmp / ".refactor-loop/state/secondary-mutation-backoff.json").read_text(encoding="utf-8"))
+        self.assertEqual("secondary-content-creation-limit", backoff["contentCreation"]["reason"])
+        self.assertNotIn("__global_dashboard_status_card__", reporter._state())
+
+    def _ctx_with_global_status(self, *, extra: str = "") -> LoopContext:
+        host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
+        host_env.write_text(
+            f'export REPO_ROOT="{self.tmp}"\n'
+            'export GH_REPO_SLUG="owner/repo"\n'
+            'export HOST_HOLISTIC_STATUS_ENABLE="true"\n'
+            'export HOST_HOLISTIC_STATUS_ISSUE_NUMBER="9"\n'
+            'export HOST_HOLISTIC_STATUS_COMMENT_ID="123"\n'
+            f"{extra}",
+            encoding="utf-8",
+        )
+        return LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
 
 
 class ProgressReporterSourceRegressionTests(unittest.TestCase):
@@ -367,6 +217,7 @@ class ProgressReporterSourceRegressionTests(unittest.TestCase):
             '"-X", "PATCH"',
             "issues/comments",
             "render_holistic_markdown",
+            "_valid_fixed_comment_patch",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, text)
@@ -374,7 +225,6 @@ class ProgressReporterSourceRegressionTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text.lower())
         executable = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-        self.assertNotIn(r"^phase9-issue([0-9]+).*", executable)
         for token in (
             'os.environ.get("INTERVAL"',
             'os.environ.get("STATE_DIR"',
@@ -382,11 +232,16 @@ class ProgressReporterSourceRegressionTests(unittest.TestCase):
             'os.environ.get("LOG_DIR"',
             'os.environ.get("PROMPTS_DIR"',
             "PROGRESS_REPORTER_INTERVAL",
+            "parse_target",
+            "parse_kind",
+            "_create_comment",
+            '"DELETE"',
+            '"POST"',
+            '["issue", "comment"',
+            '["pr", "comment"',
         ):
             with self.subTest(token=token):
                 self.assertNotIn(token, executable)
-        self.assertIn('f"repos/{self.repo}/issues/{target}"', text)
-        self.assertNotIn('["pr", "view"', text)
 
 
 if __name__ == "__main__":

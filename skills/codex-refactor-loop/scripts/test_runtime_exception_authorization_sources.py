@@ -51,7 +51,6 @@ TARGET_ANCHORS = {
 
 MAINTAINER_DIRECTIVE_ANCHORS = {
     "maintainer-directive-concurrency-auto-topup",
-    "maintainer-directive-progress-reporter-orphan-delete",
     "maintainer-directive-existing-issue-priority-over-audit",
     "maintainer-directive-stale-issue-3h-revival",
     "maintainer-directive-floor-no-exemption",
@@ -580,7 +579,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertNotIn(forbidden, (patrol_source + publisher_source).lower())
 
     def test_maintainer_directive_entries_have_required_fields(self) -> None:
-        self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 7)
+        self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 6)
         mirror_projection = project_markdown(self.mirror)
         for anchor in MAINTAINER_DIRECTIVE_ANCHORS:
             entry = mirror_entry(self.mirror, anchor)
@@ -592,6 +591,26 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn("no_new_runtime_authority", entry)
                 for field in MAINTAINER_DIRECTIVE_REQUIRED_FIELDS:
                     self.assertIn(field, entry_projection.bullet_fields)
+
+    def test_progress_reporter_orphan_delete_authorization_is_obsolete(self) -> None:
+        entry = mirror_entry(self.mirror, "maintainer-directive-progress-reporter-orphan-delete")
+        section = self.skill[self.skill.index("## Named runtime surface — codex-progress-reporter TEST_NO_LOOP(per #69)") :]
+
+        for required in (
+            "obsolete/deleted by #626",
+            "grants no recurring daemon delete path",
+            "no per-worker progress comment create/edit/delete/get/read path",
+            "Per-worker GitHub progress comment existence is no longer read or maintained",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry + section)
+        for forbidden in (
+            "retry nonterminal delete failures",
+            "allow terminal orphan retry",
+            "own-comment maintenance surface",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, entry)
 
     def test_floor_no_exemption_mirror_preserves_single_active_audit_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "maintainer-directive-floor-no-exemption")
@@ -1708,14 +1727,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         section = rest if next_heading == -1 else rest[:next_heading]
 
         for required in (
-            "Progress target/kind facts are owned locally by `monitors/progress.py`",
-            "exact log basenames are the canonical target source",
-            "prompt fallback applies only when the matching prompt file exists",
+            "Progress-reporter per-worker GitHub progress comments are deleted",
+            "#504 separately allows only PATCH of exactly one host-configured global status-card comment id",
             "Comment-monitor controller-post identity is owned locally by `monitors/comment.py`",
             "final `⟦AI:AUTO-LOOP⟧` sentinel is canonical",
             "`CONTROLLER_PREFIXES` is only a legacy compatibility skip list",
             "private `.refactor-loop` paths derived from `LoopContext`, not host env surfaces",
             "#191 `ActiveControllerLease` / `require_active_controller(...)` gate",
+            "per-worker progress comment create/edit/delete/get/read",
             "label mutation",
             "issue/PR close/create/merge",
             "release/tag",

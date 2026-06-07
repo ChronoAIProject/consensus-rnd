@@ -41,6 +41,7 @@ from .review_fix_dispatch import (
     ReviewThreadCompletionEvidence,
     validate_review_thread_completion,
 )
+from .secondary_mutation_backoff import record_content_creation_backoff
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import consensus_implementation_suppressed_reason
@@ -483,7 +484,8 @@ class ControllerActions:
         created = self.gh(["pr", "create", "--draft", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
-        if not match:
+        if created.returncode != 0 or not match:
+            record_content_creation_backoff(self.ctx, "open-pr", created)
             raise RuntimeError(f"open_pr_with_label: failed to extract PR num from: {output.strip()}")
         pr_target = self._normalize_lifecycle_target_or_raise(
             match.group(1),
@@ -536,6 +538,7 @@ class ControllerActions:
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/issues/([0-9]+)", output)
         if created.returncode != 0 or not match:
+            record_content_creation_backoff(self.ctx, "open-design-issue", created)
             raise RuntimeError(f"open_design_issue_with_labels: failed to extract issue num from: {output.strip()}")
         return int(match.group(1)), match.group(0)
 
@@ -583,6 +586,7 @@ class ControllerActions:
         finally:
             Path(comment_file).unlink(missing_ok=True)
         if result.returncode != 0:
+            record_content_creation_backoff(self.ctx, "issue-decomposition-parent-comment", result)
             raise RuntimeError(f"apply_issue_decomposition_plan: parent comment failed: {result.stderr.strip() or result.stdout.strip()}")
         return tuple(created)
 

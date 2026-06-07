@@ -16,6 +16,7 @@ from .context import LoopContext
 from .gh_invoke import build_gh_argv
 from .implementation_pr_artifacts import FINAL_SENTINEL
 from .managed_work_snapshot import invalidate_open_managed_work_snapshot
+from .secondary_mutation_backoff import record_content_creation_backoff
 
 
 CLAIM_MARKER = "crnd:default-issue-intake-claim"
@@ -172,6 +173,7 @@ class DefaultIssueIntakeClaim:
         finally:
             Path(path).unlink(missing_ok=True)
         if result.returncode != 0:
+            record_content_creation_backoff(self.ctx, f"default-issue-intake-{label}", result)
             raise RuntimeError(_failure(label, result))
 
     def _apply_design_labels(self, issue_number: int) -> None:

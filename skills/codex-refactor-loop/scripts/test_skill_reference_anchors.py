@@ -1352,7 +1352,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         concurrency = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "concurrency.py").read_text(encoding="utf-8")
         controller_actions = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
         git = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "git.py").read_text(encoding="utf-8")
-        self.assertIn("PROGRESS_PHASE9_TARGET_RE", progress)
+        self.assertIn("global-dashboard-status-card", progress)
+        self.assertIn("_valid_fixed_comment_patch", progress)
+        self.assertNotIn("PROGRESS_PHASE9_TARGET_RE", progress)
         self.assertIn("MAIN_READONLY_DISPATCH_PATTERNS", concurrency)
         self.assertIn("SAFE_WORKTREE_CLUSTER_RE", controller_actions)
         self.assertIn("SAFE_WORKTREE_CLUSTER_RE", git)
@@ -1590,8 +1592,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertNotIn("' '.join(tail_lines(log_path, 40))", wakeup_plan)
         self.assertIn("MARKER_RE.fullmatch", router)
         self.assertNotIn("stripped.find(prefix)", router)
-        self.assertIn("Raw log tail is intentionally omitted", progress)
-        self.assertIn("异常诊断 tail (non-zero EXIT only)", progress)
+        self.assertIn("worker-log-status", progress)
+        self.assertNotIn("Raw log tail is intentionally omitted", progress)
+        self.assertNotIn("异常诊断 tail (non-zero EXIT only)", progress)
 
 
 class AutoLoopStatuslineContractTests(unittest.TestCase):
