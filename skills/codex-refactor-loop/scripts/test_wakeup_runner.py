@@ -636,6 +636,33 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             json.dumps({"commits": [{"sha": "abc123", "subject": "fix: release blocker", "body": ""}]}),
             encoding="utf-8",
         )
+        self.release_dispatch_fix_sha = self.init_release_dispatch_git_history()
+
+    def init_release_dispatch_git_history(self) -> str:
+        def git_ok(*args: str) -> str:
+            result = subprocess.run(
+                ["git", "-C", str(self.repo), *args],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise AssertionError(result.stderr or result.stdout)
+            return result.stdout.strip()
+
+        git_ok("init", "-q")
+        git_ok("add", ".")
+        git_ok("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "Release v1.2.3-beta.4")
+        (self.repo / "file.txt").write_text("fix\n", encoding="utf-8")
+        git_ok("add", "file.txt")
+        git_ok("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "fix: next release")
+        fix_sha = git_ok("rev-parse", "HEAD")
+        git_ok("branch", "dev")
+        git_ok("update-ref", "refs/remotes/origin/dev", "HEAD")
+        origin = self.repo.parent / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(origin)], capture_output=True, text=True, check=True)
+        git_ok("remote", "add", "origin", str(origin))
+        return fix_sha
 
     def batch_plan(self, actions: list[dict], *, dispatch_required: object, deficit: object, active: bool = True) -> dict:
         return {
@@ -758,6 +785,42 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         }
         action.update(overrides)
         return action
+
+    def write_zero_code_completion_artifacts(self, issue: int = 77, cluster: str | None = None) -> dict[str, str]:
+        cluster_id = cluster or f"issue-{issue}"
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (runs / f"phase9-issue{issue}-r1-judge.md").write_text(
+            "---\ndecision: consensus\n---\n"
+            "## If consensus\n"
+            "- Chosen framing: delete\n"
+            "- Implement plan (structured fields read by wakeup-plan from this judge artifact only, not from solver artifacts or prompt-body free text):\n"
+            "  - scope_paths:\n"
+            "    - none\n"
+            "  - old_pattern: old\n"
+            "  - new_principle: new\n"
+            f"- Implementation owner: dispatch implement codex with cluster_id={cluster_id}, design_decision_path=.refactor-loop/runs/phase9-issue{issue}-r1-judge.md\n"
+            "META_JUDGE_DONE:consensus:delete\n",
+            encoding="utf-8",
+        )
+        (runs / f"implement-{cluster_id}.md").write_text(
+            f"worker artifact: 0 LOC no source changes\nIMPLEMENT_DONE:issue-{issue}:ok\n",
+            encoding="utf-8",
+        )
+        (runs / f"implementation-pr-{cluster_id}-body.md").write_text(
+            "## 修改文件\n\n- 0 LOC no source changes\n\n"
+            "## 测试结果\n\n- no-op verification only\n\n"
+            "## deviation 记录\n\n- none\n\n"
+            f"Closes #{issue}\n\n"
+            "⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        return {
+            "classification": "empty_scoped_diff",
+            "consensus_scope_paths": "- none",
+            "implementation_artifact": f".refactor-loop/runs/implement-{cluster_id}.md",
+            "body_file": f".refactor-loop/runs/implementation-pr-{cluster_id}-body.md",
+        }
 
     def rebase_dispatch_action(self, **overrides) -> dict:
         action = {
@@ -1270,6 +1333,31 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.action_id for result in results], [actions[0]["action_id"], actions[1]["action_id"]])
         self.assertEqual(launch.call_count, 2)
 
+    def test_wakeup_runner_prioritizes_reviewer_spawn_intent_over_stale_fallback_spawn(self) -> None:
+        fallback = self.spawn_action(
+            action_id="audit-fallback:audit-iter-9",
+            route="audit-fallback",
+            intent_id="audit-fallback:audit-iter-9",
+            log=str(self.repo / ".refactor-loop/logs/audit-iter-9.log"),
+        )
+        reviewer = self.spawn_action(
+            action_id="harness-spawn-intent:dispatch-reviewers:632:{architect,tests,quality}:r1",
+            route="dispatch-reviewers",
+            intent_id="dispatch-reviewers:632:{architect,tests,quality}:r1",
+            target={"kind": "codex", "task_id": "review-pr632-architect-r1"},
+            prompt=str(self.repo / ".refactor-loop/prompts/review-pr632-architect-r1.md"),
+            log=str(self.repo / ".refactor-loop/logs/review-pr632-architect-r1.log"),
+        )
+
+        Path(reviewer["prompt"]).write_text("review PR 632\n", encoding="utf-8")
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.batch_plan([fallback, reviewer], dispatch_required=1, deficit=1))
+
+        self.assertEqual([result.action_id for result in results], [reviewer["action_id"]])
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(launch.call_count, 1)
+        self.assertEqual(str(launch.call_args.kwargs["log"]), reviewer["log"])
+
     def test_wakeup_runner_stale_applied_spawn_ledger_retries_headless_intent(self) -> None:
         action = self.design_consensus_spawn_action(action_id="harness-spawn-intent:phase9-router:104:1:minimal-retry")
         ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
@@ -1461,6 +1549,115 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
         self.assertEqual([result.status for result in results], ["applied"])
         self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
+
+    def test_hard_gate_dispatch_pr_rebase_resolve_is_not_starved_by_spawn_budget(self) -> None:
+        spawns = [
+            self.spawn_action(
+                action_id=f"spawn:publish-implementation-fallback:{index}",
+                route="publish-implementation-fallback",
+                log=str(self.repo / f".refactor-loop/logs/publish-implementation-fallback-{index}.log"),
+            )
+            for index in range(3)
+        ]
+        rebase = self.rebase_dispatch_action(action_id="dispatch-pr-rebase-resolve:77:priority-current")
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(
+                self.batch_plan([*spawns, rebase], dispatch_required=2, deficit=2),
+                gh_state="OPEN",
+                actions=actions,
+            )
+
+        self.assertEqual([result.action_id for result in results[:1]], [rebase["action_id"]])
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
+        self.assertEqual(launch.call_count, 2)
+
+    def test_hard_gate_publishes_dirty_review_fix_before_same_pr_rebase_resolve(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter77-worker"
+        worktree.mkdir(parents=True, exist_ok=True)
+        seen: list[list[str]] = []
+
+        def command_runner(command):
+            cmd = [str(part) for part in command]
+            seen.append(cmd)
+            if cmd[:2] == ["gh", "api"]:
+                endpoint = cmd[2] if len(cmd) > 2 else ""
+                if "/pulls/" in endpoint or "/issues/" in endpoint:
+                    return subprocess.CompletedProcess(cmd, 0, json.dumps({"state": "open"}), "")
+                return subprocess.CompletedProcess(cmd, 0, "{}", "")
+            if cmd[:3] == ["gh", "pr", "view"]:
+                if "labels,body" in cmd:
+                    return subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}),
+                        "",
+                    )
+                if "headRefName" in cmd:
+                    if "--jq" in cmd:
+                        return subprocess.CompletedProcess(cmd, 0, "refactor/iter77-worker\n", "")
+                    return subprocess.CompletedProcess(cmd, 0, json.dumps({"headRefName": "refactor/iter77-worker"}), "")
+                return subprocess.CompletedProcess(cmd, 0, "OPEN\n", "")
+            if (
+                len(cmd) >= 6
+                and cmd[:2] == ["git", "-C"]
+                and Path(cmd[2]).resolve() == self.repo.resolve()
+                and cmd[3:] == ["worktree", "list", "--porcelain"]
+            ):
+                return subprocess.CompletedProcess(
+                    cmd,
+                    0,
+                    f"worktree {self.repo}\nbranch refs/heads/dev\n\n"
+                    f"worktree {worktree}\nbranch refs/heads/refactor/iter77-worker\n\n",
+                    "",
+                )
+            if (
+                len(cmd) >= 5
+                and cmd[:2] == ["git", "-C"]
+                and Path(cmd[2]).resolve() == worktree.resolve()
+                and cmd[3:] == ["status", "--porcelain"]
+            ):
+                return subprocess.CompletedProcess(cmd, 0, " M skills/x.py\n", "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        actions = FakeActions()
+        runner = WakeupRunner(
+            self.ctx,
+            plan_loader=lambda _repo: self.batch_plan(
+                [
+                    self.rebase_dispatch_action(),
+                    self.reviewer_dispatch_action(
+                        action_id="publish-review-fix-output:77",
+                        controller_action="publish_review_fix_output_from_action",
+                    ),
+                ],
+                dispatch_required=2,
+                deficit=2,
+            ),
+            actions=actions,
+            supervisor=self.supervisor,
+            command_runner=command_runner,
+        )
+
+        results = runner.run_once()
+
+        self.assertEqual(
+            [result.action_id for result in results],
+            ["publish-review-fix-output:77"],
+        )
+        self.assertEqual([result.status for result in results], ["applied"])
+        self.assertEqual(
+            [call[0] for call in actions.calls],
+            ["safe_push", "dispatch_reviewers"],
+        )
+        git_subcmds = [
+            cmd[3]
+            for cmd in seen
+            if len(cmd) > 3 and cmd[:2] == ["git", "-C"] and Path(cmd[2]).resolve() == worktree.resolve()
+        ]
+        self.assertIn("commit", git_subcmds)
 
     def test_wakeup_runner_routes_commit_push_resolved_pr_rebase_action(self) -> None:
         action = self.rebase_commit_action()
@@ -1729,6 +1926,31 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(launch.call_count, 2)
         self.assertEqual(actions.calls, [("merge_pr", "77")])
+
+    def test_hard_gate_release_rollup_open_pr_is_not_starved_by_spawn_budget(self) -> None:
+        rollup = self.release_rollup_action(action_id="release-rollup-needed:priority-current")
+        spawns = [
+            self.spawn_action(
+                action_id=f"spawn:publish-implementation-fallback:{index}",
+                log=str(self.repo / f".refactor-loop/logs/publish-implementation-fallback-{index}.log"),
+            )
+            for index in range(2)
+        ]
+        ordinary_lifecycle = self.implementation_output_action(action_id="completed-marker:implement-before-rollup")
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(
+                self.batch_plan([*spawns, ordinary_lifecycle, rollup], dispatch_required=2, deficit=2),
+                actions=actions,
+                duplicate_prs=[],
+                git_diff_code=1,
+            )
+
+        self.assertEqual([result.action_id for result in results[:1]], [rollup["action_id"]])
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual([call[0] for call in actions.calls], ["open_release_rollup_pr_from_action"])
+        self.assertEqual(launch.call_count, 2)
 
     def test_review_gate_reject_routes_to_fix_even_when_ci_is_red(self) -> None:
         runner = WakeupRunner(self.ctx)
@@ -2149,6 +2371,21 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(candidate["schema"], "decision-artifact-only/v2")
         self.assertEqual(candidate["target_ref"], "origin/dev")
         self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
+
+    def test_release_dispatch_refreshes_release_commits_before_decision(self) -> None:
+        self.write_release_dispatch_fixtures()
+        (self.repo / ".refactor-loop/state/release-commits.json").write_text(
+            json.dumps({"commits": [{"sha": "stale", "subject": "fix: stale", "body": ""}]}),
+            encoding="utf-8",
+        )
+
+        results = self.run_result(self.base_plan(self.release_dispatch_action()), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "applied")
+        commits = json.loads((self.repo / ".refactor-loop/state/release-commits.json").read_text(encoding="utf-8"))
+        self.assertEqual(commits, {"commits": [{"sha": self.release_dispatch_fix_sha, "subject": "fix: next release", "body": ""}]})
+        decision = json.loads((self.repo / ".refactor-loop/state/release-decision.json").read_text(encoding="utf-8"))
+        self.assertEqual(decision["commits"], [{"sha": self.release_dispatch_fix_sha, "subject": "fix: next release"}])
 
     def test_release_dispatch_recovers_existing_candidate_with_empty_target_ref(self) -> None:
         self.write_release_dispatch_fixtures()
@@ -2647,6 +2884,28 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             pending.count("WAKEUP_RUNNER_HELPER_EXIT:publish-implementation:helper-failure:publish_implementation_output:75"),
             2,
         )
+
+    def test_publish_implementation_create_pull_request_rate_limit_blocked_ledger_retries(self) -> None:
+        actions = FakeActions()
+
+        def rate_limited_publish(action: dict) -> int:
+            actions.calls.append(("publish_implementation_output", dict(action)))
+            raise RuntimeError(
+                "open_pr_with_label: failed to extract PR num from: "
+                "pull request create failed: GraphQL: was submitted too quickly (createPullRequest)"
+            )
+
+        actions.publish_implementation_output = rate_limited_publish
+        action = self.implementation_output_action(action_id="publish-implementation:create-pull-request-rate-limit")
+
+        first = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+        second = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+
+        self.assertEqual(first[0].status, "blocked")
+        self.assertIn("submitted too quickly", first[0].reason)
+        self.assertEqual(second[0].status, "blocked")
+        self.assertIn("createPullRequest", second[0].reason)
+        self.assertEqual([call[0] for call in actions.calls], ["publish_implementation_output", "publish_implementation_output"])
 
     def test_safe_push_stale_head_blocks_before_helper(self) -> None:
         actions = FakeActions()
@@ -3901,6 +4160,79 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(helper_action["source_artifact"], ".refactor-loop/logs/phase9-issue554-r4-reflector.log")
         self.assertEqual(helper_action["source_marker"], marker)
         self.assertEqual(helper_action["target_number"], 554)
+
+    def test_zero_code_implementation_completion_routes_to_close_helper_after_empty_diff_revalidation(self) -> None:
+        actions = FakeActions()
+        marker = "IMPLEMENT_DONE:issue-77:ok"
+        action = self.close_action(
+            action_id="completed-marker:implement-issue-77.log:" + marker,
+            preconditions=[
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_open_target",
+                "live_managed_target",
+                "zero_code_implementation_completion",
+            ],
+            source_artifact=".refactor-loop/logs/implement-issue-77.log",
+            source_marker=marker,
+            target_number=77,
+            target={"kind": "issue", "number": 77},
+            zero_code_completion_proof=self.write_zero_code_completion_artifacts(issue=77),
+        )
+        log = self.repo / ".refactor-loop/logs/implement-issue-77.log"
+        log.write_text("worker artifact: 0 LOC no source changes\n" + marker + "\nEXIT=0\n", encoding="utf-8")
+        (self.repo / ".worktrees" / "iter77-issue-77").mkdir(parents=True, exist_ok=True)
+
+        results = self.run_result(
+            self.base_plan(action),
+            git_diff_code=0,
+            implementation_status="",
+            implementation_issue=77,
+            actions=actions,
+        )
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual([call[0] for call in actions.calls], ["close_managed_item_from_drop_marker"])
+        helper_action = actions.calls[0][1]
+        self.assertEqual(helper_action["source_marker"], marker)
+        self.assertIn("zero_code_implementation_completion", helper_action["preconditions"])
+
+    def test_zero_code_implementation_close_blocks_when_diff_not_empty(self) -> None:
+        actions = FakeActions()
+        marker = "IMPLEMENT_DONE:issue-77:ok"
+        action = self.close_action(
+            action_id="completed-marker:implement-issue-77.log:" + marker,
+            preconditions=[
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_open_target",
+                "live_managed_target",
+                "zero_code_implementation_completion",
+            ],
+            source_artifact=".refactor-loop/logs/implement-issue-77.log",
+            source_marker=marker,
+            target_number=77,
+            target={"kind": "issue", "number": 77},
+            zero_code_completion_proof=self.write_zero_code_completion_artifacts(issue=77),
+        )
+        log = self.repo / ".refactor-loop/logs/implement-issue-77.log"
+        log.write_text(marker + "\nEXIT=0\n", encoding="utf-8")
+        (self.repo / ".worktrees" / "iter77-issue-77").mkdir(parents=True, exist_ok=True)
+
+        results = self.run_result(
+            self.base_plan(action),
+            git_diff_code=1,
+            implementation_status="M  changed.py\n",
+            implementation_issue=77,
+            actions=actions,
+        )
+
+        self.assert_blocked_before_dispatch(
+            results,
+            "completed-marker:implement-issue-77.log:" + marker,
+            "close_managed_drop_zero_code_not_empty_scoped_diff:publish_ready:",
+            actions,
+        )
 
     def test_close_managed_item_from_drop_marker_blocks_non_managed_open_target_before_helper(self) -> None:
         actions = FakeActions()

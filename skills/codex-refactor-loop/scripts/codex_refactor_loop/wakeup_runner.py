@@ -24,6 +24,7 @@ from .implement_lifecycle import (
     _implement_run_artifact_done_marker,
     classify_implement_attempt,
     clear_redispatchable_implement_log,
+    committed_implementation_delta,
     implement_attempt_is_terminal_or_noop_completion,
     is_implement_log,
 )
@@ -36,7 +37,9 @@ from .issue_decomposition import (
 from .pr_checks import PrMergeReadinessProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.gate import AutoReleaseGate
+from .release.commits import write_release_commits
 from .release.publish_preflight import ReleasePublishPreflight
+from .release.publisher import ReleasePublisher
 from .safe_progress_scheduler import MEDIUM_NON_SPAWN_LIMIT_PER_TICK, validate_runner_action
 from .state import read_json
 from .work_items import extract_closing_issue_numbers
@@ -44,6 +47,7 @@ from .wakeup_plan import (
     build_plan,
     consensus_implementation_suppressed_reason,
     release_candidate_target_ref_invalid,
+    zero_code_implementation_completion_proven,
 )
 from .worker_markers import read_worker_terminal_marker
 
@@ -246,7 +250,7 @@ class WakeupRunner:
         applied_spawns = 0
         applied_medium_non_spawns = 0
         worker_top_up_only = False
-        for action in plan.get("actions", []):
+        for action in self._actions_for_apply(plan.get("actions", []), budget):
             if not isinstance(action, dict) or action.get("status_only") is True:
                 continue
             is_spawn_action = budget.is_spawn_action(action)
@@ -282,6 +286,22 @@ class WakeupRunner:
                 continue
             break
         return results
+
+    def _actions_for_apply(self, actions: Sequence[Any], budget: WakeupApplyBudget) -> list[Any]:
+        if not budget.hard_gate_active:
+            return list(actions)
+        return sorted(actions, key=self._hard_gate_apply_priority)
+
+    def _hard_gate_apply_priority(self, action: Any) -> tuple[int, int]:
+        if not isinstance(action, Mapping):
+            return (4, 0)
+        if _publishes_review_fix_output(action):
+            return (0, 0)
+        if _unblocks_pr_mergeability(action) or _unblocks_release_rollup(action):
+            return (1, 0)
+        if _is_reviewer_harness_spawn_intent(action):
+            return (2, 0)
+        return (3, 0)
 
     def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:
         controller_action = str(action.get("controller_action") or "")
@@ -567,7 +587,30 @@ class WakeupRunner:
         for required in ("active_controller_owner", "live_open_target", "live_managed_target"):
             if required not in preconditions:
                 return f"close_managed_drop_missing_precondition:{required}"
-        if not str(action.get("source_marker") or "").startswith("META_RESOLVED:drop:"):
+        marker = str(action.get("source_marker") or "")
+        zero_code_completion = "zero_code_implementation_completion" in preconditions
+        if zero_code_completion:
+            if not re.fullmatch(r"IMPLEMENT_DONE:issue-?[1-9][0-9]*:ok", marker):
+                return "close_managed_drop_invalid_zero_code_marker"
+            target_number = action.get("target_number")
+            if not isinstance(target_number, int):
+                return "close_managed_drop_target_missing"
+            state = classify_implement_attempt(
+                repo_root=self.ctx.repo_root,
+                action=action,
+                log_path=self.ctx.repo_root / str(action.get("source_artifact") or ""),
+                integration_branch=str(self.ctx.host_env.get("INTEGRATION_BRANCH") or "auto-refact-dev"),
+                command_runner=self.command_runner,
+            )
+            if not zero_code_implementation_completion_proven(
+                action,
+                self.ctx.repo_root,
+                target_number,
+                state,
+                require_action_proof=True,
+            ):
+                return f"close_managed_drop_zero_code_not_empty_scoped_diff:{state.status}:{state.reason}"
+        elif not marker.startswith("META_RESOLVED:drop:"):
             return "close_managed_drop_invalid_marker"
         kind = str(action.get("target_kind") or "").lower()
         if kind not in {"issue", "pr"}:
@@ -591,10 +634,18 @@ class WakeupRunner:
         target_ref = str(action.get("target_ref") or "")
         if not target_ref:
             return "release_target_ref_missing"
-        result = ReleasePublishPreflight(self.ctx.repo_root).validate(candidate_path=candidate_path, target_ref=target_ref)
+        preflight = ReleasePublishPreflight(self.ctx.repo_root, runner=self._run_release_command)
+        result = preflight.validate(candidate_path=candidate_path, target_ref=target_ref)
         if not result.allowed:
+            if result.reasons == ("manifest_version_mismatch",) and ReleasePublisher(
+                self.ctx.repo_root, preflight=preflight, runner=self._run_release_command
+            ).can_validate_remote_reentry(result):
+                return None
             return "release_preflight_denied:" + ",".join(result.reasons)
         return None
+
+    def _run_release_command(self, command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        return self.command_runner(command)
 
     def _validate_release_dispatch(self, action: Mapping[str, Any]) -> str | None:
         preconditions = action.get("preconditions")
@@ -1013,6 +1064,13 @@ class WakeupRunner:
             return None
         diff = self.command_runner(["git", "-C", str(worktree), "diff", "HEAD", "--quiet"])
         if diff.returncode == 0:
+            integration_branch = str(getattr(self.actions, "integration_branch", "") or self.ctx.host_env.get("INTEGRATION_BRANCH", "")).strip()
+            if integration_branch:
+                committed_delta = committed_implementation_delta(worktree, integration_branch, self.command_runner)
+                if committed_delta is True:
+                    return None
+                if committed_delta is None:
+                    return "publish_implementation_diff_unavailable"
             return "publish_implementation_empty_scoped_diff"
         if diff.returncode != 1:
             return "publish_implementation_diff_unavailable"
@@ -1102,6 +1160,18 @@ class WakeupRunner:
         previous_env = os.environ.copy()
         try:
             os.environ.update(self.ctx.env_for_subprocess())
+            release_target_ref = str(os.environ.get("RELEASE_TARGET_REF") or "").strip()
+            if not release_target_ref:
+                review_base = str(os.environ.get("REVIEW_BASE_BRANCH") or "").strip()
+                if not review_base:
+                    raise RuntimeError("missing required host branch env: REVIEW_BASE_BRANCH")
+                release_target_ref = review_base if review_base.startswith("origin/") else f"origin/{review_base}"
+            write_release_commits(
+                self.ctx.repo_root,
+                review_base_branch=str(os.environ.get("REVIEW_BASE_BRANCH") or "").strip(),
+                target_ref=release_target_ref,
+                fetch_tags=True,
+            )
             gate = AutoReleaseGate(self.ctx.repo_root)
             stability = gate.compute_stability(
                 min_recent_merges=_release_int(self.ctx.host_env.get("RELEASE_AUTO_MIN_MERGES"), 1)
@@ -1817,6 +1887,34 @@ def _target_from_text(text: str) -> tuple[str, int] | None:
 
 def _managed_pr_head_ref(value: str) -> bool:
     return bool(re.fullmatch(r"refactor/iter[1-9][0-9]*-[A-Za-z0-9._-]+", value))
+
+
+def _unblocks_pr_mergeability(action: Mapping[str, Any]) -> bool:
+    return str(action.get("controller_action") or "") in {
+        "dispatch_pr_rebase_resolve",
+        "commit_push_resolved_pr_rebase",
+    }
+
+
+def _publishes_review_fix_output(action: Mapping[str, Any]) -> bool:
+    return str(action.get("controller_action") or "") == "publish_review_fix_output_from_action"
+
+
+def _unblocks_release_rollup(action: Mapping[str, Any]) -> bool:
+    return str(action.get("controller_action") or "") in {
+        "open_release_rollup_pr_from_action",
+        "auto_merge_release_rollup_pr_from_action",
+    }
+
+
+def _is_reviewer_harness_spawn_intent(action: Mapping[str, Any]) -> bool:
+    if action.get("kind") != "harness-spawn-intent":
+        return False
+    if action.get("controller_action") != "spawn_codex_harness_background":
+        return False
+    if action.get("route") == "dispatch-reviewers":
+        return True
+    return str(action.get("intent_id") or "").startswith("dispatch-reviewers:")
 
 
 def _terminal_blocked_reason(reason: str) -> bool:

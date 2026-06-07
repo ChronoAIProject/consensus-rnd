@@ -97,6 +97,13 @@ class FakeRunner:
         self.rev_list_stdout = "0\n"
         self.head_sha = "bumpcommit456"
         self.head_subject = "Release v2.0.0-beta.4"
+        self.remote_branch = "auto-refact-dev"
+        self.remote_sha = ""
+        self.remote_subject = "Release v2.0.0-beta.4"
+        self.remote_manifest_versions: dict[str, str] = {}
+        self.rollup_refs: dict[str, str] = {}
+        self.rollup_subjects: dict[str, str] = {}
+        self.rollup_manifest_versions: dict[str, dict[str, str]] = {}
         self.check_status = "green"
         self.check_completed_at = "2026-05-30T12:01:00Z"
 
@@ -110,9 +117,30 @@ class FakeRunner:
             return subprocess.CompletedProcess(command, 0, stdout=self.rev_list_stdout, stderr="")
         if command == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(command, 0, stdout=f"{self.head_sha}\n", stderr="")
+        if command == ["git", "rev-parse", f"origin/{self.remote_branch}"]:
+            return subprocess.CompletedProcess(command, 0, stdout=f"{self.remote_sha}\n", stderr="")
+        if command[:2] == ["git", "rev-parse"] and len(command) == 3 and command[2].startswith("origin/rollup/"):
+            sha = self.rollup_refs.get(command[2])
+            if sha is None:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="missing rollup ref")
+            return subprocess.CompletedProcess(command, 0, stdout=f"{sha}\n", stderr="")
         if command == ["git", "show", "-s", "--format=%s", "HEAD"]:
             return subprocess.CompletedProcess(command, 0, stdout=f"{self.head_subject}\n", stderr="")
-        if command == expected_check_runs_command(self.head_sha):
+        if command == ["git", "show", "-s", "--format=%s", f"origin/{self.remote_branch}"]:
+            return subprocess.CompletedProcess(command, 0, stdout=f"{self.remote_subject}\n", stderr="")
+        if command[:4] == ["git", "show", "-s", "--format=%s"] and len(command) == 5 and command[4].startswith("origin/rollup/"):
+            return subprocess.CompletedProcess(command, 0, stdout=f"{self.rollup_subjects.get(command[4], '')}\n", stderr="")
+        if command == ["git", "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/rollup"]:
+            return subprocess.CompletedProcess(command, 0, stdout="\n".join(sorted(self.rollup_refs)) + "\n", stderr="")
+        if command[:2] == ["git", "show"] and len(command) == 3 and command[2].startswith(f"origin/{self.remote_branch}:"):
+            relative = command[2].split(":", 1)[1]
+            return subprocess.CompletedProcess(command, 0, stdout=self._remote_manifest_payload(cwd, relative), stderr="")
+        if command[:2] == ["git", "show"] and len(command) == 3 and command[2].startswith("origin/rollup/"):
+            remote_ref, relative = command[2].split(":", 1)
+            versions = self.rollup_manifest_versions.get(remote_ref, {})
+            return subprocess.CompletedProcess(command, 0, stdout=self._remote_manifest_payload(cwd, relative, versions), stderr="")
+        check_run_shas = {self.head_sha, self.remote_sha, *self.rollup_refs.values()}
+        if command in [expected_check_runs_command(sha) for sha in check_run_shas]:
             if self.check_status == "api_failure":
                 return subprocess.CompletedProcess(command, 1, stdout="", stderr="api failed")
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(self._check_runs_payload()), stderr="")
@@ -141,6 +169,31 @@ class FakeRunner:
         if self.check_status == "missing":
             check_runs.pop()
         return [{"check_runs": check_runs}]
+
+    def _remote_manifest_payload(self, cwd: Path, relative: str, versions_by_path: dict[str, str] | None = None) -> str:
+        data = read_json(cwd / relative)
+        version = (versions_by_path or self.remote_manifest_versions).get(relative)
+        if version is None:
+            return json.dumps(data)
+        mapping = read_json(cwd / ".version-bump.json")
+        assert isinstance(mapping, dict)
+        field = None
+        for item in mapping["files"]:
+            if item["path"] == relative:
+                field = item["field"]
+                break
+        if field is None:
+            return json.dumps(data)
+        current = data
+        parts = field.split(".")
+        for part in parts[:-1]:
+            current = current[int(part)] if isinstance(current, list) else current[part]
+        last = parts[-1]
+        if isinstance(current, list):
+            current[int(last)] = version
+        else:
+            current[last] = version
+        return json.dumps(data)
 
 
 def allowed_result(repo: Path, version: str = "2.0.0-beta.4") -> PublishPreflightResult:
@@ -305,6 +358,57 @@ def expected_reentry_success_commands(version: str = "2.0.0-beta.4", prerelease:
     ]
 
 
+def expected_remote_reentry_success_commands(version: str = "2.0.0-beta.4", remote_sha: str = "remotecommit789", prerelease: bool = True) -> list[list[str]]:
+    release_command = ["gh", "release", "create", f"v{version}", "--target", remote_sha, "--generate-notes"]
+    if prerelease:
+        release_command.append("--prerelease")
+    remote_ref = "origin/auto-refact-dev"
+    return [
+        ["git", "fetch", "origin", "auto-refact-dev"],
+        ["git", "rev-parse", remote_ref],
+        ["git", "show", "-s", "--format=%s", remote_ref],
+        ["git", "show", f"{remote_ref}:package.json"],
+        ["git", "show", f"{remote_ref}:.claude-plugin/plugin.json"],
+        ["git", "show", f"{remote_ref}:.claude-plugin/marketplace.json"],
+        ["git", "show", f"{remote_ref}:.codex-plugin/plugin.json"],
+        ["git", "show", f"{remote_ref}:.cursor-plugin/plugin.json"],
+        ["git", "show", f"{remote_ref}:gemini-extension.json"],
+        ["git", "show", f"{remote_ref}:skills/codex-refactor-loop/VERSION.json"],
+        expected_check_runs_command(remote_sha),
+        release_command,
+    ]
+
+
+def expected_rollup_remote_reentry_success_commands(
+    *,
+    version: str = "2.0.0-beta.4",
+    rollup_sha: str,
+    prerelease: bool = True,
+) -> list[list[str]]:
+    release_command = ["gh", "release", "create", f"v{version}", "--target", rollup_sha, "--generate-notes"]
+    if prerelease:
+        release_command.append("--prerelease")
+    remote_ref = "origin/auto-refact-dev"
+    rollup_ref = f"origin/rollup/{rollup_sha}"
+    return [
+        ["git", "fetch", "origin", "auto-refact-dev"],
+        ["git", "rev-parse", remote_ref],
+        ["git", "show", "-s", "--format=%s", remote_ref],
+        ["git", "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/rollup"],
+        ["git", "rev-parse", rollup_ref],
+        ["git", "show", "-s", "--format=%s", rollup_ref],
+        ["git", "show", f"{rollup_ref}:package.json"],
+        ["git", "show", f"{rollup_ref}:.claude-plugin/plugin.json"],
+        ["git", "show", f"{rollup_ref}:.claude-plugin/marketplace.json"],
+        ["git", "show", f"{rollup_ref}:.codex-plugin/plugin.json"],
+        ["git", "show", f"{rollup_ref}:.cursor-plugin/plugin.json"],
+        ["git", "show", f"{rollup_ref}:gemini-extension.json"],
+        ["git", "show", f"{rollup_ref}:skills/codex-refactor-loop/VERSION.json"],
+        expected_check_runs_command(rollup_sha),
+        release_command,
+    ]
+
+
 def expected_check_runs_command(sha: str) -> list[str]:
     return ["gh", "api", f"repos/owner/repo/commits/{sha}/check-runs", "--paginate", "--slurp"]
 
@@ -453,6 +557,82 @@ class ReleasePublisherTests(unittest.TestCase):
             self.assertIsInstance(payload, dict)
             assert isinstance(payload, dict)
             self.assertEqual(payload["target_ref"], "bumpcommit456")
+
+    def test_remote_already_bumped_reentry_skips_push_when_local_head_is_behind(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            runner = FakeRunner()
+            runner.rev_list_stdout = "2\n"
+            runner.remote_sha = "remotecommit789"
+            runner.remote_manifest_versions = {
+                "package.json": "2.0.0-beta.4",
+                ".claude-plugin/plugin.json": "2.0.0-beta.4",
+                ".claude-plugin/marketplace.json": "2.0.0-beta.4",
+                ".codex-plugin/plugin.json": "2.0.0-beta.4",
+                ".cursor-plugin/plugin.json": "2.0.0-beta.4",
+                "gemini-extension.json": "2.0.0-beta.4",
+                "skills/codex-refactor-loop/VERSION.json": "2.0.0-beta.4",
+            }
+            publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
+
+            with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}, clear=False):
+                with release_env():
+                    result = publisher.publish(target_ref="abc123")
+
+            self.assertTrue(result.published)
+            self.assertEqual(result.target_ref, "remotecommit789")
+            self.assertEqual(runner.commands, expected_remote_reentry_success_commands())
+            self.assertFalse(any(command[:2] == ["python3", ".github/scripts/bump_version.py"] for command in runner.commands))
+            self.assertFalse(any(command[:2] == ["git", "add"] for command in runner.commands))
+            self.assertFalse(any(command[:2] == ["git", "commit"] for command in runner.commands))
+            self.assertNotIn(["git", "push", "origin", "HEAD"], runner.commands)
+            self.assertIn(expected_check_runs_command("remotecommit789"), runner.commands)
+            payload = read_json(repo / ".refactor-loop/state/release-publish-result.json")
+            self.assertIsInstance(payload, dict)
+            assert isinstance(payload, dict)
+            self.assertEqual(payload["target_ref"], "remotecommit789")
+
+    def test_remote_reentry_accepts_rollup_ref_exact_release_commit_when_branch_head_is_merge(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            rollup_sha = "0ccc9eb90a3aa9437f79bbe8260738c7ad7c361e"
+            runner = FakeRunner()
+            runner.remote_sha = "713192baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            runner.remote_subject = "发布 rollup: integration ahead 2 commits (256e4b827b26) (#595)"
+            runner.rollup_refs = {f"origin/rollup/{rollup_sha}": rollup_sha}
+            runner.rollup_subjects = {f"origin/rollup/{rollup_sha}": "Release v2.0.0-beta.4"}
+            runner.rollup_manifest_versions = {
+                f"origin/rollup/{rollup_sha}": {
+                    "package.json": "2.0.0-beta.4",
+                    ".claude-plugin/plugin.json": "2.0.0-beta.4",
+                    ".claude-plugin/marketplace.json": "2.0.0-beta.4",
+                    ".codex-plugin/plugin.json": "2.0.0-beta.4",
+                    ".cursor-plugin/plugin.json": "2.0.0-beta.4",
+                    "gemini-extension.json": "2.0.0-beta.4",
+                    "skills/codex-refactor-loop/VERSION.json": "2.0.0-beta.4",
+                }
+            }
+            publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
+
+            with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}, clear=False):
+                with release_env():
+                    result = publisher.publish(target_ref="abc123")
+
+            self.assertTrue(result.published)
+            self.assertEqual(result.target_ref, rollup_sha)
+            self.assertEqual(runner.commands, expected_rollup_remote_reentry_success_commands(rollup_sha=rollup_sha))
+            self.assertFalse(any(command[:2] == ["python3", ".github/scripts/bump_version.py"] for command in runner.commands))
+            self.assertFalse(any(command[:2] == ["git", "add"] for command in runner.commands))
+            self.assertFalse(any(command[:2] == ["git", "commit"] for command in runner.commands))
+            self.assertFalse(any(command[:2] == ["git", "push"] for command in runner.commands))
+            forbidden_exact = {"tag", "merge", "rebase", "reset"}
+            self.assertFalse(any(command[:1] == ["git"] and len(command) > 1 and command[1] in forbidden_exact for command in runner.commands))
+            self.assertIn(expected_check_runs_command(rollup_sha), runner.commands)
+            self.assertEqual(runner.commands[-1][4:6], ["--target", rollup_sha])
+            payload = read_json(repo / ".refactor-loop/state/release-publish-result.json")
+            self.assertIsInstance(payload, dict)
+            assert isinstance(payload, dict)
+            self.assertEqual(payload["target_ref"], rollup_sha)
 
     def test_real_preflight_reentry_after_initial_push_failure_skips_bump_add_commit(self) -> None:
         with copy_repo_fixture() as tmp:

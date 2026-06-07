@@ -181,6 +181,27 @@ class ProgressReporterTests(unittest.TestCase):
         self.assertEqual("secondary-content-creation-limit", backoff["contentCreation"]["reason"])
         self.assertNotIn("__global_dashboard_status_card__", reporter._state())
 
+    def test_global_status_card_graphql_secondary_mutation_records_named_backoff(self) -> None:
+        ctx = self._ctx_with_global_status()
+        reporter = ProgressReporter(ctx)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="global-dashboard-status-card", lease_id="", expires_at="")
+        result = mock.Mock(
+            returncode=1,
+            stdout="",
+            stderr="GraphQL: was submitted too quickly (updateIssueComment)",
+        )
+
+        with mock.patch("codex_refactor_loop.secondary_mutation_backoff.time.time", return_value=100):
+            with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
+                with mock.patch.object(reporter, "build_global_status_body", return_value="changed body\n"):
+                    with mock.patch.object(reporter, "gh_api", return_value=result):
+                        reporter.sync_global_status_card()
+
+        backoff = json.loads((self.tmp / ".refactor-loop/state/secondary-mutation-backoff.json").read_text(encoding="utf-8"))
+        self.assertEqual("updateIssueComment", backoff["mutationThrottle"]["mutation"])
+        self.assertEqual(700, backoff["mutationThrottle"]["until_epoch"])
+        self.assertNotIn("__global_dashboard_status_card__", reporter._state())
+
     def _ctx_with_global_status(self, *, extra: str = "") -> LoopContext:
         host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
         host_env.write_text(

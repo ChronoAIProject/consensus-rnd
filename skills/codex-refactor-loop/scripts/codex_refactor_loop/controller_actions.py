@@ -41,10 +41,14 @@ from .review_fix_dispatch import (
     ReviewThreadCompletionEvidence,
     validate_review_thread_completion,
 )
-from .secondary_mutation_backoff import record_content_creation_backoff
+from .secondary_mutation_backoff import (
+    currently_backing_off,
+    record_backoff_from_gh_output,
+    record_content_creation_backoff,
+)
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
-from .wakeup_plan import consensus_implementation_suppressed_reason
+from .wakeup_plan import consensus_implementation_suppressed_reason, zero_code_implementation_completion_proven
 from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 
 
@@ -551,7 +555,19 @@ class ControllerActions:
                 source="body-link",
             )
         self._require_github_actor_or_raise("open-pr")
+        backoff = currently_backing_off(self.ctx.paths.state)
+        if backoff.active:
+            raise RuntimeError(
+                "open_pr_with_label: secondary mutation backoff active "
+                f"mutation={backoff.mutation or 'unknown'} until_epoch={int(backoff.until_epoch)}"
+            )
         created = self.gh(["pr", "create", "--draft", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
+        recorded = record_backoff_from_gh_output(self.ctx.paths.state, created.stdout, created.stderr, env=self.ctx.env_for_subprocess())
+        if recorded is not None:
+            raise RuntimeError(
+                "open_pr_with_label: secondary mutation backoff recorded "
+                f"mutation={recorded.mutation} until_epoch={int(recorded.until_epoch)}"
+            )
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
         if created.returncode != 0 or not match:
@@ -1952,7 +1968,29 @@ class ControllerActions:
         if not self._require_owner_or_return("close-managed-drop", code=3):
             return 3
         marker = str(action.get("source_marker") or action.get("marker") or "")
-        if not marker.startswith("META_RESOLVED:drop:"):
+        preconditions = action.get("preconditions")
+        zero_code_completion = isinstance(preconditions, list) and "zero_code_implementation_completion" in preconditions
+        if zero_code_completion:
+            state = classify_implement_attempt(
+                repo_root=self.ctx.repo_root,
+                action=action,
+                log_path=self.ctx.repo_root / str(action.get("source_artifact") or ""),
+                integration_branch=self.integration_branch,
+            )
+            issue_number = action.get("target_number")
+            if not isinstance(issue_number, int) or not re.fullmatch(r"IMPLEMENT_DONE:issue-?[1-9][0-9]*:ok", marker):
+                sys.stderr.write("close_managed_item_from_drop_marker: invalid zero-code implementation completion\n")
+                return 2
+            if not zero_code_implementation_completion_proven(
+                action,
+                self.ctx.repo_root,
+                issue_number,
+                state,
+                require_action_proof=True,
+            ):
+                sys.stderr.write("close_managed_item_from_drop_marker: invalid zero-code implementation completion\n")
+                return 2
+        elif not marker.startswith("META_RESOLVED:drop:"):
             sys.stderr.write("close_managed_item_from_drop_marker: requires clean META_RESOLVED:drop marker\n")
             return 2
         kind = str(action.get("target_kind") or "").lower()
@@ -1972,8 +2010,11 @@ class ControllerActions:
             return 2
         if not self._require_github_actor_or_return("close-managed-drop", code=3):
             return 3
-        drop_reason = marker.removeprefix("META_RESOLVED:drop:").strip() or "drop"
-        comment = f"Closed from drop marker.\n\nDrop reason: {drop_reason}\n\n⟦AI:AUTO-LOOP⟧"
+        if zero_code_completion:
+            comment = "Closed from zero-code implementation completion.\n\nReason: scope_paths none and empty scoped diff.\n\n⟦AI:AUTO-LOOP⟧"
+        else:
+            drop_reason = marker.removeprefix("META_RESOLVED:drop:").strip() or "drop"
+            comment = f"Closed from drop marker.\n\nDrop reason: {drop_reason}\n\n⟦AI:AUTO-LOOP⟧"
         if kind == "pr":
             pr_target = issue_target
             result = self.gh(["pr", "close", pr_target, "--comment", comment], check=False)

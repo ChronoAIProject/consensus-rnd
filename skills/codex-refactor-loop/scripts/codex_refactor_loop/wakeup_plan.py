@@ -40,6 +40,7 @@ from codex_refactor_loop.issue_decomposition import (
     issue_decomposition_plan_file_digest,
 )
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
+from codex_refactor_loop.phase9.progress import issue_has_terminal_consensus_judge
 from codex_refactor_loop.pr_checks import PrMergeReadinessProjection
 from codex_refactor_loop.release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from codex_refactor_loop.release.gate import canonical_digest, decide_release_artifact, parse_time
@@ -1008,6 +1009,13 @@ def expected_from_open_items(
             and item.kind == "issue"
             and phase_label == label_catalog.PHASE_DESIGN_SOLVING
             and _issue_is_applied_decomposition_parent(repo_root, item.number)
+        ):
+            continue
+        if (
+            repo_root is not None
+            and item.kind == "issue"
+            and phase_label == label_catalog.PHASE_DESIGN_SOLVING
+            and issue_has_terminal_consensus_judge(repo_root, item.number)
         ):
             continue
         breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase_label, "expected": expected})
@@ -3572,10 +3580,15 @@ def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) ->
     candidate_path = repo_root / ".refactor-loop" / "state" / "release-candidate.json"
     decision_path = repo_root / ".refactor-loop" / "state" / "release-decision.json"
     decision = read_json(decision_path, {})
+    precondition_reasons: list[str] = []
     if candidate_path.exists():
         candidate = read_json(candidate_path, {})
-        if not release_candidate_target_ref_invalid(candidate, decision):
+        if release_candidate_consumed_by_publish_result(repo_root, candidate):
+            precondition_reasons.append("release_candidate_already_published")
+        elif not release_candidate_target_ref_invalid(candidate, decision):
             return []
+        else:
+            precondition_reasons.append("release_candidate_target_ref_invalid")
     score = _release_countdown_score(repo_root, scorer=scorer)
     if not score.get("ready"):
         return []
@@ -3603,11 +3616,7 @@ def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) ->
                 "release_auto_opt_in",
                 "release_gate_ready",
                 "decision_artifact_only",
-                *(
-                    ["release_candidate_target_ref_invalid"]
-                    if candidate_path.exists()
-                    else []
-                ),
+                *precondition_reasons,
             ],
             "runner_authority": RUNNER_AUTHORITY,
             "no_generic_command": True,
@@ -3644,10 +3653,26 @@ def release_candidate_target_ref_invalid(candidate: Any, decision: Any | None = 
     return not isinstance(expected_digest, str) or canonical_digest(decision) != expected_digest
 
 
+def release_candidate_consumed_by_publish_result(repo_root: Path, candidate: Any) -> bool:
+    if not isinstance(candidate, dict):
+        return False
+    to_version = str(candidate.get("to_version") or "").strip()
+    if not to_version:
+        return False
+    result = read_json(repo_root / ".refactor-loop" / "state" / "release-publish-result.json", {})
+    if not isinstance(result, dict):
+        return False
+    version = str(result.get("version") or "").strip()
+    tag = str(result.get("tag") or "").strip()
+    return version == to_version or tag == f"v{to_version}"
+
+
 def release_publish_actions(repo_root: Path) -> list[dict[str, Any]]:
     candidate_path = repo_root / ".refactor-loop" / "state" / "release-candidate.json"
     candidate = read_json(candidate_path, {})
     if not isinstance(candidate, dict) or candidate.get("ready") is not True:
+        return []
+    if release_candidate_consumed_by_publish_result(repo_root, candidate):
         return []
     decision = read_json(repo_root / ".refactor-loop" / "state" / "release-decision.json", {})
     if release_candidate_target_ref_invalid(candidate, decision):
@@ -3916,6 +3941,10 @@ def _stale_unexecutable_reason(
     controller_action = action.get("controller_action")
     if controller_action == "publish_implementation_output":
         return _stale_publish_implementation_reason(action, repo_root, open_targets, worktrees, gh_items)
+    if controller_action == "apply_issue_decomposition_plan":
+        target = _action_target_key(action)
+        if target is not None and _publish_target_is_applied_decomposition_parent(repo_root, target):
+            return "applied_decomposition_parent_tracking_noop"
     if controller_action == "close_managed_item_from_drop_marker":
         target = _action_target_key(action)
         if target is not None and target not in open_targets:
@@ -3933,6 +3962,8 @@ def _stale_publish_implementation_reason(
     target = _action_target_key(action)
     if target is not None and target not in open_targets:
         return "target_not_open"
+    if target is not None and _publish_target_is_applied_decomposition_parent(repo_root, target):
+        return "applied_decomposition_parent_tracking_noop"
     head_ref = _implementation_head_ref(action, target)
     if not head_ref:
         return "implementation_head_ref_missing"
@@ -3947,6 +3978,8 @@ def _stale_publish_implementation_reason(
         command_runner=lambda command: git_text(list(command), cwd=repo_root),
     )
     if state.redispatch and state.reason == "empty_scoped_diff":
+        if _convert_zero_code_implementation_to_close_action(action, repo_root, target, state):
+            return None
         return "implementation_noop_empty_scoped_diff"
     if state.redispatch:
         clear_redispatchable_implement_log(
@@ -3966,7 +3999,13 @@ def _stale_publish_implementation_reason(
         return artifact_reason
     match_error = _matching_open_pr_error(action, target, gh_items=gh_items, head_ref=head_ref)
     if match_error:
-        return match_error
+        if match_error == "matching_pr_missing" and _retryable_create_pr_secondary_limit(repo_root, action):
+            preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])
+            if "retry_after_create_pull_request_secondary_limit" not in preconditions:
+                preconditions.append("retry_after_create_pull_request_secondary_limit")
+            action["preconditions"] = preconditions
+        else:
+            return match_error
     preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])
     for required in (
         "canonical_implementation_identity",
@@ -3983,6 +4022,128 @@ def _stale_publish_implementation_reason(
         preconditions.remove("verified_pr_head")
     action["preconditions"] = preconditions
     return None
+
+
+def _publish_target_is_applied_decomposition_parent(repo_root: Path, target: tuple[str, int]) -> bool:
+    if target[0] != "issue":
+        return False
+    return _issue_is_applied_decomposition_parent(repo_root, target[1])
+
+
+NOOP_COMPLETION_TEXT_RE = re.compile(r"(?i)\b(?:0\s*LOC|zero[- ]code|no[- ]op|no code changes?|no source changes?)\b")
+
+
+def _convert_zero_code_implementation_to_close_action(
+    action: dict[str, Any],
+    repo_root: Path,
+    target: tuple[str, int] | None,
+    state: Any,
+) -> bool:
+    if target is None or target[0] != "issue":
+        return False
+    if not zero_code_implementation_completion_proven(action, repo_root, target[1], state):
+        return False
+    source_marker = str(action.get("source_marker") or "")
+    action["phase"] = "publish"
+    action["route"] = "close-zero-code-implementation"
+    action["controller_action"] = "close_managed_item_from_drop_marker"
+    action["preconditions"] = [
+        "active_controller_owner",
+        "clean_exit_source_marker",
+        "live_open_target",
+        "live_managed_target",
+        "zero_code_implementation_completion",
+    ]
+    action["source_marker"] = source_marker
+    action["target_kind"] = "issue"
+    action["target_number"] = target[1]
+    action["target"] = {"kind": "issue", "number": target[1]}
+    consensus = latest_consensus_implementation_for_issue(repo_root, target[1])
+    action["zero_code_completion_proof"] = {
+        "classification": "empty_scoped_diff",
+        "consensus_scope_paths": str(consensus.get("scope_paths") or ""),
+        "implementation_artifact": _implementation_summary_path(
+            repo_root,
+            str(action.get("source_artifact") or ""),
+            _implementation_cluster_id(action, target[1]),
+        ),
+        "body_file": str(action.get("body_file") or ""),
+    }
+    action.pop("title_file", None)
+    action.pop("body_file", None)
+    action.pop("head_ref", None)
+    action.pop("worktree", None)
+    action.pop("status_only", None)
+    action.pop("no_lifecycle_authority", None)
+    action["runner_authority"] = RUNNER_AUTHORITY
+    action["no_generic_command"] = True
+    return True
+
+
+def zero_code_implementation_completion_proven(
+    action: Mapping[str, Any],
+    repo_root: Path,
+    issue: int,
+    state: Any,
+    *,
+    require_action_proof: bool = False,
+) -> bool:
+    marker = str(getattr(state, "marker", "") or action.get("source_marker") or "")
+    if not marker.startswith("IMPLEMENT_DONE:") or not marker.endswith(":ok"):
+        return False
+    if not (getattr(state, "redispatch", False) and getattr(state, "reason", "") == "empty_scoped_diff"):
+        return False
+    if require_action_proof and not _zero_code_action_proof_matches(action, issue):
+        return False
+    consensus = latest_consensus_implementation_for_issue(repo_root, issue)
+    if not _consensus_scope_paths_is_none(consensus.get("scope_paths")):
+        return False
+    source_artifact = str(action.get("source_artifact") or "")
+    cluster_id = _implementation_cluster_id(action, issue)
+    summary = repo_root / _implementation_summary_path(repo_root, source_artifact, cluster_id)
+    if not _path_contains_noop_completion_proof(summary):
+        return False
+    proof = action.get("zero_code_completion_proof")
+    proof_body = proof.get("body_file") if isinstance(proof, Mapping) else ""
+    body_file = repo_root / str(action.get("body_file") or proof_body or "")
+    if not _path_contains_noop_completion_proof(body_file):
+        return False
+    return True
+
+
+def _zero_code_action_proof_matches(action: Mapping[str, Any], issue: int) -> bool:
+    proof = action.get("zero_code_completion_proof")
+    if not isinstance(proof, Mapping):
+        return False
+    if proof.get("classification") != "empty_scoped_diff":
+        return False
+    if not _consensus_scope_paths_is_none(proof.get("consensus_scope_paths")):
+        return False
+    cluster_id = _implementation_cluster_id(action, issue)
+    expected_artifact = f".refactor-loop/runs/implement-{cluster_id}.md"
+    expected_body = f".refactor-loop/runs/implementation-pr-{cluster_id}-body.md"
+    return proof.get("implementation_artifact") == expected_artifact and proof.get("body_file") == expected_body
+
+
+def _consensus_scope_paths_is_none(value: Any) -> bool:
+    normalized: list[str] = []
+    for raw_line in str(value or "").splitlines():
+        text = raw_line.strip()
+        if not text:
+            continue
+        text = re.sub(r"^(?:[-*]\s+|\d+\.\s+)", "", text).strip()
+        text = text.strip("`'\"").lower()
+        if text:
+            normalized.append(text)
+    return normalized == ["none"]
+
+
+def _path_contains_noop_completion_proof(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return bool(NOOP_COMPLETION_TEXT_RE.search(text))
 
 
 def _matching_open_pr_error(
@@ -4007,6 +4168,31 @@ def _matching_open_pr_error(
         return "matching_pr_issue_mismatch"
     action["target_pr_number"] = pr.number
     return None
+
+
+def _retryable_create_pr_secondary_limit(repo_root: Path, action: dict[str, Any]) -> bool:
+    action_id = str(action.get("action_id") or "")
+    if not action_id:
+        return False
+    ledger = repo_root / ".refactor-loop" / "state" / "wakeup-runner-ledger.jsonl"
+    try:
+        lines = ledger.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    for line in reversed(lines):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("action_id") or "") != action_id:
+            continue
+        if str(row.get("status") or "") != "blocked":
+            continue
+        reason = str(row.get("reason") or "")
+        return "createPullRequest" in reason and "was submitted too quickly" in reason
+    return False
 
 
 def _single_linked_issue_from_body(body: str) -> int | None:
@@ -4256,7 +4442,7 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True))
     hard_gate_line = plan["hard_gate"].get("line")
     if hard_gate_line:
-        print(hard_gate_line)
+        print(hard_gate_line, file=sys.stderr)
     return 0
 
 

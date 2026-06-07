@@ -33,6 +33,7 @@ from codex_refactor_loop.git import Git
 from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 from codex_refactor_loop.release.publisher import ReleasePublishResult
+from codex_refactor_loop.secondary_mutation_backoff import record_secondary_mutation_backoff
 from codex_refactor_loop.wakeup_plan import harness_spawn_intent_actions
 
 
@@ -3195,6 +3196,40 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertNotIn("auto-loop", edit_call)
         self.assertNotIn("🚀 phase:pr-open", edit_call)
         self.assertFalse(any(call[:2] == ["issue", "edit"] for call in gh_calls), gh_calls)
+
+    def test_open_pr_with_label_records_create_pull_request_secondary_backoff(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            del check
+            gh_calls.append(args)
+            if args[:2] == ["pr", "create"]:
+                return mock.Mock(returncode=1, stdout="", stderr="GraphQL: was submitted too quickly (createPullRequest)")
+            raise AssertionError(f"post-create mutation should not run after secondary throttle: {args}")
+
+        with mock.patch("codex_refactor_loop.secondary_mutation_backoff.time.time", return_value=100):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with self.assertRaisesRegex(RuntimeError, "secondary mutation backoff recorded mutation=createPullRequest"):
+                    self.actions.open_pr_with_label("title", str(self.pr_body), head="refactor/branch")
+
+        backoff = json.loads((self.tmp / ".refactor-loop" / "state" / "secondary-mutation-backoff.json").read_text(encoding="utf-8"))
+        self.assertEqual("createPullRequest", backoff["mutation"])
+        self.assertEqual(700, backoff["until_epoch"])
+        self.assertEqual(1, sum(1 for call in gh_calls if call[:2] == ["pr", "create"]))
+        self.assertFalse(any(call[:2] == ["pr", "edit"] for call in gh_calls), gh_calls)
+        self.assertFalse(any(call[:2] == ["issue", "edit"] for call in gh_calls), gh_calls)
+
+    def test_open_pr_with_label_blocks_create_during_secondary_backoff(self) -> None:
+        record_secondary_mutation_backoff(
+            self.actions.ctx.paths.state,
+            "createPullRequest",
+            now=4_102_444_800,
+            env={"SECONDARY_MUTATION_BACKOFF_SECONDS": "600"},
+        )
+
+        with mock.patch.object(self.actions, "gh", side_effect=AssertionError("pr create should not be called during secondary backoff")):
+            with self.assertRaisesRegex(RuntimeError, "secondary mutation backoff active mutation=createPullRequest"):
+                self.actions.open_pr_with_label("title", str(self.pr_body), head="refactor/branch")
 
     def test_open_pr_with_label_moves_linked_parent_issue_to_pr_open(self) -> None:
         self.pr_body.write_text(

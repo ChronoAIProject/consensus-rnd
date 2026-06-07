@@ -21,7 +21,11 @@ from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from ..holistic_status import collect as collect_holistic_status
 from ..holistic_status import render_markdown as render_holistic_markdown
-from ..secondary_mutation_backoff import record_content_creation_backoff
+from ..secondary_mutation_backoff import (
+    currently_backing_off,
+    record_backoff_from_gh_output,
+    record_content_creation_backoff,
+)
 
 
 AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
@@ -68,6 +72,13 @@ class ProgressReporter:
     def tick(self) -> None:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
             self.log_tick_status("skip:graphql-backoff remaining=unknown")
+            return
+        backoff = currently_backing_off(self.ctx.paths.state)
+        if backoff.active:
+            self.log_tick_status(
+                "skip:secondary-mutation-backoff "
+                f"mutation={backoff.mutation or 'unknown'} until_epoch={int(backoff.until_epoch)}"
+            )
             return
         for log in sorted(self.log_dir.glob("*.log")):
             base = log.stem
@@ -125,6 +136,18 @@ class ProgressReporter:
                 f"issue=#{config['issue_number']} comment_id={config['comment_id']}"
             )
         else:
+            recorded = record_backoff_from_gh_output(
+                self.ctx.paths.state,
+                patch.stdout,
+                patch.stderr,
+                env=self.ctx.env_for_subprocess(),
+            )
+            if recorded is not None:
+                self.log_msg(
+                    "global-dashboard-status-card=secondary-backoff "
+                    f"comment_id={config['comment_id']} mutation={recorded.mutation} until_epoch={int(recorded.until_epoch)}"
+                )
+                return
             record_content_creation_backoff(self.ctx, "global-dashboard-status-card", patch)
             self.log_msg(f"global-dashboard-status-card=FAIL patch comment_id={config['comment_id']}")
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -42,7 +43,7 @@ def collect_release_commits(
         target_ref,
         review_base_branch=review_base_branch,
     )
-    release_ref = since_ref or latest_release_ref(repo_root)
+    release_ref = since_ref or latest_release_ref(repo_root, target_ref=resolved_target_ref)
     if not release_ref:
         raise RuntimeError("no latest release tag found")
     rev_range = f"{release_ref}..{resolved_target_ref}"
@@ -73,13 +74,34 @@ def write_release_commits(
     return output_path
 
 
-def latest_release_ref(repo_root: Path) -> str | None:
+def latest_release_ref(repo_root: Path, target_ref: str | None = None) -> str | None:
+    release_commit = latest_release_commit_ref(repo_root, target_ref)
+    if release_commit:
+        return release_commit
     described = run_git(repo_root, ["describe", "--tags", "--abbrev=0"])
     if described.returncode == 0 and described.stdout.strip():
         return described.stdout.strip()
     version_tag = manifest_version_tag(repo_root)
     if version_tag and git_ref_exists(repo_root, version_tag):
         return version_tag
+    return None
+
+
+def latest_release_commit_ref(repo_root: Path, target_ref: str | None) -> str | None:
+    version_tag = manifest_version_tag(repo_root)
+    if not version_tag or not target_ref:
+        return None
+    version = version_tag.removeprefix("v")
+    subject_re = re.compile(rf"^Release v{re.escape(version)}(?: \(#[1-9][0-9]*\))?$")
+    result = run_git(repo_root, ["log", "--format=%H%x00%s", target_ref])
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        sha, separator, subject = line.partition("\x00")
+        if not separator:
+            continue
+        if subject_re.fullmatch(subject):
+            return sha
     return None
 
 

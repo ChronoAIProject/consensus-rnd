@@ -329,6 +329,47 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertEqual(expected, 0)
         self.assertEqual(breakdown, [])
 
+    def test_compute_expected_suppresses_publish_ready_implementation_completion(self) -> None:
+        (self.refactor_loop / "logs").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".worktrees" / "iter581-issue-581").mkdir(parents=True)
+        (self.refactor_loop / "logs" / "implement-issue-581.log").write_text(
+            "implementation ready for publish\nIMPLEMENT_DONE:issue-581:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        items = [
+            {
+                "number": 581,
+                "kind": "issue",
+                "phase": self.labels.PHASE_IMPLEMENTING,
+                "human": self.labels.HUMAN_AUTO,
+                "labels": [self.labels.MANAGED, self.labels.PHASE_IMPLEMENTING, self.labels.HUMAN_AUTO],
+                "body": "",
+                "head_ref": "",
+                "is_draft": False,
+                "state": "open",
+            }
+        ]
+
+        def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+            if command[-2:] == ["--abbrev-ref", "HEAD"]:
+                return subprocess.CompletedProcess(command, 0, "refactor/iter581-issue-581\n", "")
+            if command[-3:] == ["merge-base", "HEAD", "origin/integration"]:
+                return subprocess.CompletedProcess(command, 0, "base\n", "")
+            if command[-2:] == ["--verify", "origin/integration"]:
+                return subprocess.CompletedProcess(command, 0, "base\n", "")
+            if command[-2:] == ["status", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, "M  touched.py\n", "")
+            return subprocess.CompletedProcess(command, 1, "", "unexpected command")
+
+        expected, breakdown = self.monitor.compute_expected(
+            items,
+            integration_branch="integration",
+            command_runner=runner,
+        )
+
+        self.assertEqual(expected, 0)
+        self.assertEqual(breakdown, [])
+
     def test_compute_expected_suppresses_applied_decomposition_parent_tracking_issue(self) -> None:
         _plan_path, digest = self.write_applied_issue_decomposition_evidence(issue=537, round_no=6)
 
@@ -346,6 +387,18 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             [self.design_issue_item(537)],
             command_runner=runner,
         )
+
+        self.assertEqual(expected, 0)
+        self.assertEqual(breakdown, [])
+
+    def test_compute_expected_suppresses_terminal_phase9_consensus_issue(self) -> None:
+        (self.refactor_loop / "logs").mkdir(parents=True, exist_ok=True)
+        (self.refactor_loop / "logs" / "phase9-issue620-r2-judge.log").write_text(
+            "META_JUDGE_DONE:consensus:false-positive\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        expected, breakdown = self.monitor.compute_expected([self.design_issue_item(620)])
 
         self.assertEqual(expected, 0)
         self.assertEqual(breakdown, [])
@@ -723,6 +776,41 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 self.monitor.tick()
 
         self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
+
+    def test_tick_publish_ready_implement_result_does_not_trigger_hard_gate(self) -> None:
+        items = [
+            {
+                "number": 581,
+                "kind": "issue",
+                "phase": self.labels.PHASE_IMPLEMENTING,
+                "human": self.labels.HUMAN_AUTO,
+                "labels": [self.labels.MANAGED, self.labels.PHASE_IMPLEMENTING, self.labels.HUMAN_AUTO],
+                "state": "open",
+            }
+        ]
+        logs = self.refactor_loop / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        (self.repo / ".worktrees" / "iter581-issue-581").mkdir(parents=True)
+        (logs / "implement-issue-581.log").write_text(
+            "implementation ready for publish\nIMPLEMENT_DONE:issue-581:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            if command[-2:] == ["--abbrev-ref", "HEAD"]:
+                return subprocess.CompletedProcess(command, 0, "refactor/iter581-issue-581\n", "")
+            if command[-2:] == ["status", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, "M  touched.py\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with mock.patch.object(self.monitor, "run", side_effect=runner):
+            with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=items):
+                with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+                    self.monitor.tick()
+
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
+        snapshot = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["expected"], 0)
 
     def test_tick_terminal_implement_result_does_not_suppress_design_expected_worker(self) -> None:
         items = [
