@@ -60,6 +60,23 @@ class PatrolInspectorTests(unittest.TestCase):
             {finding.kind for finding in findings},
         )
 
+    def test_failure_prose_and_direct_post_marker_do_not_create_exception_findings(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
+            "\n".join(
+                (
+                    "command failed after retries",
+                    "POST_FAILED:issue:5:failed to post progress",
+                    "fallback prose says the task failed but no runtime crash was raised",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        self.assertNotIn("exception-log", {finding.kind for finding in findings})
+
     def test_run_once_publishes_findings_and_writes_dashboard_state(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("FATAL: failed\n", encoding="utf-8")
         publisher = FakePublisher()

@@ -276,7 +276,7 @@ def _item_ref(item: GhItem | Mapping[str, object]) -> str:
 
 def _line_has_exception_signal(line: str) -> bool:
     lowered = line.lower()
-    return any(token in lowered for token in ("traceback", "exception", "runtimeerror", "fatal:", "failed"))
+    return any(token in lowered for token in ("traceback", "exception", "runtimeerror", "fatal:"))
 
 
 def _read_tail_or_fail(path: Path, max_lines: int) -> tuple[str, ...]:
