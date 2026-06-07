@@ -118,12 +118,12 @@ Refactor (iter6/issue-118):
 - "Minimal" means smallest code change; it does NOT mean "ignore architectural correctness". If the minimum is still wrong, abstain.
 - Philosophy is evolvable: touching CLAUDE.md/L0/L1/L2, Tier boundaries, SPEC, or architecture vocabulary is allowed when it is the minimum viable fix and is written as a concrete plan.
 - Escalate only for physical ratification/reinstall or total inability to produce a plan, not for crossing an existing philosophy boundary.
-- 中文 by default per SKILL.md; do not add a mandatory parallel English section.
+- Follow ${HOST_WORK_LANGUAGE} per SKILL.md; do not add a mandatory parallel English section.
 - No filler / no marketing language. Numbers > adjectives.
 
 ## GitHub post(强制)
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循渲染期内联的共享规则:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow ``**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 

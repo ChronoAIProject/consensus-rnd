@@ -37,7 +37,7 @@ Artifact profile: marker-only-work-unit
 
 1. 调研代码(grep / read)补充 evidence:`file:line` + 必要片段 + repo-owned invariant / policy / desired end state(引原文或 issue 决策)
 2. 写 Fix Boundary(明确 scope_paths)
-3. 写 human_brief(中文 problem_title / problem_statement / problem_example / why_needs_design / design_question / original_authors via git blame)
+3. 写 human_brief(problem_title / problem_statement / problem_example / why_needs_design / design_question / original_authors via git blame)
 4. 在 artifact 中写出 proposed issue body 全文(参考 audit codex 产出的 issue body 风格),并在 body 中明确写入:
    - `work_unit_id: issue-${ISSUE_NUMBER}`
    - `kind: manual-work-unit`

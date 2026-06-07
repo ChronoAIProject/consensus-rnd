@@ -38,7 +38,7 @@ class RepositoryPublicDocsTests(unittest.TestCase):
         for needle in (
             "README.md` is English canonical",
             "README.zh-CN.md` is the 中文 companion",
-            "GitHub issue/PR/commit/design artifacts remain 中文 by default",
+            "external user-facing artifact language comes from host-owned `$HOST_WORK_LANGUAGE`",
             "Public identity README pair",
         ):
             with self.subTest(needle=needle):

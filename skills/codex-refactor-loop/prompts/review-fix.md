@@ -130,7 +130,7 @@ Begin.
 
 ## GitHub post(强制)
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循渲染期内联的共享规则:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow ``**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 

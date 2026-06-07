@@ -163,12 +163,12 @@ Refactor (iter6/issue-118):
 - Be willing to converge on philosophy. Fundamental philosophy gaps are not human escalation by themselves; ask the solvers for exact clause/Tier/SPEC changes until consensus or router-derived true stall.
 - Treat deep consensus as sufficient authorization. Never require post-consensus human approval, physical GPG ratification, or Tier I reinstall ratification.
 - Do not invent a 4th hybrid framing not present in any solver — that means you're solving, not judging. If no solver covers the right framing → converge with "no solver covers correct framing; propose exact framing"; router owns stalled continuation.
-- 中文 by default per SKILL.md; do not add a mandatory parallel English section.
+- Follow ${HOST_WORK_LANGUAGE} per SKILL.md; do not add a mandatory parallel English section.
 - Numbers > adjectives.
 
 ## GitHub post(强制)
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循渲染期内联的共享规则:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow ``**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 

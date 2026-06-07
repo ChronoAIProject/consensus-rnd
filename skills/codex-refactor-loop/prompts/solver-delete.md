@@ -137,12 +137,12 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - Abstaining is honorable. Forcing a deletion that doesn't fit is worse than abstaining.
 - Philosophy is evolvable: touching CLAUDE.md/L0/L1/L2, Tier boundaries, SPEC, or architecture vocabulary is allowed when it is part of the best deletion/collapse plan.
 - Escalate only for physical ratification/reinstall or total inability to classify; never escalate just because deletion changes an existing philosophy boundary.
-- 中文 by default per SKILL.md; do not add a mandatory parallel English section.
+- Follow ${HOST_WORK_LANGUAGE} per SKILL.md; do not add a mandatory parallel English section.
 - Numbers > adjectives.
 
 ## GitHub post(强制)
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循渲染期内联的共享规则:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow ``**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 

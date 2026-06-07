@@ -26,7 +26,7 @@ class PromptContractInlinerTests(unittest.TestCase):
         self.skill_root = self.tmp / "skill"
         (self.skill_root / "prompts").mkdir(parents=True)
         (self.skill_root / "prompts" / "_github-post-rules.md").write_text(
-            "# GitHub post rules\n\n## Body\n",
+            "# GitHub post rules\n\n## Body\n\nFollow `${HOST_WORK_LANGUAGE}`.\n",
             encoding="utf-8",
         )
 
@@ -41,6 +41,7 @@ class PromptContractInlinerTests(unittest.TestCase):
 
         self.assertIn("# GitHub post rules", rendered)
         self.assertIn("## Body", rendered)
+        self.assertIn("${HOST_WORK_LANGUAGE}", rendered)
         self.assertNotIn(GITHUB_POST_RULES_CONTRACT_TOKEN, rendered)
 
     def test_unknown_contract_token_fails_closed(self) -> None:

@@ -136,7 +136,7 @@ human_brief:
     - "@<handle-from-whitelist>"  # 同上;若 git blame 只 1 个 whitelist match,只 list 1 个
 ```
 
-**工作语言**: human_brief 不再要求 `_en` + `_zh` 双字段。`problem_title` / `problem_statement` / `why_needs_design` / `design_question` 直接用中文。Code snippet + file path + GitHub handle 等技术内容保留原英文。
+**工作语言**: human_brief 不再要求 `_en` + `_zh` 双字段。`problem_title` / `problem_statement` / `why_needs_design` / `design_question` follow `${HOST_WORK_LANGUAGE}`。Code snippet + file path + GitHub handle 等技术内容保留原英文。
 
 **红线**：
 

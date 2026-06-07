@@ -57,7 +57,7 @@ ${SCOPE_PATHS}
    - 测试结果
    - deviation 记录
    - `SCOPE_EXTEND` 记录
-10. 若 status 为 `ok`，同时写入 worker-authored PR artifacts：`$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt` 与 `$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`。title 必须是一行非占位中文标题，不得是 `实现 issue #N`；body 必须包含且只包含一个 `Closes #N`，包含 `## 修改文件`、`## 测试结果`、`## deviation 记录`，并以 sentinel 作为最终独立行。
+10. 若 status 为 `ok`，同时写入 worker-authored PR artifacts：`$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt` 与 `$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`。title 必须是一行非占位标题,语言遵循 `HOST_WORK_LANGUAGE`，不得是 placeholder；body 必须包含且只包含一个 `Closes #N`，包含 changed files、test results、deviation record 三个 section concepts(按 `HOST_WORK_LANGUAGE` 渲染)，并以 sentinel 作为最终独立行。
 11. 末尾打印 `IMPLEMENT_DONE:${CLUSTER_ID}:<status>` 其中 status ∈ {ok, partial, blocked}。
 
 ## Marker emission allowlist(强制)

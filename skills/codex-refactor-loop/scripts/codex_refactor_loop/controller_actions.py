@@ -1907,6 +1907,7 @@ class ControllerActions:
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)
+        values.setdefault("HOST_WORK_LANGUAGE", self.ctx.host_env.get("HOST_WORK_LANGUAGE") or "en")
         if env:
             values.update(env)
         aliases = {
@@ -1925,6 +1926,7 @@ class ControllerActions:
         for key, value in aliases.items():
             template = template.replace("{{" + key + "}}", value)
         rendered = inline_prompt_contracts(Template(template).safe_substitute(values), skill_root=self.ctx.skill_root)
+        rendered = rendered.replace("${HOST_WORK_LANGUAGE}", values.get("HOST_WORK_LANGUAGE") or "en")
         Path(output_path).write_text(rendered, encoding="utf-8")
 
     def _review_fix_pr_facts(self, pr_number: str, existing: Mapping[str, str]) -> dict[str, str]:
@@ -2003,6 +2005,7 @@ class ControllerActions:
             "ITERATION": "",
             "PROJECT_RULES": "CLAUDE.md",
             "HOST_REFACTOR_COMMENT_POLICY": "none",
+            "HOST_WORK_LANGUAGE": self.ctx.host_env.get("HOST_WORK_LANGUAGE") or "en",
         }
         render_env.update(env or {})
         render_env.update(self._review_fix_pr_facts(spec.pr_number, render_env))
