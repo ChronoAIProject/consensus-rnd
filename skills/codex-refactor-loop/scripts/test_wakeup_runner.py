@@ -479,6 +479,10 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 if endpoint == f"repos/owner/repo/commits/{'a' * 40}/check-runs":
                     payload = [{"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}]
                     return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+                if endpoint == "repos/owner/repo/branches/main/protection/required_status_checks":
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"contexts": ["ci"]}), "")
+                if endpoint == "repos/owner/repo/rules/branches/main":
+                    return subprocess.CompletedProcess(command, 1, "", "404 Not Found")
                 if endpoint == "repos/owner/repo/issues/77":
                     if gh_state is None:
                         return subprocess.CompletedProcess(command, 1, "", "not found")
@@ -520,6 +524,13 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     if "--jq" not in command:
                         return subprocess.CompletedProcess(command, 0, json.dumps({"headRefName": gh_head_ref}), "")
                     return subprocess.CompletedProcess(command, 0, gh_head_ref + "\n", "")
+                if "baseRefName,headRefOid,mergeStateStatus" in command:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        json.dumps({"baseRefName": "main", "headRefOid": "a" * 40, "mergeStateStatus": "DIRTY"}),
+                        "",
+                    )
                 if ".headRefOid" in command:
                     return subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", "")
                 if "mergeable,isDraft" in command:
@@ -677,7 +688,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "kind": "ci-red",
             "action_id": "ci-red:77:" + "a" * 40 + ":contract-tests",
             "runner_authority": "wakeup-runner-396",
-            "preconditions": ["active_controller_owner", "live_open_target", "checks_red"],
+            "preconditions": ["active_controller_owner", "live_open_target", "target_required_checks_red"],
             "source_artifact": "github-check-runs",
             "source_marker": "ci-red:77:" + "a" * 40 + ":contract-tests",
             "target_kind": "PR",
@@ -2408,6 +2419,19 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         attempts = json.loads((self.repo / ".refactor-loop/state/remote-ci-fix-attempts.json").read_text(encoding="utf-8"))
         self.assertEqual(attempts[f"pr77:{'a' * 40}:contract-tests"], 1)
         self.assertEqual(actions.calls, [])
+
+    def test_ci_red_dispatch_rejects_legacy_raw_checks_red_precondition(self) -> None:
+        action = self.remote_ci_fix_action(preconditions=["active_controller_owner", "live_open_target", "checks_red"])
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor") as launch:
+            results = self.run_result(self.base_plan(action), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(
+            results[0].reason,
+            "dispatch_remote_ci_fix_missing_precondition:target_required_checks_red",
+        )
+        launch.assert_not_called()
 
     def test_ci_red_dispatch_retry_cap_stops_third_attempt_per_check(self) -> None:
         worktree = self.repo / ".worktrees" / "iter77-worker"
