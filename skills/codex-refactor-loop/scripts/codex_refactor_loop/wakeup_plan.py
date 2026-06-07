@@ -21,6 +21,7 @@ from typing import Any, Mapping
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.default_issue_intake import default_issue_intake_enabled
 from codex_refactor_loop.implement_lifecycle import (
     classify_implement_attempt,
     clear_redispatchable_implement_log,
@@ -120,6 +121,7 @@ RUNNER_NAMED_HELPER_ACTIONS = {
     "dispatch_release_candidate",
     "publish_release_candidate",
     "apply_issue_decomposition_plan",
+    "apply_default_issue_intake_claim",
 }
 RELEASE_ROLLUP_BODY_FILE = ".refactor-loop/runs/release-rollup-pr-body.md"
 RELEASE_ROLLUP_BODY_PROMPT = ".refactor-loop/prompts/release-rollup-body.md"
@@ -157,6 +159,7 @@ EXECUTABLE_ACTION_KINDS = {
     "release-gate-dispatch",
     "release-publish",
     "review-evidence-redispatch",
+    "default-issue-intake-claim",
 }
 NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_PR_OPEN: "pr-open",
@@ -2260,6 +2263,54 @@ def load_github_items_with_status(repo_root: Path) -> tuple[list[GhItem], bool]:
     return items, True
 
 
+def load_default_issue_intake_candidates(repo_root: Path, ctx: LoopContext) -> list[GhItem]:
+    if not default_issue_intake_enabled(ctx.host_env) or not ctx.gh_repo_slug:
+        return []
+    data = run_json(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--state",
+            "open",
+            "--limit",
+            "50",
+            "--json",
+            "number,title,labels,updatedAt",
+        ],
+        cwd=repo_root,
+    )
+    if not isinstance(data, list):
+        return []
+    items: list[GhItem] = []
+    for raw in data:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            number = int(raw["number"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        labels = _json_label_names(raw.get("labels"))
+        if label_catalog.MANAGED in label_catalog.normalize_label_set(labels).canonical:
+            continue
+        items.append(
+            GhItem(
+                kind="issue",
+                number=number,
+                title=str(raw.get("title") or ""),
+                labels=tuple(labels),
+                updated_at=str(raw.get("updatedAt") or ""),
+            )
+        )
+    return items
+
+
+def _json_label_names(raw_labels: Any) -> list[str]:
+    if not isinstance(raw_labels, list):
+        return []
+    return [str(item.get("name") or "") for item in raw_labels if isinstance(item, dict) and item.get("name")]
+
+
 def git_text(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
 
@@ -2872,6 +2923,47 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
                 if action.get("consensus_implementation_ready") is True:
                     action.pop("status_only", None)
         actions.append(action)
+    return actions
+
+
+def default_issue_intake_actions(items: list[GhItem], ctx: LoopContext) -> list[dict[str, Any]]:
+    if not default_issue_intake_enabled(ctx.host_env):
+        return []
+    actions: list[dict[str, Any]] = []
+    for item in sorted(items, key=lambda candidate: (candidate.updated_at or "", candidate.number)):
+        if item.kind != "issue":
+            continue
+        if label_catalog.MANAGED in label_catalog.normalize_label_set(item.labels).canonical:
+            continue
+        actions.append(
+            {
+                "priority": 6,
+                "kind": "default-issue-intake-claim",
+                "action_id": f"default-issue-intake-claim:issue:{item.number}",
+                "item": f"issue #{item.number}",
+                "phase": "work-intake",
+                "actor": "controller",
+                "route": "default-issue-intake-claim",
+                "title": item.title,
+                "source_artifact": "github-open-default-issue-intake-candidates",
+                "source_marker": f"default-issue-intake-candidate:issue:{item.number}",
+                "target_kind": "issue",
+                "target_number": item.number,
+                "target": {"kind": "issue", "number": item.number},
+                "preconditions": [
+                    "active_controller_owner",
+                    "default_issue_intake_enabled",
+                    "live_open_target",
+                    "non_pr_issue",
+                    "target_not_managed",
+                    "github_comment_claim_protocol",
+                ],
+                "controller_action": "apply_default_issue_intake_claim",
+                "runner_authority": RUNNER_AUTHORITY,
+                "no_generic_command": True,
+                "no_lifecycle_authority": True,
+            }
+        )
     return actions
 
 
@@ -4074,6 +4166,8 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         actions.extend(host_actions)
     actions.extend(release_countdown_actions(repo_root, gh_items))
     actions.extend(existing_issue_actions(gh_items, repo_root))
+    if gh_items_loaded and not has_dispatchable_action(actions):
+        actions.extend(default_issue_intake_actions(load_default_issue_intake_candidates(repo_root, ctx), ctx))
     suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)
     actions.extend(implementation_pr_artifact_repair_actions(actions, repo_root))
     suppress_publish_superseded_implementation_spawn_intents(actions)
