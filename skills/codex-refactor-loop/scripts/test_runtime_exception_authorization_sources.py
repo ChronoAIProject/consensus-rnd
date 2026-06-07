@@ -542,6 +542,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         claude = self.repo_rules
         cli_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
         patrol_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "patrol.py")
+        analysis_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "patrol_analysis.py")
         publisher_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "patrol_issue_publisher.py")
         restart_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "restart.py")
         holistic_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "holistic_status.py")
@@ -550,11 +551,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "active-controller owner only",
             "$PATROL_INSPECTOR_ENABLE=true",
             "worker terminal failure envelopes from local logs",
-            "raw log prose is diagnostic text, not an issue-intake fact source",
+            "generate patrol-private `PatrolCandidateSignal`",
+            "raw log prose is diagnostic text, not an issue-intake fact source, and may be used only as codex prompt context",
+            "structured codex `PatrolAnalysisDecision` with `is_real_issue=true`",
             "runs artifacts",
             "wakeup-plan/peek projections",
             "GitHub managed item snapshot",
             "PatrolFinding",
+            "public issue bodies may use only analysis fields",
             "durable fingerprint",
             "fixed patrol/design-intake label bundle",
             "update may edit only the patrol issue body",
@@ -585,6 +589,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, claude)
+        for needle in (
+            "PatrolCandidateSignal",
+            "PatrolAnalysisDecision",
+            "is_real_issue",
+        ):
+            with self.subTest(skill_only_needle=needle):
+                self.assertIn(needle, entry)
+                self.assertIn(needle, skill_section)
 
         self.assertIn('"patrol-inspector": CommandSpec(', cli_source)
         self.assertNotIn('"patrol_inspector_daemon"', restart_source)
@@ -593,6 +605,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("require_active_controller", patrol_source)
         self.assertIn("PATROL_INSPECTOR_ENABLE", patrol_source)
         self.assertIn("PATROL_INSPECTOR_INTERVAL_SECONDS", patrol_source)
+        self.assertIn("class PatrolCandidateSignal", analysis_source)
+        self.assertIn("class PatrolAnalysisDecision", analysis_source)
+        self.assertIn("is_real_issue", analysis_source)
+        self.assertIn("PATROL_ANALYSIS_PROMPT", analysis_source)
         self.assertIn("PATROL_LABEL_BUNDLE", publisher_source)
         self.assertIn('"create"', publisher_source)
         self.assertIn('"edit"', publisher_source)

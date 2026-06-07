@@ -253,7 +253,13 @@ class MarkerEmissionContractTests(unittest.TestCase):
         role_prompt_files = {
             path.name for path in PROMPTS_DIR.glob("*.md")
             if path.name
-            not in {"_github-post-rules.md", "design-issue-body.md", "design-issue-reply.md", "release-rollup-body.md"}
+            not in {
+                "_github-post-rules.md",
+                "design-issue-body.md",
+                "design-issue-reply.md",
+                "patrol-analysis.md",
+                "release-rollup-body.md",
+            }
         }
 
         self.assertEqual(role_prompt_files, set(PROMPT_ALLOWLISTS))
