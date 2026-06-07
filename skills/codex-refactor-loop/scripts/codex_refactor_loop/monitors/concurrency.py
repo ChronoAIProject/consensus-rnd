@@ -662,7 +662,7 @@ class ConcurrencyMonitor:
         lease = DaemonHeartbeatLease("concurrency_monitor", self.repo_root)
         while True:
             try:
-                self.tick()
+                lease.run_with_lease(self.tick)
             except Exception as exc:
                 log(f"EXCEPTION in tick: {exc!r}")
             lease.beat()

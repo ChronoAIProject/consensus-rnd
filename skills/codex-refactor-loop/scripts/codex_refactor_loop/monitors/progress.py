@@ -69,7 +69,7 @@ class ProgressReporter:
     def run_forever(self) -> int:
         while True:
             self.log_msg("tick")
-            self.tick()
+            self.heartbeat.run_with_lease(self.tick)
             self.heartbeat.beat()
             self.heartbeat.sleep_with_lease(self.interval)
 
