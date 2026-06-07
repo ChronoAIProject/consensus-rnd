@@ -300,7 +300,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         lease.beat()
         interval = max(1, int(args.interval_seconds))
         while True:
-            reconciler.run_once(beat=lease.beat)
+            lease.run_with_lease(lambda: reconciler.run_once(beat=lease.beat))
             lease.sleep_with_lease(interval)
     return reconciler.run_once()
 
