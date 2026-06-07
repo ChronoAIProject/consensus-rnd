@@ -290,7 +290,9 @@ def _extract_log_diagnostic_evidence(lines: Sequence[str]) -> tuple[str, ...]:
                 evidence.extend(block)
             index = next_index
             continue
-        if _is_exit_failure_line(line) or _is_single_line_diagnostic(line) or _is_python_exception_line(line):
+        if _is_exit_failure_line(line) and not evidence:
+            evidence.append(line)
+        elif _is_single_line_diagnostic(line) or _is_python_exception_line(line):
             evidence.append(line)
         elif not has_clean_final_exit and _is_command_failure_summary(line):
             evidence.append(line)
@@ -351,17 +353,7 @@ def _is_python_exception_line(line: str) -> bool:
 
 
 def _exception_signal_lines(lines: Sequence[str]) -> tuple[str, ...]:
-    if _tail_has_clean_exit(lines):
-        return tuple(line for line in lines if _line_is_worker_self_post_failure(line))
     return _extract_log_diagnostic_evidence(lines)
-
-
-def _tail_has_clean_exit(lines: Sequence[str]) -> bool:
-    return any(line.strip() == "EXIT=0" for line in lines)
-
-
-def _line_is_worker_self_post_failure(line: str) -> bool:
-    return line.strip().startswith("POST_FAILED:")
 
 
 def _read_tail_or_fail(path: Path, max_lines: int) -> tuple[str, ...]:
