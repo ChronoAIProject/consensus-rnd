@@ -45,7 +45,7 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 2. issue body（含 cluster YAML / evidence / fix boundary / human_brief）—— 用 `gh issue view ${ISSUE_NUMBER}` 拉。
 3. cluster 在 `.refactor-loop/runs/audit-iter-${ITERATION}.md` 的原文。
 4. 评论中引用的具体文件 + 行号（**必须打开通读**，不只看 line refs）。
-5. SKILL.md 中的工作语言规则 —— 你的 GitHub 回复默认用中文；可原样引用英文代码、错误、路径和条款。
+5. SKILL.md 中的工作语言规则 —— 你的 GitHub reply follows `${HOST_WORK_LANGUAGE}`；可原样引用英文代码、错误、路径和条款。
 
 ## 流程
 
@@ -63,9 +63,9 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
    - **下一步动作明确**：结尾必须有 "我需要你回答：…" 或 "下次见到 `crnd:triage:resume-requested` label 我就 ..."。reviewer 不应在你回复后还要猜下一步
 
 3. **语言要求**（per SKILL.md 工作语言规则）：
-   - GitHub-facing 回复用中文；不要生成平行英文 section。
+   - GitHub-facing reply follows `${HOST_WORK_LANGUAGE}`；不要生成平行英文 section。
    - code blocks、file path、错误消息、CLAUDE/AGENTS 条款引用可保留原文。
-   - 中文正文必须完整可行动，不要写"见英文部分"或只给 TL;DR。
+   - Body text must be complete and actionable in `${HOST_WORK_LANGUAGE}`，不要写"见英文部分"或只给 TL;DR。
 
 4. **不做的事**：
    - 禁止改任何代码（你是 analyst，不是 implementer）
@@ -84,13 +84,13 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 - 不要敷衍。reviewer 投了时间评论；你也必须投匹配的时间分析
 - 不要用"我们会..."的市场话术。每句话必须能被证据支撑
 - 不要在回复里塞 "auto-loop 机制说明"（issue body 已经有了；重复占空间）
-- 语言完整性：写完后自测中文正文是否包含证据、取舍和下一步；缺任一项就重写。
+- 语言完整性：self-check that the body in `$HOST_WORK_LANGUAGE` contains evidence, trade-offs, and next steps；缺任一项就重写。
 
 开始执行。
 
 ## GitHub post(强制)
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循渲染期内联的共享规则:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 

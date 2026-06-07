@@ -16,7 +16,7 @@ from typing import Any, Mapping, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
 from .banners import BannerRequest, build_status_banner, gh_comment_command
-from .context import LoopContext
+from .context import LoopContext, normalize_host_work_language
 from .default_issue_intake import DefaultIssueIntakeClaim, DefaultIssueIntakeResult
 from .gh_invoke import build_gh_argv
 from .github_actor import GitHubActorAdmission, GitHubAuthenticatedActor
@@ -259,30 +259,95 @@ class ControllerActions:
     def safe_sync_main(self, remote: str = "origin", branch: str = "") -> int:
         if not self._require_owner_or_return("safe-sync-main", code=3):
             return 3
-        branch = branch or self._current_branch()
-        if not branch or branch == "HEAD":
+        branch = branch or self.integration_branch
+        if not branch:
+            sys.stderr.write("safe_sync_main: missing target integration branch; skipping\n")
+            return 2
+        current_branch = self._current_branch()
+        if not current_branch or current_branch == "HEAD":
             sys.stderr.write("safe_sync_main: cannot determine branch; skipping\n")
+            return 0
+        if current_branch != branch:
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:branch-mismatch:{current_branch}:{branch}")
+            sys.stderr.write(f"safe_sync_main: current branch {current_branch} is not target {branch}; skipping\n")
+            return 0
+        if not self._tracked_tree_clean(self.ctx.repo_root):
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:tracked-dirty:{branch}")
+            sys.stderr.write("safe_sync_main: tracked worktree changes present; skipping\n")
+            return 0
+        in_progress = self._git_operation_in_progress(self.ctx.repo_root)
+        if in_progress:
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:git-operation-in-progress:{branch}:{in_progress}")
+            sys.stderr.write(f"safe_sync_main: git operation in progress ({in_progress}); skipping\n")
             return 0
         fetch = self.git(["fetch", remote, branch], check=False)
         if fetch.stdout:
             print(fetch.stdout, end="")
         if fetch.stderr:
             print("\n".join(fetch.stderr.splitlines()[-3:]))
-        behind = self.git(["rev-list", "--count", f"HEAD..{remote}/{branch}"], check=False)
-        try:
-            behind_count = int((behind.stdout or "0").strip() or "0")
-        except ValueError:
-            behind_count = 0
+        if fetch.returncode != 0:
+            sys.stderr.write(f"safe_sync_main: fetch failed for {remote}/{branch}\n")
+            return fetch.returncode
+        ahead_range = f"{remote}/{branch}..HEAD"
+        behind_range = f"HEAD..{remote}/{branch}"
+        ahead_count = self._rev_count(ahead_range)
+        behind_count = self._rev_count(behind_range)
+        if ahead_count is None or behind_count is None:
+            failed_range = ahead_range if ahead_count is None else behind_range
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:rev-count-failed:{branch}:{failed_range}")
+            sys.stderr.write(
+                f"safe_sync_main: rev-list count failed for {failed_range} on {remote}/{branch}; skipping\n"
+            )
+            return 0
+        if ahead_count > 0:
+            state = "diverged" if behind_count > 0 else "local-ahead"
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:{state}:{branch}:ahead={ahead_count}:behind={behind_count}")
+            sys.stderr.write(
+                f"safe_sync_main: {state} from {remote}/{branch} "
+                f"(ahead={ahead_count}, behind={behind_count}); adoption PR/review recovery required\n"
+            )
+            return 0
         if behind_count > 0:
-            print(f"safe_sync_main: local behind {remote}/{branch} by {behind_count}; pulling --rebase --autostash")
-            pull = self.git(["pull", "--rebase", "--autostash", remote, branch], check=False)
-            if pull.stdout:
-                print(pull.stdout, end="")
-            if pull.stderr:
-                sys.stderr.write(pull.stderr)
-            return pull.returncode
+            print(f"safe_sync_main: remote-only ahead {remote}/{branch} by {behind_count}; merging --ff-only")
+            merge = self.git(["merge", "--ff-only", f"{remote}/{branch}"], check=False)
+            if merge.stdout:
+                print(merge.stdout, end="")
+            if merge.stderr:
+                sys.stderr.write(merge.stderr)
+            return merge.returncode
         print(f"safe_sync_main: already up to date with {remote}/{branch}")
         return 0
+
+    def _rev_count(self, revision_range: str) -> int | None:
+        result = self.git(["rev-list", "--count", revision_range], check=False)
+        if result.returncode != 0:
+            return None
+        try:
+            return int((result.stdout or "0").strip() or "0")
+        except ValueError:
+            return None
+
+    def _tracked_tree_clean(self, worktree: Path) -> bool:
+        unstaged = self._git_in(worktree, ["diff", "--quiet"], check=False)
+        staged = self._git_in(worktree, ["diff", "--cached", "--quiet"], check=False)
+        return unstaged.returncode == 0 and staged.returncode == 0
+
+    def _git_operation_in_progress(self, worktree: Path) -> str:
+        for name in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REBASE_HEAD"):
+            git_path = self._git_in(worktree, ["rev-parse", "--git-path", name], check=False)
+            path = self._git_path_from_output(worktree, git_path.stdout)
+            if git_path.returncode == 0 and path.exists():
+                return name
+        for name in ("rebase-merge", "rebase-apply"):
+            git_path = self._git_in(worktree, ["rev-parse", "--git-path", name], check=False)
+            path = self._git_path_from_output(worktree, git_path.stdout)
+            if git_path.returncode == 0 and path.exists():
+                return name
+        return ""
+
+    def _git_path_from_output(self, worktree: Path, output: str) -> Path:
+        path = Path(output.strip())
+        return path if path.is_absolute() else worktree / path
 
     def safe_worktree(self, iteration: str, cluster: str, base: str) -> tuple[Path, str]:
         _validate_safe_worktree_fields(str(iteration), cluster)
@@ -2009,8 +2074,13 @@ class ControllerActions:
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)
+        values["HOST_WORK_LANGUAGE"] = normalize_host_work_language(
+            raw=self.ctx.host_env.get("HOST_WORK_LANGUAGE") or values.get("HOST_WORK_LANGUAGE"),
+            env=values,
+        )
         if env:
             values.update(env)
+            values["HOST_WORK_LANGUAGE"] = normalize_host_work_language(env=values)
         aliases = {
             "work_unit_id": values.get("WORK_UNIT_ID") or values.get("CLUSTER_ID") or "",
             "cluster_id": values.get("CLUSTER_ID", ""),
@@ -2027,6 +2097,7 @@ class ControllerActions:
         for key, value in aliases.items():
             template = template.replace("{{" + key + "}}", value)
         rendered = inline_prompt_contracts(Template(template).safe_substitute(values), skill_root=self.ctx.skill_root)
+        rendered = rendered.replace("${HOST_WORK_LANGUAGE}", values.get("HOST_WORK_LANGUAGE") or "en")
         Path(output_path).write_text(rendered, encoding="utf-8")
 
     def _review_fix_pr_facts(self, pr_number: str, existing: Mapping[str, str]) -> dict[str, str]:
@@ -2105,6 +2176,7 @@ class ControllerActions:
             "ITERATION": "",
             "PROJECT_RULES": "CLAUDE.md",
             "HOST_REFACTOR_COMMENT_POLICY": "none",
+            "HOST_WORK_LANGUAGE": self.ctx.host_env.get("HOST_WORK_LANGUAGE") or "en",
         }
         render_env.update(env or {})
         render_env.update(self._review_fix_pr_facts(spec.pr_number, render_env))

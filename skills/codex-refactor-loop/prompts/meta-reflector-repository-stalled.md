@@ -10,7 +10,7 @@ The controller/wakeup-plan injects a read-only table of open managed issue/PR me
 
 ## Output
 
-Write a concise Chinese summary suitable for a GitHub-visible controller artifact. Also write one recommendation artifact under `.refactor-loop/runs/meta-escalation/` with per-item recommendations.
+Write a concise summary that follows `${HOST_WORK_LANGUAGE}` suitable for a GitHub-visible controller artifact. Also write one recommendation artifact under `.refactor-loop/runs/meta-escalation/` with per-item recommendations.
 
 Allowed recommendation exits are only:
 

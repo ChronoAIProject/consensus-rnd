@@ -271,6 +271,29 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, python_policy)
 
+    def test_issue_651_main_checkout_follow_boundary_is_documented(self) -> None:
+        claude = read(REPO_ROOT / "CLAUDE.md")
+        integration = section_after_heading(self.skill, "Named runtime exception — integration sync daemon(per #53)")
+        daemon_body = section_after_anchor_until_heading(self.skill, "daemon-command-bodies", 2)
+
+        for needle in (
+            "integration publish/write authority remains only in the dedicated integration worktree",
+            "safe_sync_main",
+            "branch==`$INTEGRATION_BRANCH`",
+            "tracked-clean",
+            "no in-progress git operation",
+            "remote-only-ahead",
+            "git merge --ff-only origin/$INTEGRATION_BRANCH",
+            "main checkout HEAD as publish authorization",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, claude)
+                self.assertIn(needle, integration)
+        self.assertIn("LOCAL_AHEAD_PENDING_ONLY", daemon_body)
+        self.assertIn("DEV_SYNC_PENDING:local-ahead-managed-adoption-required:<json>", daemon_body)
+        self.assertNotIn("push-local-ahead", daemon_body)
+        self.assertNotIn("direct push", integration)
+
     def test_default_issue_intake_claim_anchor_and_contract_are_documented(self) -> None:
         available = reference_anchors(self.skill)
         anchor = "named-runtime-exception---default-issue-intake-claimper-623"
@@ -894,9 +917,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
-        self.assertIn("`MERGE`: post 中文 merge comment, then call `merge_pr <pr>` for ready+merge.", self.skill)
+        self.assertIn("`MERGE`: post merge comment according to `$HOST_WORK_LANGUAGE`, then call `merge_pr <pr>` for ready+merge.", self.skill)
         self.assertIn(
-            "`MERGE_WITH_COMMENTS`: surface comment evidence, post 中文 merge comment, then call `merge_pr <pr>` for ready+merge.",
+            "`MERGE_WITH_COMMENTS`: surface comment evidence, post merge comment according to `$HOST_WORK_LANGUAGE`, then call `merge_pr <pr>` for ready+merge.",
             self.skill,
         )
         for needle in (
@@ -1832,7 +1855,7 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "merge_pr",
             "mock.patch(\"codex_refactor_loop.phase9.router.subprocess.run\"",
             "mock.patch(\"codex_refactor_loop.wakeup_plan.subprocess.run\"",
-            "mock.patch(\"codex_refactor_loop.wakeup_runner.PrChecksProjection\"",
+            "mock.patch(\"codex_refactor_loop.wakeup_runner.PrMergeReadinessProjection\"",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, source)
@@ -1893,6 +1916,10 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "Review artifact verdict authority does not bypass current-head binding; merge readiness requires every required reviewer artifact to bind to the live PR head.",
             "review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`",
             "`wakeup-plan` action `head_sha` is not reviewer-head authority",
+            "target-required PR merge-readiness checks",
+            "raw PR-head check buckets or advisory check buckets are display-only diagnostics, not merge/fix lifecycle authority",
+            "target-required CI pending/fail/missing/unavailable",
+            "remote-ci worker only for target-required failed checks with `target_required_checks_red`",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)

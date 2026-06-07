@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -33,20 +34,34 @@ class GitHubBodyRendererTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_renderer_embeds_full_artifact_and_debug_path_only_under_details(self) -> None:
-        body = render_github_body(
-            kind="consensus",
-            title="issue #192 共识",
-            artifact_paths=[self.artifact],
-            debug_paths=[".refactor-loop/runs/phase9-issue192-r2-judge.md"],
-        )
+        with mock.patch.dict("os.environ", {}, clear=True):
+            body = render_github_body(
+                kind="consensus",
+                title="issue #192 consensus",
+                artifact_paths=[self.artifact],
+                debug_paths=[".refactor-loop/runs/phase9-issue192-r2-judge.md"],
+            )
 
-        self.assertTrue(body.startswith("## 🤖 issue #192 共识\n"))
+        self.assertTrue(body.startswith("## 🤖 issue #192 consensus\n"))
         self.assertIn("完整共识正文", body)
-        self.assertIn("<summary>内联 artifact 1: phase9-issue192-r2-judge.md</summary>", body)
-        self.assertIn("<summary>本机调试线索</summary>", body)
+        self.assertIn("<summary>Inline artifact 1: phase9-issue192-r2-judge.md</summary>", body)
+        self.assertIn("<summary>Local debug clues</summary>", body)
         self.assertIn("`.refactor-loop/runs/phase9-issue192-r2-judge.md`", body)
         self.assertTrue(body.splitlines()[-1] == "⟦AI:AUTO-LOOP⟧")
         validate_self_contained_github_body(body, authority_required=True)
+
+    def test_renderer_preserves_chinese_when_host_language_is_zh(self) -> None:
+        with mock.patch.dict("os.environ", {"HOST_WORK_LANGUAGE": "zh"}, clear=True):
+            body = render_github_body(
+                kind="consensus",
+                title="issue #192 共识",
+                artifact_paths=[self.artifact],
+                debug_paths=[".refactor-loop/runs/phase9-issue192-r2-judge.md"],
+            )
+
+        self.assertTrue(body.startswith("## 🤖 issue #192 共识\n"))
+        self.assertIn("<summary>内联 artifact 1: phase9-issue192-r2-judge.md</summary>", body)
+        self.assertIn("<summary>本机调试线索</summary>", body)
 
     def test_validator_rejects_path_only_authority(self) -> None:
         body = "## 🤖 bad body\n\n授权:.refactor-loop/runs/phase9-issue192-r1-judge.md\n\n⟦AI:AUTO-LOOP⟧\n"
@@ -54,11 +69,11 @@ class GitHubBodyRendererTests(unittest.TestCase):
             validate_self_contained_github_body(body)
 
     def test_validator_allows_plain_body_without_authority_requirement(self) -> None:
-        validate_self_contained_github_body("## 🤖 status\n\n普通评论。\n\n⟦AI:AUTO-LOOP⟧\n")
+        validate_self_contained_github_body("## 🤖 status\n\nPlain comment.\n\n⟦AI:AUTO-LOOP⟧\n")
 
     def test_validator_requires_inline_details_for_authority_required_body(self) -> None:
         with self.assertRaisesRegex(GitHubBodyError, "must inline raw artifact text"):
-            validate_self_contained_github_body("## 🤖 accepted\n\n结论已接受。\n\n⟦AI:AUTO-LOOP⟧\n", authority_required=True)
+            validate_self_contained_github_body("## 🤖 accepted\n\nConclusion accepted.\n\n⟦AI:AUTO-LOOP⟧\n", authority_required=True)
 
     def test_validator_rejects_generic_markdown_details_as_authority(self) -> None:
         body = (
@@ -93,7 +108,7 @@ class GitHubBodyRendererTests(unittest.TestCase):
                 "--kind",
                 "authorization",
                 "--title",
-                "授权卡片",
+                "authorization card",
                 "--artifact",
                 str(self.artifact),
                 "--debug-path",
@@ -105,6 +120,7 @@ class GitHubBodyRendererTests(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("完整共识正文", result.stdout)
+        self.assertIn("<summary>Inline artifact 1: phase9-issue192-r2-judge.md</summary>", result.stdout)
         self.assertTrue(result.stdout.splitlines()[-1] == "⟦AI:AUTO-LOOP⟧")
 
     def test_cli_rejects_output_path_to_remain_read_only(self) -> None:

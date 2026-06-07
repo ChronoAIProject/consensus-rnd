@@ -39,7 +39,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `crnd:human:maintainer-decision` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | controller-internal `ControllerActions`, GitHub labels |
 | Spawn | Mainline codex spawn uses harness background tasks, not detached nohup. | Use one background task per codex; if detached already happened, preserve work and rely on log sweep plus wake source. | [codex invocation details](#codex-invocation-details) | `consensus-rnd-cli spawn-codex` |
 | Hard rules | All worker prompts inherit controller-level hard rules. | Include scope, git, test, language, and no-scope-creep constraints in every spawned prompt. | [hard rules details](#hard-rules-details) | prompt templates |
-| Language | Source files are English-only; external user-facing artifacts are 中文 by default. README.md + README.zh-CN.md is the only English-canonical public-doc carve-out. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
+| Language | Source files are English-only; external user-facing artifact language comes from host-owned `HOST_WORK_LANGUAGE`. README.md + README.zh-CN.md is the only English-canonical public-doc carve-out. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
 
 <a id="two-entry-modes"></a>
 ## Main path and fallback producer
@@ -137,6 +137,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$HOST_HOLISTIC_STATUS_COMMENT_ID` | optional-noop | global-dashboard-status-card | empty existing issue-comment id | required only when `$HOST_HOLISTIC_STATUS_ENABLE=true`; empty or non-numeric disables the GitHub sync path; the writer may PATCH this exact issue comment only and must not create a comment | progress-reporter | `test_progress_reporter.py`, `test_host_env_surface_matrix.py` |
 | `$HOST_HOLISTIC_STATUS_INTERVAL_SECONDS` | defaulted | global-dashboard-status-card | `600` | default to `600` seconds; unchanged rendered hash skips PATCH and only refreshes local progress-reporter bookkeeping | progress-reporter | `test_progress_reporter.py`, `test_host_env_surface_matrix.py` |
 | `$HOST_REFACTOR_COMMENT_POLICY` | defaulted | prompt templates | `none` | missing/empty/default normalizes to `none`; rationale belongs in external artifacts; explicit `self-doc-comment` is downstream compatibility opt-in and must obey source English-only; any other value is invalid and fail-closed | prompt templates | `test_host_env_surface_matrix.py`, `test_refactor_comment_policy_prompt_contract.py`, `test_source_language_policy.py` |
+| `$HOST_WORK_LANGUAGE` | defaulted | work language policy | `en` | single external user-facing artifact language fact; allowed values are `en` and `zh`; missing/empty/default normalizes to `en`; invalid values fail closed; explicit `zh` preserves Chinese working artifacts | prompt templates, GitHub body renderer, controller templates | `test_host_env_surface_matrix.py`, `test_work_language_policy.py`, `test_github_body_renderer.py` |
 | `$SOURCE_GLOBS` | optional-noop | review prompts | host source glob hints | empty means review from actual diff and project evidence; do not invent host source layout | review prompts | `test_host_env_surface_matrix.py` |
 | `$MAINTAINER_WHITELIST` | conditional-fail-closed | comment-monitor | host GitHub handles | optional for hosts without comment-monitor/direct-mention intake; when that surface runs, empty fails closed | comment-monitor | `test_comment_monitor.py` |
 | `$HOST_TEST_FILE_GLOBS` | prompt-empty-infer | prompt templates | empty | infer from existing tests; fail closed if unsafe to locate writable tests | prompt templates | `test_host_env_surface_matrix.py` |
@@ -150,6 +151,8 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 Prompt templates reference these fields as `${HOST_*}` placeholders so normal `host.env` sourcing plus `render_template`/`envsubst` injects them at prompt construction time. Do not add aliases for the rejected Set B names.
 
 `$HOST_REFACTOR_COMMENT_POLICY` controls only refactor-history self-documentation source-comment semantics. Missing, empty, or default policy is `none`, which rejects Old/New refactor-history source comments and keeps rationale in external artifacts. Explicit `self-doc-comment` is a downstream compatibility opt-in; `${HOST_COMMENT_RULE}` only supplies comment syntax in that mode and does not override source English-only.
+
+`$HOST_WORK_LANGUAGE` controls only external user-facing artifact language. Source files, sentinel, markers, labels, schema fields, command names, file paths, protocol vocabulary, artifact filenames, and historical artifacts are not translated.
 
 Host config rules:
 1. `host.env` is the only loop runtime fact injection point. It is not host production configuration schema.
@@ -365,7 +368,7 @@ Allowed: active-controller owner only; read live issue state and issue comments;
 Forbidden: no `UNMANAGED_ISSUE_INTAKE_ENABLE`, `UnmanagedIssueIntakeClaim`, `intake_unmanaged_issue_claim`, `crnd:unmanaged-issue-intake-*`, public lifecycle CLI, new daemon, generic issue factory, issue/PR close/reopen/body/title edit, PR edit/merge, assignee, milestone, tag/release, commit/push, generic label mutation, takeover permit, per-work claim, lifecycle owner, lifecycle authority, daemon owner, #191 lease owner, prompt-body authorization, or any GitHub side effect that bypasses #191 and #396. GitHub username, authenticated actor, comment author, and issue author facts are admission/accounting/display metadata only within this surface and never durable owner identity. Verification: `test_default_issue_intake.py`, `test_wakeup_plan.py`, `test_wakeup_runner.py`, `test_host_env_surface_matrix.py`, `test_runtime_exception_authorization_sources.py`, and `test_skill_reference_anchors.py`.
 
 ## Named runtime exception - wakeup-runner(per #396)
-Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#wakeup-runner-396`. `wakeup-runner` is active-controller owner only and consumes only `wakeup-plan` evidence-bound closed action projection. The effect-adapter boundary is only the owner-local admission contract before existing #396 controller actions/named helpers and the #403 `ControllerActions.apply_issue_decomposition_plan()` helper; it is no generic effect-adapter runtime abstraction, no public command bus, and no executor layer. Effects are allowed only by concrete `controller_action` or helper name. It revalidates #191 owner, durable artifact evidence, clean `EXIT=0` source marker when required, ConsensusGate/meta-judge or review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`, OPEN/live GitHub state, missing/stale per-reviewer head SHA, release #322 preflight, safe-progress admission metadata, and helper-specific preconditions before mechanically calling existing controller helpers or the named #396 helpers. Medium risk actions must carry `risk_tier: "medium"` plus `execution_policy: "cautious"` and are bounded per tick; `risk_tier: "high"` or blocked execution policy is a schema violation. Ordinary rejection uses grep-able one-line runner diagnostics such as `WAKEUP_RUNNER_BLOCKED:<action_id>:<reason>` plus ledger/pending-event reason; multi-step external side effects require helper-owned durable result/diagnostic artifacts when that helper owns such a surface or partial external state can exist. `.refactor-loop/host.env` may be skill-private runtime/cache/log read state only, not branch topology, machine paths, durable ledger authority, host artifact, or host production SSOT. `wakeup-plan` action `head_sha` is not reviewer-head authority. Consensus→implement projection durable fact source is the consensus judge artifact frontmatter, `## If consensus`, `Implementation owner`, and Implement plan structured fields `scope_paths`, `old_pattern`, `new_principle`, and optional `verification_hints`; parser failure emits no implementation action. Consensus implementation readiness is a helper-specific precondition: dispatchable projection requires `consensus_implementation_ready` and suppresses to status-only with `suppressed_reason` such as `open_closing_pr`, `remote_iter_branch`, `in_flight_implement`, or `scope_conflict_waiting` when the OPEN managed issue is already claimed by a closing PR, canonical implementation branch/worktree, implement log, pending intent, in-flight worker, or an earlier executable consensus implementation action with overlapping normalized `scope_paths`; runner and controller helper revalidate before dispatch. `dispatch_consensus_implementation` creates the canonical worktree/head, writes an empty reservation commit, pushes the head, and opens the managed draft PR before spawning the implement worker; missing reservation for an already clean implementation is treated as `early_pr_missing` fresh redispatch. For implementation publish, PR title/body are worker-authored GitHub-facing artifacts: title SSOT is `.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt`, body SSOT is `.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`; `wakeup-plan` projects only these paths and suppresses missing or invalid artifacts, while `wakeup-runner` and `ControllerActions.publish_implementation_output` revalidate path containment, sentinel, exactly one matching `Closes #N`, required sections, and non-placeholder title/body. `publish_implementation_output` may only commit/push the implementation diff to exactly one matching open managed PR with the canonical head, integration base, and single linked managed issue; zero, multiple, head/base/link mismatch, invalid worker-authored PR artifacts, or stale-base clean output fails closed/status-only, and stale-base clean `IMPLEMENT_DONE:ok` is `implementation_refresh_needed:stale_base` without clearing the log. Clean `IMPLEMENT_DONE:ok` with an empty scoped diff is a no-op publish input: `wakeup-plan` suppresses it to status-only and `wakeup-runner` records stale executable projections as skipped rather than blocked, with no close/merge/label side effect. Before runner application, `wakeup-plan` prunes stale, terminal, or superseded local evidence from its projection; release-rollup freshness may use read-only local `refs/remotes/origin/<review_base>..refs/remotes/origin/<integration>` evidence to suppress stale pending events, and local ref probe failure fails open. This narrows runner input only and does not weaken #396 revalidation or create standalone authorization. Allowed actions are spawn codex, including allowlisted `release-rollup-body` generation that only writes `.refactor-loop/runs/release-rollup-pr-body.md`, named helper `dispatch_consensus_implementation`, named helper `publish_implementation_output`, named helper `apply_issue_decomposition_plan`, named helper `apply_default_issue_intake_claim`, then named helper `open_release_rollup_pr_from_action` after the body exists, publish worker output, dispatch reviewers/fix/remote-ci worker, apply triage decision, merge PR under review truth table, close managed item from drop marker, and publish release through #322. Forbidden: no arbitrary git/gh command, workflow tag/release, router guard adjudication, generic codex fallback, prompt-body decision, standalone authorization from `wakeup-plan`; the fixed forbidden field set is at least `cmd`, `argv`, `shell`, `command_line`, `commands`, `env`, `git`, `gh`, `executor`, `lifecycle_authority`, and `lifecycle_owner`, with existing extra `args` rejection retained; no generic command fields, new lifecycle authority, `ControllerTurnDecision`, controller-turn worker, private schema, active-active scheduler, `.refactor-loop/host.env` as host production SSOT, generic lifecycle actor, and arbitrary label/merge/close outside existing helper or named #396 helper. Verification: `test_wakeup_runner.py`, `test_wakeup_runner_review_gate.py`, `test_wakeup_runner_release.py`, `test_wakeup_plan.py`, `test_safe_progress_scheduler.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, `test_restart_daemons.py`, and `test_skill_reference_anchors.py`.
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#wakeup-runner-396`. `wakeup-runner` is active-controller owner only and consumes only `wakeup-plan` evidence-bound closed action projection. The effect-adapter boundary is only the owner-local admission contract before existing #396 controller actions/named helpers and the #403 `ControllerActions.apply_issue_decomposition_plan()` helper; it is no generic effect-adapter runtime abstraction, no public command bus, and no executor layer. Effects are allowed only by concrete `controller_action` or helper name. It revalidates #191 owner, durable artifact evidence, clean `EXIT=0` source marker when required, ConsensusGate/meta-judge or review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`, target-required PR merge-readiness checks, OPEN/live GitHub state, missing/stale per-reviewer head SHA, release #322 preflight, safe-progress admission metadata, and helper-specific preconditions before mechanically calling existing controller helpers or the named #396 helpers. Medium risk actions must carry `risk_tier: "medium"` plus `execution_policy: "cautious"` and are bounded per tick; `risk_tier: "high"` or blocked execution policy is a schema violation. Ordinary rejection uses grep-able one-line runner diagnostics such as `WAKEUP_RUNNER_BLOCKED:<action_id>:<reason>` plus ledger/pending-event reason; multi-step external side effects require helper-owned durable result/diagnostic artifacts when that helper owns such a surface or partial external state can exist. `.refactor-loop/host.env` may be skill-private runtime/cache/log read state only, not branch topology, machine paths, durable ledger authority, host artifact, or host production SSOT. `wakeup-plan` action `head_sha` is not reviewer-head authority, and raw PR-head check buckets or advisory check buckets are display-only diagnostics, not merge/fix lifecycle authority. Consensus→implement projection durable fact source is the consensus judge artifact frontmatter, `## If consensus`, `Implementation owner`, and Implement plan structured fields `scope_paths`, `old_pattern`, `new_principle`, and optional `verification_hints`; parser failure emits no implementation action. Consensus implementation readiness is a helper-specific precondition: dispatchable projection requires `consensus_implementation_ready` and suppresses to status-only with `suppressed_reason` such as `open_closing_pr`, `remote_iter_branch`, `in_flight_implement`, or `scope_conflict_waiting` when the OPEN managed issue is already claimed by a closing PR, canonical implementation branch/worktree, implement log, pending intent, in-flight worker, or an earlier executable consensus implementation action with overlapping normalized `scope_paths`; runner and controller helper revalidate before dispatch. `dispatch_consensus_implementation` creates the canonical worktree/head, writes an empty reservation commit, pushes the head, and opens the managed draft PR before spawning the implement worker; missing reservation for an already clean implementation is treated as `early_pr_missing` fresh redispatch. For implementation publish, PR title/body are worker-authored GitHub-facing artifacts: title SSOT is `.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt`, body SSOT is `.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`; `wakeup-plan` projects only these paths and suppresses missing or invalid artifacts, while `wakeup-runner` and `ControllerActions.publish_implementation_output` revalidate path containment, sentinel, exactly one matching `Closes #N`, required sections, and non-placeholder title/body. `publish_implementation_output` may only commit/push the implementation diff to exactly one matching open managed PR with the canonical head, integration base, and single linked managed issue; zero, multiple, head/base/link mismatch, invalid worker-authored PR artifacts, or stale-base clean output fails closed/status-only, and stale-base clean `IMPLEMENT_DONE:ok` is `implementation_refresh_needed:stale_base` without clearing the log. Clean `IMPLEMENT_DONE:ok` with an empty scoped diff is a no-op publish input: `wakeup-plan` suppresses it to status-only and `wakeup-runner` records stale executable projections as skipped rather than blocked, with no close/merge/label side effect. Before runner application, `wakeup-plan` prunes stale, terminal, or superseded local evidence from its projection; release-rollup freshness may use read-only local `refs/remotes/origin/<review_base>..refs/remotes/origin/<integration>` evidence to suppress stale pending events, and local ref probe failure fails open. This narrows runner input only and does not weaken #396 revalidation or create standalone authorization. Allowed actions are spawn codex, including allowlisted `release-rollup-body` generation that only writes `.refactor-loop/runs/release-rollup-pr-body.md`, named helper `dispatch_consensus_implementation`, named helper `publish_implementation_output`, named helper `apply_issue_decomposition_plan`, named helper `apply_default_issue_intake_claim`, then named helper `open_release_rollup_pr_from_action` after the body exists, publish worker output, dispatch reviewers/fix/remote-ci worker only for target-required failed checks with `target_required_checks_red`, apply triage decision, merge PR under review truth table plus target-required readiness, close managed item from drop marker, and publish release through #322. Forbidden: no arbitrary git/gh command, workflow tag/release, router guard adjudication, generic codex fallback, prompt-body decision, standalone authorization from `wakeup-plan`; the fixed forbidden field set is at least `cmd`, `argv`, `shell`, `command_line`, `commands`, `env`, `git`, `gh`, `executor`, `lifecycle_authority`, and `lifecycle_owner`, with existing extra `args` rejection retained; no generic command fields, new lifecycle authority, `ControllerTurnDecision`, controller-turn worker, private schema, active-active scheduler, `.refactor-loop/host.env` as host production SSOT, generic lifecycle actor, and arbitrary label/merge/close outside existing helper or named #396 helper. Verification: `test_wakeup_runner.py`, `test_wakeup_runner_review_gate.py`, `test_wakeup_runner_release.py`, `test_wakeup_plan.py`, `test_safe_progress_scheduler.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, `test_restart_daemons.py`, and `test_skill_reference_anchors.py`.
 
 <a id="named-runtime-exception--runtime-retentionper-437"></a>
 ## Named runtime exception - RuntimeRetention(per #437)
@@ -409,7 +412,7 @@ Forbidden: no open item mutation, issue create/close/reopen/body/title edit, PR 
 Fact source and verification: projection logic lives in `closed_phase_labels.py`, the daemon in `closed_label_reconciler.py`, and the only public command authority is `cli.py::COMMANDS["closed-label-reconciler"].authority == ("read-gh", "gh-label-closed-reconcile", "write-state")`; it does not grant generic `gh-label` or `gh-edit`. Candidate collection is GitHub label/state driven and managed-intersecting at query construction: missing terminal phase, residual nonterminal phase, `crnd:lifecycle:stuck`, plus a small recent closed read-only managed window for search quirks or newly closed missing-terminal discovery. terminal-complete closed managed items are excluded from steady-state scans and must not receive steady-state per-item view or linked-merge probes; unmanaged CLOSED search noise must not be returned to the reconciler or `peek` lens. Behavior/source-regression coverage: `test_closed_label_reconciler.py`, `test_peek_status_lens.py`, `test_gh_accounting.py`, `test_cli_command_router.py`, `test_restart_daemons.py`, `test_label_taxonomy.py`, `test_label_contract_source.py`, and `test_runtime_exception_authorization_sources.py`.
 
 ## Named runtime exception — integration sync daemon(per #53)
-Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#integration-sync-daemon-53`. **Narrow allowlist**: daemon-owned autonomous integration-branch git apply in the dedicated integration worktree. The daemon may fetch refs, run `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, compare ref counts and ancestry, detect conflicts, dispatch resolver workers, append pending events, write integration sync operation artifacts, and execute only the #53 git allowlist: `git fetch`, `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, `rev-list`, `rev-parse`, `merge-base`, `reset --hard`, `rebase --rebase-merges`, `merge --ff-only|--no-ff`, `git push HEAD:$INTEGRATION_BRANCH`, and force-with-lease rollup adoption. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no generic lifecycle actor, and no git commands outside that allowlist. Implement/fix workers still never commit, push, or open PRs.
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#integration-sync-daemon-53`. **Narrow allowlist**: integration publish/write authority remains only in the dedicated integration worktree. The daemon may fetch refs, run `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, compare ref counts and ancestry, detect conflicts, dispatch resolver workers, append pending events, write integration sync operation artifacts, and execute only the #53 git allowlist in that worktree: `git fetch`, `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, `rev-list`, `rev-parse`, `merge-base`, `reset --hard`, `rebase --rebase-merges`, `merge --ff-only|--no-ff`, `git push HEAD:$INTEGRATION_BRANCH`, and force-with-lease rollup adoption. The active-controller owner may reuse the narrowed checked-in `ControllerActions.safe_sync_main()` for main checkout branch==`$INTEGRATION_BRANCH`, tracked-clean, no in-progress git operation, remote-only-ahead `git merge --ff-only origin/$INTEGRATION_BRANCH` follow. **Forbidden**: no main checkout local-ahead push, rebase, reset, no-ff merge, force-push, branch create/delete, no use of main checkout HEAD as publish authorization, no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no generic lifecycle actor, and no git commands outside that allowlist. Implement/fix workers still never commit, push, or open PRs.
 
 ## Named runtime exception — observability-comment-writers(per #53)
 Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#observability-comment-writers-53`. **Narrow allowlist**: GitHub issue/PR comments for controller status banners, PR body edit, and reactions only. Progress-reporter per-worker GitHub progress comments are deleted; worker detail stays in `peek`, statusline, clean `EXIT=` logs, daemon events, and pending-event surfaces. #504 separately allows only PATCH of exactly one host-configured global status-card comment id. Comment-monitor controller-post identity is owned locally by `monitors/comment.py`: a final `⟦AI:AUTO-LOOP⟧` sentinel is canonical, while `CONTROLLER_PREFIXES` is only a legacy compatibility skip list. Observability runtime paths are private `.refactor-loop` paths derived from `LoopContext`, not host env surfaces. Issue/PR target writes still require the #191 `ActiveControllerLease` / `require_active_controller(...)` gate; #53 is not a cross-device write permit. **Forbidden**: per-worker progress comment create/edit/delete/get/read, label mutation, issue/PR close/create/merge, release/tag, and git lifecycle. Triage accept/reject writes manual issue triage decision artifacts for controller apply instead of mutating labels/body directly.
@@ -419,7 +422,7 @@ Authorization source: `skills/codex-refactor-loop/authorizations/runtime-excepti
 
 ## Named runtime exception — integration sync daemon(per #65)
 Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#integration-sync-release-rollup-65`. It records the existing-review-base pending-event boundary. **Narrow allowlist**: release-rollup detection and existing-format pending-event emission only; event facts include `integration_branch`, `review_base_branch`, `integration_sha`, `review_base_sha`, `ahead_count`, `detected_at`, and `reason`.
-**No lifecycle authority**: the daemon must not run `gh pr create`; it must not create PRs, edit PRs, label PRs, close PRs, approve PRs, merge PRs, or push directly to `$REVIEW_BASE_BRANCH`. Controller pending-event sweep re-checks open head/base PRs, writes the Chinese PR body, and calls `open_release_rollup_pr_from_pending_event`, which first pushes a throwaway `rollup/<integration_sha>` head and then delegates to `open_pr_with_label`; the rollup PR head must not be `$INTEGRATION_BRANCH` itself. Behavior/source-regression tests cover event emission, suppression, cooldown, missing integration ref alerts, throwaway rollup heads, and forbidden daemon lifecycle tokens.
+**No lifecycle authority**: the daemon must not run `gh pr create`; it must not create PRs, edit PRs, label PRs, close PRs, approve PRs, merge PRs, or push directly to `$REVIEW_BASE_BRANCH`. Controller pending-event sweep re-checks open head/base PRs, writes the PR body according to `$HOST_WORK_LANGUAGE`, and calls `open_release_rollup_pr_from_pending_event`, which first pushes a throwaway `rollup/<integration_sha>` head and then delegates to `open_pr_with_label`; the rollup PR head must not be `$INTEGRATION_BRANCH` itself. Behavior/source-regression tests cover event emission, suppression, cooldown, missing integration ref alerts, throwaway rollup heads, and forbidden daemon lifecycle tokens.
 
 ## Skill degradation source-repo validation
 <!-- Refactor (iter259/issue-259): Old pattern: check-degradation --static 把 downstream/plugin host root 当 source tree 扫描,吐 skills/codex-refactor-loop/... required-file false-positive(每 tick rc=1). New principle: degradation.py 内加私有 not-source-repo guard:无 source sentinels 时 rc=0 + reason not-source-repo;source repo candidate 仍 fail-closed;不新增 SourceRepoValidationContext,不改 manifest.py. -->
@@ -898,19 +901,19 @@ Policy:the loop continues until an explicit stop condition or a visible `crnd:hu
 7. No suite-level host-wide process-table daemon guard: daemon leak / duplicate coverage belongs in the responsible helper's local fact source or helper behavior tests; suite-level tests must not scan the current machine with `ps -eo pid=,command=`.
 8. No `[Skip]`, disabled tests, ignored tests, or manual category escapes to make CI green.
 9. No scope creep; workers must print `SCOPE_EXTEND: <file> <reason>` before touching outside authorized scope.
-10. Source files are English-only; external user-facing artifacts are 中文 by default. The root README pair is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion, and GitHub issue/PR/commit/design artifacts remain 中文 by default. No mandatory parallel English section.
+10. Source files are English-only; external user-facing artifact language comes from host-owned `$HOST_WORK_LANGUAGE`. The root README pair is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion. No mandatory parallel English section.
 11. Do not hardcode host facts into this cross-platform skill.
 
 Details are in [hard rules details](#hard-rules-details).
 
-## 工作语言规则(源码内英文,源码外中文)
+## 工作语言规则(source English-only, host-owned external artifact language)
 
 <!--
 Refactor (iter343/issue-343):
   Old pattern: README 单一(非英文默认),CLAUDE.md 文档分层称 README 为权威源;无英文 canonical + 中文 companion 双文件,语言策略未给 README pair carve-out
   New principle: README.md 英文 canonical 公开身份文档 + README.zh-CN.md 中文 companion(双向交叉链接,大段顺序对齐不要求逐句对等);CLAUDE.md 文档分层/根.md收口/语言 carve-out 与 SKILL.md 语言策略窄改:README pair 是唯一英文-canonical 公开文档 carve-out,GitHub issue/PR/commit/design artifact 等工作态仍中文默认。严格按 DESIGN_DECISION_PATH verbatim Concrete plan;不碰 .version-bump.json/额外根文档/runtime/host.env/marker/daemon/workflow
 -->
-Policy: Source files are English-only; external user-facing artifacts are 中文 by default. The root README pair is the only English-canonical public-doc carve-out. No mandatory parallel English section.
+Policy: Source files are English-only; external user-facing artifact language comes from `$HOST_WORK_LANGUAGE`. The root README pair is the only English-canonical public-doc carve-out. No mandatory parallel English section.
 Operational details live in [language policy details](#language-policy-details); historical bilingual notes live in [historical bilingual notes](#historical-bilingual-notes).
 
 ## Files
@@ -1085,10 +1088,10 @@ Consensus-rnd Phase ci-watch guardrails:
 4. Codecov patch failures route to test-add work.
 5. Repeated same-check failure routes through meta-layer policy before human escalation.
 
-Consensus-rnd Phase integration-sync guardrails: integration sync is daemon-owned autonomous integration-branch git apply through the #53 allowlist. The daemon writes integration sync operation artifacts, re-checks live state before git mutation, and records execution results under `.refactor-loop/runs/integration-sync-executions/`. Daemon command details live in [daemon command bodies](#daemon-command-bodies).
+Consensus-rnd Phase integration-sync guardrails: integration sync publish/write authority is daemon-owned autonomous integration-branch git apply through the #53 allowlist in the dedicated integration worktree. The daemon writes integration sync operation artifacts, re-checks live state before git mutation, and records execution results under `.refactor-loop/runs/integration-sync-executions/`. Main checkout follow is only the narrowed `ControllerActions.safe_sync_main()` remote-only-ahead fast-forward path. Daemon command details live in [daemon command bodies](#daemon-command-bodies).
 
 ## Named runtime exception — integration sync daemon integration-sync controller boundary
-The integration sync daemon owns detection, conflict detection, resolver dispatch, heartbeat, pending-event append, integration sync operation artifact emission, and autonomous #53 git apply in its dedicated integration worktree. The executor must reject stale SHA, branch mismatch, dirty non-merge worktrees, invalid rollup ancestry, unresolved merges, malformed operations, or already-executed operations. Resolver codexes resolve and stage conflicts only; they never push, reset, continue, or abort.
+The integration sync daemon owns detection, conflict detection, resolver dispatch, heartbeat, pending-event append, integration sync operation artifact emission, and autonomous #53 git apply in its dedicated integration worktree. Main checkout HEAD is never publish authorization; local-ahead/diverged main checkout states are pending-event-only and route to managed adoption PR/review recovery. The executor must reject stale SHA, branch mismatch, dirty non-merge worktrees, invalid rollup ancestry, unresolved merges, malformed operations, or already-executed operations. Resolver codexes resolve and stage conflicts only; they never push, reset, continue, or abort.
 
 Consensus-rnd Phase design-intake guardrails:
 
@@ -1352,7 +1355,7 @@ Allowed priority directories are `p0/`, `p1/`, and `p2/`; the monitor always che
 Required fields are `cd`, `prompt`, and `log`; `task_id` defaults to the `.dispatch.json` filename stem if omitted, and `stall` defaults to `5400` if omitted. Paths must be absolute so floor counting can still scope by `$REPO_ROOT`.
 
 Dispatch cwd guard:
-- `MUTABLE_DISPATCH_PREFIXES`: `implement-`, `fix-pr`, `remote-ci-fix`, `test-add-`, `verify-`, and `hotfix-`.
+- `MUTABLE_DISPATCH_PREFIXES`: `implement-`, `fix-pr`, `remote-ci-fix`, `test-add-`, and `verify-`.
 - `MAIN_READONLY_DISPATCH_PREFIXES`: `audit-`, `phase9-issue`, `solver-`, `meta-judge-`, `review-pr`, and `reviewer-pr`.
 - Queued mutable task prefixes must use `cd` under `$REPO_ROOT/.worktrees/<name>/`; `$REPO_ROOT`, relative paths, paths outside `$REPO_ROOT`, and `$REPO_ROOT/.worktrees/` itself fail closed.
 - Main-readonly prefixes are the explicit allowlist that may use `$REPO_ROOT` as `cd`, but each task id must still match the exact owner-local grammar for that prefix; near-miss names fail closed.
@@ -1917,12 +1920,9 @@ git pull --ff-only origin auto-refact-dev
 bash -lc "$BUILD_CMD"
 ```
 
-若 trunk build 错 → 立即派 **hotfix codex**(直接 push 到 `$INTEGRATION_BRANCH`,不开 PR):
-- 在 `$REPO_ROOT/.worktrees/hotfix-trunk` worktree 跑 codex 修
-- 用 `.refactor-loop/prompts/hotfix-trunk-*.md` 模板(参考 iterN hotfix 模板)
-- IMPLEMENT_DONE marker + controller commit/push 到 `$INTEGRATION_BRANCH` 直接
+若 trunk build 错 → 立即走 managed adoption PR/review recovery:用普通 managed issue/PR 修复路径派 implement/fix worker,经 review gate 后由 controller 合并;禁止绕过 PR/review gate push 到 `$INTEGRATION_BRANCH`。
 
-结构性教训:两个独立 PR 各自 CI 绿仍可能在顺序 merge 后引入 trunk build break,典型原因是一个 PR 重命名 API、另一个 PR 仍引用旧名。每次 merge 后必须在 trunk 重新跑 `$BUILD_CMD`,失败则立即派 hotfix codex。
+结构性教训:两个独立 PR 各自 CI 绿仍可能在顺序 merge 后引入 trunk build break,典型原因是一个 PR 重命名 API、另一个 PR 仍引用旧名。每次 merge 后必须在 trunk 重新跑 `$BUILD_CMD`,失败则进入 managed adoption PR/review recovery。
 
 **cwd discipline (critical)**: trunk-side git and GitHub mutations are
 active-controller-owned operations. Use the checked-in `ControllerActions`
@@ -1972,7 +1972,7 @@ For each `pass` cluster, serially:
 
     Edge case — if a maintainer accidentally retargets a cluster PR to `review_base_branch`, the next Consensus-rnd Phase integration-sync sweep detects the mismatch and posts a comment requesting retarget (does NOT auto-edit, to respect maintainer intent).
 
-6b. **Open PR** (**body follows current language policy: 中文 by default; no mandatory parallel English section**):
+6b. **Open PR** (**body follows `$HOST_WORK_LANGUAGE`; no mandatory parallel English section**):
 
     Structure the body as:
 
@@ -1981,8 +1981,8 @@ For each `pass` cluster, serially:
 
     iter<N> <cluster-id>（<严重度>，<rule_ids>）。
 
-    - **Old**：<old_pattern 完整中文一句，来自 human_brief.problem_statement；老 cluster 只有英文时由 controller 翻成中文>
-    - **New**：<new_pattern 完整中文一句>
+    - **Old**：<old_pattern one sentence following `$HOST_WORK_LANGUAGE`, sourced from human_brief.problem_statement>
+    - **New**：<new_pattern one sentence following `$HOST_WORK_LANGUAGE`>
 
     违反：<对应 CLAUDE.md/AGENTS.md 条款中文摘录>。
 
@@ -2006,7 +2006,7 @@ For each `pass` cluster, serially:
     catalog-managed PR label bundle, including `crnd:lifecycle:managed`, in
     the same active-controller-gated path.
 
-    Controller must reject a generated body that reintroduces a parallel `## English` section as a required peer to 中文.
+    Controller must reject a generated body that reintroduces a mandatory parallel English section.
 
 7b. The PR open helper must add the catalog-managed label bundle immediately.
 **漏加 → comment-monitor 不监控该 PR 评论 → maintainer 评论无 react 无回复**。漏加是 P0 bug,等同失保。Consensus-rnd Phase publish stacked cannot defer this label sync to the next turn.
@@ -2122,9 +2122,9 @@ Daemon 工作流由 `integration sync daemon` 命名状态机表达:
 1. `FETCH`: fetch origin in the daemon worktree.
 2. `CHECK_MERGE`: if a merge is in progress with unresolved paths, observe or dispatch exactly one resolver codex. Resolver codexes resolve and stage files only; they never continue, push, reset, or abort. If all paths are resolved, the daemon executes a `continue-resolved-merge` operation and pushes through the #53 allowlist.
 3. `CHECK_DIRTY`: dirty non-merge worktrees skip without reset.
-4. `PRESERVE_LOCAL_AHEAD`: compute `local_ahead_count` with `git rev-list --count origin/$INTEGRATION_BRANCH..HEAD`; if the daemon worktree is clean and ahead, write and execute a `push-local-ahead` integration sync operation. This preserves resolver continuation commits without controller side-channel latency.
+4. `LOCAL_AHEAD_PENDING_ONLY`: compute `local_ahead_count` with `git rev-list --count origin/$INTEGRATION_BRANCH..HEAD`; if the daemon worktree is clean and ahead, append `DEV_SYNC_PENDING:local-ahead-managed-adoption-required:<json>` and stop the tick. Local-ahead/diverged checkout state is not a publish source and must go through managed adoption PR/review recovery.
 5. `ADOPT_MERGED_ROLLUP`: if a merged rollup PR from `$INTEGRATION_BRANCH` to `$REVIEW_BASE_BRANCH` is provable, capture the old rollup head and current expected remote SHA, then write and execute an `adopt-merged-rollup` operation. The executor re-checks ancestry and live SHAs before force-with-lease adoption.
-6. `RESET_TO_REMOTE`: after local-ahead preservation and rollup adoption checks, write and execute a `reset-to-remote` operation for remote alignment when local HEAD differs from `origin/$INTEGRATION_BRANCH`.
+6. `RESET_TO_REMOTE`: after rollup adoption checks, write and execute a `reset-to-remote` operation for remote alignment when local HEAD differs from `origin/$INTEGRATION_BRANCH` and there is no local-ahead state.
 7. `FORWARD_SYNC`: when review base needs to be incorporated into integration, write and execute a `forward-sync-review-base` operation. The executor re-checks live state before merge and push.
 8. `DETECT_RELEASE_ROLLUP_NEEDED`: if `origin/$INTEGRATION_BRANCH` is ahead of `origin/$REVIEW_BASE_BRANCH` by at least `RELEASE_ROLLUP_MIN_COMMITS` and no open rollup PR already covers that integration SHA, append `DEV_SYNC_PENDING:release-rollup-needed:<json>` with branch names, SHAs, ahead count, timestamp, and reason. Cooldown only suppresses duplicate same-SHA events; it grants no lifecycle authority.
 9. `MISSING_INTEGRATION_BRANCH_ALERT`: daemon startup/tick verifies `origin/$INTEGRATION_BRANCH` exists via `git ls-remote --exit-code --heads origin "$INTEGRATION_BRANCH"`. If missing, append `DEV_SYNC_PENDING:missing-integration-branch:<branch>` and stop the tick without guessing or recreating the branch.
@@ -2171,7 +2171,7 @@ python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80
 tail -10 .refactor-loop/logs/dev_sync_daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
 ```
 若 daemon-status 报 owner daemon `stale` / `dead` → 由 `consensus-rnd-cli restart-daemons` 按 canonical wrapper repair/reload。
-若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。若发现 `DEV_SYNC_PENDING:release-rollup-needed:<json>` → controller 重新查是否已有覆盖同一 integration SHA 的 open rollup PR;已存在则 ledger/suppress,否则生成中文 body 并调用 `open_release_rollup_pr_from_pending_event <event-json> <body-file>`,由 helper 创建 `rollup/<integration_sha> -> $REVIEW_BASE_BRANCH`。该 PR 进入既有 Consensus-rnd Phase review-gate 与 CI/merge policy。
+若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。若发现 `DEV_SYNC_PENDING:release-rollup-needed:<json>` → controller 重新查是否已有覆盖同一 integration SHA 的 open rollup PR;已存在则 ledger/suppress,否则generate a body according to `$HOST_WORK_LANGUAGE` 并调用 `open_release_rollup_pr_from_pending_event <event-json> <body-file>`,由 helper 创建 `rollup/<integration_sha> -> $REVIEW_BASE_BRANCH`。该 PR 进入既有 Consensus-rnd Phase review-gate 与 CI/merge policy。
 ### 反面(❌ 禁止)
 
 - ❌ controller 自己跑 `git merge dev` 同步(daemon 已做,会 race / 冲突)
@@ -2276,11 +2276,11 @@ Each reviewer outputs `REVIEW_DONE:${PR}:${role}:<approve|comment|reject>` marke
 
 | Preconditions | Latest complete required round | Controller action |
 |---|---|
-| CI green, PR mergeable, every required reviewer head SHA equals the live PR head, every required role has exactly one valid marker after `EXIT=0` | `reject=0`, `approve=R`, `comment=0` | `MERGE`: post 中文 merge comment, then call `merge_pr <pr>` for ready+merge. |
-| Same preconditions | `reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R` | `MERGE_WITH_COMMENTS`: surface comment evidence, post 中文 merge comment, then call `merge_pr <pr>` for ready+merge. |
+| Target-required checks green, PR mergeable, every required reviewer head SHA equals the live PR head, every required role has exactly one valid marker after `EXIT=0` | `reject=0`, `approve=R`, `comment=0` | `MERGE`: post merge comment according to `$HOST_WORK_LANGUAGE`, then call `merge_pr <pr>` for ready+merge. |
+| Same preconditions | `reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R` | `MERGE_WITH_COMMENTS`: surface comment evidence, post merge comment according to `$HOST_WORK_LANGUAGE`, then call `merge_pr <pr>` for ready+merge. |
 | Same preconditions | `reject=0`, `approve=0`, `comment=R` | `WAIT_EXPLICIT_APPROVAL`: surface comments, do not ready, do not merge, do not dispatch fix. |
 | Same preconditions | `reject>=1` | `FIX`: enter fix-retry loop; do not ready, do not merge; fix codex consumes reject evidence as blocking input and comments as context. Do NOT escalate to human on first reject. |
-| Any gate incomplete or invalid | missing role, duplicate/unknown verdict, no `EXIT=0`, missing/stale per-reviewer head SHA, CI pending/fail, or non-mergeable PR | `WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer once; do not ready, never merge. |
+| Any gate incomplete or invalid | missing role, duplicate/unknown verdict, no `EXIT=0`, missing/stale per-reviewer head SHA, target-required CI pending/fail/missing/unavailable, or non-mergeable PR | `WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer once; do not ready, never merge. |
 
 Clean worker terminal marker consumers use `codex_refactor_loop.worker_markers` as the shared source for detection, runner revalidation, implement readiness, and review completion evidence. The reader accepts standalone allowlisted terminal markers only after clean `EXIT=0`; when the log lacks a marker it may read only the same-stem `.refactor-loop/runs/<stem>.md` companion artifact for allowlisted worker roles. Duplicate, malformed, or conflicting marker evidence fails closed. Implement readiness recognizes `IMPLEMENT_DONE:*:ok` through this log-first plus same-stem companion artifact path. Review-gate verdict authority remains artifact-frontmatter-first; `REVIEW_DONE` does not override frontmatter verdicts.
 
@@ -2320,7 +2320,7 @@ Escalate to human ONLY when the meta-layer cannot make progress:
 
 Escalation action:
 - Add `crnd:human:maintainer-decision` label on PR.
-- Post 中文 PR comment with: round history (N rounds tried), reject evidence per round, what fix codex tried, why it's stuck.
+- Post PR comment according to `$HOST_WORK_LANGUAGE` with: round history (N rounds tried), reject evidence per round, what fix codex tried, why it's stuck.
 - `PushNotification`: "PR #N stuck at round N — human decision needed: <one-line reason>".
 - State: `pr_reviews[PR].consensus = "stuck-human-review"`.
 
@@ -2353,7 +2353,7 @@ Refactor (iter6/issue-118):
 - `SKILL.md` 不维护 posting-mode prompt filename roster,也不引入 JSON manifest 或 helper contract; inventory coverage 由 prompt body + tests 承担。
 - Direct-post prompts keep to GitHub comments, PR body edits, reactions, and temp files. Lifecycle/label/create/close/merge/push/release authority remains controller-owned.
 - body 必须 `## 🤖 <headline>` 开头(consensus-rnd-cli comment-monitor 据此识别 controller-post 跳 react)
-- 中文 only / TL;DR ≤ 6 行 / raw artifact 折叠 `<details>` / 若 situation 给 `original_authors:` 加 `📢 cc`
+- TL;DR ≤ 6 行 / raw artifact 折叠 `<details>` / 若 situation 给 `original_authors:` 加 `📢 cc`
 - codex 自己抓 gh 输出的 URL,打 `POSTED:<role>:<N>:<URL>:<headline>` 或 `POST_FAILED:...`
 - controller 只读 log 末尾 marker,**不读 body**
 
@@ -2748,7 +2748,7 @@ If the above makes the current framing underspecified, route `converge` with the
 
 ### GitHub traceability (mandatory per SKILL.md "GitHub traceability" — same standard as Consensus-rnd Phase review-gate)
 
-Every Consensus-rnd Phase design-consensus action posts a 中文 comment to the issue. **The issue must be a complete audit trail** — solver outputs follow the current language policy; the controller posts each one as a SEPARATE issue comment so reviewers can inspect the 3 perspectives side-by-side. Comments are traceability, not a human approval gate.
+Every Consensus-rnd Phase design-consensus action posts a comment that follows `$HOST_WORK_LANGUAGE` to the issue. **The issue must be a complete audit trail** — solver outputs follow the current language policy; the controller posts each one as a SEPARATE issue comment so reviewers can inspect the 3 perspectives side-by-side. Comments are traceability, not a human approval gate.
 
 | Consensus-rnd Phase design-consensus event | Issue comment content |
 |---|---|
@@ -3252,13 +3252,13 @@ Bash(
 7. **No suite-level host-wide process-table daemon guard** — daemon leak / duplicate coverage belongs in the responsible helper's local fact source or helper behavior tests. A suite-level test must not scan the current machine with `ps -eo pid=,command=` as the truth source for daemon leak / duplicate state.
 8. **No `[Skip]` / disabled tests** as a way to make CI green.
 9. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.
-10. **Source files are English-only; external user-facing artifacts are 中文 by default**. Inside `.rs` / `.lua` / `.sh` / `.py` / `.ts`, comments, docstrings, `log.{info,warn,error}` strings, error/panic text, identifiers, and code-built commit-body templates are English. Outside source files, GitHub issue bodies, PR descriptions, design notifications, git commit messages written by the controller/codex, docs, TODO markers, and natural-language artifacts use 中文. `README.md` + `README.zh-CN.md` is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion, and large-section order alignment is enough. English may appear inline when quoting (a) a CLAUDE.md / AGENTS.md clause, (b) source error messages, (c) test names — quote verbatim, do not translate. No mandatory parallel English section.
+10. **Source files are English-only; external user-facing artifact language comes from host-owned `$HOST_WORK_LANGUAGE`**. Inside `.rs` / `.lua` / `.sh` / `.py` / `.ts`, comments, docstrings, `log.{info,warn,error}` strings, error/panic text, identifiers, and code-built commit-body templates are English. Outside source files, GitHub issue bodies, PR descriptions, design notifications, git commit messages written by the controller/codex, docs, TODO markers, and natural-language artifacts follow `$HOST_WORK_LANGUAGE`. `README.md` + `README.zh-CN.md` is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion, and large-section order alignment is enough. Sentinel, markers, labels, schema fields, command names, file paths, protocol vocabulary, artifact filenames, and historical artifacts are not translated. No mandatory parallel English section.
 
-## 工作语言规则(源码内英文,源码外中文)
+## 工作语言规则(source English-only, host-owned external artifact language)
 
-Policy: **源文件内部 English-only;源文件之外的 user-facing artifact 默认 中文**。
+Policy: **Source files are English-only;external user-facing artifact language comes from host-owned `$HOST_WORK_LANGUAGE`**.
 
-中文适用对象:GitHub issue body、PR description、PR comments、design issue auto-loop 评论、scorecard docs (`docs/audit-scorecard/`)、escalation 文案、cross-post 通知、controller / codex 写出的 git commit message、`docs/*.md`、TODO 标记。`README.md` + `README.zh-CN.md` 是唯一英文 canonical 公开文档 carve-out:`README.md` 英文 canonical,`README.zh-CN.md` 中文 companion,双向交叉链接且大段顺序对齐即可,不要求逐句对等。Internal artifact(`.refactor-loop/runs/*.md` and named daemon state artifacts)仍是英文(只要 grep / 调试用)。
+External user-facing artifact examples:GitHub issue body、PR description、PR comments、design issue auto-loop comments、scorecard docs (`docs/audit-scorecard/`)、escalation copy、cross-post notifications、controller / codex-authored git commit messages、`docs/*.md`、TODO markers. These follow `$HOST_WORK_LANGUAGE`. `README.md` + `README.zh-CN.md` 是唯一英文 canonical 公开文档 carve-out:`README.md` 英文 canonical,`README.zh-CN.md` 中文 companion,双向交叉链接且大段顺序对齐即可,不要求逐句对等。Internal artifact(`.refactor-loop/runs/*.md` and named daemon state artifacts) remains English when used for grep/debug unless the artifact is also GitHub-facing.
 
 英文适用对象:所有源文件(`.rs` / `.lua` / `.sh` / `.py` / `.ts`)内部自然语言与代码元素,包括注释、docstring、`log.{info,warn,error}` 字符串、error / panic 文本、代码 identifier、代码内构造的 commit-body 模板字符串。fkst 是 substrate,无 end-user UI;人读 `git log` / `journalctl` / source,英文 log 与注释强制英文同理,保持 LLM 语料一致、跨工程 reuse、无 encoding / 字体问题。
 
@@ -3269,10 +3269,10 @@ Policy: **源文件内部 English-only;源文件之外的 user-facing artifact �
 
 | 内容类型 | 语言 |
 |---|---|
-| GitHub issue title / body / 评论 | **中文** |
-| GitHub PR title / body / 评论 | **中文** |
-| Git commit message | **中文**(包括 controller 写的 fix/merge/squash 等) |
-| Push notification | **中文** |
+| GitHub issue title / body / 评论 | `$HOST_WORK_LANGUAGE` |
+| GitHub PR title / body / 评论 | `$HOST_WORK_LANGUAGE` |
+| Git commit message | `$HOST_WORK_LANGUAGE`(including controller-authored fix/merge/squash text) |
+| Push notification | `$HOST_WORK_LANGUAGE` |
 | Public identity README pair | `README.md` is **English canonical**; `README.zh-CN.md` is the **中文 companion**. This is the only English-canonical public-doc carve-out. |
 | Skill 文档 / $REPO_ROOT 的架构/词汇文档(若有) /audit 报告 | 维持现状(中英混排已存在) |
 | **代码内 `// Refactor (iterN/cluster-XXX):` 注释** | **英文**(production code 跨团队读) |
@@ -3280,16 +3280,17 @@ Policy: **源文件内部 English-only;源文件之外的 user-facing artifact �
 | **代码内 log / error / panic 字符串** | **英文** |
 | **代码内构造的 commit-body 模板字符串** | **英文** |
 | 代码 identifier / 类名 / 方法名 / 字段 | 英文(遵循 host / 项目惯例) |
-| schema / data 结构 | 英文 |
-| CLI 命令 / 文件路径 / SHA / URL | 英文 |
+| schema / data 结构 | English; not translated |
+| sentinel / markers / labels / protocol vocabulary / artifact filenames | English/protocol literal; not translated |
+| CLI 命令 / 文件路径 / SHA / URL | English/protocol literal; not translated |
 | CLAUDE/AGENTS 条款 verbatim 引用 / error message / test name / 第三方英文 quote | 引用原文,不翻译 |
 
 具体红线:
 1. 不再生成平行 `## English` section。
-2. 不再要求 `_en` + `_zh` 对。`prompts/audit.md` `human_brief` 块只保留中文字段(去掉 `_zh` 后缀)。
-3. TL;DR 也是中文。
-4. Controller 自己写的 `git commit -m "..."` 用中文。fix codex / writer codex prompt 里要求写中文 commit message。
-5. PR title 中文(但分支名仍 `refactor/iterN-cluster-XXX-...` 英文以维持 ID 惯例)。
+2. 不再要求 `_en` + `_zh` 对。`prompts/audit.md` `human_brief` 块只保留 un-suffixed fields.
+3. TL;DR follows `$HOST_WORK_LANGUAGE`.
+4. Controller 自己写的 `git commit -m "..."` follows `$HOST_WORK_LANGUAGE`. fix codex / writer codex prompt 里要求 follow the host work language.
+5. PR title follows `$HOST_WORK_LANGUAGE`(但分支名仍 `refactor/iterN-cluster-XXX-...` 英文以维持 ID 惯例)。
 6. 源文件内部不写中文自然语言。❌ `log.info("开始派发事件")` → ✅ `log.info("dispatching event")`;❌ `panic!("配置缺失")` → ✅ `panic!("missing configuration")`。
 7. **已发布的 EN+ZH 历史 artifact 保留原样**:不回头删 / 重译。新发的按本规则走。
 

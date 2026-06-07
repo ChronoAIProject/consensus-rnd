@@ -120,6 +120,13 @@ class ReviewGateEndToEndTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, HEAD_SHA + "\n", "")
             if command[:3] == ["gh", "pr", "view"] and "headRefName" in command and "--jq" not in command:
                 return subprocess.CompletedProcess(command, 0, json.dumps({"headRefName": "impl/pr480"}), "")
+            if command[:3] == ["gh", "pr", "view"] and "baseRefName,headRefOid,mergeStateStatus" in command:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"baseRefName": "canonical-integration", "headRefOid": HEAD_SHA, "mergeStateStatus": "DIRTY"}),
+                    "",
+                )
             if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft" in command:
                 return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": is_draft}), "")
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/480":
@@ -127,6 +134,10 @@ class ReviewGateEndToEndTests(unittest.TestCase):
                 if transient_pull_failure and pull_attempts == 2:
                     return subprocess.CompletedProcess(command, 1, "", "temporary pull read failure")
                 return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": HEAD_SHA}}), "")
+            if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/branches/canonical-integration/protection/required_status_checks":
+                return subprocess.CompletedProcess(command, 0, json.dumps({"contexts": ["ci"]}), "")
+            if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/rules/branches/canonical-integration":
+                return subprocess.CompletedProcess(command, 1, "", "404 Not Found")
             if command[:2] == ["gh", "api"] and command[2] == f"repos/owner/repo/commits/{HEAD_SHA}/check-runs":
                 payload = {"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
@@ -245,10 +256,21 @@ class ReviewGateEndToEndTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, "OPEN\n", "")
         if command[:3] == ["gh", "pr", "view"] and ".headRefOid" in command:
             return subprocess.CompletedProcess(command, 0, HEAD_SHA + "\n", "")
+        if command[:3] == ["gh", "pr", "view"] and "baseRefName,headRefOid,mergeStateStatus" in command:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps({"baseRefName": "canonical-integration", "headRefOid": HEAD_SHA, "mergeStateStatus": "DIRTY"}),
+                "",
+            )
         if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft" in command:
             return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": is_draft}), "")
         if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/480":
             return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": HEAD_SHA}}), "")
+        if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/branches/canonical-integration/protection/required_status_checks":
+            return subprocess.CompletedProcess(command, 0, json.dumps({"contexts": ["ci"]}), "")
+        if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/rules/branches/canonical-integration":
+            return subprocess.CompletedProcess(command, 1, "", "404 Not Found")
         if command[:2] == ["gh", "api"] and command[2] == f"repos/owner/repo/commits/{HEAD_SHA}/check-runs":
             payload = {"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}
             return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
@@ -271,8 +293,19 @@ class ReviewGateEndToEndTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "OPEN\n", "")
             if command == ["gh", "pr", "view", "480", "--repo", "owner/repo", "--json", "headRefOid", "--jq", ".headRefOid"]:
                 return subprocess.CompletedProcess(command, 0, HEAD_SHA + "\n", "")
+            if command == ["gh", "pr", "view", "480", "--repo", "owner/repo", "--json", "baseRefName,headRefOid,mergeStateStatus"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"baseRefName": "canonical-integration", "headRefOid": HEAD_SHA, "mergeStateStatus": "DIRTY"}),
+                    "",
+                )
             if command == ["gh", "api", "repos/owner/repo/pulls/480"]:
                 return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": HEAD_SHA}}), "")
+            if command == ["gh", "api", "repos/owner/repo/branches/canonical-integration/protection/required_status_checks"]:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"contexts": ["ci"]}), "")
+            if command == ["gh", "api", "repos/owner/repo/rules/branches/canonical-integration"]:
+                return subprocess.CompletedProcess(command, 1, "", "404 Not Found")
             if command == ["gh", "api", f"repos/owner/repo/commits/{HEAD_SHA}/check-runs", "--paginate", "--slurp"]:
                 payload = {"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
@@ -298,6 +331,7 @@ class ReviewGateEndToEndTests(unittest.TestCase):
         self.assertEqual(self.actions.rendered_fixes, [])
         self.assertEqual(self.actions.merged, ["480"])
         self.assertIn(["gh", "api", "repos/owner/repo/pulls/480"], calls)
+        self.assertIn(["gh", "api", "repos/owner/repo/branches/canonical-integration/protection/required_status_checks"], calls)
         self.assertIn(["gh", "api", f"repos/owner/repo/commits/{HEAD_SHA}/check-runs", "--paginate", "--slurp"], calls)
         self.assertIn(["gh", "pr", "view", "480", "--repo", "owner/repo", "--json", "mergeable,isDraft"], calls)
         for command in calls:

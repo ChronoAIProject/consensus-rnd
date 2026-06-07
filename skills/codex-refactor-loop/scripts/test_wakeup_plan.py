@@ -764,7 +764,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   esac
                   exit 0
                 fi
-                if [[ "$cmd1" == "api" ]]; then
+                  if [[ "$cmd1" == "api" ]]; then
                   if [[ -n "${WAKEUP_PLAN_GH_QUERY_LOG:-}" && "$api_path" == repos/owner/repo/milestones* ]]; then
                     printf 'api milestones\n' >> "$WAKEUP_PLAN_GH_QUERY_LOG"
                   fi
@@ -837,6 +837,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     fi
                     exit 0
                   fi
+                  if [[ "$api_path" == "repos/owner/repo/branches/main/protection/required_status_checks" ]]; then
+                    if [[ "$fixture" == "ci_red" ]]; then
+                      printf '{"contexts":["unit"]}\n'
+                    else
+                      printf '{"contexts":[]}\n'
+                    fi
+                    exit 0
+                  fi
+                  if [[ "$api_path" == "repos/owner/repo/rules/branches/main" ]]; then
+                    printf 'Not Found\n' >&2
+                    exit 1
+                  fi
                   if [[ "$api_path" == "repos/owner/repo/pulls/31" ]]; then
                     printf '{"head":{"sha":"ci-red-sha"}}\n'
                     exit 0
@@ -846,6 +858,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$cmd1 $cmd2" == "pr view" && "$cmd3" == "177" ]]; then
                   printf '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"stale-head-sha"}\n'
+                  exit 0
+                fi
+                if [[ "$cmd1 $cmd2" == "pr view" && "$cmd3" == "31" ]]; then
+                  printf '{"baseRefName":"main","headRefOid":"ci-red-sha","mergeStateStatus":"DIRTY"}\n'
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "pr view" && ( "$fixture" == "draft_rollup_missing_snapshot_draft" || "$fixture" == "draft_rollup_only_missing_snapshot_draft" ) && "$cmd3" == "572" ]]; then
@@ -4348,7 +4364,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         )
         ctx = mock.Mock(host_env={"REVIEW_BASE_BRANCH": "review"})
 
-        with mock.patch("codex_refactor_loop.wakeup_plan.PrChecksProjection") as checks_projection:
+        with mock.patch("codex_refactor_loop.wakeup_plan.PrMergeReadinessProjection") as checks_projection:
             review_actions = review_evidence_redispatch_actions(self.repo, [item], ctx)
             ci_actions = ci_red_actions(self.repo, [item], ctx)
 
@@ -5119,16 +5135,41 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["actor"], "remote-ci-fix-codex")
         self.assertEqual(plan["actions"][0]["check_names"], ["unit"])
         self.assertEqual(plan["actions"][0]["head_sha"], "ci-red-sha")
+        self.assertIn("target_required_checks_red", plan["actions"][0]["preconditions"])
         self.assertNotIn("REMOTE_CI_DONE", json.dumps(plan))
 
-    def test_ci_red_uses_pr_checks_projection_without_legacy_pr_checks_command(self) -> None:
+    def test_ci_red_uses_merge_readiness_projection_without_legacy_pr_checks_command(self) -> None:
         plan = self.run_plan(fixture="ci_red")
 
         self.assertEqual(plan["actions"][0]["kind"], "ci-red")
         projection = wakeup_plan_projection()
-        self.assertIn("PrChecksProjection", projection.imported_names)
+        self.assertIn("PrMergeReadinessProjection", projection.imported_names)
         self.assertNotIn("pr", projection.set_members.get("LEGACY_PR_CHECKS_COMMAND", frozenset()))
         self.assertNotIn("checks", projection.set_members.get("LEGACY_PR_CHECKS_COMMAND", frozenset()))
+
+    def test_ci_red_actions_ignore_advisory_failed_checks(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=31,
+            title="ci",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_CI_RUNNING),
+            head_sha="ci-red-sha",
+        )
+        ctx = mock.Mock(host_env={})
+        status = mock.Mock(
+            ok=True,
+            head_sha="ci-red-sha",
+            required_failed=(),
+            advisory_failed=(mock.Mock(name="unit", link="https://checks/unit"),),
+        )
+        with (
+            mock.patch("codex_refactor_loop.wakeup_plan.github_repo_slug", return_value="owner/repo"),
+            mock.patch("codex_refactor_loop.wakeup_plan.PrMergeReadinessProjection") as projection,
+        ):
+            projection.return_value.check_pr.return_value = status
+            actions = ci_red_actions(self.repo, [item], ctx)
+
+        self.assertEqual([], actions)
 
     def test_no_gap_routes_before_milestone(self) -> None:
         (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
