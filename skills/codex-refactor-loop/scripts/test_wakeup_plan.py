@@ -1795,6 +1795,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("argv", action)
         self.assertNotIn("shell", action)
 
+    def test_safe_progress_annotates_valid_spawn_intent_and_writes_empty_blocked_queue(self) -> None:
+        self.append_harness_spawn_intent()
+
+        plan = self.run_plan(fixture="open_issue_330")
+
+        action_ids = [action["action_id"] for action in plan["actions"] if action["kind"] == "harness-spawn-intent"]
+        self.assertEqual(["harness-spawn-intent:phase9-router:330:4:judge"], action_ids)
+        action = next(action for action in plan["actions"] if action["kind"] == "harness-spawn-intent")
+        self.assertEqual("low", action["risk_tier"])
+        self.assertEqual("auto", action["execution_policy"])
+        self.assertEqual([], plan["blocked_queue"])
+        queue_path = self.repo / ".refactor-loop/state/safe-progress-blocked-queue.json"
+        document = json.loads(queue_path.read_text(encoding="utf-8"))
+        self.assertEqual("safe-progress-blocked-queue", document["schema"])
+        self.assertEqual(0, document["counters"]["high"])
+        self.assertTrue(document["no_lifecycle_authority"])
+
     def test_review_gate_completed_marker_routes_before_new_work_spawn_intents(self) -> None:
         self.append_harness_spawn_intent(
             intent_id="new-work-330",

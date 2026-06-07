@@ -346,6 +346,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         issue_entry = mirror_entry(self.mirror, "issue-decomposition-403")
         issue_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "issue_decomposition.py")
         wakeup_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_runner.py")
+        scheduler_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "safe_progress_scheduler.py")
         minimum_forbidden_fields = (
             "cmd",
             "argv",
@@ -366,10 +367,33 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(field, runner_entry)
                 self.assertIn(field, issue_entry)
                 self.assertIn(f'"{field}"', issue_source)
-                self.assertIn(f'"{field}"', wakeup_source)
+                self.assertIn(f'"{field}"', scheduler_source)
+        self.assertIn("validate_runner_action", wakeup_source)
         self.assertIn("existing extra `args` rejection retained", runner_entry)
         self.assertIn('"args"', issue_source)
-        self.assertIn('"args"', wakeup_source)
+        self.assertIn('"args"', scheduler_source)
+
+    def test_safe_progress_admission_boundary_is_mirrored(self) -> None:
+        runner_entry = mirror_entry(self.mirror, "wakeup-runner-396")
+        scheduler_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "safe_progress_scheduler.py")
+        wakeup_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        concurrency_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "concurrency.py")
+
+        for needle in (
+            "safe_progress_scheduler.py",
+            "sole risk admission owner",
+            "risk_tier: \"medium\"",
+            "execution_policy: \"cautious\"",
+            ".refactor-loop/state/safe-progress-blocked-queue.json",
+            "not final side-effect authorization",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, runner_entry)
+        self.assertIn("project_wakeup_actions", wakeup_source)
+        self.assertIn("write_blocked_queue", wakeup_source)
+        self.assertIn("classify_dispatch_payload", concurrency_source)
+        self.assertIn("MEDIUM_NON_SPAWN_LIMIT_PER_TICK", scheduler_source)
+        self.assertIn("MEDIUM_DISPATCH_LIMIT_PER_TICK", scheduler_source)
 
     def test_runtime_retention_437_preserves_narrow_local_gc_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "runtime-retention-437")
