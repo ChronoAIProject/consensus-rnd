@@ -36,8 +36,6 @@ def frontmatter(text: str) -> dict[str, str]:
     return result
 
 
-# // Fix (remote-ci/contract-tests): remove conflict markers left by the
-# previous remote CI fix while preserving both #483 helper groups.
 def completed_worker_verdict(
     *,
     process_exited: bool,
