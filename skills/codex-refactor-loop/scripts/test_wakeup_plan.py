@@ -2651,6 +2651,31 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target_pr_number"], 320)
         self.assertNotIn("verified_pr_head", action["preconditions"])
 
+    def test_publish_ready_implementation_does_not_count_expected_worker(self) -> None:
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan, stdout = self.run_plan_with_stdout(fixture="local_iter_branch_issue20", ps_count=5)
+
+        publish = next(
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "publish_implementation_output"
+            and item.get("target_number") == 20
+        )
+        self.assertNotIn("status_only", publish)
+        self.assertNotIn(
+            {"expected": 1, "id": "#20", "kind": "issue", "phase": label_catalog.PHASE_IMPLEMENTING},
+            plan["concurrency"]["expected_breakdown"],
+        )
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
+
     def test_noop_implementation_done_empty_scoped_diff_is_status_only_not_hard_gate(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
         self.write_implementation_pr_artifacts()

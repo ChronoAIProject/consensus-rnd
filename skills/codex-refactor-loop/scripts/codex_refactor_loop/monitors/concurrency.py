@@ -569,7 +569,11 @@ class ConcurrencyMonitor:
         owner_allowed = decision.allowed
 
         items = self.list_auto_loop_issues()
-        expected, breakdown = self.compute_expected(items)
+        expected, breakdown = self.compute_expected(
+            items,
+            integration_branch=str(os.environ.get("INTEGRATION_BRANCH") or "").strip(),
+            command_runner=self.run,
+        )
         actual = self.count_in_flight_codex()
         open_pr_count = sum(1 for item in items if item["kind"] == "pr")
         open_issue_count = sum(1 for item in items if item["kind"] == "issue")

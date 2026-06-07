@@ -148,13 +148,17 @@ def implement_attempt_suppresses_expected_worker(
             integration_branch=integration_branch,
             command_runner=command_runner,
         )
-        if implement_attempt_is_terminal_or_noop_completion(state):
+        if implement_attempt_satisfies_expected_worker(state):
             return True
     return False
 
 
 def implement_attempt_is_terminal_or_noop_completion(state: ImplementAttemptState) -> bool:
     return state.terminal_non_ok or state.reason == "empty_scoped_diff"
+
+
+def implement_attempt_satisfies_expected_worker(state: ImplementAttemptState) -> bool:
+    return state.publish_ready or state.refresh_needed or implement_attempt_is_terminal_or_noop_completion(state)
 
 
 def _implement_run_artifact_done_marker(log_path: Path) -> str:
