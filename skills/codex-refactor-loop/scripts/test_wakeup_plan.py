@@ -5747,6 +5747,27 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
         self.assertEqual(plan["concurrency"]["expected_breakdown"], [])
 
+    def test_design_solving_issue_keeps_expected_worker_despite_old_implement_terminal(self) -> None:
+        (self.logs / "implement-issue-537.log").write_text(
+            "old implementation terminal\nIMPLEMENT_DONE:issue-537:partial\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        item = GhItem(
+            "issue",
+            537,
+            "design target",
+            (label_catalog.MANAGED, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_AUTO),
+        )
+
+        concurrency = concurrency_plan(self.repo, fixed_point=False, gh_items=[item], monitor=None)
+
+        self.assertEqual(concurrency["expected_from_active_tasks"], 1)
+        self.assertEqual(
+            concurrency["expected_breakdown"],
+            [{"expected": 1, "id": "#537", "kind": "issue", "phase": label_catalog.PHASE_DESIGN_SOLVING}],
+        )
+        self.assertTrue(concurrency["hard_gate"]["active"])
+
     def test_github_action_queries_only_open_auto_loop_items(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 

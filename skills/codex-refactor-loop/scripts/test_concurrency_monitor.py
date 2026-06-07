@@ -485,6 +485,33 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
         self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
 
+    def test_tick_terminal_implement_result_does_not_suppress_design_expected_worker(self) -> None:
+        items = [
+            {
+                "number": 537,
+                "kind": "issue",
+                "phase": self.labels.PHASE_DESIGN_SOLVING,
+                "human": self.labels.HUMAN_AUTO,
+                "labels": [self.labels.MANAGED, self.labels.PHASE_DESIGN_SOLVING, self.labels.HUMAN_AUTO],
+                "state": "open",
+            }
+        ]
+        logs = self.refactor_loop / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / "implement-issue-537.log").write_text(
+            "old implementation no-op\nIMPLEMENT_DONE:issue-537:partial\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=items):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+                self.monitor.tick()
+
+        alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+        self.assertIn("P0 no-gap-violation", alert)
+        snapshot = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["expected"], 1)
+
     def test_tick_zero_expected_actionable_work_bypasses_single_active_audit_wait(self) -> None:
         active_audit = (
             f"python3 /skill/consensus-rnd-cli spawn-codex --cd {self.repo} "

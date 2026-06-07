@@ -379,7 +379,7 @@ class ConcurrencyMonitor:
             phase = label_catalog.normalize_label_set([str(item.phase)]).phase or ""
             expected = label_catalog.phase_expected_workers(phase)
             if expected > 0:
-                if item.kind == "issue" and implement_attempt_suppresses_expected_worker(
+                if item.kind == "issue" and phase == label_catalog.PHASE_IMPLEMENTING and implement_attempt_suppresses_expected_worker(
                     self.repo_root,
                     item.number,
                     integration_branch=integration_branch,

@@ -986,7 +986,12 @@ def expected_from_open_items(
         expected = label_catalog.phase_expected_workers(phase_label)
         if expected <= 0:
             continue
-        if repo_root is not None and item.kind == "issue" and _issue_has_terminal_implement_projection(repo_root, item.number):
+        if (
+            repo_root is not None
+            and item.kind == "issue"
+            and phase_label == label_catalog.PHASE_IMPLEMENTING
+            and _issue_has_terminal_implement_projection(repo_root, item.number)
+        ):
             continue
         breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase_label, "expected": expected})
         total += expected
