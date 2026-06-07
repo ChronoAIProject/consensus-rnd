@@ -142,8 +142,6 @@ class SshxContractTests(unittest.TestCase):
         self.assertNotIn("sealed-transcript", contract_text)
         self.assertNotIn("actor-isolated", contract_text)
 
-    # Fix (remote-ci/contract-tests): preserve both merged contract groups after
-    # removing stale conflict-marker lines that broke unittest import.
     def test_sshx_worker_mode_gate_blocks_delegated_dispatch_before_mode_resolution(self) -> None:
         text = read(SKILL)
         self.assertIn("`WorkerModeGate` is a prompt-level dispatch gate, not a runtime API", text)
