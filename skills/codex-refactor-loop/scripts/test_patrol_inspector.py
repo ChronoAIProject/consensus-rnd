@@ -60,16 +60,6 @@ class PatrolInspectorTests(unittest.TestCase):
             {finding.kind for finding in findings},
         )
 
-<<<<<<< HEAD
-    def test_exception_log_ignores_prompt_and_shell_transcript_examples(self) -> None:
-        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
-            '\n'.join(
-                (
-                    'echo "POST_FAILED:issue-1"',
-                    '  POST_FAILED: prompt template example',
-                    "request failed after retry",
-                    "FAILED: command transcript line",
-=======
     def test_clean_exit_worker_log_ignores_prompt_and_diff_exception_words(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
             "\n".join(
@@ -98,7 +88,6 @@ class PatrolInspectorTests(unittest.TestCase):
                     "diff --git a/runtime-exceptions.md b/runtime-exceptions.md",
                     "+ failed markdown checklist item",
                     "path-only failed-state.md",
->>>>>>> origin/auto-refact-dev
                 )
             )
             + "\n",
@@ -109,25 +98,6 @@ class PatrolInspectorTests(unittest.TestCase):
 
         self.assertNotIn("exception-log", {finding.kind for finding in findings})
 
-<<<<<<< HEAD
-    def test_exception_log_accepts_explicit_exception_tokens_and_real_post_failed_marker(self) -> None:
-        signals = (
-            "Traceback (most recent call last):",
-            "Exception: broken",
-            "RuntimeError: broken",
-            "fatal: cannot continue",
-            "POST_FAILED:issue-1:network",
-        )
-        for index, signal in enumerate(signals):
-            with self.subTest(signal=signal):
-                for path in (self.tmp / ".refactor-loop" / "logs").glob("*.log"):
-                    path.unlink()
-                (self.tmp / ".refactor-loop" / "logs" / f"router-{index}.log").write_text(signal + "\n", encoding="utf-8")
-
-                findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
-
-                self.assertIn("exception-log", {finding.kind for finding in findings})
-=======
     def test_clean_exit_worker_log_reports_standalone_post_failure(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
             "RuntimeError appears only in prompt prose\nPOST_FAILED: gh comment failed\nEXIT=0\n",
@@ -139,6 +109,16 @@ class PatrolInspectorTests(unittest.TestCase):
         exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
         self.assertEqual(1, len(exception_findings))
         self.assertEqual(("POST_FAILED: gh comment failed",), exception_findings[0].evidence)
+
+    def test_clean_exit_worker_log_ignores_indented_prompt_post_failure_example(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
+            "echo \"POST_FAILED:issue-1\"\n  POST_FAILED: prompt template example\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        self.assertEqual([], [finding for finding in findings if finding.kind == "exception-log"])
 
     def test_log_traceback_block_is_reported_as_bounded_evidence(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
@@ -205,7 +185,6 @@ class PatrolInspectorTests(unittest.TestCase):
         exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
         self.assertEqual(1, len(exception_findings))
         self.assertEqual(("FATAL: route failed",), exception_findings[0].evidence)
->>>>>>> origin/auto-refact-dev
 
     def test_run_once_publishes_findings_and_writes_dashboard_state(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("FATAL: failed\n", encoding="utf-8")

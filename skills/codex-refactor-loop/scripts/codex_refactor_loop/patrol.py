@@ -274,14 +274,6 @@ def _item_ref(item: GhItem | Mapping[str, object]) -> str:
     return f"{kind or 'item'} #{number or '?'}"
 
 
-<<<<<<< HEAD
-def _line_has_exception_signal(line: str) -> bool:
-    stripped = line.strip()
-    lowered = stripped.lower()
-    return (line.lstrip() == line and stripped.startswith("POST_FAILED:")) or any(
-        token in lowered for token in ("traceback", "exception", "runtimeerror", "fatal:")
-    )
-=======
 def _extract_log_diagnostic_evidence(lines: Sequence[str]) -> tuple[str, ...]:
     evidence: list[str] = []
     index = 0
@@ -338,8 +330,7 @@ def _tail_has_clean_exit(lines: Sequence[str]) -> bool:
 
 
 def _line_is_worker_self_post_failure(line: str) -> bool:
-    return line.strip().startswith("POST_FAILED:")
->>>>>>> origin/auto-refact-dev
+    return line.lstrip() == line and line.startswith("POST_FAILED:")
 
 
 def _read_tail_or_fail(path: Path, max_lines: int) -> tuple[str, ...]:
