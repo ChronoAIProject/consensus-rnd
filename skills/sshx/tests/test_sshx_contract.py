@@ -36,6 +36,7 @@ def frontmatter(text: str) -> dict[str, str]:
     return result
 
 
+<<<<<<< HEAD
 # Fix (remote-ci/contract-tests): keep both #483 helper groups after a
 # conflict-marker regression made this test module fail before discovery.
 def completed_worker_verdict(
@@ -64,6 +65,8 @@ def completed_worker_verdict(
     return str(verdict)
 
 
+=======
+>>>>>>> origin/auto-refact-dev
 def flight_blocks_mutation(flight: dict[str, object], work_target: str) -> bool:
     return flight.get("work_target") == work_target and flight.get("status") in {"in-flight", "retrying"}
 
