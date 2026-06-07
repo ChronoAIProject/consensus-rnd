@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,6 +25,8 @@ DEFAULT_INTERVAL_SECONDS = 7200
 DEFAULT_MAX_FINDINGS = 25
 STATE_FILE_NAME = "patrol-inspector.json"
 PATROL_DAEMON_NAME = "patrol_inspector_daemon"
+EXIT_STATUS_LINE_RE = re.compile(r"^EXIT=(\d+)$")
+EXITED_STATUS_RE = re.compile(r"\bexited\s+(\d+)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -276,6 +279,8 @@ def _item_ref(item: GhItem | Mapping[str, object]) -> str:
 
 def _extract_log_diagnostic_evidence(lines: Sequence[str]) -> tuple[str, ...]:
     evidence: list[str] = []
+    final_exit_status = _tail_final_exit_status(lines)
+    has_clean_final_exit = final_exit_status == 0
     index = 0
     while index < len(lines):
         line = lines[index]
@@ -285,7 +290,9 @@ def _extract_log_diagnostic_evidence(lines: Sequence[str]) -> tuple[str, ...]:
                 evidence.extend(block)
             index = next_index
             continue
-        if _is_single_line_diagnostic(line) or _is_command_failure_summary(line):
+        if _is_exit_failure_line(line) or _is_single_line_diagnostic(line) or _is_python_exception_line(line):
+            evidence.append(line)
+        elif not has_clean_final_exit and _is_command_failure_summary(line):
             evidence.append(line)
         index += 1
     return tuple(evidence)
@@ -310,6 +317,30 @@ def _is_single_line_diagnostic(line: str) -> bool:
 def _is_command_failure_summary(line: str) -> bool:
     lowered = line.lower()
     return lowered.startswith(("command failed:", "command failure:", "cmd failed:"))
+
+
+def _is_exit_failure_line(line: str) -> bool:
+    status = _line_exit_status(line)
+    return status is not None and status != 0
+
+
+def _tail_final_exit_status(lines: Sequence[str]) -> int | None:
+    for line in reversed(lines):
+        status = _line_exit_status(line)
+        if status is not None:
+            return status
+    return None
+
+
+def _line_exit_status(line: str) -> int | None:
+    stripped = line.strip()
+    exit_match = EXIT_STATUS_LINE_RE.fullmatch(stripped)
+    if exit_match is not None:
+        return int(exit_match.group(1))
+    exited_match = EXITED_STATUS_RE.search(stripped)
+    if exited_match is not None:
+        return int(exited_match.group(1))
+    return None
 
 
 def _is_python_exception_line(line: str) -> bool:

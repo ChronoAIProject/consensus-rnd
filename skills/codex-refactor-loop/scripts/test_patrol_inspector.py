@@ -79,6 +79,43 @@ class PatrolInspectorTests(unittest.TestCase):
 
         self.assertNotIn("exception-log", {finding.kind for finding in findings})
 
+    def test_clean_exit_log_body_failure_prose_does_not_create_findings(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "implement-issue-612.log").write_text(
+            "\n".join(
+                (
+                    "The implementation discussed failed checks in old logs.",
+                    "No exception was raised by this worker.",
+                    "command failed appears in quoted markdown prose.",
+                    "EXIT=0",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        self.assertNotIn("exception-log", {finding.kind for finding in findings})
+
+    def test_clean_exit_log_still_reports_structured_exception_signal(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "implement-issue-612.log").write_text(
+            "\n".join(
+                (
+                    "worker body mentions failed validation",
+                    "ValueError: broken",
+                    "EXIT=0",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
+        self.assertEqual(1, len(exception_findings))
+        self.assertEqual(("ValueError: broken",), exception_findings[0].evidence)
+
     def test_log_traceback_block_is_reported_as_bounded_evidence(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
             "\n".join(
@@ -120,6 +157,30 @@ class PatrolInspectorTests(unittest.TestCase):
         exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
         self.assertEqual(1, len(exception_findings))
         self.assertEqual(("command failed: exit=2 cmd=python3 -m pytest",), exception_findings[0].evidence)
+
+    def test_nonzero_exit_status_is_reported(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
+            "worker body\nEXIT=2\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
+        self.assertEqual(1, len(exception_findings))
+        self.assertEqual(("EXIT=2",), exception_findings[0].evidence)
+
+    def test_nonzero_exited_status_is_reported(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
+            "spawn supervisor: process exited 127\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
+        self.assertEqual(1, len(exception_findings))
+        self.assertEqual(("spawn supervisor: process exited 127",), exception_findings[0].evidence)
 
     def test_run_once_publishes_findings_and_writes_dashboard_state(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("FATAL: failed\n", encoding="utf-8")
