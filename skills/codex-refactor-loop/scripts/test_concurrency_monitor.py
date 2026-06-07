@@ -94,6 +94,94 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             intents.append(json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1]))
         return intents
 
+    def design_issue_item(self, issue: int) -> dict:
+        return {
+            "number": issue,
+            "kind": "issue",
+            "phase": self.labels.PHASE_DESIGN_SOLVING,
+            "human": self.labels.HUMAN_AUTO,
+            "labels": [self.labels.MANAGED, self.labels.PHASE_DESIGN_SOLVING, self.labels.HUMAN_AUTO],
+            "body": "",
+            "head_ref": "",
+            "is_draft": False,
+            "state": "open",
+        }
+
+    def write_applied_issue_decomposition_evidence(self, *, issue: int = 537, round_no: int = 6) -> tuple[str, str]:
+        from codex_refactor_loop.context import LoopContext
+        from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest
+
+        runs = self.refactor_loop / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        consensus = f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-judge.md"
+        child_one = f".refactor-loop/runs/issue-{issue}-decomposition/child-one.md"
+        child_two = f".refactor-loop/runs/issue-{issue}-decomposition/child-two.md"
+        for path, scope, non_goals in (
+            (child_one, "First bounded scope", "No parent lifecycle mutation"),
+            (child_two, "Second bounded scope", "No public issue factory"),
+        ):
+            (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / path).write_text(
+                "## child\n\n"
+                f"Parent issue: #{issue}\n"
+                f"Source consensus artifact: {Path(consensus).name}\n"
+                f"Scope: {scope}\n"
+                f"Non-goals: {non_goals}\n\n"
+                "<details>\n<summary>内联 artifact 1: decision.md</summary>\n\n"
+                "```markdown\nraw decision\n```\n\n</details>\n\n"
+                "⟦AI:AUTO-LOOP⟧\n",
+                encoding="utf-8",
+            )
+        parent_comment = f".refactor-loop/runs/issue-{issue}-decomposition/parent-comment.md"
+        (self.repo / parent_comment).write_text(f"Parent issue: #{issue}\n\nChildren opened.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        plan_path = f".refactor-loop/runs/issue-{issue}-decomposition/plan.json"
+        (self.repo / plan_path).write_text(
+            json.dumps(
+                {
+                    "schema": "IssueDecompositionPlan",
+                    "parent_issue": issue,
+                    "source_consensus_artifact": consensus,
+                    "children": [
+                        {
+                            "slug": "first-child",
+                            "title": "First child",
+                            "scope": "First bounded scope",
+                            "non_goals": "No parent lifecycle mutation",
+                            "body_artifact_path": child_one,
+                        },
+                        {
+                            "slug": "second-child",
+                            "title": "Second child",
+                            "scope": "Second bounded scope",
+                            "non_goals": "No public issue factory",
+                            "body_artifact_path": child_two,
+                        },
+                    ],
+                    "parent_update": {"comment_artifact_path": parent_comment},
+                }
+            ),
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.repo, env=os.environ)
+        digest = issue_decomposition_plan_file_digest(ctx, plan_path)
+        (self.repo / consensus).write_text("META_JUDGE_DONE:consensus:decompose\n", encoding="utf-8")
+        ledger = self.refactor_loop / "state" / "wakeup-runner-ledger.jsonl"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(
+            json.dumps(
+                {
+                    "action_id": f"completed-marker:phase9-issue{issue}-r{round_no}-judge.log:META_JUDGE_DONE:consensus:decompose:real",
+                    "kind": "completed-marker",
+                    "reason": "",
+                    "status": "applied",
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return plan_path, digest
+
     def assert_dispatch_rejected(self, task_id: str, reason: str, calls: list[list[str]]) -> None:
         self.assertEqual(calls, [])
         self.assertFalse((self.refactor_loop / "dispatch-queue" / "p0" / f"{task_id}.dispatch.json").exists())
@@ -189,6 +277,52 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
         self.assertEqual(expected, 0)
         self.assertEqual(breakdown, [])
+
+    def test_compute_expected_suppresses_applied_decomposition_parent_tracking_issue(self) -> None:
+        _plan_path, digest = self.write_applied_issue_decomposition_evidence(issue=537, round_no=6)
+
+        def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+            if command == ["gh", "issue", "view", "537", "--json", "comments"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"comments": [{"body": f"IssueDecompositionPlan digest: {digest}\n⟦AI:AUTO-LOOP⟧\n"}]}),
+                    "",
+                )
+            return subprocess.CompletedProcess(command, 1, "", "unexpected command")
+
+        expected, breakdown = self.monitor.compute_expected(
+            [self.design_issue_item(537)],
+            command_runner=runner,
+        )
+
+        self.assertEqual(expected, 0)
+        self.assertEqual(breakdown, [])
+
+    def test_compute_expected_keeps_unapplied_decomposition_parent_tracking_issue(self) -> None:
+        self.write_applied_issue_decomposition_evidence(issue=537, round_no=6)
+        (self.refactor_loop / "state" / "wakeup-runner-ledger.jsonl").unlink()
+
+        def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+            if command == ["gh", "issue", "view", "537", "--json", "comments"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"comments": [{"body": "IssueDecompositionPlan digest: present-but-not-applied\n"}]}),
+                    "",
+                )
+            return subprocess.CompletedProcess(command, 1, "", "unexpected command")
+
+        expected, breakdown = self.monitor.compute_expected(
+            [self.design_issue_item(537)],
+            command_runner=runner,
+        )
+
+        self.assertEqual(expected, 1)
+        self.assertEqual(
+            breakdown,
+            [{"id": "#537", "kind": "issue", "phase": self.labels.PHASE_DESIGN_SOLVING, "expected": 1}],
+        )
 
     # Refactor (iter6/issue-133):
     #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree

@@ -20,6 +20,7 @@ from ..context import LoopContext, LoopContextError
 from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from ..implement_lifecycle import implement_attempt_suppresses_expected_worker
+from ..issue_decomposition import applied_issue_decomposition_parent_suppresses_expected_worker
 from .. import labels as label_catalog
 from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..state import read_json, write_json
@@ -384,6 +385,16 @@ class ConcurrencyMonitor:
                     item.number,
                     integration_branch=integration_branch,
                     command_runner=command_runner,
+                ):
+                    continue
+                if (
+                    item.kind == "issue"
+                    and phase == label_catalog.PHASE_DESIGN_SOLVING
+                    and applied_issue_decomposition_parent_suppresses_expected_worker(
+                        self.ctx,
+                        item.number,
+                        command_runner=command_runner,
+                    )
                 ):
                     continue
                 breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase, "expected": expected})
