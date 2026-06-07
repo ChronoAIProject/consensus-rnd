@@ -89,35 +89,59 @@ class PromptContractsTests(unittest.TestCase):
                 self.assertIn(needle, implement)
 
     def test_prompts_use_scope_authorization_not_blanket_work_type_rejection(self) -> None:
-        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        implement = (PROMPTS_DIR / "implement.md").read_text(encoding="utf-8")
-        triage = (PROMPTS_DIR / "triage-external-issue.md").read_text(encoding="utf-8")
-        architect = (PROMPTS_DIR / "reviewer-architect.md").read_text(encoding="utf-8")
-        quality = (PROMPTS_DIR / "reviewer-quality.md").read_text(encoding="utf-8")
-        fix = (PROMPTS_DIR / "review-fix.md").read_text(encoding="utf-8")
-        combined = "\n".join((skill, implement, triage, architect, quality, fix))
-
-        for needle in (
-            "No unauthorized scope expansion",
-            "source issue, consensus artifact, and `scope_paths`",
-            "feature、bug、doc、refactor 或 governance 工作",
-            "类别本身不是 reject 理由",
-            "issue-authorized feature or bug diff is not drift by itself",
-            "issue-authorized feature or bug work is allowed inside that boundary",
-            "outside the authorized work-unit boundary",
-        ):
-            with self.subTest(needle=needle):
-                self.assertIn(needle, combined)
-
         forbidden_patterns = (
             r"No new " + r"features",
             r"不新增" + r"功能",
             r"product-feature" + r"-request",
             r"runtime-bug" + r"-report",
         )
-        for pattern in forbidden_patterns:
-            with self.subTest(pattern=pattern):
-                self.assertIsNone(re.search(pattern, combined))
+        prompt_expectations = {
+            "SKILL.md": (
+                "No unauthorized scope expansion",
+                "source issue, consensus artifact, and `scope_paths`",
+                "Issue-authorized feature, bug, doc, refactor, and governance work may proceed",
+            ),
+            "prompts/audit.md": (
+                "不越权扩展范围",
+                "当前 audit/issue 授权的 violation 或 work-unit scope",
+            ),
+            "prompts/implement.md": (
+                "不越权扩展范围",
+                "source issue、consensus artifact 和 `scope_paths` 授权的当前 work-unit",
+                "feature、bug、doc、refactor、governance 工作",
+            ),
+            "prompts/triage-external-issue.md": (
+                "bounded `scope_paths`、desired end state / invariant 和 verification hints",
+                "类别本身不是 reject 理由",
+                "no-bounded-work-unit",
+            ),
+            "prompts/reviewer-architect.md": (
+                "source issue, consensus artifact, PR diff intent, and declared `scope_paths`",
+                "issue-authorized feature or bug diff is not drift by itself",
+                "outside the authorized work-unit boundary",
+            ),
+            "prompts/reviewer-quality.md": (
+                "source issue, consensus artifact, PR diff intent, and declared `scope_paths`",
+                "issue-authorized feature or bug work is allowed inside that boundary",
+                "unauthorized scope expansion into unrelated cleanup",
+            ),
+            "prompts/review-fix.md": (
+                "source issue, consensus artifact, PR diff intent, and `scope_paths`",
+                "outside the authorized work-unit boundary",
+                "delete this authorized capability entirely",
+            ),
+        }
+
+        for name, required_needles in prompt_expectations.items():
+            path = SKILL_ROOT / name if name == "SKILL.md" else SKILL_ROOT / name
+            body = path.read_text(encoding="utf-8")
+
+            for needle in required_needles:
+                with self.subTest(prompt=name, needle=needle):
+                    self.assertIn(needle, body)
+            for pattern in forbidden_patterns:
+                with self.subTest(prompt=name, pattern=pattern):
+                    self.assertIsNone(re.search(pattern, body))
 
 
 def github_post_section(body: str) -> str:
