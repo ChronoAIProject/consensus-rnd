@@ -39,11 +39,6 @@ def exit_status(log: Path) -> str:
     return "in_flight"
 
 
-def extract_tail(log: Path) -> str:
-    lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
-    return "\n".join(lines[-30:-5] if len(lines) >= 30 else lines[:25])
-
-
 def hash_body(body: str) -> str:
     return hashlib.md5(body.encode("utf-8")).hexdigest()
 
@@ -58,7 +53,6 @@ class ProgressReporter:
         self.state_dir = ctx.paths.refactor_loop
         self.state_file = self.state_dir / "codex-progress-state.json"
         self.log_dir = self.state_dir / "logs"
-        self.prompts_dir = self.state_dir / "prompts"
         self.state_dir.mkdir(parents=True, exist_ok=True)
         if not self.state_file.exists():
             self.state_file.write_text("{}\n", encoding="utf-8")
@@ -79,7 +73,7 @@ class ProgressReporter:
             base = log.stem
             if base.startswith("audit-iter-") or base.startswith("remote-ci-"):
                 continue
-            self.post_or_update(base, log)
+            self.record_worker_log_status(base, log)
         self.sync_global_status_card()
 
     def sync_global_status_card(self) -> None:
@@ -168,7 +162,7 @@ class ProgressReporter:
         except OSError:
             return False
 
-    def post_or_update(self, base: str, log: Path) -> None:
+    def record_worker_log_status(self, base: str, log: Path) -> None:
         status = exit_status(log)
         if status == "in_flight" and self.is_zombie(log):
             self.log_msg(f"skip zombie log {base} (no EXIT, mtime > 30 min)")
@@ -194,9 +188,6 @@ class ProgressReporter:
         tmp = self.state_file.with_name(f".{self.state_file.name}.tmp.{os.getpid()}")
         tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp, self.state_file)
-
-    def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        return _run(["gh", *args, "--repo", self.repo], self.ctx.repo_root, check=check)
 
     def gh_api(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         return _run(["gh", "api", *args], self.ctx.repo_root, check=check)

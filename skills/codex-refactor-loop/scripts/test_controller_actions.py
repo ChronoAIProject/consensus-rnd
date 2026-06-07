@@ -1097,6 +1097,48 @@ class ControllerActionsTests(unittest.TestCase):
                 else:
                     self.assertNotIn(invalid_target_event, self.pending_events())
 
+    def test_open_pr_with_label_records_secondary_backoff_on_create_content_limit(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:2] == ["pr", "create"]:
+                return mock.Mock(
+                    returncode=1,
+                    stdout="",
+                    stderr="You have been temporarily blocked from content creation",
+                )
+            raise AssertionError(f"unexpected post-create gh call: {args}")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            with self.assertRaisesRegex(RuntimeError, "failed to extract PR num"):
+                self.actions.open_pr_with_label("title", str(self.pr_body), head="refactor/branch")
+
+        self.assertEqual([["pr", "create"]], [call[:2] for call in gh_calls])
+        backoff = json.loads((self.tmp / ".refactor-loop/state/secondary-mutation-backoff.json").read_text(encoding="utf-8"))
+        self.assertEqual("open-pr", backoff["contentCreation"]["operation"])
+        self.assertEqual("secondary-content-creation-limit", backoff["contentCreation"]["reason"])
+
+    def test_open_design_issue_with_labels_records_secondary_backoff_on_create_content_limit(self) -> None:
+        body_file = self.write_design_issue_body()
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args[:2] == ["issue", "create"]:
+                return mock.Mock(
+                    returncode=1,
+                    stdout="",
+                    stderr="You have exceeded a secondary rate limit",
+                )
+            raise AssertionError(f"unexpected post-create gh call: {args}")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            with self.assertRaisesRegex(RuntimeError, "failed to extract issue num"):
+                self.actions.open_design_issue_with_labels("Design issue", str(body_file))
+
+        backoff = json.loads((self.tmp / ".refactor-loop/state/secondary-mutation-backoff.json").read_text(encoding="utf-8"))
+        self.assertEqual("open-design-issue", backoff["contentCreation"]["operation"])
+        self.assertEqual("secondary-content-creation-limit", backoff["contentCreation"]["reason"])
+
     def test_record_recent_pr_merge_rejects_invalid_argument_before_gh_or_projection(self) -> None:
         with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
             with self.assertRaisesRegex(RuntimeError, "invalid pr target"):
@@ -3181,7 +3223,7 @@ class ControllerActionsTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout=f"https://github.com/owner/repo/issues/{number}\n", stderr="")
             if args[:2] == ["issue", "comment"]:
                 comment_texts.append(Path(args[args.index("--body-file") + 1]).read_text(encoding="utf-8"))
-                return mock.Mock(returncode=1, stdout="", stderr="parent comment denied\n")
+                return mock.Mock(returncode=1, stdout="", stderr="parent comment denied: temporarily blocked from content creation\n")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
         with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
@@ -3201,6 +3243,9 @@ class ControllerActionsTests(unittest.TestCase):
             self.assertEqual(",".join(labels.design_issue_label_bundle()), create[create.index("--label") + 1])
         forbidden_calls = {("issue", "close"), ("issue", "reopen"), ("issue", "edit")}
         self.assertFalse(any(tuple(call[:2]) in forbidden_calls for call in gh_calls), gh_calls)
+        backoff = json.loads((self.tmp / ".refactor-loop/state/secondary-mutation-backoff.json").read_text(encoding="utf-8"))
+        self.assertEqual("issue-decomposition-parent-comment", backoff["contentCreation"]["operation"])
+        self.assertEqual("secondary-content-creation-limit", backoff["contentCreation"]["reason"])
 
     def test_apply_issue_decomposition_plan_reuses_single_parent_digest_sentinel_and_fails_on_multiple(self) -> None:
         consensus = ".refactor-loop/runs/phase9-issue403-r6-judge.md"

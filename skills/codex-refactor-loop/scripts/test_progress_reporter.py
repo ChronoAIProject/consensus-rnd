@@ -63,7 +63,6 @@ class ProgressReporterTests(unittest.TestCase):
         self.assertEqual(self.ctx.paths.refactor_loop, reporter.state_dir)
         self.assertEqual(self.ctx.paths.refactor_loop / "codex-progress-state.json", reporter.state_file)
         self.assertEqual(self.ctx.paths.refactor_loop / "logs", reporter.log_dir)
-        self.assertEqual(self.ctx.paths.refactor_loop / "prompts", reporter.prompts_dir)
         self.assertFalse(override_root.exists())
 
     def test_explicit_interval_parameter_remains_test_seam(self) -> None:
@@ -77,9 +76,9 @@ class ProgressReporterTests(unittest.TestCase):
         log.write_text("important failure\nEXIT=17\n", encoding="utf-8")
         reporter = ProgressReporter(self.ctx)
 
-        with mock.patch.object(reporter, "gh", side_effect=AssertionError("per-worker gh comments are deleted")):
-            with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("per-worker gh api comments are deleted")):
-                reporter.post_or_update("fix-pr47-round2", log)
+        self.assertFalse(hasattr(reporter, "gh"))
+        with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("per-worker gh api comments are deleted")):
+            reporter.record_worker_log_status("fix-pr47-round2", log)
 
         self.assertEqual({}, reporter._state())
 
@@ -89,9 +88,9 @@ class ProgressReporterTests(unittest.TestCase):
 
         with mock.patch("codex_refactor_loop.monitors.progress.graphql_headroom_ok", return_value=True):
             with mock.patch.object(reporter, "sync_global_status_card") as sync_global_status_card:
-                with mock.patch.object(reporter, "gh", side_effect=AssertionError("per-worker gh comments are deleted")):
-                    with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("per-worker gh api comments are deleted")):
-                        reporter.tick()
+                self.assertFalse(hasattr(reporter, "gh"))
+                with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("per-worker gh api comments are deleted")):
+                    reporter.tick()
 
         sync_global_status_card.assert_called_once()
         self.assertEqual({}, reporter._state())
@@ -151,9 +150,9 @@ class ProgressReporterTests(unittest.TestCase):
 
         with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
             with mock.patch.object(reporter, "build_global_status_body", return_value="changed body\n"):
-                with mock.patch.object(reporter, "gh", side_effect=AssertionError("writer must not use gh comment create")):
-                    with mock.patch.object(reporter, "gh_api", side_effect=fake_gh_api):
-                        reporter.sync_global_status_card()
+                self.assertFalse(hasattr(reporter, "gh"))
+                with mock.patch.object(reporter, "gh_api", side_effect=fake_gh_api):
+                    reporter.sync_global_status_card()
 
         self.assertEqual(1, len(calls))
         self.assertEqual(["-X", "PATCH", "repos/owner/repo/issues/comments/123"], calls[0][:3])
@@ -232,9 +231,12 @@ class ProgressReporterSourceRegressionTests(unittest.TestCase):
             'os.environ.get("LOG_DIR"',
             'os.environ.get("PROMPTS_DIR"',
             "PROGRESS_REPORTER_INTERVAL",
+            "extract_tail",
             "parse_target",
             "parse_kind",
             "_create_comment",
+            "post_or_update",
+            "prompts_dir",
             '"DELETE"',
             '"POST"',
             '["issue", "comment"',

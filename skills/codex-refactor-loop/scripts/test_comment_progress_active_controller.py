@@ -113,9 +113,9 @@ class CommentProgressActiveControllerTests(unittest.TestCase):
         log.write_text("running\n", encoding="utf-8")
         reporter = ProgressReporter(self.ctx)
 
-        with mock.patch.object(reporter, "gh", side_effect=AssertionError("gh should not be called")):
-            with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("gh api should not be called")):
-                reporter.post_or_update(log.stem, log)
+        self.assertFalse(hasattr(reporter, "gh"))
+        with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("gh api should not be called")):
+            reporter.record_worker_log_status(log.stem, log)
 
         self.assertEqual({}, reporter._state())
 

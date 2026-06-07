@@ -48,7 +48,7 @@ class ProgressReporterOrphanRemovalTests(unittest.TestCase):
 
         reporter = ProgressReporter(self.ctx)
         with mock.patch("codex_refactor_loop.monitors.progress._run", side_effect=AssertionError("per-worker progress comment API is deleted")):
-            reporter.post_or_update("foo-test", self.log_file)
+            reporter.record_worker_log_status("foo-test", self.log_file)
 
         state = json.loads(self.state_file.read_text(encoding="utf-8"))
         self.assertEqual(12345, state["foo-test"]["comment_id"])
