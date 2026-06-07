@@ -663,6 +663,13 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "CI",
             "policy",
             "HOST_*",
+            "does not write, load, unload, or delete cron entries or LaunchAgent plists",
+            "only loop action is to call the existing checked-in `consensus-rnd-cli restart-daemons` helper",
+            "When `host.env` path or contents change",
+            "`DaemonLaunchFingerprint`",
+            "launchctl bootstrap gui/$(id -u)",
+            "launchctl bootout gui/$(id -u)",
+            "Do not add a second watchdog or installer",
         )
         for needle in required:
             with self.subTest(needle=needle):

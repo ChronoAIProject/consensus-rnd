@@ -235,8 +235,8 @@ Do not produce `summary.json` or `host-workflow-spec.example.json`. These artifa
 
 ### Keep existing daemons alive
 
-Install exactly one user-level scheduler. The command must require non-empty `CONSENSUS_RND_HOST_ENV` and `source "$CONSENSUS_RND_HOST_ENV"` before it execs the checked-in helper; this preserves values with spaces and keeps all loop runtime facts in the host env file.
-Existing scheduler entries must be updated to set `CONSENSUS_RND_HOST_ENV` to the host-owned file; `.refactor-loop/host.env` is not a runtime fallback.
+Install exactly one user-level scheduler. This skill does not write, load, unload, or delete cron entries or LaunchAgent plists; the host operator owns those OS-level actions. The scheduler entry's only loop action is to call the existing checked-in `consensus-rnd-cli restart-daemons` helper after setting a non-empty `CONSENSUS_RND_HOST_ENV` and running `source "$CONSENSUS_RND_HOST_ENV"`. That preserves values with spaces and keeps all loop runtime facts in the host-owned env file.
+Existing scheduler entries must be updated to set `CONSENSUS_RND_HOST_ENV` to the host-owned file; `.refactor-loop/host.env` is not a runtime fallback. When `host.env` path or contents change, `restart-daemons` detects the changed `DaemonLaunchFingerprint` and reloads helper-managed daemons so they do not keep a stale environment.
 
 Cron example:
 
@@ -244,9 +244,14 @@ Cron example:
 */5 * * * * cd /abs/path/to/host-repo && bash -lc 'export CONSENSUS_RND_HOST_ENV=.config/consensus-rnd/host.env; source "$CONSENSUS_RND_HOST_ENV" && exec python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons' >> .refactor-loop/logs/restart-cron.log 2>&1
 ```
 
-launchd `ProgramArguments` example:
+launchd user LaunchAgent example. Replace `com.example.consensus-rnd.restart-daemons` with a host-owned label, write it manually to `~/Library/LaunchAgents/<label>.plist`, then run `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`; unload with `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`; delete by removing that plist after unload. Do not add a second watchdog or installer.
 
 ```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+<key>Label</key><string>com.example.consensus-rnd.restart-daemons</string>
 <key>ProgramArguments</key>
 <array>
   <string>/bin/bash</string>
@@ -254,6 +259,8 @@ launchd `ProgramArguments` example:
   <string>cd /abs/path/to/host-repo && export CONSENSUS_RND_HOST_ENV=.config/consensus-rnd/host.env && source "$CONSENSUS_RND_HOST_ENV" && exec python3 &lt;skill-root&gt;/scripts/consensus-rnd-cli restart-daemons >> .refactor-loop/logs/restart-cron.log 2>&1</string>
 </array>
 <key>StartInterval</key><integer>300</integer>
+</dict>
+</plist>
 ```
 
 The helper remains the existing cron/launchd-only anti-stop surface. It has no lifecycle authority: it must not commit, push, merge, label, create, close, or edit issues/PRs.
@@ -274,7 +281,7 @@ Use the installed `python3 <skill-root>/scripts/consensus-rnd-cli statusline` pa
 
 ### Uninstall or rollback
 
-Remove the user-level cron or launchd entry, remove the Claude Code `statusLine` setting, stop any running helper-managed daemon wrappers if needed, and remove the copied skill directory only if it was installed by direct copy. Keep or delete the host repository's host-owned `host.env` according to the host's own rollback policy.
+Remove the user-level cron entry or unload/delete the LaunchAgent plist, remove the Claude Code `statusLine` setting, stop any running helper-managed daemon wrappers if needed, and remove the copied skill directory only if it was installed by direct copy. Keep or delete the host repository's host-owned `host.env` according to the host's own rollback policy.
 
 <a id="release-pipeline-integrationpost-61"></a>
 ## Named runtime exception — autonomous release gate(per #56)
@@ -452,7 +459,7 @@ Same heartbeat path/epoch/90s consumers; no new daemon, lifecycle authority, CLA
 <!-- Refactor (issue-264): Old: restart skip trusted one fresh pidfile wrapper and missed duplicate canonical instances.
 New: skip additionally requires zero duplicate canonical live wrapper for the same static allowlist command; process inventory is helper-private daemon-maintained state, not controller probing. -->
 <!-- Refactor (issue-298): Old: status reads and repair were both described through restart-daemons. New: daemon-status --json reads the same helper-private pid/heartbeat/fingerprint/inventory facts without lifecycle authority; restart-daemons is still the only write-side repair/reload path. -->
-`skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`)。事实源是 `.refactor-loop/locks/<daemon>.pid`、`.refactor-loop/heartbeats/<daemon>.ts`、`.refactor-loop/locks/<daemon>.fingerprint.json`,以及 helper-private `DaemonProcessInventory`;只有 pid alive、actor-loop heartbeat fresh(`<90s`)、fingerprint current、且同一 static allowlist command 零 duplicate canonical live wrapper 时才 skip,missing/malformed/mismatch fail-closed 并重启对应 wrapper。每次 helper tick 先调用 canonical `consensus-rnd-cli runtime-retention`;不保留兼容 alias。
+`skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`)。事实源是 `.refactor-loop/locks/<daemon>.pid`、`.refactor-loop/heartbeats/<daemon>.ts`、`.refactor-loop/locks/<daemon>.fingerprint.json`,以及 helper-private `DaemonProcessInventory`;只有 pid alive、actor-loop heartbeat fresh(`<90s`)、fingerprint current、且同一 static allowlist command 零 duplicate canonical live wrapper 时才 skip,missing/malformed/mismatch fail-closed 并重启对应 wrapper。`DaemonLaunchFingerprint` writes `host_env_path` and `host_env_sha256`; those fields are local reload invalidation and read-only stale projection only, never host.env plaintext, host production SSOT, branch topology, durable ledger, host artifact authority, or side-effect authorization. 每次 helper tick 先调用 canonical `consensus-rnd-cli runtime-retention`;不保留兼容 alias。
 Before starting or repairing any restart-helper-managed write daemon from `restart.py::DAEMON_COMMANDS`, `restart-daemons` acquires or renews the #191 active-controller lease. A non-owner restart writes local status `active_controller=noop:not-owner` and exits 0 without starting, killing, or repairing those daemons.
 `consensus-rnd-cli daemon-status --json` is the paired read-only daemon-status projection. It reports `running`, `stale`, `dead`, or `not-owner` from the existing static allowlist, helper-private launch fingerprint, pid/heartbeat readers, cached active-controller status, and `DaemonProcessInventory`; it has no public start/stop/restart/reload lifecycle verb. Repair/reload remains restart-daemons.
 
@@ -464,7 +471,7 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 
 `skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` = Consensus-rnd Phase design-consensus r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
 
-- **Narrow allowlist**: helper 只 maintain singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler` in the existing static daemon allowlist;heartbeat 是 actor-loop progress lease,不是 wrapper sidecar liveness;daemon actor after tick / caught exception / lease sleep renews it;fingerprint artifact `.refactor-loop/locks/<daemon>.fingerprint.json` 只记录 daemon name、resolved command、CLI entrypoint hash、Python package tree hash 和文件计数,只用于 restart skip eligibility;`DaemonProcessInventory` 只在 helper 内部枚举 same resolved static allowlist command 的 canonical live wrapper,发现 duplicate canonical live wrapper 时 duplicate canonical wrappers fail closed:先 terminate 多余实例并等待下一 tick,绝不在 duplicate 存在时 spawn;并顺手运行 canonical `consensus-rnd-cli runtime-retention`;不 spawn codex / commit / push / merge / label / archive。
+- **Narrow allowlist**: helper 只 maintain singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler` in the existing static daemon allowlist;heartbeat 是 actor-loop progress lease,不是 wrapper sidecar liveness;daemon actor after tick / caught exception / lease sleep renews it;fingerprint artifact `.refactor-loop/locks/<daemon>.fingerprint.json` 只记录 daemon name、resolved command、CLI entrypoint hash、Python package tree hash、文件计数、`host_env_path` 和 `host_env_sha256`,只用于 restart skip eligibility and read-only stale projection;it never stores host.env plaintext and never becomes host production SSOT, branch topology, durable ledger, host artifact authority, or side-effect authorization;`DaemonProcessInventory` 只在 helper 内部枚举 same resolved static allowlist command 的 canonical live wrapper,发现 duplicate canonical live wrapper 时 duplicate canonical wrappers fail closed:先 terminate 多余实例并等待下一 tick,绝不在 duplicate 存在时 spawn;并顺手运行 canonical `consensus-rnd-cli runtime-retention`;不 spawn codex / commit / push / merge / label / archive。
 - **Read-only status projection**: `consensus-rnd-cli daemon-status --json` mirrors the same static allowlist and helper-private pid/heartbeat/fingerprint/inventory facts plus cached active-controller status. It is read-only status only, has no public start/stop/restart/reload lifecycle verb, and repair/reload remains restart-daemons.
 - **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
 - **No lifecycle authority**: 不开关 issue/PR,不打 label,不 commit/push/merge/tag/release;controller wakeup `STALE_CONTROLLER` 事件仅 alert。
