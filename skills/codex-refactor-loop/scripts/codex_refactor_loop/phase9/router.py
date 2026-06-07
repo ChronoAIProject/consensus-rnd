@@ -1016,6 +1016,7 @@ class Phase9Router:
     def _recover_stale_ledgered_actors(self, ledger: set[str]) -> None:
         now = datetime.now(timezone.utc)
         threshold = self._stale_revival_threshold()
+        capacity_threshold = self._capacity_recovery_threshold(now)
         for key, entries in sorted(self._ledger_entries_by_key.items()):
             parsed = self._parse_key(key)
             if parsed is None:
@@ -1024,7 +1025,8 @@ class Phase9Router:
             if actor not in (*self._solver_roles(), self._judge_role()):
                 continue
             health = self._actor_health(issue, round_no, actor, ledger)
-            if not self._actor_recovery_allowed(health, now, threshold):
+            effective_threshold = capacity_threshold if capacity_threshold is not None else threshold
+            if not self._actor_recovery_allowed(health, now, effective_threshold):
                 continue
             source_marker = self._ledger_source_marker(entries)
             prompt_body = self._recovery_prompt_body(issue, round_no, actor, source_marker)
@@ -1064,6 +1066,39 @@ class Phase9Router:
             and health.source_allowed
             and health.terminal_allowed
         )
+
+    def _capacity_recovery_threshold(self, now: datetime) -> timedelta | None:
+        latest = self._latest_hard_gate_dispatch_required_at(now)
+        if latest is None:
+            return None
+        if now - latest > timedelta(minutes=10):
+            return None
+        return timedelta(minutes=2)
+
+    def _latest_hard_gate_dispatch_required_at(self, now: datetime) -> datetime | None:
+        if not self.pending_events_path.exists():
+            return None
+        try:
+            lines = self.pending_events_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return None
+        for line in reversed(lines[-200:]):
+            if "HARD_GATE:dispatch_required=" not in line:
+                continue
+            if "dispatch_required=0" in line:
+                continue
+            ts = self._parse_pending_event_timestamp(line)
+            if ts is not None:
+                return ts
+        return None
+
+    def _parse_pending_event_timestamp(self, line: str) -> datetime | None:
+        if len(line) < 20:
+            return None
+        prefix = line[:20]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", prefix):
+            return None
+        return self._parse_utc(prefix)
 
     def _ledger_source_marker(self, entries: list[dict[str, object]]) -> str:
         for entry in reversed(entries):

@@ -21,6 +21,7 @@ from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from ..implement_lifecycle import implement_attempt_suppresses_expected_worker
 from ..issue_decomposition import applied_issue_decomposition_parent_suppresses_expected_worker
+from ..phase9.progress import issue_has_terminal_consensus_judge
 from .. import labels as label_catalog
 from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..state import read_json, write_json
@@ -397,6 +398,12 @@ class ConcurrencyMonitor:
                     )
                 ):
                     continue
+                if (
+                    item.kind == "issue"
+                    and phase == label_catalog.PHASE_DESIGN_SOLVING
+                    and issue_has_terminal_consensus_judge(self.repo_root, item.number)
+                ):
+                    continue
                 breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase, "expected": expected})
                 total += expected
         return total, breakdown
@@ -562,7 +569,11 @@ class ConcurrencyMonitor:
         owner_allowed = decision.allowed
 
         items = self.list_auto_loop_issues()
-        expected, breakdown = self.compute_expected(items)
+        expected, breakdown = self.compute_expected(
+            items,
+            integration_branch=str(os.environ.get("INTEGRATION_BRANCH") or "").strip(),
+            command_runner=self.run,
+        )
         actual = self.count_in_flight_codex()
         open_pr_count = sum(1 for item in items if item["kind"] == "pr")
         open_issue_count = sum(1 for item in items if item["kind"] == "issue")

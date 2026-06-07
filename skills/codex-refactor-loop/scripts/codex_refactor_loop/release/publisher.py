@@ -5,18 +5,21 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 import os
+import re
 from pathlib import Path
-from typing import Callable, Literal, Sequence
+from typing import Any, Callable, Literal, Sequence
 
 from ..state import write_json
-from .gate import isoformat, load_host_env
+from .gate import isoformat, load_host_env, resolve_field
 from .publish_preflight import PublishPreflightResult, ReleasePublishPreflight, load_manifest_targets
 from .required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from .versions import parse_semver_full
 
 
 Runner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
+HEX_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass(frozen=True)
@@ -46,7 +49,14 @@ class ReleasePublicationState:
     tag: str
     release_target_ref: str | None
     skip_bump_commit: bool
+    push_release_commit: bool
     reason: str
+
+
+@dataclass(frozen=True)
+class RemoteReleaseProof:
+    ref: str
+    sha: str
 
 
 class ReleasePublisher:
@@ -80,7 +90,7 @@ class ReleasePublisher:
         result = self.preflight.validate(candidate_path=candidate_path, target_ref=target_ref)
         state = self._inspect_publication_state(result)
         if not result.allowed and not state.skip_bump_commit:
-            return self._denied(result)
+            return self._denied(result, state.reason)
 
         version = state.version
         tag = state.tag
@@ -92,9 +102,10 @@ class ReleasePublisher:
             self._ensure_success(add, "git add")
             commit = self._run(["git", "commit", "-m", self._release_bump_subject(version)])
             self._ensure_success(commit, "git commit")
-        release_target_ref = self._current_head_sha()
+        release_target_ref = state.release_target_ref or self._current_head_sha()
         release_push_started_at = None if state.skip_bump_commit else self.now()
-        self._safe_push()
+        if state.push_release_commit:
+            self._safe_push()
         self._ensure_fresh_release_commit_checks_green(release_target_ref, since=release_push_started_at)
         release_command = ["gh", "release", "create", tag, "--target", release_target_ref, "--generate-notes"]
         if parse_semver_full(version).prerelease:
@@ -121,25 +132,43 @@ class ReleasePublisher:
             result_path=self.result_path,
         )
 
+    def can_validate_remote_reentry(self, result: PublishPreflightResult) -> bool:
+        """Return whether a denied preflight has publisher-proven remote reentry."""
+
+        state = self._inspect_publication_state(result)
+        return (
+            not result.allowed
+            and self._is_only_manifest_version_mismatch(result)
+            and state.reason == "remote_already_bumped_reentry"
+        )
+
     def _inspect_publication_state(self, result: PublishPreflightResult) -> ReleasePublicationState:
         version = result.version
         tag = f"v{version}" if version else ""
         if result.allowed and result.already_bumped_reentry:
+            remote_state = self._remote_already_bumped_reentry_state(version, tag)
+            if remote_state is not None:
+                return remote_state
             return ReleasePublicationState(
                 phase="already_bumped",
                 version=version,
                 tag=tag,
                 release_target_ref=None,
                 skip_bump_commit=True,
+                push_release_commit=True,
                 reason="preflight_already_bumped_reentry",
             )
         if result.allowed:
+            remote_state = self._remote_already_bumped_reentry_state(version, tag)
+            if remote_state is not None:
+                return remote_state
             return ReleasePublicationState(
                 phase="first_run",
                 version=version,
                 tag=tag,
                 release_target_ref=None,
                 skip_bump_commit=False,
+                push_release_commit=True,
                 reason="preflight_allowed",
             )
         if not self._is_only_manifest_version_mismatch(result):
@@ -149,6 +178,7 @@ class ReleasePublisher:
                 tag=tag,
                 release_target_ref=None,
                 skip_bump_commit=False,
+                push_release_commit=True,
                 reason="preflight_denied",
             )
         if not version:
@@ -158,27 +188,35 @@ class ReleasePublisher:
                 tag=tag,
                 release_target_ref=None,
                 skip_bump_commit=False,
+                push_release_commit=True,
                 reason="missing_version",
             )
+        remote_state = self._remote_already_bumped_reentry_state(version, tag)
+        if remote_state is not None:
+            return remote_state
         manifest_versions = self._mapped_manifest_versions()
         if not manifest_versions or manifest_versions != {version}:
+            reason = "remote_release_reentry_unavailable" if self._integration_branch() else "mapped_manifests_not_to_version"
             return ReleasePublicationState(
                 phase="first_run",
                 version=version,
                 tag=tag,
                 release_target_ref=None,
                 skip_bump_commit=False,
-                reason="mapped_manifests_not_to_version",
+                push_release_commit=True,
+                reason=reason,
             )
         expected_subject = self._release_bump_subject(version)
         if self._current_commit_subject() != expected_subject:
+            reason = "remote_release_reentry_unavailable" if self._integration_branch() else "release_head_subject_mismatch"
             return ReleasePublicationState(
                 phase="first_run",
                 version=version,
                 tag=tag,
                 release_target_ref=None,
                 skip_bump_commit=False,
-                reason="release_head_subject_mismatch",
+                push_release_commit=True,
+                reason=reason,
             )
         return ReleasePublicationState(
             phase="already_bumped",
@@ -186,6 +224,7 @@ class ReleasePublisher:
             tag=tag,
             release_target_ref=None,
             skip_bump_commit=True,
+            push_release_commit=True,
             reason="already_bumped_reentry",
         )
 
@@ -196,6 +235,94 @@ class ReleasePublisher:
         versions = {str(target["version"]) for target in load_manifest_targets(self.repo_root)}
         return versions
 
+    def _remote_already_bumped_reentry_state(self, version: str, tag: str) -> ReleasePublicationState | None:
+        branch = self._integration_branch()
+        if not branch:
+            return None
+        fetch = self._run(["git", "fetch", "origin", branch])
+        if fetch.returncode != 0:
+            return None
+        branch_proof = self._remote_reentry_proof(f"origin/{branch}")
+        state = self._remote_already_bumped_state_from_proof(branch_proof, version, tag)
+        if state is not None:
+            return state
+        for proof in self._remote_rollup_release_proofs():
+            state = self._remote_already_bumped_state_from_proof(proof, version, tag)
+            if state is not None:
+                return state
+        return None
+
+    def _remote_already_bumped_state_from_proof(
+        self, proof: RemoteReleaseProof | None, version: str, tag: str
+    ) -> ReleasePublicationState | None:
+        if proof is None:
+            return None
+        subject = self._run(["git", "show", "-s", "--format=%s", proof.ref])
+        if subject.returncode != 0 or subject.stdout.strip() != self._release_bump_subject(version):
+            return None
+        if self._remote_mapped_manifest_versions(proof.ref) != {version}:
+            return None
+        return ReleasePublicationState(
+            phase="already_bumped",
+            version=version,
+            tag=tag,
+            release_target_ref=proof.sha,
+            skip_bump_commit=True,
+            push_release_commit=False,
+            reason="remote_already_bumped_reentry",
+        )
+
+    def _remote_reentry_proof(self, ref: str) -> RemoteReleaseProof | None:
+        sha = self._rev_parse_ref(ref)
+        if not sha:
+            return None
+        return RemoteReleaseProof(ref=ref, sha=sha)
+
+    def _remote_rollup_release_proofs(self) -> list[RemoteReleaseProof]:
+        listing = self._run(["git", "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/rollup"])
+        if listing.returncode != 0:
+            return []
+        proofs: list[RemoteReleaseProof] = []
+        for ref in sorted(line.strip() for line in listing.stdout.splitlines() if line.strip()):
+            if not ref.startswith("origin/rollup/"):
+                continue
+            suffix = ref.rsplit("/", 1)[-1]
+            if not HEX_SHA_RE.fullmatch(suffix):
+                continue
+            resolved = self._rev_parse_ref(ref)
+            if resolved == suffix:
+                proofs.append(RemoteReleaseProof(ref=ref, sha=resolved))
+        return proofs
+
+    def _rev_parse_ref(self, ref: str) -> str | None:
+        rev_parse = self._run(["git", "rev-parse", ref])
+        if rev_parse.returncode != 0:
+            return None
+        sha = rev_parse.stdout.strip()
+        return sha or None
+
+    def _remote_mapped_manifest_versions(self, remote_ref: str) -> set[str]:
+        versions: set[str] = set()
+        try:
+            targets = load_manifest_targets(self.repo_root)
+        except Exception:
+            return set()
+        for target in targets:
+            relative = str(target["relative"])
+            show = self._run(["git", "show", f"{remote_ref}:{relative}"])
+            if show.returncode != 0:
+                return set()
+            try:
+                data: Any = json.loads(show.stdout)
+                versions.add(str(resolve_field(data, str(target["field"]))))
+            except Exception:
+                return set()
+        return versions
+
+    def _integration_branch(self) -> str:
+        host_env = load_host_env(self.repo_root)
+        return (host_env.get("INTEGRATION_BRANCH") or os.environ.get("INTEGRATION_BRANCH") or "").strip()
+
     def _release_bump_subject(self, version: str) -> str:
         return f"Release v{version}"
 
@@ -204,10 +331,13 @@ class ReleasePublisher:
         self._ensure_success(result, "git show -s --format=%s HEAD")
         return result.stdout.strip()
 
-    def _denied(self, result: PublishPreflightResult) -> ReleasePublishResult:
+    def _denied(self, result: PublishPreflightResult, state_reason: str) -> ReleasePublishResult:
+        reasons = result.reasons
+        if state_reason == "remote_release_reentry_unavailable":
+            reasons = (*reasons, state_reason)
         return ReleasePublishResult(
             published=False,
-            reasons=result.reasons,
+            reasons=reasons,
             tag=f"v{result.version}" if result.version else "",
             target_ref=result.target_ref,
             version=result.version,

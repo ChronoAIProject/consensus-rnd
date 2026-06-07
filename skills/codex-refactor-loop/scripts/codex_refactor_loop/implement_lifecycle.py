@@ -106,6 +106,14 @@ def classify_implement_attempt(
         return ImplementAttemptState("redispatch", "diff_unavailable", marker=marker, head_ref=head_ref, worktree=worktree)
     if not status.stdout.strip():
         diff = runner(["git", "-C", str(worktree), "diff", "--quiet"])
+        if diff.returncode == 0 and integration_branch:
+            committed_delta = committed_implementation_delta(worktree, integration_branch, runner)
+            if committed_delta is None:
+                return ImplementAttemptState("redispatch", "diff_unavailable", marker=marker, head_ref=head_ref, worktree=worktree)
+            if committed_delta:
+                if stale_base:
+                    return ImplementAttemptState("refresh_needed", "stale_base", marker=marker, head_ref=head_ref, worktree=worktree)
+                return ImplementAttemptState("publish_ready", marker=marker, head_ref=head_ref, worktree=worktree)
         if diff.returncode == 0:
             return ImplementAttemptState("redispatch", "empty_scoped_diff", marker=marker, head_ref=head_ref, worktree=worktree)
         if diff.returncode != 1:
@@ -148,13 +156,43 @@ def implement_attempt_suppresses_expected_worker(
             integration_branch=integration_branch,
             command_runner=command_runner,
         )
-        if implement_attempt_is_terminal_or_noop_completion(state):
+        if implement_attempt_satisfies_expected_worker(state):
             return True
     return False
 
 
 def implement_attempt_is_terminal_or_noop_completion(state: ImplementAttemptState) -> bool:
     return state.terminal_non_ok or state.reason == "empty_scoped_diff"
+
+
+def implement_attempt_satisfies_expected_worker(state: ImplementAttemptState) -> bool:
+    return state.publish_ready or state.refresh_needed or implement_attempt_is_terminal_or_noop_completion(state)
+
+
+def committed_implementation_delta(
+    worktree: Path,
+    integration_branch: str,
+    command_runner: CommandRunner,
+) -> bool | None:
+    if not integration_branch:
+        return None
+    for ref in (f"origin/{integration_branch}", integration_branch):
+        current = command_runner(["git", "-C", str(worktree), "rev-parse", "--verify", ref])
+        if current.returncode != 0:
+            continue
+        merge_base = command_runner(["git", "-C", str(worktree), "merge-base", "HEAD", ref])
+        if merge_base.returncode != 0:
+            return None
+        base_sha = merge_base.stdout.strip()
+        if not base_sha:
+            return None
+        diff = command_runner(["git", "-C", str(worktree), "diff", "--quiet", base_sha, "HEAD"])
+        if diff.returncode == 0:
+            return False
+        if diff.returncode == 1:
+            return True
+        return None
+    return None
 
 
 def _implement_run_artifact_done_marker(log_path: Path) -> str:

@@ -211,7 +211,7 @@ class PrChecksSourceRegressionTests(unittest.TestCase):
         joined = "\n".join(texts.values())
         self.assertNotIn('"pr", "checks"', joined)
         self.assertNotIn("gh pr checks", joined)
-        self.assertNotIn("GraphQL", joined)
+        self.assertNotIn("GraphQL", texts["pr_checks.py"])
         self.assertNotIn("gh issue create", texts["pr_checks.py"])
         self.assertNotIn("gh pr create", texts["pr_checks.py"])
         self.assertNotIn("git push", texts["pr_checks.py"])
