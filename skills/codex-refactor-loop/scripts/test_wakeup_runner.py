@@ -873,7 +873,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "host_checks_green",
                 "single_linked_managed_issue",
                 "worker_authored_pr_artifacts",
-                "no_conflicting_open_implementation_pr",
+                "matching_open_managed_pr",
             ],
             "source_artifact": ".refactor-loop/logs/implement-issue77.log",
             "source_marker": marker,
@@ -1442,7 +1442,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "no_conflicting_open_implementation_pr",
+                "matching_open_managed_pr",
             ],
         )
         later = self.spawn_action(action_id="spawn:after-blocked-lifecycle")
@@ -1502,7 +1502,6 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             results = self.run_result(
                 self.batch_plan([*status_only_prefix, duplicate, applied_lifecycle, *spawn_batch], dispatch_required=3, deficit=3),
                 actions=actions,
-                duplicate_prs=[],
                 git_diff_code=1,
             )
 
@@ -1561,7 +1560,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "no_conflicting_open_implementation_pr",
+                "matching_open_managed_pr",
             ],
         )
         spawns = [
@@ -1645,7 +1644,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "no_conflicting_open_implementation_pr",
+                "matching_open_managed_pr",
             ],
         )
         close = self.close_action(action_id="close-managed-item:53:after-blocked-publish")
@@ -2921,7 +2920,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                         "clean_scoped_diff",
                         "single_linked_managed_issue",
                         "worker_authored_pr_artifacts",
-                        "no_conflicting_open_implementation_pr",
+                        "matching_open_managed_pr",
                     ],
                 ),
                 "publish_implementation_missing_precondition:host_checks_green",
@@ -3468,7 +3467,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_implementation_output")
 
-    def test_publish_implementation_output_allows_missing_pr_so_publish_can_open_it(self) -> None:
+    def test_publish_implementation_output_blocks_missing_matching_pr_before_helper(self) -> None:
         actions = FakeActions()
 
         def command_runner(command):
@@ -3500,8 +3499,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         results = runner.run_once()
 
-        self.assertEqual(results[0].status, "applied")
-        self.assertEqual(actions.calls[0][0], "publish_implementation_output")
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "publish_implementation_matching_pr_missing")
+        self.assertEqual(actions.calls, [])
 
     def test_dispatch_reviewers_routes_to_named_helper_after_pr_target_validation(self) -> None:
         actions = FakeActions()
