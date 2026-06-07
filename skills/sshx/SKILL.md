@@ -54,6 +54,8 @@ Run the stages in this exact order:
 6. `review_triplet_workers`
 7. `fix_or_done`
 
+`WorkerModeGate` is a prompt-level dispatch gate, not a runtime API. During `intake`, the caller may use its own read-only tools to inspect the user's input and write `GoalArtifact`; this caller-owned read-only intake is not worker dispatch. Before any worker dispatch, including delegated intake context-gathering by subagent, Agent, Task, or codex, the caller must complete the non-mutating `codex-cli` capability check and resolve `WorkerMode`.
+
 Each thinking or review record must include these fields:
 
 - `role`
@@ -82,7 +84,7 @@ Each `visible_inputs` value must include the same `GoalArtifact.normalized_goal`
 
 `codex-cli` is the default worker carrier after a non-mutating capability check. The check may confirm that a Codex CLI worker can be invoked, but it must not mutate files, Git state, GitHub state, labels, releases, host configuration, or lifecycle state.
 
-`isolated-token-subagent` is the fallback when `codex-cli` is unavailable. It must run with isolated token context so same-round workers cannot read one another's full reasoning or peer outputs before returning their own verdict.
+`isolated-token-subagent` is the fallback when `codex-cli` is unavailable or the capability check fails. It must run with isolated token context so same-round workers cannot read one another's full reasoning or peer outputs before returning their own verdict. Whenever this fallback is selected, `worker_delegation.reason` and the gate record must state the concrete `codex-cli` unavailable or failed reason.
 
 `abstain` is required when neither `codex-cli` nor `isolated-token-subagent` is available. Do not self-apply the triplet inside the caller context and present it as worker consensus.
 
@@ -261,6 +263,11 @@ intake:
     iteration_question:
   strict_peer_invisibility_required:
 worker_delegation:
+  worker_mode_gate:
+    codex_cli_capability_check:
+    resolved_before_any_worker_dispatch:
+    delegated_intake_context_gathering_allowed:
+    fallback_reason:
   worker_mode:
   worker_carrier:
   reason:

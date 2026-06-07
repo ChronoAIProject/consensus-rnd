@@ -4,7 +4,7 @@ Artifact profile: marker-only-work-unit
 
 你是 triage codex,任务:把 maintainer 加了 `crnd:triage:pending` label 的**外部 issue** 评估为:
 - **accept** — 是 concrete repository work unit suitable for consensus;reshape body 为 `manual-issue` WorkUnit-backed design issue + 切换 label 进入 Consensus-rnd Phase design-consensus 三 solver 流程
-- **reject** — 不适合作为 consensus work unit(产品需求 / runtime bug report / 外部依赖 / duplicate / unclear / scope 过大),评论解释 + 移除 triage label
+- **reject** — 不适合作为 consensus work unit(不属于本 repo、duplicate、unclear、scope 过大、无法给出 bounded `scope_paths` 或 repo-owned desired end state),评论解释 + 移除 triage label
 
 ## Context
 
@@ -21,13 +21,13 @@ Artifact profile: marker-only-work-unit
 **Accept 标准(全部满足)**:
 - 描述的是一个 concrete repository work unit:可落到本 repo 内具体 files / docs / prompts / scripts / config,且需要实现决策或执行边界
 - 能给出 repo-owned invariant / policy / desired end state(优先引用 PROJECT_RULES 或 AGENTS.md;若是 skill 文档/prompt/tooling 工作,引用相应权威文档或 issue 决策)
-- 不是产品 feature request("加 X 功能")或 bug report("Y 不工作")
+- 若请求是 feature、bug、doc、refactor 或 governance 工作,必须能收敛为本 repo 拥有的 bounded `scope_paths`、desired end state / invariant 和 verification hints;类别本身不是 reject 理由
 - 不是外部依赖工作;不是只要求第三方服务/上游仓库变更
 - 范围合理(≤ 50 files;过大需 maintainer split,reject + 解释)
 
 **Reject 类型**:
-- product-feature-request — 加新功能 / 改 UI 行为
-- runtime-bug-report — 用户报告功能失常,但没有 repo-owned implementation decision
+- not-repo-owned — 无法落到本 repo 内具体 files / docs / prompts / scripts / config
+- no-bounded-work-unit — 无法给出 bounded `scope_paths`、desired end state / invariant 或 verification hints
 - out-of-scope — 在外部依赖($EXTERNAL_REPOS 等)
 - duplicate — 已有 open auto-loop issue 覆盖(grep 现有 issue title/body)
 - scope-too-large — 范围 > 50 files,需 maintainer 先 split
