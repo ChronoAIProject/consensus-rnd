@@ -280,6 +280,12 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertNotIn("REMOTE_CODEX_FLOOR", source)
         self.assertNotIn("cross_device_floor", source)
 
+    def test_hotfix_prefix_is_not_a_mutable_dispatch_surface(self) -> None:
+        from codex_refactor_loop import safe_progress_scheduler
+
+        self.assertNotIn("hotfix-", self.module.MUTABLE_DISPATCH_PREFIXES)
+        self.assertNotIn("hotfix-", safe_progress_scheduler.MUTABLE_DISPATCH_PATTERNS)
+
     def test_compute_expected_suppresses_empty_scoped_diff_implementation_completion(self) -> None:
         (self.refactor_loop / "logs").mkdir(parents=True, exist_ok=True)
         (self.repo / ".worktrees" / "iter581-issue-581").mkdir(parents=True)

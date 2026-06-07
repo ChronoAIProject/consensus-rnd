@@ -178,24 +178,24 @@ class SyncDevBehaviorTests(unittest.TestCase):
         paths = sorted((self.repo / ".refactor-loop" / "runs" / "integration-sync-executions").glob(f"*.{status}.json"))
         return [json.loads(path.read_text(encoding="utf-8")) for path in paths]
 
-    def test_clean_local_ahead_executes_push_without_dev_sync_request(self) -> None:
+    def test_clean_local_ahead_records_managed_adoption_event_without_push(self) -> None:
         fake = FakeGit(ahead=2)
         self.daemon(fake).tick()
 
-        operation = self.operation_jsons()[0]
-        self.assertEqual("IntegrationSyncOperation", operation["schema"])
-        self.assertEqual("push-local-ahead", operation["kind"])
-        self.assertEqual("auto-refact-dev", operation["integration_branch"])
-        self.assertEqual("dev", operation["review_base_branch"])
-        self.assertEqual("head-sha", operation["worktree_head"])
-        self.assertEqual("remote-sha", operation["expected_remote_sha"])
-        self.assertEqual("dev_sync_daemon", operation["executor"])
-        self.assertEqual("integration-branch-git-allowlist", operation["authority"])
-        self.assertNotIn("lifecycle_owner", operation)
-        self.assertEqual([], [line for line in self.pending_events() if line.startswith("DEV_SYNC_REQUEST:")])
-        self.assertIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
+        self.assertEqual([], self.operation_jsons())
+        events = self.pending_events()
+        self.assertEqual(1, len(events))
+        prefix = "DEV_SYNC_PENDING:local-ahead-managed-adoption-required:"
+        self.assertTrue(events[0].startswith(prefix))
+        event = json.loads(events[0][len(prefix):])
+        self.assertEqual("auto-refact-dev", event["integration_branch"])
+        self.assertEqual("dev", event["review_base_branch"])
+        self.assertEqual("head-sha", event["worktree_head"])
+        self.assertEqual("remote-sha", event["expected_remote_sha"])
+        self.assertEqual(2, event["ahead_count"])
+        self.assertEqual("managed-adoption-pr-review", event["recovery"])
+        self.assertFalse(any(command[:2] == ["git", "push"] for command in fake.commands))
         self.assertFalse(any(command[:2] == ["git", "reset"] for command in fake.commands))
-        self.assertEqual("applied", self.execution_jsons()[0]["status"])
 
     def test_merged_rollup_adoption_executes_operation(self) -> None:
         fake = FakeGit(
@@ -544,7 +544,8 @@ class SyncDevBehaviorTests(unittest.TestCase):
             self.daemon(fake, context=ctx).tick()
 
         self.assertIn(["git", "ls-remote", "--exit-code", "--heads", "origin", "auto-refact-dev"], fake.commands)
-        self.assertEqual("push-local-ahead", self.operation_jsons()[0]["kind"])
+        self.assertEqual([], self.operation_jsons())
+        self.assertTrue(self.pending_events()[0].startswith("DEV_SYNC_PENDING:local-ahead-managed-adoption-required:"))
 
     def test_resolver_in_flight_scopes_to_repo_or_worktree_and_skips_shell_wrappers(self) -> None:
         repo = Path("/tmp/repo")

@@ -35,7 +35,7 @@ from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
 HEARTBEAT_STALE_SECONDS = 90
 PRIORITIES = ("p0", "p1", "p2")
-MUTABLE_DISPATCH_PREFIXES = ("implement-", "fix-pr", "remote-ci-fix", "test-add-", "verify-", "hotfix-")
+MUTABLE_DISPATCH_PREFIXES = ("implement-", "fix-pr", "remote-ci-fix", "test-add-", "verify-")
 MAIN_READONLY_DISPATCH_PREFIXES = ("audit-", "phase9-issue", "solver-", "meta-judge-", "review-pr", "reviewer-pr")
 MAIN_READONLY_DISPATCH_PATTERNS = (
     re.compile(r"^audit-iter-[0-9]+[A-Za-z0-9._-]*$"),

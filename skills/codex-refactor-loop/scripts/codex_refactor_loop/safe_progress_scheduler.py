@@ -71,7 +71,6 @@ MUTABLE_DISPATCH_PATTERNS = (
     "remote-ci-fix",
     "test-add-",
     "verify-",
-    "hotfix-",
 )
 
 

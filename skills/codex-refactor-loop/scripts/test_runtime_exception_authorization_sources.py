@@ -1319,10 +1319,19 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn(expected_command, self.repo_rules)
         self.assertIn(expected_command, self.skill)
         self.assertIn(expected_command, integration_entry)
+        self.assertIn("integration publish/write authority remains only in the dedicated integration worktree", integration_entry)
+        self.assertIn("ControllerActions.safe_sync_main()", integration_entry)
+        self.assertIn("branch==`$INTEGRATION_BRANCH`", integration_entry)
+        self.assertIn("tracked-clean", integration_entry)
+        self.assertIn("no in-progress git operation", integration_entry)
+        self.assertIn("remote-only-ahead", integration_entry)
+        self.assertIn("git merge --ff-only origin/$INTEGRATION_BRANCH", integration_entry)
+        self.assertIn("no main checkout local-ahead push", integration_entry)
+        self.assertIn("use of main checkout HEAD as publish authorization", integration_entry)
         self.assertIn("daemon-owned execution", integration_entry)
         self.assertIn("integration-branch git allowlist", integration_entry)
-        self.assertIn("no worker-diff commit", integration_entry)
-        self.assertIn("no PR create, merge, close, or edit", integration_entry)
+        self.assertIn("worker-diff commit", integration_entry)
+        self.assertIn("PR create, merge, close, or edit", integration_entry)
         for token in (
             "reset --hard",
             "rebase --rebase-merges",
