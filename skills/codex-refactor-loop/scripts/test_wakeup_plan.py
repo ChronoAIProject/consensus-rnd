@@ -1518,6 +1518,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ledger_rows: tuple[tuple[str, str], ...] = (("applied", ""),),
     ) -> tuple[str, str]:
         plan_path, digest = self.write_issue_decomposition_plan_artifacts(issue=issue, round_no=round_no)
+        consensus = self.repo / f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-judge.md"
+        consensus.write_text(
+            f"---\nissue: {issue}\ncluster: issue-{issue}\nconvergence_round: {round_no}\ndecision: consensus\n---\n\n"
+            "## If consensus\n"
+            '- controller_action="apply_issue_decomposition_plan"\n'
+            f"- plan_level_design_consensus_judge_artifact: .refactor-loop/runs/phase9-issue{issue}-r{round_no}-judge.md\n"
+            f"- issue_decomposition_plan_path: {plan_path}\n"
+            f"- issue_decomposition_plan_digest: {digest}\n"
+            f"- issue_decomposition_proof: plan-level judge .refactor-loop/runs/phase9-issue{issue}-r{round_no}-judge.md validated plan {plan_path} digest {digest} reached consensus for parent issue #{issue}\n\n"
+            "META_JUDGE_DONE:consensus:decompose\n",
+            encoding="utf-8",
+        )
         comments_path = self.repo / f"gh-issue-{issue}-comments.json"
         comments_path.write_text(
             json.dumps({"comments": [{"body": f"tracked\nIssueDecompositionPlan digest: {digest}\n⟦AI:AUTO-LOOP⟧\n"}]}),
@@ -2177,6 +2189,30 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ]
         self.assertEqual(1, len(publish))
         self.assertEqual("publish-or-review-gate", publish[0]["route"])
+
+    def test_applied_decomposition_parent_suppresses_stale_implement_publish(self) -> None:
+        self.write_applied_issue_decomposition_evidence(issue=537, round_no=6)
+        self.write_completed_log("phase9-issue537-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
+        self.write_implement_result(issue=537, status="ok")
+
+        plan = self.run_plan(fixture="open_design_parent_537")
+
+        publish = [
+            action
+            for action in plan["actions"]
+            if action.get("source_marker") == "IMPLEMENT_DONE:issue-537:ok"
+            and action.get("controller_action") == "publish_implementation_output"
+        ]
+        self.assertEqual(1, len(publish))
+        self.assertTrue(publish[0]["status_only"])
+        self.assertEqual(publish[0]["suppressed_reason"], "applied_decomposition_parent_tracking_noop")
+        self.assertNotIn("runner_authority", publish[0])
+        apply_actions = issue_decomposition_apply_actions(plan)
+        self.assertEqual(1, len(apply_actions))
+        self.assertTrue(apply_actions[0]["status_only"])
+        self.assertEqual(apply_actions[0]["suppressed_reason"], "applied_decomposition_parent_tracking_noop")
+        self.assertNotIn("runner_authority", apply_actions[0])
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
 
     def test_partial_implement_with_parent_mismatched_decomposition_plan_does_not_project_apply_action(self) -> None:
         source_plan, _digest = self.write_issue_decomposition_plan_artifacts(issue=538)

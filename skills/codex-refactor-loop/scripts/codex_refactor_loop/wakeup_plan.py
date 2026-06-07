@@ -3804,6 +3804,10 @@ def _stale_unexecutable_reason(
     controller_action = action.get("controller_action")
     if controller_action == "publish_implementation_output":
         return _stale_publish_implementation_reason(action, repo_root, open_targets, worktrees, gh_items)
+    if controller_action == "apply_issue_decomposition_plan":
+        target = _action_target_key(action)
+        if target is not None and _publish_target_is_applied_decomposition_parent(repo_root, target):
+            return "applied_decomposition_parent_tracking_noop"
     if controller_action == "close_managed_item_from_drop_marker":
         target = _action_target_key(action)
         if target is not None and target not in open_targets:
@@ -3821,6 +3825,8 @@ def _stale_publish_implementation_reason(
     target = _action_target_key(action)
     if target is not None and target not in open_targets:
         return "target_not_open"
+    if target is not None and _publish_target_is_applied_decomposition_parent(repo_root, target):
+        return "applied_decomposition_parent_tracking_noop"
     head_ref = _implementation_head_ref(action, target)
     if not head_ref:
         return "implementation_head_ref_missing"
@@ -3873,6 +3879,12 @@ def _stale_publish_implementation_reason(
         preconditions.remove("verified_pr_head")
     action["preconditions"] = preconditions
     return None
+
+
+def _publish_target_is_applied_decomposition_parent(repo_root: Path, target: tuple[str, int]) -> bool:
+    if target[0] != "issue":
+        return False
+    return _issue_is_applied_decomposition_parent(repo_root, target[1])
 
 
 NOOP_COMPLETION_TEXT_RE = re.compile(r"(?i)\b(?:0\s*LOC|zero[- ]code|no[- ]op|no code changes?|no source changes?)\b")
