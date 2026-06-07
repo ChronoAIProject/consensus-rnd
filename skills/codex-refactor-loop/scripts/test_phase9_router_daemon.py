@@ -47,7 +47,9 @@ def managed_snapshot(rows: list[dict[str, object]]) -> ManagedWorkSnapshotResult
                 kind="issue",
                 number=int(row.get("number", 0)),
                 title=str(row.get("title", "")),
+                body=str(row.get("body", "")),
                 labels=tuple(labels),
+                updated_at=str(row.get("updated_at", "")),
             )
         )
     return ManagedWorkSnapshotResult(tuple(items), True, "cache:fresh")
@@ -934,7 +936,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
             self.router.tick()
 
-        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427"), 1)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427"), 2)
         self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427/comments?per_page=20"), 1)
         prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue427-r4-judge.md").read_text(encoding="utf-8")
         self.assertIn("## Issue source snapshot", prompt)
@@ -943,6 +945,69 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn("recent comment", prompt)
         self.assertNotIn("gh issue view 427", prompt)
         self.assertNotIn(str(self.repo), prompt)
+
+    def test_phase9_router_uses_managed_snapshot_and_private_comments_cache(self) -> None:
+        calls: list[str] = []
+        self.router._read_source_issue_decision = self.original_source_issue_reader.__get__(self.router, Phase9Router)  # type: ignore[method-assign]
+        self.solver_triplet(issue=427, round_no=4)
+        snapshot = managed_snapshot(
+            [
+                {
+                    "number": 427,
+                    "title": "Snapshot title",
+                    "body": "Snapshot body",
+                    "updated_at": "2026-06-01T00:00:00Z",
+                    "labels": [{"name": "crnd:lifecycle:managed"}],
+                }
+            ]
+        )
+
+        def fake_run(command, **kwargs):
+            calls.append(command[2])
+            if command[2].endswith("/comments?per_page=20"):
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        [
+                            {
+                                "id": 10,
+                                "user": {"login": "maintainer"},
+                                "body": "recent comment",
+                                "created_at": "2026-06-01T00:00:00Z",
+                            }
+                        ]
+                    ),
+                    stderr="",
+                )
+            return mock.Mock(returncode=0, stdout=json.dumps({"state": "open", "title": "live title", "body": "live body"}), stderr="")
+
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=snapshot):
+            with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+                self.router.tick()
+
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427"), 1)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427/comments?per_page=20"), 1)
+        cache_path = self.repo / ".refactor-loop/state/phase9-router-comments-cache.json"
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        self.assertTrue(cache["not_live_state_fact_source"])
+        self.assertTrue(cache["not_host_production_ssot"])
+        self.assertTrue(cache["no_lifecycle_authority"])
+        prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue427-r4-judge.md").read_text(encoding="utf-8")
+        self.assertIn("# Issue #427: Snapshot title", prompt)
+        self.assertIn("Snapshot body", prompt)
+        self.assertIn("recent comment", prompt)
+
+        second = self.new_router()
+        second._read_source_issue_decision = self.original_source_issue_reader.__get__(second, Phase9Router)  # type: ignore[method-assign]
+        second._ledger_entries_by_key = {}
+        calls.clear()
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=snapshot):
+            with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+                comments = second._read_issue_source_snapshot("427").comments
+
+        self.assertEqual([comment["body"] for comment in comments], ["recent comment"])
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427"), 0)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427/comments?per_page=20"), 0)
 
     def test_phase9_router_comments_read_failure_injects_unavailable_snapshot_only(self) -> None:
         calls: list[str] = []
@@ -962,7 +1027,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
             self.router.tick()
 
-        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/429"), 1)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/429"), 2)
         self.assertEqual(calls.count("repos/example/consensus-rnd/issues/429/comments?per_page=20"), 1)
         self.assertEqual(len(self.commands), 1)
         prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue429-r4-judge.md").read_text(encoding="utf-8")
@@ -1117,6 +1182,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             comments=(),
             read_at="2026-06-01T00:00:00Z",
             source="open",
+            updated_at="2026-06-01T00:00:00Z",
             truncated=False,
             comments_loaded=True,
         )
@@ -1625,6 +1691,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             comments=(),
             read_at="2026-06-01T00:00:00Z",
             source="open",
+            updated_at="2026-06-01T00:00:00Z",
             truncated=False,
             comments_loaded=True,
         )
