@@ -17,8 +17,9 @@ from .active_controller import require_active_controller, write_active_controlle
 from . import labels
 from .banners import BannerRequest, build_status_banner, gh_comment_command
 from .context import LoopContext
+from .default_issue_intake import DefaultIssueIntakeClaim, DefaultIssueIntakeResult
 from .gh_invoke import build_gh_argv
-from .github_actor import GitHubAuthenticatedActor
+from .github_actor import GitHubActorAdmission, GitHubAuthenticatedActor
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .implementation_pr_artifacts import (
     FINAL_SENTINEL,
@@ -584,6 +585,11 @@ class ControllerActions:
         if result.returncode != 0:
             raise RuntimeError(f"apply_issue_decomposition_plan: parent comment failed: {result.stderr.strip() or result.stdout.strip()}")
         return tuple(created)
+
+    def apply_default_issue_intake_claim(self, issue_number: int) -> DefaultIssueIntakeResult:
+        self._require_owner_or_raise("apply-default-issue-intake-claim")
+        admission = self._require_github_actor_or_raise("apply-default-issue-intake-claim")
+        return DefaultIssueIntakeClaim(self.ctx, actor_login=admission.login).apply(issue_number)
 
     def _issue_decomposition_parent_sentinel_count(self, parent_target: str, digest: str) -> int:
         result = self.gh(["issue", "view", parent_target, "--json", "comments"], check=False)
@@ -2168,9 +2174,9 @@ class ControllerActions:
             return False
         return True
 
-    def _require_github_actor_or_raise(self, action: str) -> None:
+    def _require_github_actor_or_raise(self, action: str) -> GitHubActorAdmission:
         actor = self.github_actor or GitHubAuthenticatedActor(self.ctx)
-        actor.require_admission(action)
+        return actor.require_admission(action)
 
     def _normalize_lifecycle_target_or_block(self, value: object, *, kind: str, action: str, source: str) -> str | None:
         try:

@@ -95,6 +95,7 @@ SUPPORTED_CONTROLLER_ACTIONS = {
     "dispatch_release_candidate",
     "publish_release_candidate",
     "apply_issue_decomposition_plan",
+    "apply_default_issue_intake_claim",
 }
 # Worker-dispatch (non-lifecycle) controller actions that may batch up to the
 # per-tick spawn budget. Both directly spawn codex workers and carry no
@@ -418,6 +419,8 @@ class WakeupRunner:
             return self._validate_release(action)
         if controller_action == "apply_issue_decomposition_plan":
             return self._validate_issue_decomposition_apply(action)
+        if controller_action == "apply_default_issue_intake_claim":
+            return self._validate_default_issue_intake_claim(action)
         if controller_action == "dispatch_consensus_implementation":
             return self._validate_consensus_implementation(action)
         if controller_action == "publish_implementation_output":
@@ -658,6 +661,52 @@ class WakeupRunner:
         sentinel_error = self._issue_decomposition_sentinel_error(plan.parent_issue, digest)
         if sentinel_error:
             return sentinel_error
+        return None
+
+    def _validate_default_issue_intake_claim(self, action: Mapping[str, Any]) -> str | None:
+        if action.get("kind") != "default-issue-intake-claim":
+            return f"unsupported_kind:{action.get('kind')}"
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "default_issue_intake_missing_preconditions"
+        for required in (
+            "active_controller_owner",
+            "default_issue_intake_enabled",
+            "live_open_target",
+            "non_pr_issue",
+            "target_not_managed",
+            "github_comment_claim_protocol",
+        ):
+            if required not in preconditions:
+                return f"default_issue_intake_missing_precondition:{required}"
+        target = action.get("target_number")
+        if action.get("target_kind") != "issue" or not isinstance(target, int):
+            return "default_issue_intake_target_missing"
+        if str(self.ctx.host_env.get("DEFAULT_ISSUE_INTAKE_ENABLE") or "").strip().lower() in {"false", "0", "no", "off"}:
+            return "default_issue_intake_disabled"
+        issue_error = self._default_issue_intake_live_issue_error(target)
+        if issue_error:
+            return issue_error
+        if self._live_target_has_managed_label("issue", target):
+            return "default_issue_intake_target_already_managed"
+        return None
+
+    def _default_issue_intake_live_issue_error(self, issue_number: int) -> str | None:
+        if not self.ctx.gh_repo_slug:
+            return "default_issue_intake_missing_gh_repo_slug"
+        result = self.command_runner(["gh", "api", f"repos/{self.ctx.gh_repo_slug}/issues/{issue_number}"])
+        if result.returncode != 0:
+            return "default_issue_intake_issue_unavailable"
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return "default_issue_intake_issue_invalid_json"
+        if not isinstance(payload, dict):
+            return "default_issue_intake_issue_invalid_json"
+        if str(payload.get("state") or "").strip().lower() != "open":
+            return "default_issue_intake_target_not_open"
+        if isinstance(payload.get("pull_request"), Mapping):
+            return "default_issue_intake_target_is_pr"
         return None
 
     def _issue_decomposition_sentinel_error(self, parent_issue: int, digest: str) -> str | None:
@@ -1027,6 +1076,12 @@ class WakeupRunner:
             return 0 if result.published else 3
         if controller_action == "apply_issue_decomposition_plan":
             self.actions.apply_issue_decomposition_plan(str(action.get("issue_decomposition_plan_path") or ""))
+            return 0
+        if controller_action == "apply_default_issue_intake_claim":
+            target = action.get("target_number")
+            if not isinstance(target, int):
+                return 2
+            self.actions.apply_default_issue_intake_claim(target)
             return 0
         self._append_pending_event(f"WAKEUP_RUNNER_UNAPPLIED:{controller_action}:{action.get('action_id')}")
         return 0
