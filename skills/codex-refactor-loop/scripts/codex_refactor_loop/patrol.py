@@ -438,7 +438,7 @@ def _is_python_exception_line(line: str) -> bool:
 
 
 def _line_is_worker_self_post_failure(line: str) -> bool:
-    return line.strip().startswith("POST_FAILED:")
+    return line.lstrip() == line and line.startswith("POST_FAILED:")
 
 
 def _read_tail_or_fail(path: Path, max_lines: int) -> tuple[str, ...]:

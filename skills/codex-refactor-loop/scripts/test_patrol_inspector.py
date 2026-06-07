@@ -170,6 +170,16 @@ class PatrolInspectorTests(unittest.TestCase):
         self.assertEqual(1, len(exception_findings))
         self.assertEqual(("POST_FAILED: gh comment failed",), exception_findings[0].evidence)
 
+    def test_clean_exit_worker_log_ignores_indented_prompt_post_failure_example(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
+            "echo \"POST_FAILED:issue-1\"\n  POST_FAILED: prompt template example\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        self.assertEqual([], [finding for finding in findings if finding.kind == "exception-log"])
+
     def test_nonzero_exit_worker_log_creates_exception_log_finding(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
             "\n".join(
