@@ -1474,6 +1474,7 @@ class ControllerActions:
         self._ensure_rebase_resolve_prompt_fully_rendered(prompt)
         return launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
+            skill_root=self.ctx.skill_root,
             cd=worktree,
             prompt=prompt,
             log=log,
