@@ -1484,11 +1484,11 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for token in (
             "Phase9ActorHealth",
             "_recover_actor_health",
-            "_quarantine_markerless_solver_logs",
+            "_append_markerless_solver_exhausted_events",
             "_recover_stale_ledgered_actors",
             "_actor_recovery_allowed",
             "_read_pending_spawn_intent_logs",
-            "phase9-actor-markerless-quarantine",
+            "phase9-solver-markerless-exhausted",
             "actor_health_recovery",
             "STALE_REVIVAL_HOURS",
         ):
@@ -1496,9 +1496,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(token, router)
         for token in (
             "router-private `Phase9ActorHealth`",
-            "markerless clean solver logs",
-            "quarantine",
-            "phase9-actor-markerless-quarantine",
+            "clean markerless solver target logs",
+            "preserved in place",
+            "phase9-solver-markerless-exhausted",
+            "terminal format failure",
             "actor_health_recovery",
             "STALE_REVIVAL_HOURS",
             "source issue is OPEN",

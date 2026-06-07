@@ -1334,7 +1334,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 "worker_markers.py",
             },
             "solver-issue": {"monitors/concurrency.py", "phase9/router.py"},
-            "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py"},
+            "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py", "worker_markers.py"},
             "review-pr": {"controller_actions.py", "monitors/progress.py", "monitors/concurrency.py", "peek.py", "wakeup_plan.py", "wakeup_runner.py"},
             "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py", "wakeup_runner.py"},
             "crnd:": {"default_issue_intake.py", "labels.py", "triage.py"},
@@ -1597,7 +1597,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(needle, self.skill)
         self.assertIn("DONE_PREFIX_RE.fullmatch", wakeup_plan)
         self.assertNotIn("' '.join(tail_lines(log_path, 40))", wakeup_plan)
-        self.assertIn("MARKER_RE.fullmatch", router)
+        worker_markers = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "worker_markers.py").read_text(encoding="utf-8")
+        self.assertIn("read_worker_terminal_marker", router)
+        self.assertIn("GENERIC_DONE_PREFIX_RE.fullmatch", worker_markers)
         self.assertNotIn("stripped.find(prefix)", router)
         self.assertIn("worker-log-status", progress)
         self.assertNotIn("Raw log tail is intentionally omitted", progress)

@@ -1691,6 +1691,8 @@ class WakeupRunner:
             if state.redispatch and not implement_attempt_is_terminal_or_noop_completion(state):
                 return f"target-log-redispatchable:{state.reason}"
             return ""
+        if _phase9_solver_log_is_clean_markerless(log):
+            return ""
         if _spawn_log_suppresses_retry(log):
             return ""
         return "target-log-terminal-failed"
@@ -1726,6 +1728,13 @@ def _source_log_has_clean_marker(path: Path, marker: str) -> bool:
     if not is_implement_log(path):
         return False
     return _implement_run_artifact_done_marker(path) == marker
+
+
+def _phase9_solver_log_is_clean_markerless(path: Path) -> bool:
+    if re.fullmatch(r"phase9-issue[1-9][0-9]*-r[1-9][0-9]*-(?:minimal|structural|delete)\.log", path.name) is None:
+        return False
+    marker_read = read_worker_terminal_marker(path)
+    return marker_read.reason == "marker_missing"
 
 
 def _plan_level_judge_log_path(repo_root: Path, artifact_path: str) -> Path | None:

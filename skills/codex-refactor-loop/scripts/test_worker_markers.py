@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import tempfile
+import sys
 import unittest
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.worker_markers import read_worker_terminal_marker
 
@@ -39,6 +41,51 @@ class WorkerMarkerReaderTests(unittest.TestCase):
             self.assertEqual(marker.marker, "META_JUDGE_DONE:consensus:minimal:summary with spaces")
             self.assertEqual(marker.source, "log")
 
+    def test_reads_solver_marker_from_bounded_tail_before_exit_with_later_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self.repo(tmp)
+            log = logs / "phase9-issue659-r2-minimal.log"
+            log.write_text(
+                "worker summary\n"
+                "SOLVER_DONE:minimal:propose:shared-reader\n"
+                "https://github.com/example/repo/issues/659\n"
+                "DONE_AT=2026-06-07T00:00:00Z\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertTrue(marker.found)
+            self.assertEqual(marker.marker, "SOLVER_DONE:minimal:propose:shared-reader")
+            self.assertEqual(marker.source, "log")
+
+    def test_solver_marker_tail_requires_unique_role_matching_standalone_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self.repo(tmp)
+            wrong_role = logs / "phase9-issue659-r2-minimal.log"
+            wrong_role.write_text(
+                "SOLVER_DONE:structural:propose:wrong-role\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            conflict = logs / "solver-issue659-r2-delete.log"
+            conflict.write_text(
+                "SOLVER_DONE:delete:propose:first\n"
+                "SOLVER_DONE:delete:reject:second\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                read_worker_terminal_marker(wrong_role).reason,
+                "duplicate_or_conflicting_log_marker",
+            )
+            self.assertEqual(
+                read_worker_terminal_marker(conflict).reason,
+                "duplicate_or_conflicting_log_marker",
+            )
+
     def test_reads_same_stem_artifact_when_log_markerless(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, runs = self.repo(tmp)
@@ -68,6 +115,21 @@ class WorkerMarkerReaderTests(unittest.TestCase):
 
             self.assertEqual(marker.marker, "REVIEW_DONE:42:quality:approve")
             self.assertEqual(marker.source, "artifact")
+
+    def test_solver_artifact_fallback_requires_role_matching_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            log = logs / "phase9-issue659-r2-minimal.log"
+            log.write_text("solver output\nEXIT=0\n", encoding="utf-8")
+            (runs / "phase9-issue659-r2-minimal.md").write_text(
+                "SOLVER_DONE:structural:propose:wrong-role\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertFalse(marker.found)
+            self.assertEqual(marker.reason, "duplicate_or_conflicting_artifact_marker")
 
     def test_artifact_fallback_is_same_stem_clean_exit_and_allowlisted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -291,6 +353,7 @@ class WorkerMarkerReaderTests(unittest.TestCase):
             "codex_refactor_loop/wakeup_plan.py",
             "codex_refactor_loop/wakeup_runner.py",
             "codex_refactor_loop/implement_lifecycle.py",
+            "codex_refactor_loop/phase9/router.py",
         ):
             source = (SCRIPT_DIR / relative).read_text(encoding="utf-8")
             with self.subTest(relative=relative):

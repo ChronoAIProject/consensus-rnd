@@ -33,6 +33,7 @@ from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..managed_work_snapshot import ManagedWorkSnapshotItem
 from ..prompt_contracts import inline_prompt_contracts
 from ..transition_assessment import TransitionAssessment, TransitionAssessmentReader, projection_lines
+from ..worker_markers import log_has_clean_exit, read_worker_terminal_marker
 from ..workflow_stages import format_stage
 from .. import labels as label_catalog
 
@@ -49,12 +50,6 @@ LIFECYCLE_PREFIXES = (
     "TEST_ADD_DONE",
     "META_RESOLVED",
 )
-KNOWN_PREFIXES = (
-    "SOLVER_DONE:",
-    "META_JUDGE_DONE:",
-    *LIFECYCLE_PREFIXES,
-)
-MARKER_RE = re.compile(r"^(?:[A-Z][A-Z0-9_]*_(?:DONE|RESOLVED|BLOCKED)|META_JUDGE_DONE):[^\s`]+$")
 
 
 class Phase9MarkerGrammar:
@@ -408,85 +403,31 @@ class Phase9Router:
         return markers
 
     def _final_marker_from_path(self, path: Path) -> str | None:
-        return self._final_marker_from_completed_log(path) or self._companion_artifact_marker_fallback(path)
-
-    def _final_marker_from_completed_log(self, path: Path) -> str | None:
-        tail = self._read_tail_lines(path, self.MARKER_TAIL_LINES)
-        try:
-            exit_index = max(index for index, line in enumerate(tail) if line.strip() == "EXIT=0")
-        except ValueError:
+        marker_read = read_worker_terminal_marker(path)
+        marker = marker_read.marker
+        if marker is None:
             return None
-        before_exit = tail[:exit_index]
-        for line in reversed(before_exit):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            marker = self._extract_marker(stripped)
-            if marker is not None:
+        identity = self._identity_from_path(path)
+        if identity is None:
+            return None
+        if identity.actor in self._solver_roles():
+            return marker if marker.startswith(f"SOLVER_DONE:{identity.actor}:") else None
+        if identity.actor == self._judge_role():
+            if marker.startswith("META_JUDGE_DONE:"):
                 return marker
-            break
-        for index, line in enumerate(before_exit):
-            if "⟦AI:AUTO-LOOP⟧" not in line:
-                continue
-            for candidate in before_exit[index + 1 : index + 4]:
-                marker = self._extract_marker(candidate.strip())
-                if marker is not None:
-                    return marker
+            if any(marker.startswith(prefix) for prefix in LIFECYCLE_PREFIXES):
+                return marker
+            return Phase9MarkerGrammar.parse_marker_candidate(marker)
+        if identity.actor == "reflector":
+            if marker.startswith("META_RESOLVED:"):
+                return marker
+            if any(marker.startswith(prefix) for prefix in LIFECYCLE_PREFIXES):
+                return marker
+            return Phase9MarkerGrammar.parse_marker_candidate(marker)
         return None
 
     def _companion_artifact_marker_fallback(self, log_path: Path) -> str | None:
-        identity = self._identity_from_path(log_path)
-        if identity is None:
-            return None
-        if identity.actor not in (*self._solver_roles(), self._judge_role()):
-            return None
-        if not self._is_clean_exit(log_path):
-            return None
-        artifact = self.runs_dir / f"{log_path.stem}.md"
-        allowed_prefix = "SOLVER_DONE:" if identity.actor in self._solver_roles() else "META_JUDGE_DONE:"
-        for line in reversed(self._read_tail_lines(artifact, self.MARKER_TAIL_LINES)):
-            marker = self._extract_marker(line.strip())
-            if marker and marker.startswith(allowed_prefix):
-                return marker
-        return None
-
-    def _extract_marker(self, line: str) -> str | None:
-        stripped = line.strip()
-        if stripped.startswith("+") and not stripped.startswith("+++"):
-            stripped = stripped[1:].strip()
-        stripped = stripped.strip("`")
-        if self._is_placeholder_or_echo(stripped):
-            return None
-        candidate: str | None = None
-        if any(stripped.startswith(prefix) for prefix in KNOWN_PREFIXES):
-            candidate = stripped
-        if candidate is None:
-            match = MARKER_RE.fullmatch(stripped)
-            if match:
-                candidate = match.group(0)
-        if candidate is None:
-            return None
-        if any(candidate.startswith(prefix) for prefix in LIFECYCLE_PREFIXES):
-            return candidate
-        return Phase9MarkerGrammar.parse_marker_candidate(candidate)
-
-    def _is_placeholder_or_echo(self, text: str) -> bool:
-        if "<" in text and ">" in text:
-            return True
-        lowered = text.lower()
-        if "template" in lowered or "example" in lowered or "emits `" in lowered:
-            return True
-        if "round-n" in lowered:
-            return True
-        if "|" in text and any(prefix in text for prefix in KNOWN_PREFIXES):
-            return True
-        if "\\\"" in text or '\\"' in text:
-            return True
-        if "r+1" in text or "round-k+" in lowered or "round-n+" in lowered:
-            return True
-        if any(f"{prefix}*" in text or f"{prefix}:*" in text for prefix in KNOWN_PREFIXES):
-            return True
-        return False
+        return self._final_marker_from_path(log_path)
 
     def _load_persisted_fallback_seen(self) -> set[str]:
         """Seed _fallback_seen from existing pending-events log so restart is idempotent."""
@@ -532,10 +473,7 @@ class Phase9Router:
         return parse_phase9_log_identity(path.name)
 
     def _is_clean_exit(self, path: Path) -> bool:
-        tail = self._read_tail_lines(path, 5)
-        if not tail:
-            return False
-        return any(re.match(r"^EXIT=0$", line) for line in tail)
+        return log_has_clean_exit(path)
 
     def _dispatch_solver_triplets(self, markers: list[Marker], ledger: set[str]) -> None:
         solver_roles = self._solver_roles()
@@ -976,10 +914,10 @@ class Phase9Router:
         return timedelta(hours=hours)
 
     def _recover_actor_health(self, ledger: set[str]) -> None:
-        self._quarantine_markerless_solver_logs()
+        self._append_markerless_solver_exhausted_events()
         self._recover_stale_ledgered_actors(ledger)
 
-    def _quarantine_markerless_solver_logs(self) -> None:
+    def _append_markerless_solver_exhausted_events(self) -> None:
         markerless_by_round: dict[tuple[str, int], list[Phase9ActorHealth]] = {}
         for log_path in sorted(self.logs_dir.glob("*.log")):
             identity = self._identity_from_path(log_path)
@@ -989,33 +927,20 @@ class Phase9Router:
             if health.markerless_clean_log is not None and health.valid_marker is None:
                 markerless_by_round.setdefault((identity.issue, identity.round), []).append(health)
         for (issue, round_no), healths in markerless_by_round.items():
-            quarantined = []
-            for health in healths:
-                assert health.markerless_clean_log is not None
-                quarantined.append(self._quarantine_markerless_log(health.markerless_clean_log))
             self._append_actor_health_fallback_event(
                 issue,
                 round_no,
-                "phase9-actor-markerless-quarantine",
+                "phase9-solver-markerless-exhausted",
                 "solver_triplet_to_judge",
                 {
-                    "quarantined_logs": [self._artifact_path(path) for path in quarantined],
+                    "markerless_logs": [
+                        self._artifact_path(health.markerless_clean_log)
+                        for health in healths
+                        if health.markerless_clean_log is not None
+                    ],
                     "roles": sorted(health.actor for health in healths),
                 },
             )
-
-    def _quarantine_markerless_log(self, log_path: Path) -> Path:
-        target = log_path.with_name(f"{log_path.stem}.markerless-quarantine.log")
-        if not target.exists():
-            log_path.replace(target)
-            return target
-        suffix = 1
-        while True:
-            candidate = log_path.with_name(f"{log_path.stem}.markerless-quarantine-{suffix}.log")
-            if not candidate.exists():
-                log_path.replace(candidate)
-                return candidate
-            suffix += 1
 
     def _recover_stale_ledgered_actors(self, ledger: set[str]) -> None:
         now = datetime.now(timezone.utc)
@@ -1671,7 +1596,7 @@ class Phase9Router:
         issue: str,
         round_no: int,
         reason: Literal[
-            "phase9-actor-markerless-quarantine",
+            "phase9-solver-markerless-exhausted",
             "phase9-actor-recovery-prompt-unavailable",
         ],
         route: str,
