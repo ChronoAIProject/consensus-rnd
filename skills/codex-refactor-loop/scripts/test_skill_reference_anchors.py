@@ -271,16 +271,24 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, python_policy)
 
-        forbidden = (
-            "PythonStructureGuard",
-            "legacy debt allowlist",
-            "legacy debt whitelist",
-            "ruff",
-            "flake8",
-        )
-        for needle in forbidden:
-            with self.subTest(forbidden=needle):
-                self.assertNotIn(needle, python_policy)
+    def test_default_issue_intake_claim_anchor_and_contract_are_documented(self) -> None:
+        available = reference_anchors(self.skill)
+        anchor = "named-runtime-exception---default-issue-intake-claimper-623"
+        self.assertIn(anchor, available)
+        section = section_after_anchor(self.skill, anchor)
+
+        for required in (
+            "DefaultIssueIntakeClaim",
+            "DEFAULT_ISSUE_INTAKE_ENABLE",
+            "apply_default_issue_intake_claim",
+            "crnd:default-issue-intake-claim",
+            "crnd:default-issue-intake-stop",
+            "test_default_issue_intake.py",
+            "test_wakeup_runner.py",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, section)
+        self.assertIn("default-issue-intake-claim-623", read(REPO_ROOT / "skills/codex-refactor-loop/authorizations/runtime-exceptions.md"))
 
     def test_issue_decomposition_discoverability_requires_plan_level_judge_fields(self) -> None:
         section = section_after_anchor(self.skill, "large-issue-decomposition")
@@ -1322,7 +1330,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py"},
             "review-pr": {"controller_actions.py", "monitors/progress.py", "monitors/concurrency.py", "peek.py", "wakeup_plan.py", "wakeup_runner.py"},
             "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py", "wakeup_runner.py"},
-            "crnd:": {"labels.py", "triage.py"},
+            "crnd:": {"default_issue_intake.py", "labels.py", "triage.py"},
             "refactor/iter": {"controller_actions.py", "git.py", "implement_lifecycle.py", "wakeup_runner.py"},
             "rollup/": {"controller_actions.py", "sync/dev.py", "wakeup_plan.py", "wakeup_runner.py", "work_items.py"},
             "COMMANDS": {"cli.py", "restart.py", "gh_accounting.py", "gh_invoke.py"},

@@ -188,7 +188,7 @@ def _find_log_exceptions(log_dir: Path) -> tuple[PatrolFinding, ...]:
     findings = []
     for path in sorted(log_dir.glob("*.log"))[-200:]:
         lines = _read_tail_or_fail(path, 80)
-        signal = _terminal_failure_signal(lines)
+        signal = _log_failure_signal(lines)
         if signal is None:
             continue
         evidence = signal.evidence
@@ -198,7 +198,7 @@ def _find_log_exceptions(log_dir: Path) -> tuple[PatrolFinding, ...]:
             PatrolFinding(
                 kind="exception-log",
                 source=_repo_local_source(path),
-                summary=f"worker log terminal failure EXIT={signal.exit_code} in {path.name}",
+                summary=f"{signal.summary} in {path.name}",
                 severity="high",
                 evidence=evidence[-10:],
             )
@@ -279,8 +279,20 @@ def _item_ref(item: GhItem | Mapping[str, object]) -> str:
 
 @dataclass(frozen=True)
 class TerminalFailureSignal:
-    exit_code: int
+    summary: str
     evidence: tuple[str, ...]
+
+
+def _log_failure_signal(lines: Sequence[str]) -> TerminalFailureSignal | None:
+    exit_signal = _terminal_failure_signal(lines)
+    if exit_signal is not None:
+        return exit_signal
+    if _has_exit_marker(lines):
+        return None
+    evidence = _extract_log_diagnostic_evidence(lines)
+    if not evidence:
+        return None
+    return TerminalFailureSignal(summary="runtime log reports exception signals", evidence=evidence)
 
 
 def _terminal_failure_signal(lines: Sequence[str]) -> TerminalFailureSignal | None:
@@ -289,10 +301,17 @@ def _terminal_failure_signal(lines: Sequence[str]) -> TerminalFailureSignal | No
         if exit_code is None:
             continue
         if exit_code == 0:
-            return None
+            evidence = tuple(line for line in lines if _line_is_worker_self_post_failure(line))
+            if not evidence:
+                return None
+            return TerminalFailureSignal(summary="worker log self-post failure after clean EXIT=0", evidence=evidence)
         evidence = _terminal_failure_evidence(lines, index)
-        return TerminalFailureSignal(exit_code=exit_code, evidence=evidence)
+        return TerminalFailureSignal(summary=f"worker log terminal failure EXIT={exit_code}", evidence=evidence)
     return None
+
+
+def _has_exit_marker(lines: Sequence[str]) -> bool:
+    return any(_parse_exit_line(line) is not None for line in lines)
 
 
 def _parse_exit_line(line: str) -> int | None:
@@ -316,6 +335,55 @@ def _terminal_failure_evidence(lines: Sequence[str], exit_index: int) -> tuple[s
     if structured_failure:
         return tuple(structured_failure + [lines[exit_index]])
     return tuple(window)
+
+
+def _extract_log_diagnostic_evidence(lines: Sequence[str]) -> tuple[str, ...]:
+    evidence: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line == "Traceback (most recent call last):":
+            block, next_index = _extract_traceback_block(lines, index)
+            if block:
+                evidence.extend(block)
+            index = next_index
+            continue
+        if _is_single_line_diagnostic(line) or _is_command_failure_summary(line):
+            evidence.append(line)
+        index += 1
+    return tuple(evidence)
+
+
+def _extract_traceback_block(lines: Sequence[str], start: int) -> tuple[tuple[str, ...], int]:
+    block = [lines[start]]
+    index = start + 1
+    while index < len(lines):
+        line = lines[index]
+        block.append(line)
+        index += 1
+        if _is_python_exception_line(line):
+            return tuple(block), index
+    return (), index
+
+
+def _is_single_line_diagnostic(line: str) -> bool:
+    return line.startswith(("FATAL:", "POST_FAILED:", "RuntimeError:"))
+
+
+def _is_command_failure_summary(line: str) -> bool:
+    lowered = line.lower()
+    return lowered.startswith(("command failed:", "command failure:", "cmd failed:"))
+
+
+def _is_python_exception_line(line: str) -> bool:
+    if line.startswith((" ", "\t")):
+        return False
+    exception_type = line.split(":", 1)[0].strip()
+    return exception_type.endswith(("Error", "Exception")) or exception_type in {"KeyboardInterrupt", "SystemExit"}
+
+
+def _line_is_worker_self_post_failure(line: str) -> bool:
+    return line.strip().startswith("POST_FAILED:")
 
 
 def _read_tail_or_fail(path: Path, max_lines: int) -> tuple[str, ...]:
