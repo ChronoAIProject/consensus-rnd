@@ -24,7 +24,7 @@ CLI = SCRIPT_DIR / "consensus-rnd-cli"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.active_controller import LeaseDecision
-from codex_refactor_loop.runtime_retention import RETENTION_TTL_HOURS, main as runtime_retention_main, retain_runtime
+from codex_refactor_loop.runtime_retention import main as runtime_retention_main, retain_runtime
 
 
 class RuntimeRetentionBehaviorTests(unittest.TestCase):
@@ -162,7 +162,7 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         self.assertTrue(old_log.exists())
         self.assertTrue(stale.exists())
 
-    def test_deletes_only_host_opt_in_generated_regular_files_older_than_24h(self) -> None:
+    def test_generated_file_gc_fails_closed_without_file_level_planner_proof(self) -> None:
         old_log = self.write_file(".refactor-loop/logs/old.log", "done\nEXIT=0\n", 25)
         old_prompt = self.write_file(".refactor-loop/prompts/old.md", "prompt\n", 25)
         old_run = self.write_file(".refactor-loop/runs/old.json", "{}\n", 25)
@@ -172,17 +172,16 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
 
         result = retain_runtime(self.repo, enabled=True)
 
-        self.assertEqual((result.deleted, result.missing), (3, False))
+        self.assertEqual((result.deleted, result.kept, result.missing), (0, 0, False))
         self.assertEqual(result.target.resolve(), self.refactor_loop.resolve())
-        self.assertFalse(old_log.exists())
-        self.assertFalse(old_prompt.exists())
-        self.assertFalse(old_run.exists())
+        self.assertTrue(old_log.exists())
+        self.assertTrue(old_prompt.exists())
+        self.assertTrue(old_run.exists())
         self.assertTrue(young_log.exists())
         self.assertTrue(old_non_generated.exists())
         self.assertTrue(state_artifact.exists())
-        self.assertEqual(RETENTION_TTL_HOURS, 24)
 
-    def test_keeps_symlink_and_non_regular_generated_paths(self) -> None:
+    def test_generated_path_symlink_and_non_regular_files_are_retained_without_counting(self) -> None:
         old_target = self.write_file(".refactor-loop/logs/target.log", "target\n", 25)
         symlink_log = self.refactor_loop / "logs" / "linked.log"
         symlink_log.symlink_to(old_target)
@@ -191,11 +190,10 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
 
         result = retain_runtime(self.repo, enabled=True)
 
-        self.assertEqual(result.deleted, 1)
-        self.assertGreaterEqual(result.kept, 2)
+        self.assertEqual((result.deleted, result.kept), (0, 0))
         self.assertTrue(symlink_log.is_symlink())
         self.assertTrue(fifo_log.exists())
-        self.assertFalse(old_target.exists())
+        self.assertTrue(old_target.exists())
 
     def test_pending_events_compaction_preserves_same_inode_tail(self) -> None:
         pending = self.refactor_loop / ".controller-pending-events.log"
@@ -300,7 +298,7 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         self.write_file(".refactor-loop/logs/old.log", "done\nEXIT=0\n", 25)
         result = self.run_cli()
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("runtime_retention: enabled=true ttl_hours=24 deleted=1", result.stdout)
+        self.assertIn("runtime_retention: enabled=true ttl_hours=24 deleted=0 kept=0", result.stdout)
         self.assertIn("removed_worktrees=0", result.stdout)
         self.assertIn("diagnostics=none", result.stdout)
 
@@ -463,6 +461,8 @@ class RuntimeRetentionSourceRegressionTests(unittest.TestCase):
             "PENDING_EVENTS_MAX_LINES",
             ".controller-pending-events.log",
             "same-inode",
+            "deleted = 0",
+            "kept = 0",
             '"worktree", "remove"',
             '"worktree", "prune"',
             "no_in_flight",
