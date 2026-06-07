@@ -35,6 +35,7 @@ from codex_refactor_loop.implementation_pr_artifacts import (
 )
 from codex_refactor_loop.issue_decomposition import (
     IssueDecompositionError,
+    applied_issue_decomposition_parent_suppresses_expected_worker,
     issue_decomposition_plan_file_digest,
 )
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
@@ -986,11 +987,31 @@ def expected_from_open_items(
         expected = label_catalog.phase_expected_workers(phase_label)
         if expected <= 0:
             continue
-        if repo_root is not None and item.kind == "issue" and _issue_has_terminal_implement_projection(repo_root, item.number):
+        if (
+            repo_root is not None
+            and item.kind == "issue"
+            and phase_label == label_catalog.PHASE_IMPLEMENTING
+            and _issue_has_terminal_implement_projection(repo_root, item.number)
+        ):
+            continue
+        if (
+            repo_root is not None
+            and item.kind == "issue"
+            and phase_label == label_catalog.PHASE_DESIGN_SOLVING
+            and _issue_is_applied_decomposition_parent(repo_root, item.number)
+        ):
             continue
         breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase_label, "expected": expected})
         total += expected
     return total, breakdown
+
+
+def _issue_is_applied_decomposition_parent(repo_root: Path, issue: int) -> bool:
+    return applied_issue_decomposition_parent_suppresses_expected_worker(
+        LoopContext.load(repo_root=repo_root, env=_repo_local_context_env(repo_root, os.environ), cwd=repo_root, read_only=True),
+        issue,
+        command_runner=lambda command: git_text(list(command), cwd=repo_root),
+    )
 
 
 def _issue_has_terminal_implement_projection(repo_root: Path, issue: int) -> bool:

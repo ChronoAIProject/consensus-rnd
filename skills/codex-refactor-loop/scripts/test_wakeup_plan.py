@@ -416,6 +416,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    open_design_parent_537)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":537,"title":"decomposition parent","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     open_issue_53)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":53,"title":"drop target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
@@ -772,6 +779,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "issue view" || "$cmd1 $cmd2" == "pr view" ]]; then
+                  comments_file="${WAKEUP_PLAN_REPO_ROOT:-.}/gh-${cmd1}-${cmd3}-comments.json"
+                  if [[ -f "$comments_file" ]]; then
+                    cat "$comments_file"
+                    exit 0
+                  fi
                   printf '{"comments":[]}\n'
                   exit 0
                 fi
@@ -855,6 +867,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             ],
             "open_issue_453": [issue(453, "solver target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_403": [issue(403, "decompose target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_design_parent_537": [issue(537, "decomposition parent", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_537": [issue(537, "decompose handoff target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "open_issue_53": [issue(53, "drop target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_54": [issue(54, "judge target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
@@ -1460,6 +1473,41 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         (self.repo / plan_path).unlink()
         ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
         return target, issue_decomposition_plan_file_digest(ctx, target)
+
+    def write_applied_issue_decomposition_evidence(
+        self,
+        *,
+        issue: int = 537,
+        round_no: int = 6,
+        marker: str = "META_JUDGE_DONE:consensus:decompose:real",
+        ledger_rows: tuple[tuple[str, str], ...] = (("applied", ""),),
+    ) -> tuple[str, str]:
+        plan_path, digest = self.write_issue_decomposition_plan_artifacts(issue=issue, round_no=round_no)
+        comments_path = self.repo / f"gh-issue-{issue}-comments.json"
+        comments_path.write_text(
+            json.dumps({"comments": [{"body": f"tracked\nIssueDecompositionPlan digest: {digest}\n⟦AI:AUTO-LOOP⟧\n"}]}),
+            encoding="utf-8",
+        )
+        ledger = self.repo / ".refactor-loop" / "state" / "wakeup-runner-ledger.jsonl"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        action_id = f"completed-marker:phase9-issue{issue}-r{round_no}-judge.log:{marker}"
+        ledger.write_text(
+            "".join(
+                json.dumps(
+                    {
+                        "action_id": action_id,
+                        "kind": "completed-marker",
+                        "reason": reason,
+                        "status": status,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
+                for status, reason in ledger_rows
+            ),
+            encoding="utf-8",
+        )
+        return plan_path, digest
 
     def write_implement_result(self, *, issue: int = 537, status: str = "partial") -> None:
         self.append_harness_spawn_intent(
@@ -5677,6 +5725,65 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             [{"expected": 1, "id": "#255", "kind": "pr", "phase": label_catalog.PHASE_REVIEWING}],
         )
 
+    def test_applied_issue_decomposition_parent_does_not_count_expected_worker(self) -> None:
+        self.write_applied_issue_decomposition_evidence(issue=537, round_no=6)
+
+        plan, stdout = self.run_plan_with_stdout(fixture="open_design_parent_537", ps_count=0)
+
+        self.assertEqual(plan["concurrency"]["expected_breakdown"], [])
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
+
+    def test_hybrid_applied_duplicate_issue_decomposition_parent_does_not_count_expected_worker(self) -> None:
+        self.write_applied_issue_decomposition_evidence(
+            issue=537,
+            round_no=1,
+            marker="META_JUDGE_DONE:consensus:hybrid-A+B:bounded decomposition only; stage0 first, later runtime/gate/headless cleanup as child design issues",
+            ledger_rows=(("applied", ""), ("skipped", "duplicate")),
+        )
+
+        plan, stdout = self.run_plan_with_stdout(fixture="open_design_parent_537", ps_count=0)
+
+        self.assertEqual(plan["concurrency"]["expected_breakdown"], [])
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
+
+    def test_only_duplicate_issue_decomposition_parent_still_counts_expected_worker(self) -> None:
+        self.write_applied_issue_decomposition_evidence(
+            issue=537,
+            round_no=6,
+            ledger_rows=(("skipped", "duplicate"),),
+        )
+
+        plan, stdout = self.run_plan_with_stdout(fixture="open_design_parent_537", ps_count=0)
+
+        self.assertEqual(
+            plan["concurrency"]["expected_breakdown"],
+            [{"expected": 1, "id": "#537", "kind": "issue", "phase": label_catalog.PHASE_DESIGN_SOLVING}],
+        )
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 1)
+        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
+        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+
+    def test_unapplied_issue_decomposition_parent_still_counts_expected_worker(self) -> None:
+        self.write_issue_decomposition_plan_artifacts(issue=537, round_no=6)
+
+        plan, stdout = self.run_plan_with_stdout(fixture="open_design_parent_537", ps_count=0)
+
+        self.assertEqual(
+            plan["concurrency"]["expected_breakdown"],
+            [{"expected": 1, "id": "#537", "kind": "issue", "phase": label_catalog.PHASE_DESIGN_SOLVING}],
+        )
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 1)
+        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
+        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+
     def test_draft_release_rollup_is_not_expected_active_review_task(self) -> None:
         plan = self.run_plan(fixture="draft_rollup_and_review_prs", ps_count=5)
 
@@ -5746,6 +5853,27 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual([action for action in plan["actions"] if action["kind"] == "existing-issue"], [])
         self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
         self.assertEqual(plan["concurrency"]["expected_breakdown"], [])
+
+    def test_design_solving_issue_keeps_expected_worker_despite_old_implement_terminal(self) -> None:
+        (self.logs / "implement-issue-537.log").write_text(
+            "old implementation terminal\nIMPLEMENT_DONE:issue-537:partial\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        item = GhItem(
+            "issue",
+            537,
+            "design target",
+            (label_catalog.MANAGED, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_AUTO),
+        )
+
+        concurrency = concurrency_plan(self.repo, fixed_point=False, gh_items=[item], monitor=None)
+
+        self.assertEqual(concurrency["expected_from_active_tasks"], 1)
+        self.assertEqual(
+            concurrency["expected_breakdown"],
+            [{"expected": 1, "id": "#537", "kind": "issue", "phase": label_catalog.PHASE_DESIGN_SOLVING}],
+        )
+        self.assertTrue(concurrency["hard_gate"]["active"])
 
     def test_github_action_queries_only_open_auto_loop_items(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")

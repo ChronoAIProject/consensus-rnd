@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import re
 import hashlib
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Sequence
 
 from .context import LoopContext, LoopContextError
 from .github_body import GitHubBodyError, validate_self_contained_github_body
@@ -159,6 +160,116 @@ def issue_decomposition_plan_file_digest(ctx: LoopContext, plan_path: str | Path
     except json.JSONDecodeError as exc:
         raise IssueDecompositionError(f"invalid IssueDecompositionPlan JSON: {exc}") from exc
     return issue_decomposition_plan_digest(raw)
+
+
+def applied_issue_decomposition_parent_suppresses_expected_worker(
+    ctx: LoopContext,
+    parent_issue: int,
+    *,
+    command_runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] | None = None,
+) -> bool:
+    """Return true when a design-solving issue is an already-applied decomposition parent."""
+
+    for plan_path in _candidate_issue_decomposition_plan_paths(ctx, parent_issue):
+        try:
+            plan = load_issue_decomposition_plan(ctx, plan_path)
+            digest = issue_decomposition_plan_file_digest(ctx, plan_path)
+        except IssueDecompositionError:
+            continue
+        if plan.parent_issue != parent_issue:
+            continue
+        if not _parent_comment_has_plan_digest_sentinel(ctx, parent_issue, digest, command_runner=command_runner):
+            continue
+        if not _wakeup_runner_has_applied_issue_decomposition_action(ctx, plan):
+            continue
+        return True
+    return False
+
+
+def _candidate_issue_decomposition_plan_paths(ctx: LoopContext, parent_issue: int) -> tuple[str, ...]:
+    canonical = ctx.paths.runs / f"issue-{parent_issue}-decomposition" / "plan.json"
+    candidates: list[str] = []
+    if canonical.is_file():
+        candidates.append(ctx.durable_artifact_path(canonical))
+    for path in sorted(ctx.paths.runs.glob("issue-*-decomposition/plan.json")):
+        rel = ctx.durable_artifact_path(path)
+        if rel not in candidates:
+            candidates.append(rel)
+    return tuple(candidates)
+
+
+def _parent_comment_has_plan_digest_sentinel(
+    ctx: LoopContext,
+    parent_issue: int,
+    digest: str,
+    *,
+    command_runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] | None,
+) -> bool:
+    runner = command_runner or (
+        lambda command: subprocess.run(
+            list(command),
+            cwd=str(ctx.repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    )
+    result = runner(["gh", "issue", "view", str(parent_issue), "--json", "comments"])
+    if result.returncode != 0:
+        return False
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return False
+    comments = payload.get("comments") if isinstance(payload, dict) else None
+    if not isinstance(comments, list):
+        return False
+    sentinel = f"IssueDecompositionPlan digest: {digest}"
+    hits = [
+        comment
+        for comment in comments
+        if isinstance(comment, dict) and isinstance(comment.get("body"), str) and sentinel in comment["body"]
+    ]
+    return len(hits) == 1
+
+
+def _wakeup_runner_has_applied_issue_decomposition_action(ctx: LoopContext, plan: IssueDecompositionPlan) -> bool:
+    ledger = ctx.paths.state / "wakeup-runner-ledger.jsonl"
+    if not ledger.is_file():
+        return False
+    source_log = Path(plan.source_consensus_artifact).with_suffix(".log").name
+    action_prefix = f"completed-marker:{source_log}:"
+    action_statuses: dict[str, tuple[bool, str, str]] = {}
+    try:
+        lines = ledger.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        action_id = str(row.get("action_id") or "")
+        if row.get("kind") not in (None, "completed-marker"):
+            continue
+        if not action_id.startswith(action_prefix):
+            continue
+        if not _completed_marker_action_id_is_decomposition_consensus(action_id, action_prefix):
+            continue
+        if row.get("status") == "applied":
+            action_statuses[action_id] = (True, "applied", "")
+        elif row.get("status") == "skipped" and row.get("reason") == "duplicate":
+            was_applied = action_statuses.get(action_id, (False, "", ""))[0]
+            action_statuses[action_id] = (was_applied, "skipped", "duplicate")
+    return any(
+        was_applied and (status == "applied" or (status == "skipped" and reason == "duplicate"))
+        for was_applied, status, reason in action_statuses.values()
+    )
+
+
+def _completed_marker_action_id_is_decomposition_consensus(action_id: str, action_prefix: str) -> bool:
+    marker = action_id.removeprefix(action_prefix)
+    return marker.startswith("META_JUDGE_DONE:consensus:")
 
 
 def _resolve_input_path(ctx: LoopContext, plan_path: str | Path) -> Path:
