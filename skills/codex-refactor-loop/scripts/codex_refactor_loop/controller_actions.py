@@ -288,12 +288,17 @@ class ControllerActions:
         if fetch.returncode != 0:
             sys.stderr.write(f"safe_sync_main: fetch failed for {remote}/{branch}\n")
             return fetch.returncode
-        ahead_count = self._rev_count(f"{remote}/{branch}..HEAD")
-        behind = self.git(["rev-list", "--count", f"HEAD..{remote}/{branch}"], check=False)
-        try:
-            behind_count = int((behind.stdout or "0").strip() or "0")
-        except ValueError:
-            behind_count = 0
+        ahead_range = f"{remote}/{branch}..HEAD"
+        behind_range = f"HEAD..{remote}/{branch}"
+        ahead_count = self._rev_count(ahead_range)
+        behind_count = self._rev_count(behind_range)
+        if ahead_count is None or behind_count is None:
+            failed_range = ahead_range if ahead_count is None else behind_range
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:rev-count-failed:{branch}:{failed_range}")
+            sys.stderr.write(
+                f"safe_sync_main: rev-list count failed for {failed_range} on {remote}/{branch}; skipping\n"
+            )
+            return 0
         if ahead_count > 0:
             state = "diverged" if behind_count > 0 else "local-ahead"
             self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:{state}:{branch}:ahead={ahead_count}:behind={behind_count}")
@@ -313,12 +318,14 @@ class ControllerActions:
         print(f"safe_sync_main: already up to date with {remote}/{branch}")
         return 0
 
-    def _rev_count(self, revision_range: str) -> int:
+    def _rev_count(self, revision_range: str) -> int | None:
         result = self.git(["rev-list", "--count", revision_range], check=False)
+        if result.returncode != 0:
+            return None
         try:
             return int((result.stdout or "0").strip() or "0")
         except ValueError:
-            return 0
+            return None
 
     def _tracked_tree_clean(self, worktree: Path) -> bool:
         unstaged = self._git_in(worktree, ["diff", "--quiet"], check=False)
@@ -328,13 +335,19 @@ class ControllerActions:
     def _git_operation_in_progress(self, worktree: Path) -> str:
         for name in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REBASE_HEAD"):
             git_path = self._git_in(worktree, ["rev-parse", "--git-path", name], check=False)
-            if git_path.returncode == 0 and Path(git_path.stdout.strip()).exists():
+            path = self._git_path_from_output(worktree, git_path.stdout)
+            if git_path.returncode == 0 and path.exists():
                 return name
         for name in ("rebase-merge", "rebase-apply"):
             git_path = self._git_in(worktree, ["rev-parse", "--git-path", name], check=False)
-            if git_path.returncode == 0 and Path(git_path.stdout.strip()).exists():
+            path = self._git_path_from_output(worktree, git_path.stdout)
+            if git_path.returncode == 0 and path.exists():
                 return name
         return ""
+
+    def _git_path_from_output(self, worktree: Path, output: str) -> Path:
+        path = Path(output.strip())
+        return path if path.is_absolute() else worktree / path
 
     def safe_worktree(self, iteration: str, cluster: str, base: str) -> tuple[Path, str]:
         _validate_safe_worktree_fields(str(iteration), cluster)

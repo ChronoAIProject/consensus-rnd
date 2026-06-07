@@ -11,6 +11,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -233,6 +234,76 @@ class SafePushHelperTests(unittest.TestCase):
         self.assertIn("tracked worktree changes", result.stderr)
         events = self.local / ".refactor-loop" / ".controller-pending-events.log"
         self.assertIn("SAFE_SYNC_MAIN_PENDING:tracked-dirty:main", events.read_text(encoding="utf-8"))
+
+    def test_safe_sync_main_skips_git_operation_in_progress_without_fetch_or_merge(self) -> None:
+        original_remote_tracking = git(self.local, "rev-parse", "refs/remotes/origin/main").stdout.strip()
+        (self.other / "remote.txt").write_text("remote\n", encoding="utf-8")
+        git(self.other, "add", ".")
+        git(self.other, "commit", "-m", "remote-only")
+        git(self.other, "push", "origin", "main")
+        git_path = git(self.local, "rev-parse", "--git-path", "rebase-merge").stdout.strip()
+        git_path = str(self.local / git_path) if not Path(git_path).is_absolute() else git_path
+        Path(git_path).mkdir(parents=True)
+
+        result = self._run_helper("safe_sync_main origin main")
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("git operation in progress", result.stderr)
+        events = self.local / ".refactor-loop" / ".controller-pending-events.log"
+        self.assertIn(
+            "SAFE_SYNC_MAIN_PENDING:git-operation-in-progress:main:rebase-merge",
+            events.read_text(encoding="utf-8"),
+        )
+        current_remote_tracking = git(self.local, "rev-parse", "refs/remotes/origin/main").stdout.strip()
+        self.assertEqual(original_remote_tracking, current_remote_tracking)
+
+    def test_safe_sync_main_skips_when_rev_count_output_is_malformed(self) -> None:
+        real_git = ControllerActions.git
+        git_commands: list[list[str]] = []
+
+        def fake_git(actions: ControllerActions, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+            git_commands.append(args)
+            if args == ["rev-list", "--count", "origin/main..HEAD"]:
+                return subprocess.CompletedProcess(["git", *args], 0, "not-a-count\n", "")
+            return real_git(actions, args, check=check)
+
+        with mock.patch.object(ControllerActions, "git", new=fake_git):
+            result = self._run_helper("safe_sync_main origin main")
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("rev-list count failed", result.stderr)
+        events = self.local / ".refactor-loop" / ".controller-pending-events.log"
+        self.assertIn(
+            "SAFE_SYNC_MAIN_PENDING:rev-count-failed:main:origin/main..HEAD",
+            events.read_text(encoding="utf-8"),
+        )
+        self.assertNotIn(["merge", "--ff-only", "origin/main"], git_commands)
+        self.assertFalse(any(command[:2] == ["push", "origin"] for command in git_commands))
+        self.assertFalse(any(command and command[0] in {"rebase", "reset"} for command in git_commands))
+
+    def test_safe_sync_main_skips_when_behind_rev_count_fails(self) -> None:
+        real_git = ControllerActions.git
+        git_commands: list[list[str]] = []
+
+        def fake_git(actions: ControllerActions, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+            git_commands.append(args)
+            if args == ["rev-list", "--count", "HEAD..origin/main"]:
+                return subprocess.CompletedProcess(["git", *args], 128, "", "bad revision\n")
+            return real_git(actions, args, check=check)
+
+        with mock.patch.object(ControllerActions, "git", new=fake_git):
+            result = self._run_helper("safe_sync_main origin main")
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("rev-list count failed", result.stderr)
+        events = self.local / ".refactor-loop" / ".controller-pending-events.log"
+        self.assertIn(
+            "SAFE_SYNC_MAIN_PENDING:rev-count-failed:main:HEAD..origin/main",
+            events.read_text(encoding="utf-8"),
+        )
+        self.assertNotIn(["merge", "--ff-only", "origin/main"], git_commands)
+        self.assertFalse(any(command[:2] == ["push", "origin"] for command in git_commands))
+        self.assertFalse(any(command and command[0] in {"rebase", "reset"} for command in git_commands))
 
 
 if __name__ == "__main__":
