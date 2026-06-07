@@ -6,7 +6,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -18,8 +17,6 @@ from .context import LoopContext, LoopContextError
 RETENTION_TTL_HOURS = 24
 PENDING_EVENTS_MAX_LINES = 2000
 RETENTION_PLAN_PATH = Path(".refactor-loop") / "state" / "runtime-retention-plan.json"
-GENERATED_DIRS = ("logs", "prompts", "runs")
-GENERATED_SUFFIXES = (".json", ".log", ".md", ".txt")
 
 
 @dataclass(frozen=True)
@@ -54,9 +51,10 @@ def retain_runtime(
     if not refactor_loop.is_dir():
         return RuntimeRetentionResult(True, 0, 0, False, 0, False, refactor_loop, True)
 
-    cutoff = int(now if now is not None else time.time()) - RETENTION_TTL_HOURS * 60 * 60
+    del now
     diagnostics: list[str] = []
-    deleted, kept = _delete_generated_files(repo_real, cutoff)
+    deleted = 0
+    kept = 0
     compacted = _compact_pending_events(refactor_loop / ".controller-pending-events.log")
     runner = command_runner or _run_git
     removed = _remove_planner_stale_worktrees(repo_real, command_runner=runner, diagnostics=diagnostics)
@@ -67,36 +65,6 @@ def retain_runtime(
         if not pruned:
             diagnostics.append(_diagnostic(repo_real, "worktree_prune_failed", code=prune.returncode, stderr=prune.stderr))
     return RuntimeRetentionResult(True, deleted, kept, compacted, removed, pruned, refactor_loop, False, tuple(diagnostics))
-
-
-def _delete_generated_files(repo_root: Path, cutoff: int) -> tuple[int, int]:
-    refactor_loop = repo_root / ".refactor-loop"
-    deleted = 0
-    kept = 0
-    for dirname in GENERATED_DIRS:
-        target_dir = (refactor_loop / dirname).resolve()
-        try:
-            target_dir.relative_to(refactor_loop.resolve())
-        except ValueError as exc:
-            raise RuntimeError(f"runtime retention target escaped .refactor-loop: {target_dir}") from exc
-        if not target_dir.is_dir():
-            continue
-        for path in target_dir.iterdir():
-            try:
-                if path.is_symlink() or not path.is_file():
-                    kept += 1
-                    continue
-                if path.suffix not in GENERATED_SUFFIXES:
-                    kept += 1
-                    continue
-                if int(path.stat().st_mtime) < cutoff:
-                    path.unlink(missing_ok=True)
-                    deleted += 1
-                else:
-                    kept += 1
-            except OSError:
-                kept += 1
-    return deleted, kept
 
 
 def _compact_pending_events(path: Path) -> bool:
