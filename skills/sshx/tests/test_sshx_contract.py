@@ -36,7 +36,8 @@ def frontmatter(text: str) -> dict[str, str]:
     return result
 
 
-<<<<<<< HEAD
+# Fix (remote-ci/contract-tests): keep both #483 helper groups after a
+# conflict-marker regression made this test module fail before discovery.
 def completed_worker_verdict(
     *,
     process_exited: bool,
@@ -61,7 +62,8 @@ def completed_worker_verdict(
     if verdict not in allowed_verdicts:
         raise ContractFailure("invalid conclusion.verdict")
     return str(verdict)
-=======
+
+
 def flight_blocks_mutation(flight: dict[str, object], work_target: str) -> bool:
     return flight.get("work_target") == work_target and flight.get("status") in {"in-flight", "retrying"}
 
@@ -84,7 +86,6 @@ def resolve_abnormal_codex_exit(flight: dict[str, object], fallback_available: b
     if fallback_available:
         return "fallback-isolated-token-subagent"
     return "abstain"
->>>>>>> origin/auto-refact-dev
 
 
 class SshxContractTests(unittest.TestCase):
