@@ -802,9 +802,13 @@ def local_ahead_count(cwd: Path, config: DevSyncConfig | None = None) -> int:
     return IntegrationSyncDaemon.from_config(cfg).local_ahead_count(cwd)
 
 
+def run_dev_sync_reconcile_tick(daemon: IntegrationSyncDaemon) -> None:
+    daemon.tick()
+
+
 def tick(config: DevSyncConfig | None = None) -> None:
     cfg = config or load_dev_sync_config()
-    IntegrationSyncDaemon.from_config(cfg).tick()
+    run_dev_sync_reconcile_tick(IntegrationSyncDaemon.from_config(cfg))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -819,7 +823,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"{exc}\n")
         return 2
     if args.once:
-        IntegrationSyncDaemon.from_config(config).tick()
+        run_dev_sync_reconcile_tick(IntegrationSyncDaemon.from_config(config))
         return 0
     with singleton_lock(config.lock_file):
         log(
@@ -840,7 +844,7 @@ def main(argv: list[str] | None = None) -> int:
         daemon = IntegrationSyncDaemon.from_config(config)
         while True:
             try:
-                daemon.tick()
+                run_dev_sync_reconcile_tick(daemon)
             except Exception as exc:
                 log(f"EXCEPTION in tick: {exc!r}")
             lease.beat()
@@ -859,6 +863,7 @@ __all__ = [
     "local_ahead_count",
     "main",
     "merge_in_progress",
+    "run_dev_sync_reconcile_tick",
     "singleton_lock",
     "tick",
     "working_tree_dirty",

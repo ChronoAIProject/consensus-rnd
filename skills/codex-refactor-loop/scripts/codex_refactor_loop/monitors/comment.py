@@ -66,7 +66,7 @@ class CommentMonitor:
 
     def run_forever(self) -> int:
         while True:
-            self.heartbeat.run_with_lease(self.tick)
+            self.heartbeat.run_with_lease(lambda: run_comment_monitor_reconcile_tick(self))
             self.heartbeat.beat()
             self.heartbeat.sleep_with_lease(self.interval)
 
@@ -275,6 +275,10 @@ class CommentMonitor:
         print(f"[{ts}] comment-monitor: tick {action}", flush=True)
 
 
+def run_comment_monitor_reconcile_tick(monitor: CommentMonitor) -> None:
+    monitor.tick()
+
+
 def is_controller_post(first_line: str, body: str) -> bool:
     if AI_SENTINEL in body or "Generated with Claude Code" in body:
         return True
@@ -340,15 +344,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--daemon", action="store_true", help="run persistently")
     mode.add_argument("--once", action="store_true", help="run one tick and exit")
-    parser.parse_args(argv)
+    args = parser.parse_args(argv)
     try:
         ctx = LoopContext.load(cwd=os.getcwd())
         monitor = CommentMonitor(ctx)
     except (LoopContextError, RuntimeError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
-    if os.environ.get("TEST_NO_LOOP") == "1":
-        monitor.tick()
+    if args.once or os.environ.get("TEST_NO_LOOP") == "1":
+        run_comment_monitor_reconcile_tick(monitor)
         return 0
     return monitor.run_forever()
 

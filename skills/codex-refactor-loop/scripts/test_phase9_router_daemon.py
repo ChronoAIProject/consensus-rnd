@@ -26,6 +26,7 @@ from codex_refactor_loop.phase9.router import (
     Phase9TerminalDecision,
     main,
     parse_phase9_log_identity,
+    run_phase9_router_reconcile_tick,
 )
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 
@@ -2341,6 +2342,13 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(commands, [])
         self.assertEqual(self.ledger_entries(), [])
+
+    def test_reconcile_tick_wrapper_preserves_phase9_tick_behavior(self) -> None:
+        router = mock.Mock(spec=Phase9Router)
+
+        run_phase9_router_reconcile_tick(router)
+
+        router.tick.assert_called_once_with()
 
 
 if __name__ == "__main__":

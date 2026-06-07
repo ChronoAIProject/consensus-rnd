@@ -635,7 +635,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
     def test_tick_empty_queue_zero_expected_writes_owner_local_status_snapshot_only(self) -> None:
         with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
             with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
-                self.monitor.tick()
+                self.module.run_concurrency_reconcile_tick(self.monitor)
 
         snapshot_path = self.refactor_loop / "state" / "statusline-snapshot.json"
         self.assertTrue(snapshot_path.exists())
