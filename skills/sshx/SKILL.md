@@ -94,6 +94,19 @@ Each `visible_inputs` value must include the same `GoalArtifact.normalized_goal`
 
 Logs are not inline in caller context. Final reports aggregate `conclusion` values only and retain `log_ref` references for optional inspection.
 
+## Worker Completion Contract
+
+For `codex-cli` workers, caller-side completion and verdict routing must be decided only from:
+
+- the worker carrier process has exited with status `0`;
+- the caller-assigned `result_ref` artifact exists;
+- the `result_ref` artifact parses as a valid `SshxResultEnvelope`;
+- `conclusion.verdict`, when the stage requires a verdict, is present and is one of that stage's allowed verdict values.
+
+A worker is not done while its carrier process is still running, even if a partial `result_ref` artifact already exists. A worker is not done when completion markers or verdict-looking text appear only in stdout, stderr, raw transcripts, final text, prompt echoes, `log_ref` content, or log tails. Those surfaces are diagnostic only and must not participate in done detection or verdict routing.
+
+`log_ref` remains required as a diagnostic artifact reference, but it is never a verdict source. Missing `conclusion`, missing `log_ref`, placeholder verdicts, and verdicts outside the stage's allowed set fail closed.
+
 ## No Context Pollution
 
 The caller context must not carry worker full reasoning or same-round peer outputs. It may carry only:
