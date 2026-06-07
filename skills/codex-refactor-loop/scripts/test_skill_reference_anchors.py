@@ -894,9 +894,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
-        self.assertIn("`MERGE`: post 中文 merge comment, then call `merge_pr <pr>` for ready+merge.", self.skill)
+        self.assertIn("`MERGE`: post merge comment according to `$HOST_WORK_LANGUAGE`, then call `merge_pr <pr>` for ready+merge.", self.skill)
         self.assertIn(
-            "`MERGE_WITH_COMMENTS`: surface comment evidence, post 中文 merge comment, then call `merge_pr <pr>` for ready+merge.",
+            "`MERGE_WITH_COMMENTS`: surface comment evidence, post merge comment according to `$HOST_WORK_LANGUAGE`, then call `merge_pr <pr>` for ready+merge.",
             self.skill,
         )
         for needle in (

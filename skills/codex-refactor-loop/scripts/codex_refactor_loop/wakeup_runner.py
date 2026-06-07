@@ -1258,6 +1258,7 @@ class WakeupRunner:
                 "SHA_SHORT": sha_short,
                 "PROJECT_RULES": "CLAUDE.md",
                 "HOST_REFACTOR_COMMENT_POLICY": "none",
+                "HOST_WORK_LANGUAGE": self.ctx.host_env.get("HOST_WORK_LANGUAGE") or "en",
             },
         )
         self._replace_remote_ci_fix_shell_defaults(prompt)

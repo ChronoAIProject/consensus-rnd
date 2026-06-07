@@ -39,7 +39,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `crnd:human:maintainer-decision` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | controller-internal `ControllerActions`, GitHub labels |
 | Spawn | Mainline codex spawn uses harness background tasks, not detached nohup. | Use one background task per codex; if detached already happened, preserve work and rely on log sweep plus wake source. | [codex invocation details](#codex-invocation-details) | `consensus-rnd-cli spawn-codex` |
 | Hard rules | All worker prompts inherit controller-level hard rules. | Include scope, git, test, language, and no-scope-creep constraints in every spawned prompt. | [hard rules details](#hard-rules-details) | prompt templates |
-| Language | Source files are English-only; external user-facing artifacts are 中文 by default. README.md + README.zh-CN.md is the only English-canonical public-doc carve-out. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
+| Language | Source files are English-only; external user-facing artifact language comes from host-owned `HOST_WORK_LANGUAGE`. README.md + README.zh-CN.md is the only English-canonical public-doc carve-out. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
 
 <a id="two-entry-modes"></a>
 ## Main path and fallback producer
@@ -137,6 +137,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$HOST_HOLISTIC_STATUS_COMMENT_ID` | optional-noop | global-dashboard-status-card | empty existing issue-comment id | required only when `$HOST_HOLISTIC_STATUS_ENABLE=true`; empty or non-numeric disables the GitHub sync path; the writer may PATCH this exact issue comment only and must not create a comment | progress-reporter | `test_progress_reporter.py`, `test_host_env_surface_matrix.py` |
 | `$HOST_HOLISTIC_STATUS_INTERVAL_SECONDS` | defaulted | global-dashboard-status-card | `600` | default to `600` seconds; unchanged rendered hash skips PATCH and only refreshes local progress-reporter bookkeeping | progress-reporter | `test_progress_reporter.py`, `test_host_env_surface_matrix.py` |
 | `$HOST_REFACTOR_COMMENT_POLICY` | defaulted | prompt templates | `none` | missing/empty/default normalizes to `none`; rationale belongs in external artifacts; explicit `self-doc-comment` is downstream compatibility opt-in and must obey source English-only; any other value is invalid and fail-closed | prompt templates | `test_host_env_surface_matrix.py`, `test_refactor_comment_policy_prompt_contract.py`, `test_source_language_policy.py` |
+| `$HOST_WORK_LANGUAGE` | defaulted | work language policy | `en` | single external user-facing artifact language fact; allowed values are `en` and `zh`; missing/empty/default normalizes to `en`; invalid values fail closed; explicit `zh` preserves Chinese working artifacts | prompt templates, GitHub body renderer, controller templates | `test_host_env_surface_matrix.py`, `test_work_language_policy.py`, `test_github_body_renderer.py` |
 | `$SOURCE_GLOBS` | optional-noop | review prompts | host source glob hints | empty means review from actual diff and project evidence; do not invent host source layout | review prompts | `test_host_env_surface_matrix.py` |
 | `$MAINTAINER_WHITELIST` | conditional-fail-closed | comment-monitor | host GitHub handles | optional for hosts without comment-monitor/direct-mention intake; when that surface runs, empty fails closed | comment-monitor | `test_comment_monitor.py` |
 | `$HOST_TEST_FILE_GLOBS` | prompt-empty-infer | prompt templates | empty | infer from existing tests; fail closed if unsafe to locate writable tests | prompt templates | `test_host_env_surface_matrix.py` |
@@ -150,6 +151,8 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 Prompt templates reference these fields as `${HOST_*}` placeholders so normal `host.env` sourcing plus `render_template`/`envsubst` injects them at prompt construction time. Do not add aliases for the rejected Set B names.
 
 `$HOST_REFACTOR_COMMENT_POLICY` controls only refactor-history self-documentation source-comment semantics. Missing, empty, or default policy is `none`, which rejects Old/New refactor-history source comments and keeps rationale in external artifacts. Explicit `self-doc-comment` is a downstream compatibility opt-in; `${HOST_COMMENT_RULE}` only supplies comment syntax in that mode and does not override source English-only.
+
+`$HOST_WORK_LANGUAGE` controls only external user-facing artifact language. Source files, sentinel, markers, labels, schema fields, command names, file paths, protocol vocabulary, artifact filenames, and historical artifacts are not translated.
 
 Host config rules:
 1. `host.env` is the only loop runtime fact injection point. It is not host production configuration schema.
@@ -419,7 +422,7 @@ Authorization source: `skills/codex-refactor-loop/authorizations/runtime-excepti
 
 ## Named runtime exception — integration sync daemon(per #65)
 Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#integration-sync-release-rollup-65`. It records the existing-review-base pending-event boundary. **Narrow allowlist**: release-rollup detection and existing-format pending-event emission only; event facts include `integration_branch`, `review_base_branch`, `integration_sha`, `review_base_sha`, `ahead_count`, `detected_at`, and `reason`.
-**No lifecycle authority**: the daemon must not run `gh pr create`; it must not create PRs, edit PRs, label PRs, close PRs, approve PRs, merge PRs, or push directly to `$REVIEW_BASE_BRANCH`. Controller pending-event sweep re-checks open head/base PRs, writes the Chinese PR body, and calls `open_release_rollup_pr_from_pending_event`, which first pushes a throwaway `rollup/<integration_sha>` head and then delegates to `open_pr_with_label`; the rollup PR head must not be `$INTEGRATION_BRANCH` itself. Behavior/source-regression tests cover event emission, suppression, cooldown, missing integration ref alerts, throwaway rollup heads, and forbidden daemon lifecycle tokens.
+**No lifecycle authority**: the daemon must not run `gh pr create`; it must not create PRs, edit PRs, label PRs, close PRs, approve PRs, merge PRs, or push directly to `$REVIEW_BASE_BRANCH`. Controller pending-event sweep re-checks open head/base PRs, writes the PR body according to `$HOST_WORK_LANGUAGE`, and calls `open_release_rollup_pr_from_pending_event`, which first pushes a throwaway `rollup/<integration_sha>` head and then delegates to `open_pr_with_label`; the rollup PR head must not be `$INTEGRATION_BRANCH` itself. Behavior/source-regression tests cover event emission, suppression, cooldown, missing integration ref alerts, throwaway rollup heads, and forbidden daemon lifecycle tokens.
 
 ## Skill degradation source-repo validation
 <!-- Refactor (iter259/issue-259): Old pattern: check-degradation --static 把 downstream/plugin host root 当 source tree 扫描,吐 skills/codex-refactor-loop/... required-file false-positive(每 tick rc=1). New principle: degradation.py 内加私有 not-source-repo guard:无 source sentinels 时 rc=0 + reason not-source-repo;source repo candidate 仍 fail-closed;不新增 SourceRepoValidationContext,不改 manifest.py. -->
@@ -898,19 +901,19 @@ Policy:the loop continues until an explicit stop condition or a visible `crnd:hu
 7. No suite-level host-wide process-table daemon guard: daemon leak / duplicate coverage belongs in the responsible helper's local fact source or helper behavior tests; suite-level tests must not scan the current machine with `ps -eo pid=,command=`.
 8. No `[Skip]`, disabled tests, ignored tests, or manual category escapes to make CI green.
 9. No scope creep; workers must print `SCOPE_EXTEND: <file> <reason>` before touching outside authorized scope.
-10. Source files are English-only; external user-facing artifacts are 中文 by default. The root README pair is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion, and GitHub issue/PR/commit/design artifacts remain 中文 by default. No mandatory parallel English section.
+10. Source files are English-only; external user-facing artifact language comes from host-owned `$HOST_WORK_LANGUAGE`. The root README pair is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion. No mandatory parallel English section.
 11. Do not hardcode host facts into this cross-platform skill.
 
 Details are in [hard rules details](#hard-rules-details).
 
-## 工作语言规则(源码内英文,源码外中文)
+## 工作语言规则(source English-only, host-owned external artifact language)
 
 <!--
 Refactor (iter343/issue-343):
   Old pattern: README 单一(非英文默认),CLAUDE.md 文档分层称 README 为权威源;无英文 canonical + 中文 companion 双文件,语言策略未给 README pair carve-out
   New principle: README.md 英文 canonical 公开身份文档 + README.zh-CN.md 中文 companion(双向交叉链接,大段顺序对齐不要求逐句对等);CLAUDE.md 文档分层/根.md收口/语言 carve-out 与 SKILL.md 语言策略窄改:README pair 是唯一英文-canonical 公开文档 carve-out,GitHub issue/PR/commit/design artifact 等工作态仍中文默认。严格按 DESIGN_DECISION_PATH verbatim Concrete plan;不碰 .version-bump.json/额外根文档/runtime/host.env/marker/daemon/workflow
 -->
-Policy: Source files are English-only; external user-facing artifacts are 中文 by default. The root README pair is the only English-canonical public-doc carve-out. No mandatory parallel English section.
+Policy: Source files are English-only; external user-facing artifact language comes from `$HOST_WORK_LANGUAGE`. The root README pair is the only English-canonical public-doc carve-out. No mandatory parallel English section.
 Operational details live in [language policy details](#language-policy-details); historical bilingual notes live in [historical bilingual notes](#historical-bilingual-notes).
 
 ## Files
@@ -1972,7 +1975,7 @@ For each `pass` cluster, serially:
 
     Edge case — if a maintainer accidentally retargets a cluster PR to `review_base_branch`, the next Consensus-rnd Phase integration-sync sweep detects the mismatch and posts a comment requesting retarget (does NOT auto-edit, to respect maintainer intent).
 
-6b. **Open PR** (**body follows current language policy: 中文 by default; no mandatory parallel English section**):
+6b. **Open PR** (**body follows `$HOST_WORK_LANGUAGE`; no mandatory parallel English section**):
 
     Structure the body as:
 
@@ -1981,8 +1984,8 @@ For each `pass` cluster, serially:
 
     iter<N> <cluster-id>（<严重度>，<rule_ids>）。
 
-    - **Old**：<old_pattern 完整中文一句，来自 human_brief.problem_statement；老 cluster 只有英文时由 controller 翻成中文>
-    - **New**：<new_pattern 完整中文一句>
+    - **Old**：<old_pattern one sentence following `$HOST_WORK_LANGUAGE`, sourced from human_brief.problem_statement>
+    - **New**：<new_pattern one sentence following `$HOST_WORK_LANGUAGE`>
 
     违反：<对应 CLAUDE.md/AGENTS.md 条款中文摘录>。
 
@@ -2006,7 +2009,7 @@ For each `pass` cluster, serially:
     catalog-managed PR label bundle, including `crnd:lifecycle:managed`, in
     the same active-controller-gated path.
 
-    Controller must reject a generated body that reintroduces a parallel `## English` section as a required peer to 中文.
+    Controller must reject a generated body that reintroduces a mandatory parallel English section.
 
 7b. The PR open helper must add the catalog-managed label bundle immediately.
 **漏加 → comment-monitor 不监控该 PR 评论 → maintainer 评论无 react 无回复**。漏加是 P0 bug,等同失保。Consensus-rnd Phase publish stacked cannot defer this label sync to the next turn.
@@ -2171,7 +2174,7 @@ python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80
 tail -10 .refactor-loop/logs/dev_sync_daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
 ```
 若 daemon-status 报 owner daemon `stale` / `dead` → 由 `consensus-rnd-cli restart-daemons` 按 canonical wrapper repair/reload。
-若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。若发现 `DEV_SYNC_PENDING:release-rollup-needed:<json>` → controller 重新查是否已有覆盖同一 integration SHA 的 open rollup PR;已存在则 ledger/suppress,否则生成中文 body 并调用 `open_release_rollup_pr_from_pending_event <event-json> <body-file>`,由 helper 创建 `rollup/<integration_sha> -> $REVIEW_BASE_BRANCH`。该 PR 进入既有 Consensus-rnd Phase review-gate 与 CI/merge policy。
+若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。若发现 `DEV_SYNC_PENDING:release-rollup-needed:<json>` → controller 重新查是否已有覆盖同一 integration SHA 的 open rollup PR;已存在则 ledger/suppress,否则generate a body according to `$HOST_WORK_LANGUAGE` 并调用 `open_release_rollup_pr_from_pending_event <event-json> <body-file>`,由 helper 创建 `rollup/<integration_sha> -> $REVIEW_BASE_BRANCH`。该 PR 进入既有 Consensus-rnd Phase review-gate 与 CI/merge policy。
 ### 反面(❌ 禁止)
 
 - ❌ controller 自己跑 `git merge dev` 同步(daemon 已做,会 race / 冲突)
@@ -2276,8 +2279,8 @@ Each reviewer outputs `REVIEW_DONE:${PR}:${role}:<approve|comment|reject>` marke
 
 | Preconditions | Latest complete required round | Controller action |
 |---|---|
-| Target-required checks green, PR mergeable, every required reviewer head SHA equals the live PR head, every required role has exactly one valid marker after `EXIT=0` | `reject=0`, `approve=R`, `comment=0` | `MERGE`: post 中文 merge comment, then call `merge_pr <pr>` for ready+merge. |
-| Same preconditions | `reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R` | `MERGE_WITH_COMMENTS`: surface comment evidence, post 中文 merge comment, then call `merge_pr <pr>` for ready+merge. |
+| Target-required checks green, PR mergeable, every required reviewer head SHA equals the live PR head, every required role has exactly one valid marker after `EXIT=0` | `reject=0`, `approve=R`, `comment=0` | `MERGE`: post merge comment according to `$HOST_WORK_LANGUAGE`, then call `merge_pr <pr>` for ready+merge. |
+| Same preconditions | `reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R` | `MERGE_WITH_COMMENTS`: surface comment evidence, post merge comment according to `$HOST_WORK_LANGUAGE`, then call `merge_pr <pr>` for ready+merge. |
 | Same preconditions | `reject=0`, `approve=0`, `comment=R` | `WAIT_EXPLICIT_APPROVAL`: surface comments, do not ready, do not merge, do not dispatch fix. |
 | Same preconditions | `reject>=1` | `FIX`: enter fix-retry loop; do not ready, do not merge; fix codex consumes reject evidence as blocking input and comments as context. Do NOT escalate to human on first reject. |
 | Any gate incomplete or invalid | missing role, duplicate/unknown verdict, no `EXIT=0`, missing/stale per-reviewer head SHA, target-required CI pending/fail/missing/unavailable, or non-mergeable PR | `WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer once; do not ready, never merge. |
@@ -2320,7 +2323,7 @@ Escalate to human ONLY when the meta-layer cannot make progress:
 
 Escalation action:
 - Add `crnd:human:maintainer-decision` label on PR.
-- Post 中文 PR comment with: round history (N rounds tried), reject evidence per round, what fix codex tried, why it's stuck.
+- Post PR comment according to `$HOST_WORK_LANGUAGE` with: round history (N rounds tried), reject evidence per round, what fix codex tried, why it's stuck.
 - `PushNotification`: "PR #N stuck at round N — human decision needed: <one-line reason>".
 - State: `pr_reviews[PR].consensus = "stuck-human-review"`.
 
@@ -2353,7 +2356,7 @@ Refactor (iter6/issue-118):
 - `SKILL.md` 不维护 posting-mode prompt filename roster,也不引入 JSON manifest 或 helper contract; inventory coverage 由 prompt body + tests 承担。
 - Direct-post prompts keep to GitHub comments, PR body edits, reactions, and temp files. Lifecycle/label/create/close/merge/push/release authority remains controller-owned.
 - body 必须 `## 🤖 <headline>` 开头(consensus-rnd-cli comment-monitor 据此识别 controller-post 跳 react)
-- 中文 only / TL;DR ≤ 6 行 / raw artifact 折叠 `<details>` / 若 situation 给 `original_authors:` 加 `📢 cc`
+- TL;DR ≤ 6 行 / raw artifact 折叠 `<details>` / 若 situation 给 `original_authors:` 加 `📢 cc`
 - codex 自己抓 gh 输出的 URL,打 `POSTED:<role>:<N>:<URL>:<headline>` 或 `POST_FAILED:...`
 - controller 只读 log 末尾 marker,**不读 body**
 
@@ -2748,7 +2751,7 @@ If the above makes the current framing underspecified, route `converge` with the
 
 ### GitHub traceability (mandatory per SKILL.md "GitHub traceability" — same standard as Consensus-rnd Phase review-gate)
 
-Every Consensus-rnd Phase design-consensus action posts a 中文 comment to the issue. **The issue must be a complete audit trail** — solver outputs follow the current language policy; the controller posts each one as a SEPARATE issue comment so reviewers can inspect the 3 perspectives side-by-side. Comments are traceability, not a human approval gate.
+Every Consensus-rnd Phase design-consensus action posts a comment that follows `$HOST_WORK_LANGUAGE` to the issue. **The issue must be a complete audit trail** — solver outputs follow the current language policy; the controller posts each one as a SEPARATE issue comment so reviewers can inspect the 3 perspectives side-by-side. Comments are traceability, not a human approval gate.
 
 | Consensus-rnd Phase design-consensus event | Issue comment content |
 |---|---|
@@ -3252,13 +3255,13 @@ Bash(
 7. **No suite-level host-wide process-table daemon guard** — daemon leak / duplicate coverage belongs in the responsible helper's local fact source or helper behavior tests. A suite-level test must not scan the current machine with `ps -eo pid=,command=` as the truth source for daemon leak / duplicate state.
 8. **No `[Skip]` / disabled tests** as a way to make CI green.
 9. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.
-10. **Source files are English-only; external user-facing artifacts are 中文 by default**. Inside `.rs` / `.lua` / `.sh` / `.py` / `.ts`, comments, docstrings, `log.{info,warn,error}` strings, error/panic text, identifiers, and code-built commit-body templates are English. Outside source files, GitHub issue bodies, PR descriptions, design notifications, git commit messages written by the controller/codex, docs, TODO markers, and natural-language artifacts use 中文. `README.md` + `README.zh-CN.md` is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion, and large-section order alignment is enough. English may appear inline when quoting (a) a CLAUDE.md / AGENTS.md clause, (b) source error messages, (c) test names — quote verbatim, do not translate. No mandatory parallel English section.
+10. **Source files are English-only; external user-facing artifact language comes from host-owned `$HOST_WORK_LANGUAGE`**. Inside `.rs` / `.lua` / `.sh` / `.py` / `.ts`, comments, docstrings, `log.{info,warn,error}` strings, error/panic text, identifiers, and code-built commit-body templates are English. Outside source files, GitHub issue bodies, PR descriptions, design notifications, git commit messages written by the controller/codex, docs, TODO markers, and natural-language artifacts follow `$HOST_WORK_LANGUAGE`. `README.md` + `README.zh-CN.md` is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion, and large-section order alignment is enough. Sentinel, markers, labels, schema fields, command names, file paths, protocol vocabulary, artifact filenames, and historical artifacts are not translated. No mandatory parallel English section.
 
-## 工作语言规则(源码内英文,源码外中文)
+## 工作语言规则(source English-only, host-owned external artifact language)
 
-Policy: **源文件内部 English-only;源文件之外的 user-facing artifact 默认 中文**。
+Policy: **Source files are English-only;external user-facing artifact language comes from host-owned `$HOST_WORK_LANGUAGE`**.
 
-中文适用对象:GitHub issue body、PR description、PR comments、design issue auto-loop 评论、scorecard docs (`docs/audit-scorecard/`)、escalation 文案、cross-post 通知、controller / codex 写出的 git commit message、`docs/*.md`、TODO 标记。`README.md` + `README.zh-CN.md` 是唯一英文 canonical 公开文档 carve-out:`README.md` 英文 canonical,`README.zh-CN.md` 中文 companion,双向交叉链接且大段顺序对齐即可,不要求逐句对等。Internal artifact(`.refactor-loop/runs/*.md` and named daemon state artifacts)仍是英文(只要 grep / 调试用)。
+External user-facing artifact examples:GitHub issue body、PR description、PR comments、design issue auto-loop comments、scorecard docs (`docs/audit-scorecard/`)、escalation copy、cross-post notifications、controller / codex-authored git commit messages、`docs/*.md`、TODO markers. These follow `$HOST_WORK_LANGUAGE`. `README.md` + `README.zh-CN.md` 是唯一英文 canonical 公开文档 carve-out:`README.md` 英文 canonical,`README.zh-CN.md` 中文 companion,双向交叉链接且大段顺序对齐即可,不要求逐句对等。Internal artifact(`.refactor-loop/runs/*.md` and named daemon state artifacts) remains English when used for grep/debug unless the artifact is also GitHub-facing.
 
 英文适用对象:所有源文件(`.rs` / `.lua` / `.sh` / `.py` / `.ts`)内部自然语言与代码元素,包括注释、docstring、`log.{info,warn,error}` 字符串、error / panic 文本、代码 identifier、代码内构造的 commit-body 模板字符串。fkst 是 substrate,无 end-user UI;人读 `git log` / `journalctl` / source,英文 log 与注释强制英文同理,保持 LLM 语料一致、跨工程 reuse、无 encoding / 字体问题。
 
@@ -3269,10 +3272,10 @@ Policy: **源文件内部 English-only;源文件之外的 user-facing artifact �
 
 | 内容类型 | 语言 |
 |---|---|
-| GitHub issue title / body / 评论 | **中文** |
-| GitHub PR title / body / 评论 | **中文** |
-| Git commit message | **中文**(包括 controller 写的 fix/merge/squash 等) |
-| Push notification | **中文** |
+| GitHub issue title / body / 评论 | `$HOST_WORK_LANGUAGE` |
+| GitHub PR title / body / 评论 | `$HOST_WORK_LANGUAGE` |
+| Git commit message | `$HOST_WORK_LANGUAGE`(including controller-authored fix/merge/squash text) |
+| Push notification | `$HOST_WORK_LANGUAGE` |
 | Public identity README pair | `README.md` is **English canonical**; `README.zh-CN.md` is the **中文 companion**. This is the only English-canonical public-doc carve-out. |
 | Skill 文档 / $REPO_ROOT 的架构/词汇文档(若有) /audit 报告 | 维持现状(中英混排已存在) |
 | **代码内 `// Refactor (iterN/cluster-XXX):` 注释** | **英文**(production code 跨团队读) |
@@ -3280,16 +3283,17 @@ Policy: **源文件内部 English-only;源文件之外的 user-facing artifact �
 | **代码内 log / error / panic 字符串** | **英文** |
 | **代码内构造的 commit-body 模板字符串** | **英文** |
 | 代码 identifier / 类名 / 方法名 / 字段 | 英文(遵循 host / 项目惯例) |
-| schema / data 结构 | 英文 |
-| CLI 命令 / 文件路径 / SHA / URL | 英文 |
+| schema / data 结构 | English; not translated |
+| sentinel / markers / labels / protocol vocabulary / artifact filenames | English/protocol literal; not translated |
+| CLI 命令 / 文件路径 / SHA / URL | English/protocol literal; not translated |
 | CLAUDE/AGENTS 条款 verbatim 引用 / error message / test name / 第三方英文 quote | 引用原文,不翻译 |
 
 具体红线:
 1. 不再生成平行 `## English` section。
-2. 不再要求 `_en` + `_zh` 对。`prompts/audit.md` `human_brief` 块只保留中文字段(去掉 `_zh` 后缀)。
-3. TL;DR 也是中文。
-4. Controller 自己写的 `git commit -m "..."` 用中文。fix codex / writer codex prompt 里要求写中文 commit message。
-5. PR title 中文(但分支名仍 `refactor/iterN-cluster-XXX-...` 英文以维持 ID 惯例)。
+2. 不再要求 `_en` + `_zh` 对。`prompts/audit.md` `human_brief` 块只保留 un-suffixed fields.
+3. TL;DR follows `$HOST_WORK_LANGUAGE`.
+4. Controller 自己写的 `git commit -m "..."` follows `$HOST_WORK_LANGUAGE`. fix codex / writer codex prompt 里要求 follow the host work language.
+5. PR title follows `$HOST_WORK_LANGUAGE`(但分支名仍 `refactor/iterN-cluster-XXX-...` 英文以维持 ID 惯例)。
 6. 源文件内部不写中文自然语言。❌ `log.info("开始派发事件")` → ✅ `log.info("dispatching event")`;❌ `panic!("配置缺失")` → ✅ `panic!("missing configuration")`。
 7. **已发布的 EN+ZH 历史 artifact 保留原样**:不回头删 / 重译。新发的按本规则走。
 

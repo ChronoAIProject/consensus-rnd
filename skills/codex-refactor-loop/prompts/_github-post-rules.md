@@ -18,10 +18,10 @@ Artifact profile: github-ai-post-body
 
 ---
 
-### 详细说明
+### <details heading in `${HOST_WORK_LANGUAGE}`>
 
-(中文正文。file:line 引用要解释一句话意思。最多 1-2 段伪代码/表格;**禁止贴 raw YAML 给读者**。
-escalation / consensus pick **必须**给清晰"方案 1/2/3"表格,cell 一行话讲 trade-off。)
+(Body text follows `${HOST_WORK_LANGUAGE}`. file:line references need one sentence explaining why they matter. Use at most 1-2 pseudocode/table blocks; **do not paste raw YAML to readers**.
+Escalation / consensus picks **must** include a clear option table with one-line trade-offs.)
 
 ---
 
@@ -36,7 +36,7 @@ escalation / consensus pick **必须**给清晰"方案 1/2/3"表格,cell 一行�
 ## 硬约束
 
 - **第一行 `## 🤖 ` 开头**:本 skill 的 `scripts/consensus-rnd-cli comment-monitor` 据此识别 controller-post 跳过 👀 react。漏 🤖 → monitor 会把你的 post 当成 maintainer 评论 react 自己 → 误循环。
-- **中文 only**:per [SKILL.md 工作语言规则],不要平行 EN section。Code identifier / file path / schema field names 保留原英文。CLAUDE/AGENTS 条款引用 verbatim 不翻译。
+- **Language**: follow `${HOST_WORK_LANGUAGE}` per [SKILL.md 工作语言规则]; do not add a parallel EN section. Code identifiers, file paths, schema field names, and CLAUDE/AGENTS verbatim quotes are not translated.
 - **TL;DR ≤ 6 行**(3 bullet + 可选 cc 行)。
 - **raw artifact 必折叠**:不要让 TL;DR 之后立刻出现 raw YAML / verbatim spec dump。先用人话讲,raw 都进 `<details>`。
 - **GitHub body 必须自包含**:凡 GitHub-facing body 引用授权、共识、solver/judge 结论、escalation 或 design/triage 判断,必须内联完整 raw artifact；本地 `.refactor-loop/runs/*.md` 路径只能出现在 `<details><summary>本机调试线索</summary>` 中,且永远不是唯一授权来源。

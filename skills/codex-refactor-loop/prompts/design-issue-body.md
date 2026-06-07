@@ -2,7 +2,7 @@
 
 <!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
-> 请用中文回复。Code identifier、file path、错误消息和条款引用可以保留原文。
+> Please reply according to `${HOST_WORK_LANGUAGE}`。Code identifier、file path、错误消息和条款引用可以保留原文。
 
 ---
 
