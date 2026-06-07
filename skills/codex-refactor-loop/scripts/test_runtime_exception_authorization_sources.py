@@ -526,7 +526,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for needle in (
             "active-controller owner only",
             "$PATROL_INSPECTOR_ENABLE=true",
-            "exception logs",
+            "worker terminal failure envelopes from local logs",
+            "raw log prose is diagnostic text, not an issue-intake fact source",
             "runs artifacts",
             "wakeup-plan/peek projections",
             "GitHub managed item snapshot",
