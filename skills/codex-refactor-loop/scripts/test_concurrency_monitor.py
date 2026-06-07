@@ -310,6 +310,18 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertEqual(expected, 0)
         self.assertEqual(breakdown, [])
 
+    def test_compute_expected_suppresses_terminal_phase9_consensus_issue(self) -> None:
+        (self.refactor_loop / "logs").mkdir(parents=True, exist_ok=True)
+        (self.refactor_loop / "logs" / "phase9-issue620-r2-judge.log").write_text(
+            "META_JUDGE_DONE:consensus:false-positive\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        expected, breakdown = self.monitor.compute_expected([self.design_issue_item(620)])
+
+        self.assertEqual(expected, 0)
+        self.assertEqual(breakdown, [])
+
     def test_compute_expected_suppresses_hybrid_applied_duplicate_decomposition_parent(self) -> None:
         _plan_path, digest = self.write_applied_issue_decomposition_evidence(
             issue=537,

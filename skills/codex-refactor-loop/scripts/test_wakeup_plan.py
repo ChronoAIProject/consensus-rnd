@@ -6205,6 +6205,29 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["concurrency"]["deficit"], 5)
         self.assertIn("HARD_GATE:dispatch_required=5", stdout)
 
+    def test_terminal_phase9_consensus_issue_does_not_keep_hard_gate_open(self) -> None:
+        self.write_completed_log("phase9-issue620-r2-judge.log", "META_JUDGE_DONE:consensus:false-positive")
+        item = GhItem(
+            kind="issue",
+            number=620,
+            title="terminal design consensus",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_AUTO),
+        )
+
+        class Monitor:
+            def count_in_flight_codex(inner_self) -> int:
+                return 0
+
+            def dispatch_queue_empty(inner_self) -> bool:
+                return True
+
+        projection = concurrency_plan(self.repo, fixed_point=False, gh_items=[item], monitor=Monitor())
+
+        self.assertEqual(projection["expected_from_active_tasks"], 0)
+        self.assertEqual(projection["deficit"], projection["floor"])
+        self.assertFalse(projection["hard_gate"]["active"])
+        self.assertEqual(projection["hard_gate"]["dispatch_required"], 0)
+
     def test_no_hard_gate_when_actual_meets_target(self) -> None:
         plan, stdout = self.run_plan_with_stdout(ps_count=5)
 

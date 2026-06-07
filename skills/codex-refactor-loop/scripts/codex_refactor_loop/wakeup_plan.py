@@ -39,6 +39,7 @@ from codex_refactor_loop.issue_decomposition import (
     issue_decomposition_plan_file_digest,
 )
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
+from codex_refactor_loop.phase9.progress import issue_has_terminal_consensus_judge
 from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from codex_refactor_loop.release.gate import canonical_digest, decide_release_artifact, parse_time
@@ -999,6 +1000,13 @@ def expected_from_open_items(
             and item.kind == "issue"
             and phase_label == label_catalog.PHASE_DESIGN_SOLVING
             and _issue_is_applied_decomposition_parent(repo_root, item.number)
+        ):
+            continue
+        if (
+            repo_root is not None
+            and item.kind == "issue"
+            and phase_label == label_catalog.PHASE_DESIGN_SOLVING
+            and issue_has_terminal_consensus_judge(repo_root, item.number)
         ):
             continue
         breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase_label, "expected": expected})

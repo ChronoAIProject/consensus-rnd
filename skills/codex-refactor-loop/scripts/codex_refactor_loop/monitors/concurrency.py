@@ -21,6 +21,7 @@ from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from ..implement_lifecycle import implement_attempt_suppresses_expected_worker
 from ..issue_decomposition import applied_issue_decomposition_parent_suppresses_expected_worker
+from ..phase9.progress import issue_has_terminal_consensus_judge
 from .. import labels as label_catalog
 from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..state import read_json, write_json
@@ -395,6 +396,12 @@ class ConcurrencyMonitor:
                         item.number,
                         command_runner=command_runner,
                     )
+                ):
+                    continue
+                if (
+                    item.kind == "issue"
+                    and phase == label_catalog.PHASE_DESIGN_SOLVING
+                    and issue_has_terminal_consensus_judge(self.repo_root, item.number)
                 ):
                     continue
                 breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase, "expected": expected})
