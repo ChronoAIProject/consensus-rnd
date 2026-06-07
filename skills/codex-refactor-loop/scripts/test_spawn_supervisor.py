@@ -93,7 +93,8 @@ class SpawnSupervisorTests(unittest.TestCase):
 
     def test_launch_spawn_codex_supervisor_detaches_without_wait_or_poll(self) -> None:
         repo = self.tmp_root
-        cli = repo / "skills" / "codex-refactor-loop" / "scripts" / "consensus-rnd-cli"
+        skill_root = self.tmp_root / "installed-skill"
+        cli = skill_root / "scripts" / "consensus-rnd-cli"
         cli.parent.mkdir(parents=True, exist_ok=True)
         cli.write_text("#!/bin/sh\n", encoding="utf-8")
         fake_proc = mock.Mock()
@@ -101,6 +102,7 @@ class SpawnSupervisorTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.processes.subprocess.Popen", return_value=fake_proc) as popen:
             exit_code = launch_spawn_codex_supervisor(
                 repo_root=repo,
+                skill_root=skill_root,
                 cd=repo / ".worktrees" / "task",
                 prompt=self.prompt,
                 log=self.log,
@@ -113,7 +115,8 @@ class SpawnSupervisorTests(unittest.TestCase):
         args, kwargs = popen.call_args
         command = args[0]
         self.assertIn("spawn-codex", command)
-        self.assertIn(str(repo.resolve()), command[0])
+        self.assertEqual(str(cli.resolve()), command[0])
+        self.assertNotIn(str(repo / "skills"), command[0])
         self.assertEqual(kwargs["cwd"], str(repo.resolve()))
         self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
         self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
@@ -122,6 +125,28 @@ class SpawnSupervisorTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["GH_REPO_SLUG"], "owner/repo")
         fake_proc.wait.assert_not_called()
         fake_proc.poll.assert_not_called()
+
+    def test_launch_spawn_codex_supervisor_fails_closed_when_skill_cli_missing(self) -> None:
+        repo = self.tmp_root / "host-repo"
+        repo.mkdir()
+        skill_root = self.tmp_root / "installed-skill"
+        skill_root.mkdir()
+
+        with mock.patch("codex_refactor_loop.processes.subprocess.Popen") as popen:
+            exit_code = launch_spawn_codex_supervisor(
+                repo_root=repo,
+                skill_root=skill_root,
+                cd=repo,
+                prompt=self.prompt,
+                log=self.log,
+                stall=30,
+            )
+
+        self.assertEqual(127, exit_code)
+        popen.assert_not_called()
+        text = self.log.read_text(encoding="utf-8")
+        self.assertIn("SPAWN_SUPERVISOR_CLI_MISSING:", text)
+        self.assertIn(str((skill_root / "scripts" / "consensus-rnd-cli").resolve()), text)
 
     def test_spawn_supervisor_source_preserves_claim_before_process_supervision(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "spawn.py").read_text(encoding="utf-8")

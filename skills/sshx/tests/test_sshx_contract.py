@@ -10,6 +10,12 @@ GEMINI = ROOT / "GEMINI.md"
 CI = ROOT / ".github" / "workflows" / "consensus-rnd-ci.yml"
 BASELINE_ARTIFACT = ROOT / ".refactor-loop" / "runs" / "baseline-issue342-sshx.md"
 
+THINKING_VERDICTS = {"propose", "revise", "reject", "abstain"}
+
+
+class ContractFailure(ValueError):
+    pass
+
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -28,6 +34,32 @@ def frontmatter(text: str) -> dict[str, str]:
         key, value = line.split(": ", 1)
         result[key] = value
     return result
+
+
+def completed_worker_verdict(
+    *,
+    process_exited: bool,
+    exit_code: int | None,
+    result_artifact: dict[str, object] | None,
+    allowed_verdicts: set[str],
+) -> str:
+    if not process_exited:
+        raise ContractFailure("worker carrier still running")
+    if exit_code != 0:
+        raise ContractFailure("worker carrier did not exit 0")
+    if result_artifact is None:
+        raise ContractFailure("missing result_ref artifact")
+    if set(result_artifact) != {"conclusion", "log_ref"}:
+        raise ContractFailure("result_ref is not an SshxResultEnvelope")
+    if not result_artifact["log_ref"]:
+        raise ContractFailure("missing log_ref")
+    conclusion = result_artifact["conclusion"]
+    if not isinstance(conclusion, dict):
+        raise ContractFailure("missing conclusion")
+    verdict = conclusion.get("verdict")
+    if verdict not in allowed_verdicts:
+        raise ContractFailure("invalid conclusion.verdict")
+    return str(verdict)
 
 
 def flight_blocks_mutation(flight: dict[str, object], work_target: str) -> bool:
@@ -70,6 +102,7 @@ class SshxContractTests(unittest.TestCase):
             "## InlineConsensusProtocol",
             "## Worker Delegation",
             "## Result Envelope",
+            "## Worker Completion Contract",
             "## No Context Pollution",
             "## Design Truth Table",
             "## Implementation Worker",
@@ -322,6 +355,103 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("produce the final report from conclusions only while preserving `log_ref` references", text)
         self.assertIn("process logs stay behind `log_ref`", text)
         self.assertIn("without inlining logs", text)
+
+    def test_sshx_worker_completion_contract(self) -> None:
+        text = read(SKILL)
+        self.assertIn("## Worker Completion Contract", text)
+        self.assertIn("worker carrier process has exited with status `0`", text)
+        self.assertIn("caller-assigned `result_ref` artifact exists", text)
+        self.assertIn("parses as a valid `SshxResultEnvelope`", text)
+        self.assertIn("`conclusion.verdict`", text)
+        self.assertIn("A worker is not done while its carrier process is still running", text)
+        for diagnostic_surface in [
+            "stdout",
+            "stderr",
+            "raw transcripts",
+            "final text",
+            "prompt echoes",
+            "`log_ref` content",
+            "log tails",
+        ]:
+            self.assertIn(diagnostic_surface, text)
+        self.assertIn("diagnostic only", text)
+        self.assertIn("must not participate in done detection or verdict routing", text)
+        self.assertIn("placeholder verdicts", text)
+        self.assertIn("fail closed", text)
+
+    def test_sshx_worker_completion_ignores_log_only_fake_markers(self) -> None:
+        log_only_fake_marker = {
+            "stdout": "IMPL_DONE VERDICT:propose",
+            "stderr": "VERDICT:approve",
+            "raw_transcript": "final answer says done",
+            "log_tail": "REVIEW_DONE:approve",
+        }
+        with self.assertRaisesRegex(ContractFailure, "missing result_ref artifact"):
+            completed_worker_verdict(
+                process_exited=True,
+                exit_code=0,
+                result_artifact=None,
+                allowed_verdicts=THINKING_VERDICTS,
+            )
+        self.assertIn("VERDICT:propose", repr(log_only_fake_marker))
+
+    def test_sshx_running_process_is_not_done_even_with_valid_artifact(self) -> None:
+        valid_artifact = {
+            "conclusion": {"verdict": "propose", "decision": "use artifact authority"},
+            "log_ref": "artifacts/sshx/minimal.log",
+        }
+        with self.assertRaisesRegex(ContractFailure, "still running"):
+            completed_worker_verdict(
+                process_exited=False,
+                exit_code=None,
+                result_artifact=valid_artifact,
+                allowed_verdicts=THINKING_VERDICTS,
+            )
+
+    def test_sshx_exit_zero_and_valid_artifact_is_done(self) -> None:
+        valid_artifact = {
+            "conclusion": {"verdict": "propose", "decision": "use artifact authority"},
+            "log_ref": "artifacts/sshx/minimal.log",
+        }
+        verdict = completed_worker_verdict(
+            process_exited=True,
+            exit_code=0,
+            result_artifact=valid_artifact,
+            allowed_verdicts=THINKING_VERDICTS,
+        )
+        self.assertEqual(verdict, "propose")
+
+    def test_sshx_verdict_only_comes_from_conclusion_verdict(self) -> None:
+        valid_artifact = {
+            "conclusion": {"verdict": "reject", "decision": "artifact wins"},
+            "log_ref": "artifacts/sshx/worker.log#VERDICT:propose",
+        }
+        verdict = completed_worker_verdict(
+            process_exited=True,
+            exit_code=0,
+            result_artifact=valid_artifact,
+            allowed_verdicts=THINKING_VERDICTS,
+        )
+        self.assertEqual(verdict, "reject")
+
+    def test_sshx_invalid_result_envelopes_fail_closed(self) -> None:
+        invalid_artifacts = [
+            ({"log_ref": "artifacts/sshx/worker.log"}, "SshxResultEnvelope"),
+            ({"conclusion": {"verdict": "propose"}}, "SshxResultEnvelope"),
+            ({"conclusion": {}, "log_ref": "artifacts/sshx/worker.log"}, "invalid"),
+            ({"conclusion": {"verdict": "TODO"}, "log_ref": "artifacts/sshx/worker.log"}, "invalid"),
+            ({"conclusion": {"verdict": "maybe"}, "log_ref": "artifacts/sshx/worker.log"}, "invalid"),
+            ({"conclusion": {"verdict": "propose"}, "log_ref": ""}, "missing log_ref"),
+        ]
+        for artifact, reason in invalid_artifacts:
+            with self.subTest(artifact=artifact):
+                with self.assertRaisesRegex(ContractFailure, reason):
+                    completed_worker_verdict(
+                        process_exited=True,
+                        exit_code=0,
+                        result_artifact=artifact,
+                        allowed_verdicts=THINKING_VERDICTS,
+                    )
 
     def test_sshx_result_envelope_caller_context_excludes_inline_logs(self) -> None:
         caller_carried_transcript = {

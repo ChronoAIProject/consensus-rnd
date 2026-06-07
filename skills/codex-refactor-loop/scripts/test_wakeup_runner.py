@@ -278,6 +278,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         )
         self.ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
         self.supervisor = FakeSupervisor()
+        self.expected_skill_root = SCRIPT_DIR.parent
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -1200,7 +1201,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         args, kwargs = popen.call_args
         command = args[0]
         self.assertIn("spawn-codex", command)
-        self.assertIn(str(self.repo.resolve()), command[0])
+        self.assertEqual(command[0], str((self.expected_skill_root / "scripts" / "consensus-rnd-cli").resolve()))
+        self.assertEqual(kwargs["cwd"], str(self.repo.resolve()))
         self.assertEqual(command[command.index("--cd") + 1], str(self.repo))
         self.assertEqual(command[command.index("--prompt") + 1], str(self.repo / ".refactor-loop/prompts/task.md"))
         self.assertEqual(command[command.index("--log") + 1], str(self.repo / ".refactor-loop/logs/task.log"))
@@ -1997,6 +1999,16 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertIn("WAKEUP_RUNNER_SPAWN_LAUNCH_EXIT:spawn:supervisor-exit-3:3", pending)
         self.assertIn("WAKEUP_RUNNER_HELPER_EXIT:spawn:supervisor-exit-3:spawn_codex_harness_background:3", pending)
 
+    def test_harness_spawn_passes_context_skill_root_to_supervisor(self) -> None:
+        action = self.spawn_action(action_id="spawn:skill-root")
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(action))
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(Path(launch.call_args.kwargs["skill_root"]).resolve(), self.expected_skill_root.resolve())
+        self.assertEqual(Path(launch.call_args.kwargs["repo_root"]).resolve(), self.repo.resolve())
+
     def test_harness_spawn_existing_target_log_blocks_before_supervisor(self) -> None:
         actions = FakeActions()
         action = self.spawn_action(action_id="spawn:target-log-exists")
@@ -2388,6 +2400,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             results = self.run_result(self.base_plan(self.remote_ci_fix_action()), actions=actions)
 
         self.assertEqual(results[0].status, "applied")
+        self.assertEqual(Path(launch.call_args.kwargs["skill_root"]).resolve(), self.expected_skill_root.resolve())
         self.assertEqual(Path(launch.call_args.kwargs["cd"]).resolve(), worktree.resolve())
         prompt = Path(launch.call_args.kwargs["prompt"])
         self.assertEqual(prompt.name, f"remote-ci-fix-pr77-contract-tests-{'a' * 12}-a1.md")
