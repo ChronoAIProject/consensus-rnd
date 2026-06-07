@@ -5436,6 +5436,36 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(actions, [])
 
+    def test_release_gate_dispatch_treats_published_candidate_as_consumed(self) -> None:
+        current = release_decision("1.0.0-beta.9", "1.0.0-beta.10")
+        (self.repo / ".refactor-loop/state/release-decision.json").write_text(json.dumps(current), encoding="utf-8")
+        (self.repo / ".refactor-loop/state/release-candidate.json").write_text(
+            json.dumps(release_candidate(current, target_ref="origin/dev")),
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop/state/release-publish-result.json").write_text(
+            json.dumps({"version": "1.0.0-beta.10", "tag": "v1.0.0-beta.10"}),
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "true"}):
+            actions = release_gate_dispatch_actions(
+                self.repo,
+                scorer=lambda _: {
+                    "from_version": "1.0.0-beta.10",
+                    "to_version": "1.0.0-beta.11",
+                    "stability_score": 100,
+                    "ready": True,
+                    "signals": {},
+                    "blocked_reasons": [],
+                },
+            )
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["action_id"], "release-gate-dispatch:1.0.0-beta.10->1.0.0-beta.11")
+        self.assertIn("release_candidate_already_published", actions[0]["preconditions"])
+        self.assertEqual(release_publish_actions(self.repo), [])
+
     def test_release_gate_dispatch_refreshes_decision_mismatched_candidate(self) -> None:
         current = release_decision("1.0.0-beta.8", "1.0.0-beta.9")
         stale = release_decision("1.0.0-beta.7", "1.0.0-beta.8")
@@ -5571,6 +5601,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(actions[0]["target_ref"], "origin/dev/auto-refact-dev")
         self.assertEqual(actions[0]["source_marker"], "1.2.3-beta.5")
         self.assertFalse(actions[0].get("status_only", False))
+
+    def test_release_publish_skips_candidate_already_recorded_as_published_tag(self) -> None:
+        (self.repo / ".refactor-loop/state/release-candidate.json").write_text(
+            json.dumps({"ready": True, "target_ref": "origin/dev", "to_version": "1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop/state/release-publish-result.json").write_text(
+            json.dumps({"tag": "v1.2.3-beta.5", "target_ref": "release-sha"}),
+            encoding="utf-8",
+        )
+
+        self.assertEqual(release_publish_actions(self.repo), [])
 
     def test_release_publish_skips_candidate_without_target_ref(self) -> None:
         (self.repo / ".refactor-loop/state/release-candidate.json").write_text(

@@ -37,6 +37,7 @@ from .issue_decomposition import (
 from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.gate import AutoReleaseGate
+from .release.commits import write_release_commits
 from .release.publish_preflight import ReleasePublishPreflight
 from .release.publisher import ReleasePublisher
 from .state import read_json
@@ -1068,6 +1069,18 @@ class WakeupRunner:
         previous_env = os.environ.copy()
         try:
             os.environ.update(self.ctx.env_for_subprocess())
+            release_target_ref = str(os.environ.get("RELEASE_TARGET_REF") or "").strip()
+            if not release_target_ref:
+                review_base = str(os.environ.get("REVIEW_BASE_BRANCH") or "").strip()
+                if not review_base:
+                    raise RuntimeError("missing required host branch env: REVIEW_BASE_BRANCH")
+                release_target_ref = review_base if review_base.startswith("origin/") else f"origin/{review_base}"
+            write_release_commits(
+                self.ctx.repo_root,
+                review_base_branch=str(os.environ.get("REVIEW_BASE_BRANCH") or "").strip(),
+                target_ref=release_target_ref,
+                fetch_tags=True,
+            )
             gate = AutoReleaseGate(self.ctx.repo_root)
             stability = gate.compute_stability(
                 min_recent_merges=_release_int(self.ctx.host_env.get("RELEASE_AUTO_MIN_MERGES"), 1)

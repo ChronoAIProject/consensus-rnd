@@ -3443,10 +3443,15 @@ def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) ->
     candidate_path = repo_root / ".refactor-loop" / "state" / "release-candidate.json"
     decision_path = repo_root / ".refactor-loop" / "state" / "release-decision.json"
     decision = read_json(decision_path, {})
+    precondition_reasons: list[str] = []
     if candidate_path.exists():
         candidate = read_json(candidate_path, {})
-        if not release_candidate_target_ref_invalid(candidate, decision):
+        if release_candidate_consumed_by_publish_result(repo_root, candidate):
+            precondition_reasons.append("release_candidate_already_published")
+        elif not release_candidate_target_ref_invalid(candidate, decision):
             return []
+        else:
+            precondition_reasons.append("release_candidate_target_ref_invalid")
     score = _release_countdown_score(repo_root, scorer=scorer)
     if not score.get("ready"):
         return []
@@ -3474,11 +3479,7 @@ def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) ->
                 "release_auto_opt_in",
                 "release_gate_ready",
                 "decision_artifact_only",
-                *(
-                    ["release_candidate_target_ref_invalid"]
-                    if candidate_path.exists()
-                    else []
-                ),
+                *precondition_reasons,
             ],
             "runner_authority": RUNNER_AUTHORITY,
             "no_generic_command": True,
@@ -3515,10 +3516,26 @@ def release_candidate_target_ref_invalid(candidate: Any, decision: Any | None = 
     return not isinstance(expected_digest, str) or canonical_digest(decision) != expected_digest
 
 
+def release_candidate_consumed_by_publish_result(repo_root: Path, candidate: Any) -> bool:
+    if not isinstance(candidate, dict):
+        return False
+    to_version = str(candidate.get("to_version") or "").strip()
+    if not to_version:
+        return False
+    result = read_json(repo_root / ".refactor-loop" / "state" / "release-publish-result.json", {})
+    if not isinstance(result, dict):
+        return False
+    version = str(result.get("version") or "").strip()
+    tag = str(result.get("tag") or "").strip()
+    return version == to_version or tag == f"v{to_version}"
+
+
 def release_publish_actions(repo_root: Path) -> list[dict[str, Any]]:
     candidate_path = repo_root / ".refactor-loop" / "state" / "release-candidate.json"
     candidate = read_json(candidate_path, {})
     if not isinstance(candidate, dict) or candidate.get("ready") is not True:
+        return []
+    if release_candidate_consumed_by_publish_result(repo_root, candidate):
         return []
     decision = read_json(repo_root / ".refactor-loop" / "state" / "release-decision.json", {})
     if release_candidate_target_ref_invalid(candidate, decision):

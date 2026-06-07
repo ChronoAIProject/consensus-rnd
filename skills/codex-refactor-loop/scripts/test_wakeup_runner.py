@@ -575,6 +575,33 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             json.dumps({"commits": [{"sha": "abc123", "subject": "fix: release blocker", "body": ""}]}),
             encoding="utf-8",
         )
+        self.release_dispatch_fix_sha = self.init_release_dispatch_git_history()
+
+    def init_release_dispatch_git_history(self) -> str:
+        def git_ok(*args: str) -> str:
+            result = subprocess.run(
+                ["git", "-C", str(self.repo), *args],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise AssertionError(result.stderr or result.stdout)
+            return result.stdout.strip()
+
+        git_ok("init", "-q")
+        git_ok("add", ".")
+        git_ok("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "Release v1.2.3-beta.4")
+        (self.repo / "file.txt").write_text("fix\n", encoding="utf-8")
+        git_ok("add", "file.txt")
+        git_ok("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "fix: next release")
+        fix_sha = git_ok("rev-parse", "HEAD")
+        git_ok("branch", "dev")
+        git_ok("update-ref", "refs/remotes/origin/dev", "HEAD")
+        origin = self.repo.parent / "origin.git"
+        subprocess.run(["git", "init", "--bare", "-q", str(origin)], capture_output=True, text=True, check=True)
+        git_ok("remote", "add", "origin", str(origin))
+        return fix_sha
 
     def batch_plan(self, actions: list[dict], *, dispatch_required: object, deficit: object, active: bool = True) -> dict:
         return {
@@ -2080,6 +2107,21 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(candidate["schema"], "decision-artifact-only/v2")
         self.assertEqual(candidate["target_ref"], "origin/dev")
         self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
+
+    def test_release_dispatch_refreshes_release_commits_before_decision(self) -> None:
+        self.write_release_dispatch_fixtures()
+        (self.repo / ".refactor-loop/state/release-commits.json").write_text(
+            json.dumps({"commits": [{"sha": "stale", "subject": "fix: stale", "body": ""}]}),
+            encoding="utf-8",
+        )
+
+        results = self.run_result(self.base_plan(self.release_dispatch_action()), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "applied")
+        commits = json.loads((self.repo / ".refactor-loop/state/release-commits.json").read_text(encoding="utf-8"))
+        self.assertEqual(commits, {"commits": [{"sha": self.release_dispatch_fix_sha, "subject": "fix: next release", "body": ""}]})
+        decision = json.loads((self.repo / ".refactor-loop/state/release-decision.json").read_text(encoding="utf-8"))
+        self.assertEqual(decision["commits"], [{"sha": self.release_dispatch_fix_sha, "subject": "fix: next release"}])
 
     def test_release_dispatch_recovers_existing_candidate_with_empty_target_ref(self) -> None:
         self.write_release_dispatch_fixtures()

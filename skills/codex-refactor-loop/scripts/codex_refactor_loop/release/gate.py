@@ -382,7 +382,13 @@ class AutoReleaseGate:
 
     def latest_release_time(self) -> datetime | None:
         history = read_json(self.state_dir / "release-history.json", {})
-        return parse_time(history.get("latest_release_at")) if isinstance(history, dict) else None
+        latest = parse_time(history.get("latest_release_at")) if isinstance(history, dict) else None
+        if latest is not None:
+            return latest
+        publish_result = read_json(self.state_dir / "release-publish-result.json", {})
+        if not isinstance(publish_result, dict):
+            return None
+        return parse_time(publish_result.get("published_at"))
 
     def commits_since_latest_release(self) -> list[CommitInfo]:
         raw = read_json(self.release_commits_path, {})

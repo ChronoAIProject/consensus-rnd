@@ -380,6 +380,26 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertIn("min_interval", decision["blocked_reasons"])
             self.assertEqual(decision["from_version"], decision["to_version"])
 
+    def test_min_interval_uses_publish_result_when_release_history_missing(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_green_signals(repo)
+            write_json(
+                repo / ".refactor-loop/state/release-publish-result.json",
+                {
+                    "version": "1.2.3-beta.4",
+                    "tag": "v1.2.3-beta.4",
+                    "published_at": (NOW - timedelta(minutes=30)).isoformat().replace("+00:00", "Z"),
+                },
+            )
+            gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
+
+            decision = gate.decide_release(gate.compute_stability(), min_interval_hours=2)
+
+            self.assertFalse(decision["ready"])
+            self.assertIn("min_interval", decision["blocked_reasons"])
+            self.assertEqual(decision["release_interval"]["last_release_at"], (NOW - timedelta(minutes=30)).isoformat().replace("+00:00", "Z"))
+
     def test_fail_closed_when_required_check_red(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"

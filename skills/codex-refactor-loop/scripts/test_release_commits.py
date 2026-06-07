@@ -263,6 +263,48 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
                 data["commits"],
             )
 
+    def test_release_commits_prefers_reachable_release_subject_over_unmerged_tag(self) -> None:
+        with init_repo(tag_release=False) as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_env(repo)
+            (repo / "package.json").write_text(json.dumps({"version": "1.0.0-beta.10"}), encoding="utf-8")
+            (repo / ".version-bump.json").write_text(
+                json.dumps({"files": [{"path": "package.json", "field": "version"}]}),
+                encoding="utf-8",
+            )
+            git_ok(repo, "add", ".")
+            git_ok(
+                repo,
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-q",
+                "-m",
+                "Release v1.0.0-beta.10 (#595)",
+            )
+            feature_sha = commit(repo, "fix: beta 11 candidate")
+            unmerged_tree = git_ok(repo, "rev-parse", "HEAD^{tree}")
+            unmerged_release = git_ok(
+                repo,
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit-tree",
+                unmerged_tree,
+                "-m",
+                "Release v1.0.0-beta.10",
+            )
+            git_ok(repo, "tag", "v1.0.0-beta.10", unmerged_release)
+            self.assertNotEqual(0, git(repo, "merge-base", "--is-ancestor", "v1.0.0-beta.10", "HEAD").returncode)
+
+            output = commits.write_release_commits(repo, target_ref="HEAD", fetch_tags=False)
+
+            data = read_json(output)
+            self.assertEqual(data, {"commits": [{"sha": feature_sha, "subject": "fix: beta 11 candidate", "body": ""}]})
+
     def test_release_commits_cli_fails_closed_without_review_base_branch_env(self) -> None:
         with init_repo() as tmp:
             repo = Path(tmp) / "repo"
