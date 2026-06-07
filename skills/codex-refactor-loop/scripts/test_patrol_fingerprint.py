@@ -20,22 +20,26 @@ class PatrolFingerprintTests(unittest.TestCase):
             source=".refactor-loop/logs/a.log",
             summary="runtime log reports exception signals in a.log",
             severity="high",
-            evidence=("Traceback line 1",),
+            root_cause="stable root cause",
+            recommendation="stable recommendation",
+            rationale="first analysis rationale",
         )
         second = PatrolFinding(
             kind=first.kind,
             source=first.source,
             summary=first.summary,
             severity=first.severity,
-            evidence=("Traceback line 2",),
+            root_cause=first.root_cause,
+            recommendation=first.recommendation,
+            rationale="second analysis rationale",
         )
 
         self.assertEqual(first.fingerprint, second.fingerprint)
         self.assertRegex(first.fingerprint, r"^[0-9a-f]{16}$")
 
     def test_fingerprint_changes_for_different_patrol_source(self) -> None:
-        first = PatrolFinding("exception-log", ".refactor-loop/logs/a.log", "a failed", "high", ("failed",))
-        second = PatrolFinding("exception-log", ".refactor-loop/logs/b.log", "b failed", "high", ("failed",))
+        first = PatrolFinding("exception-log", ".refactor-loop/logs/a.log", "a failed", "high", "root", "fix", "why")
+        second = PatrolFinding("exception-log", ".refactor-loop/logs/b.log", "b failed", "high", "root", "fix", "why")
 
         self.assertNotEqual(first.fingerprint, second.fingerprint)
 

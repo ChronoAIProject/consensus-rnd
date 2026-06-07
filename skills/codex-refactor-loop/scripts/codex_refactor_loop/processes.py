@@ -34,6 +34,7 @@ class ProcessSupervisor:
         stall: int,
         preamble: str = "",
         env: Mapping[str, str] | None = None,
+        cwd: Path | None = None,
     ) -> int:
         if not stdin.is_file():
             raise ValueError(f"prompt file not found: {stdin}")
@@ -53,6 +54,7 @@ class ProcessSupervisor:
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                     env=dict(env) if env is not None else None,
+                    cwd=str(cwd) if cwd is not None else None,
                 )
             except OSError as exc:
                 _append(log, f"SPAWN_FAILED={exc}\nEXIT=127\nDONE_AT={_utc_now()}\n")

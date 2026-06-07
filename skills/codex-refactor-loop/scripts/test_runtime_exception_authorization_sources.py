@@ -542,6 +542,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         claude = self.repo_rules
         cli_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
         patrol_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "patrol.py")
+        analysis_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "patrol_analysis.py")
         publisher_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "patrol_issue_publisher.py")
         restart_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "restart.py")
         holistic_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "holistic_status.py")
@@ -550,11 +551,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "active-controller owner only",
             "$PATROL_INSPECTOR_ENABLE=true",
             "worker terminal failure envelopes from local logs",
-            "raw log prose is diagnostic text, not an issue-intake fact source",
+            "generate patrol-private `PatrolCandidateSignal`",
+            "raw log prose is diagnostic text, not an issue-intake fact source, and may be used only as codex prompt context",
+            "structured codex `PatrolAnalysisDecision` with `is_real_issue=true`",
             "runs artifacts",
             "wakeup-plan/peek projections",
             "GitHub managed item snapshot",
             "PatrolFinding",
+            "public issue bodies may use only analysis fields",
             "durable fingerprint",
             "fixed patrol/design-intake label bundle",
             "update may edit only the patrol issue body",
@@ -578,6 +582,16 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for needle in (
             "#541 是唯一 patrol-inspector issue-intake carveout",
             "host opt-in",
+            "PatrolCandidateSignal",
+            "PatrolAnalysisDecision",
+            "is_real_issue=true",
+            "codex exec",
+            "prompts/patrol-analysis.md",
+            ".refactor-loop/prompts/patrol-analysis/<signal>.md",
+            ".refactor-loop/logs/patrol-analysis-<signal>.log",
+            ".refactor-loop/runs/patrol-analysis/<signal>.json",
+            "非 generic codex fallback",
+            "无 git/GitHub/lifecycle authority",
             "PatrolFinding",
             "fingerprint create/update patrol-owned issue",
             "update 仅改该 patrol issue body",
@@ -585,6 +599,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, claude)
+        for needle in (
+            "PatrolCandidateSignal",
+            "PatrolAnalysisDecision",
+            "is_real_issue",
+        ):
+            with self.subTest(skill_only_needle=needle):
+                self.assertIn(needle, entry)
+                self.assertIn(needle, skill_section)
 
         self.assertIn('"patrol-inspector": CommandSpec(', cli_source)
         self.assertNotIn('"patrol_inspector_daemon"', restart_source)
@@ -593,6 +615,28 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("require_active_controller", patrol_source)
         self.assertIn("PATROL_INSPECTOR_ENABLE", patrol_source)
         self.assertIn("PATROL_INSPECTOR_INTERVAL_SECONDS", patrol_source)
+        self.assertIn("class PatrolCandidateSignal", analysis_source)
+        self.assertIn("class PatrolAnalysisDecision", analysis_source)
+        self.assertIn("is_real_issue", analysis_source)
+        self.assertIn("PATROL_ANALYSIS_PROMPT", analysis_source)
+        self.assertIn('"codex"', analysis_source)
+        self.assertIn('"exec"', analysis_source)
+        self.assertIn('"--sandbox"', analysis_source)
+        self.assertIn('"read-only"', analysis_source)
+        self.assertIn('"--ephemeral"', analysis_source)
+        self.assertIn('"--ignore-user-config"', analysis_source)
+        self.assertIn('"--ignore-rules"', analysis_source)
+        self.assertIn('"--skip-git-repo-check"', analysis_source)
+        self.assertIn('"--output-last-message"', analysis_source)
+        self.assertIn("patrol_analysis_env", analysis_source)
+        self.assertIn("PATROL_ANALYSIS_ENV_ALLOWLIST", analysis_source)
+        self.assertIn("PATROL_ANALYSIS_ENV_DENY_TOKENS", analysis_source)
+        self.assertIn("PATROL_ANALYSIS_CODEX_HOME", analysis_source)
+        self.assertIn("PATROL_ANALYSIS_CWD", analysis_source)
+        self.assertIn('ctx.paths.prompts / "patrol-analysis"', analysis_source)
+        self.assertIn('ctx.paths.logs / f"patrol-analysis-{_signal_id(signal)}.log"', analysis_source)
+        self.assertIn('ctx.paths.runs / "patrol-analysis"', analysis_source)
+        self.assertIn("PATROL_ANALYSIS_STALL_SECONDS", analysis_source)
         self.assertIn("PATROL_LABEL_BUNDLE", publisher_source)
         self.assertIn('"create"', publisher_source)
         self.assertIn('"edit"', publisher_source)
@@ -600,7 +644,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("patrol-inspector.json", holistic_source)
         for forbidden in ("git push", "git commit", "gh pr", "issue close", "issue reopen", "release create"):
             with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, (patrol_source + publisher_source).lower())
+                self.assertNotIn(forbidden, (patrol_source + analysis_source + publisher_source).lower())
 
     def test_maintainer_directive_entries_have_required_fields(self) -> None:
         self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 6)
