@@ -343,6 +343,71 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual("applied", result[0].status)
         self.assertEqual([("apply_default_issue_intake_claim", 77)], actions.calls)
 
+    def test_runner_blocks_high_risk_action_before_helper_dispatch(self) -> None:
+        action = self.release_dispatch_action(
+            risk_tier="high",
+            execution_policy="blocked",
+            argv=["gh", "release", "create"],
+        )
+        actions = FakeActions()
+
+        result = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual("blocked", result[0].status)
+        self.assertEqual("risk_tier_high", result[0].reason)
+        self.assertEqual([], actions.calls)
+
+    def test_runner_blocks_medium_without_cautious_policy(self) -> None:
+        action = self.release_dispatch_action(risk_tier="medium", execution_policy="auto")
+        actions = FakeActions()
+
+        result = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual("blocked", result[0].status)
+        self.assertEqual("medium_requires_cautious_execution_policy", result[0].reason)
+        self.assertEqual([], actions.calls)
+
+    def test_runner_applies_at_most_one_medium_non_spawn_per_tick(self) -> None:
+        base = {
+            "kind": "default-issue-intake-claim",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "default_issue_intake_enabled",
+                "live_open_target",
+                "non_pr_issue",
+                "target_not_managed",
+                "github_comment_claim_protocol",
+            ],
+            "source_artifact": "github-open-default-issue-intake-candidates",
+            "controller_action": "apply_default_issue_intake_claim",
+            "no_generic_command": True,
+            "no_lifecycle_authority": True,
+            "risk_tier": "medium",
+            "execution_policy": "cautious",
+        }
+        first = {
+            **base,
+            "action_id": "default-issue-intake-claim:issue:77",
+            "source_marker": "default-issue-intake-candidate:issue:77",
+            "target_kind": "issue",
+            "target_number": 77,
+            "target": {"kind": "issue", "number": 77},
+        }
+        second = {
+            **base,
+            "action_id": "default-issue-intake-claim:issue:78",
+            "source_marker": "default-issue-intake-candidate:issue:78",
+            "target_kind": "issue",
+            "target_number": 78,
+            "target": {"kind": "issue", "number": 78},
+        }
+        actions = FakeActions()
+
+        results = self.run_result(self.batch_plan([first, second], dispatch_required=2, deficit=2), gh_labels=[], actions=actions)
+
+        self.assertEqual(["default-issue-intake-claim:issue:77"], [result.action_id for result in results])
+
     def test_apply_default_issue_intake_claim_rejects_pr_shape(self) -> None:
         action = {
             "kind": "default-issue-intake-claim",
@@ -501,7 +566,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "mode": "closed-action-projection",
             "apply_authority": "wakeup-runner-396-only",
             "no_lifecycle_authority": True,
-            "actions": [action],
+            "actions": [self.annotate_safe_progress(action)],
+            "blocked_queue": [],
         }
 
     def release_dispatch_action(self, **overrides) -> dict:
@@ -566,8 +632,17 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "no_lifecycle_authority": True,
             "concurrency": {"deficit": deficit},
             "hard_gate": {"active": active, "dispatch_required": dispatch_required},
-            "actions": actions,
+            "actions": [self.annotate_safe_progress(action) for action in actions],
+            "blocked_queue": [],
         }
+
+    def annotate_safe_progress(self, action: dict) -> dict:
+        annotated = dict(action)
+        if "risk_tier" not in annotated:
+            annotated["risk_tier"] = "low" if annotated.get("controller_action") == "spawn_codex_harness_background" else "medium"
+        if "execution_policy" not in annotated:
+            annotated["execution_policy"] = "cautious" if annotated["risk_tier"] == "medium" else "auto"
+        return annotated
 
     def spawn_action(self, **overrides) -> dict:
         prompt = self.repo / ".refactor-loop/prompts/task.md"

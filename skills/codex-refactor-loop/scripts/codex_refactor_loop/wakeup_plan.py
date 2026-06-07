@@ -44,6 +44,10 @@ from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from codex_refactor_loop.release.gate import canonical_digest, decide_release_artifact, parse_time
 from codex_refactor_loop.restart import restart_managed_daemon_names
+from codex_refactor_loop.safe_progress_scheduler import (
+    project_wakeup_actions,
+    write_blocked_queue,
+)
 from codex_refactor_loop.state import read_json
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
 from codex_refactor_loop.worker_markers import (
@@ -385,6 +389,8 @@ def _harness_spawn_intent_action(
         "stall": int(intent.get("stall", 5400)),
         "run_in_background_required": True,
         "no_lifecycle_authority": True,
+        "risk_tier": intent.get("risk_tier"),
+        "execution_policy": intent.get("execution_policy"),
         "reason": intent.get("reason"),
         "evidence": evidence,
         "source_artifact": ".refactor-loop/.controller-pending-events.log",
@@ -4211,9 +4217,13 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         actions.append(fallback)
     actions.sort(key=action_priority_sort_key)
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)
+    closed_actions = close_projection_actions(actions)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    safe_progress = project_wakeup_actions(closed_actions, now=now)
+    write_blocked_queue(repo_root, safe_progress.blocked_queue, now=now)
 
     recommendation: str | None = None
-    non_status_actions = [action for action in actions if action.get("kind") != "release-countdown"]
+    non_status_actions = [action for action in safe_progress.actions if action.get("kind") != "release-countdown"]
     if not non_status_actions:
         if concurrency["hard_gate"].get("reason") == "single_active_audit_in_flight":
             recommendation = "WAIT:single-active-audit"
@@ -4230,7 +4240,9 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         "daemon_health": health,
         "concurrency": concurrency,
         "hard_gate": concurrency["hard_gate"],
-        "actions": close_projection_actions(actions),
+        "actions": safe_progress.actions,
+        "blocked_queue": safe_progress.blocked_queue,
+        "safe_progress": safe_progress.as_dict(),
         "recommendation": recommendation,
     }
 

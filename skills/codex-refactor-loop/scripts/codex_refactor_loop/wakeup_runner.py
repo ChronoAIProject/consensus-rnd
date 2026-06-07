@@ -37,6 +37,7 @@ from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.gate import AutoReleaseGate
 from .release.publish_preflight import ReleasePublishPreflight
+from .safe_progress_scheduler import MEDIUM_NON_SPAWN_LIMIT_PER_TICK, validate_runner_action
 from .state import read_json
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import (
@@ -243,12 +244,19 @@ class WakeupRunner:
         budget = WakeupApplyBudget.from_plan(plan)
         results: list[RunnerResult] = []
         applied_spawns = 0
+        applied_medium_non_spawns = 0
         worker_top_up_only = False
         for action in plan.get("actions", []):
             if not isinstance(action, dict) or action.get("status_only") is True:
                 continue
             is_spawn_action = budget.is_spawn_action(action)
             consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)
+            if (
+                action.get("risk_tier") == "medium"
+                and not consumes_spawn_budget
+                and applied_medium_non_spawns >= MEDIUM_NON_SPAWN_LIMIT_PER_TICK
+            ):
+                continue
             if worker_top_up_only and not consumes_spawn_budget:
                 continue
             if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:
@@ -267,6 +275,8 @@ class WakeupRunner:
             if consumes_spawn_budget:
                 applied_spawns += 1
                 continue
+            if result.status == "applied" and action.get("risk_tier") == "medium":
+                applied_medium_non_spawns += 1
             if budget.hard_gate_active and applied_spawns < budget.spawn_budget:
                 worker_top_up_only = True
                 continue
@@ -326,6 +336,9 @@ class WakeupRunner:
         return None
 
     def _validate_action(self, action: Mapping[str, Any]) -> str | None:
+        safe_progress_error = validate_runner_action(action)
+        if safe_progress_error:
+            return safe_progress_error
         forbidden = _forbidden_action_field_paths(action)
         if forbidden:
             return "forbidden_fields:" + ",".join(forbidden)

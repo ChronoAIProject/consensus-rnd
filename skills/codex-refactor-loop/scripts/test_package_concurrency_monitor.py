@@ -221,7 +221,8 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
         self.assertIn("HARNESS_SPAWN_INTENT", events)
         self.assertIn('"command": "spawn-codex"', events)
         self.assertIn("DISPATCH_INTENT:fix-pr160-round-1-a:p0:fix-pr160-round-1-a needed", events)
-        self.assertIn("DISPATCH_INTENT:fix-pr160-round-1-b:p0:fix-pr160-round-1-b needed", events)
+        self.assertNotIn("DISPATCH_INTENT:fix-pr160-round-1-b:p0:fix-pr160-round-1-b needed", events)
+        self.assertTrue((self.refactor_loop / "dispatch-queue" / "p0" / "fix-pr160-round-1-b.dispatch.json").exists())
         self.assertNotIn("DISPATCH_FIRED", events)
 
     def test_mutable_dispatch_to_repo_root_is_rejected_with_narrow_allowlist_event(self) -> None:
