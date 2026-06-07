@@ -107,7 +107,7 @@ class HeadlessDogfoodFixture:
             mock.patch("codex_refactor_loop.phase9.router.write_active_controller_status", lambda _ctx, _decision: None),
             mock.patch("codex_refactor_loop.wakeup_runner.require_active_controller", return_value=FakeOwnerDecision()),
             mock.patch("codex_refactor_loop.wakeup_runner.write_active_controller_status", lambda _ctx, _decision: None),
-            mock.patch("codex_refactor_loop.wakeup_runner.PrChecksProjection", lambda runner=None: self),
+            mock.patch("codex_refactor_loop.wakeup_runner.PrMergeReadinessProjection", lambda runner=None: self),
             mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", side_effect=self.fake_spawn_supervisor),
             mock.patch.dict(os.environ, self.env, clear=False),
         ]
@@ -127,8 +127,22 @@ class HeadlessDogfoodFixture:
             path.chmod(0o755)
 
     def check_pr(self, _slug: str, pr_number: int):
-        runs = [type("Run", (), {"bucket": "pass"})()]
-        return type("Checks", (), {"ok": True, "reason": "", "head_sha": self.pr_head_sha(pr_number), "runs": runs})()
+        runs = [type("Run", (), {"bucket": "pass", "name": "ci", "link": ""})()]
+        return type(
+            "Checks",
+            (),
+            {
+                "ok": True,
+                "reason": "",
+                "head_sha": self.pr_head_sha(pr_number),
+                "required_failed": (),
+                "required_pending": (),
+                "missing_required": (),
+                "advisory_failed": (),
+                "advisory_pending": (),
+                "runs": runs,
+            },
+        )()
 
     def pr_head_sha(self, number: int) -> str:
         return str(self.prs.get(number, {}).get("headRefOid") or "")

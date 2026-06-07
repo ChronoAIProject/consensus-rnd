@@ -14,7 +14,7 @@ from typing import Sequence
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.pr_checks import PrChecksProjection  # noqa: E402
+from codex_refactor_loop.pr_checks import PrChecksProjection, PrMergeReadinessProjection  # noqa: E402
 
 
 class PrChecksProjectionTests(unittest.TestCase):
@@ -188,6 +188,132 @@ class PrChecksProjectionTests(unittest.TestCase):
                 self.assertFalse(status.ok)
                 self.assertEqual(reason, status.reason)
                 self.assertEqual((), status.runs)
+
+
+class PrMergeReadinessProjectionTests(unittest.TestCase):
+    def run_projection(self, responses: dict[tuple[str, ...], subprocess.CompletedProcess[str]]):
+        calls: list[list[str]] = []
+
+        def runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            calls.append(list(cmd))
+            return responses.get(tuple(cmd), subprocess.CompletedProcess(list(cmd), 99, "", "unexpected command"))
+
+        return PrMergeReadinessProjection(runner=runner).check_pr("owner/repo", 31), calls
+
+    def test_classifies_target_required_and_advisory_check_runs(self) -> None:
+        responses = {
+            ("gh", "pr", "view", "31", "--repo", "owner/repo", "--json", "baseRefName,headRefOid,mergeStateStatus"): subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps({"baseRefName": "main", "headRefOid": "abc123", "mergeStateStatus": "DIRTY"}), ""
+            ),
+            ("gh", "api", "repos/owner/repo/branches/main/protection/required_status_checks"): subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps({"contexts": ["unit", "lint"]}), ""
+            ),
+            ("gh", "api", "repos/owner/repo/rules/branches/main"): subprocess.CompletedProcess(["gh"], 99, "", "unexpected"),
+            ("gh", "api", "repos/owner/repo/commits/abc123/check-runs", "--paginate", "--slurp"): subprocess.CompletedProcess(
+                ["gh"],
+                0,
+                json.dumps(
+                    [
+                        {
+                            "check_runs": [
+                                {"name": "unit", "status": "completed", "conclusion": "failure", "html_url": "https://checks/unit"},
+                                {"name": "lint", "status": "queued", "conclusion": None, "html_url": "https://checks/lint"},
+                                {"name": "preview", "status": "completed", "conclusion": "failure", "html_url": "https://checks/preview"},
+                                {"name": "docs", "status": "queued", "conclusion": None, "html_url": "https://checks/docs"},
+                            ]
+                        }
+                    ]
+                ),
+                "",
+            ),
+        }
+
+        status, calls = self.run_projection(responses)
+
+        self.assertTrue(status.ok)
+        self.assertEqual("main", status.base_ref)
+        self.assertEqual("abc123", status.head_sha)
+        self.assertEqual(("lint", "unit"), status.required_check_names)
+        self.assertEqual(["unit"], [run.name for run in status.required_failed])
+        self.assertEqual(["lint"], [run.name for run in status.required_pending])
+        self.assertEqual(["preview"], [run.name for run in status.advisory_failed])
+        self.assertEqual(["docs"], [run.name for run in status.advisory_pending])
+        self.assertEqual(
+            calls,
+            [
+                ["gh", "pr", "view", "31", "--repo", "owner/repo", "--json", "baseRefName,headRefOid,mergeStateStatus"],
+                ["gh", "api", "repos/owner/repo/branches/main/protection/required_status_checks"],
+                ["gh", "api", "repos/owner/repo/commits/abc123/check-runs", "--paginate", "--slurp"],
+            ],
+        )
+
+    def test_non_blocked_pr_without_required_rule_evidence_treats_checks_as_advisory(self) -> None:
+        responses = {
+            ("gh", "pr", "view", "31", "--repo", "owner/repo", "--json", "baseRefName,headRefOid,mergeStateStatus"): subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps({"baseRefName": "main", "headRefOid": "abc123", "mergeStateStatus": "CLEAN"}), ""
+            ),
+            ("gh", "api", "repos/owner/repo/branches/main/protection/required_status_checks"): subprocess.CompletedProcess(
+                ["gh"], 1, "", "404 Not Found"
+            ),
+            ("gh", "api", "repos/owner/repo/rules/branches/main"): subprocess.CompletedProcess(["gh"], 1, "", "404 Not Found"),
+            ("gh", "api", "repos/owner/repo/commits/abc123/check-runs", "--paginate", "--slurp"): subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps({"check_runs": [{"name": "unit", "status": "completed", "conclusion": "failure"}]}), ""
+            ),
+        }
+
+        status, _calls = self.run_projection(responses)
+
+        self.assertTrue(status.ok)
+        self.assertEqual((), status.required_failed)
+        self.assertEqual(["unit"], [run.name for run in status.advisory_failed])
+
+    def test_blocked_pr_without_required_rule_evidence_fails_closed(self) -> None:
+        responses = {
+            ("gh", "pr", "view", "31", "--repo", "owner/repo", "--json", "baseRefName,headRefOid,mergeStateStatus"): subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps({"baseRefName": "main", "headRefOid": "abc123", "mergeStateStatus": "BLOCKED"}), ""
+            ),
+            ("gh", "api", "repos/owner/repo/branches/main/protection/required_status_checks"): subprocess.CompletedProcess(
+                ["gh"], 1, "", "404 Not Found"
+            ),
+            ("gh", "api", "repos/owner/repo/rules/branches/main"): subprocess.CompletedProcess(["gh"], 1, "", "404 Not Found"),
+        }
+
+        status, _calls = self.run_projection(responses)
+
+        self.assertFalse(status.ok)
+        self.assertEqual("required_rules_unavailable", status.reason)
+
+    def test_ruleset_required_status_checks_are_read_when_classic_protection_is_empty(self) -> None:
+        responses = {
+            ("gh", "pr", "view", "31", "--repo", "owner/repo", "--json", "baseRefName,headRefOid,mergeStateStatus"): subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps({"baseRefName": "main", "headRefOid": "abc123", "mergeStateStatus": "DIRTY"}), ""
+            ),
+            ("gh", "api", "repos/owner/repo/branches/main/protection/required_status_checks"): subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps({"contexts": []}), ""
+            ),
+            ("gh", "api", "repos/owner/repo/rules/branches/main"): subprocess.CompletedProcess(
+                ["gh"],
+                0,
+                json.dumps(
+                    [
+                        {
+                            "type": "required_status_checks",
+                            "parameters": {"required_status_checks": [{"context": "contract-tests"}]},
+                        }
+                    ]
+                ),
+                "",
+            ),
+            ("gh", "api", "repos/owner/repo/commits/abc123/check-runs", "--paginate", "--slurp"): subprocess.CompletedProcess(
+                ["gh"], 0, json.dumps({"check_runs": [{"name": "contract-tests", "status": "completed", "conclusion": "failure"}]}), ""
+            ),
+        }
+
+        status, _calls = self.run_projection(responses)
+
+        self.assertTrue(status.ok)
+        self.assertEqual(("contract-tests",), status.required_check_names)
+        self.assertEqual(["contract-tests"], [run.name for run in status.required_failed])
 
 
 class PrChecksSourceRegressionTests(unittest.TestCase):
