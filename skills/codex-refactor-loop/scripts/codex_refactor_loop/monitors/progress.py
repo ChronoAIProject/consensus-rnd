@@ -24,6 +24,7 @@ from ..holistic_status import render_markdown as render_holistic_markdown
 
 
 AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
+PROGRESS_COMMENT_MUTATION_BUDGET_PER_TICK = 4
 PROGRESS_REVIEW_TARGET_RE = re.compile(r"^review-pr([0-9]+)-[A-Za-z][A-Za-z0-9_-]*-r[0-9]+$")
 PROGRESS_FIX_TARGET_RE = re.compile(r"^fix-pr([0-9]+)-(?:r[0-9]+|round[0-9]+|round-[0-9]+)(?:-[A-Za-z0-9._-]+)?$")
 PROGRESS_PHASE9_TARGET_RE = re.compile(r"^phase9-issue([0-9]+)-r[0-9]+-(?:minimal|structural|delete|judge|reflector)$")
@@ -77,12 +78,24 @@ class ProgressReporter:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
             self.log_tick_status("skip:graphql-backoff remaining=unknown")
             return
+        remaining_mutations = PROGRESS_COMMENT_MUTATION_BUDGET_PER_TICK
+        mutation_backoff = False
         for log in sorted(self.log_dir.glob("*.log")):
+            if remaining_mutations <= 0:
+                self.log_tick_status("skip:comment-mutation-budget-exhausted")
+                break
             base = log.stem
             if base.startswith("audit-iter-") or base.startswith("remote-ci-"):
                 continue
-            self.post_or_update(base, log)
-        self.sync_global_status_card()
+            result = self.post_or_update(base, log)
+            if result in {"mutated", "mutation_failed"}:
+                remaining_mutations -= 1
+            if result == "mutation_failed":
+                mutation_backoff = True
+                self.log_tick_status(f"skip:comment-mutation-failure-backoff base={base}")
+                break
+        if remaining_mutations > 0 and not mutation_backoff:
+            self.sync_global_status_card()
 
     def sync_global_status_card(self) -> None:
         config = self._global_status_config()
@@ -223,12 +236,12 @@ Raw log tail is intentionally omitted while the worker is still running."""
 """
         return body
 
-    def post_or_update(self, base: str, log: Path) -> None:
+    def post_or_update(self, base: str, log: Path) -> str:
         decision = require_active_controller(self.ctx, "progress-reporter-write")
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:
             self.log_msg(f"active_controller=noop:not-owner progress-reporter {base} owner={decision.owner_device}")
-            return
+            return "noop"
         state = self._state()
         item = state.get(base, {}) if isinstance(state.get(base), dict) else {}
         target = str(item.get("target") or "")
@@ -236,7 +249,7 @@ Raw log tail is intentionally omitted while the worker is still running."""
             target = self.parse_target(base)
             if not target:
                 self.log_msg(f"skip {base}: no target")
-                return
+                return "noop"
             kind = self.parse_kind(target)
             cid: str | int | None = None
             prev_md5 = ""
@@ -248,28 +261,30 @@ Raw log tail is intentionally omitted while the worker is still running."""
         finished = "true" if status == "exit_ok" else "failed" if status == "exit_failed" else "false"
         if finished == "false" and self.is_zombie(log):
             self.log_msg(f"skip zombie log {base} (no EXIT, mtime > 30 min)")
-            return
+            return "noop"
         prev_finished = str(item.get("finished") or "")
         needs_delete_retry = finished == "true" and cid not in (None, "", "null", 0, "0")
         if finished == prev_finished and not needs_delete_retry and finished in ("true", "failed"):
-            return
+            return "noop"
         if finished == "true" and cid not in (None, "", "null", 0, "0"):
             delete = self.gh_api(["-X", "DELETE", f"repos/{self.repo}/issues/comments/{cid}"], check=False)
             if delete.returncode == 0:
                 self.log_msg(f"deleted progress comment for {base} (finished, cid={cid} was={kind} #{target})")
                 self._state_set(base, target, kind, 0, "deleted", "true")
+                return "mutated"
             else:
                 exists = self.gh_api([f"repos/{self.repo}/issues/comments/{cid}"], check=False)
                 if exists.returncode != 0:
                     self.log_msg(f"comment {cid} for {base} already 404; marking finished")
                     self._state_set(base, target, kind, 0, "gone", "true")
+                    return "mutation_failed"
                 else:
                     self.log_msg(f"FAIL delete comment {cid} for {base}; comment still exists, retry next tick")
-            return
+                    return "mutation_failed"
         body = self.build_body(base, log, finished)
         cur_md5 = hash_body(body)
         if cur_md5 == prev_md5 and finished == prev_finished:
-            return
+            return "noop"
         with temp_body_file(body) as body_file:
             if cid in (None, "", "null"):
                 url = self._create_comment(kind, target, body_file)
@@ -279,15 +294,20 @@ Raw log tail is intentionally omitted while the worker is still running."""
                         kind = "issue" if kind == "pr" else "pr"
                     self._state_set(base, target, kind, int(new_cid), cur_md5, finished)
                     self.log_msg(f"created progress comment for {base} → {kind} #{target} (cid={new_cid})")
+                    return "mutated"
                 else:
                     self.log_msg(f"FAIL to create comment for {base} → {kind} #{target}")
+                    return "mutation_failed"
             else:
                 patch = self.gh_api(["-X", "PATCH", f"repos/{self.repo}/issues/comments/{cid}", "-F", f"body=@{body_file}"], check=False)
                 if patch.returncode == 0:
                     self._state_set(base, target, kind, cid, cur_md5, finished)
                     self.log_msg(f"edited progress comment for {base} (cid={cid}, finished={finished})")
+                    return "mutated"
                 else:
                     self.log_msg(f"FAIL to edit comment {cid} for {base}; will retry next tick")
+                    return "mutation_failed"
+        return "noop"
 
     def _create_comment(self, kind: str, target: str, body_file: Path) -> str:
         first = self.gh([kind, "comment", target, "--body-file", str(body_file)], check=False)
