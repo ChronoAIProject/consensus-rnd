@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable, Literal, Sequence
 
@@ -18,6 +19,7 @@ from .versions import parse_semver_full
 
 
 Runner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
+HEX_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,12 @@ class ReleasePublicationState:
     skip_bump_commit: bool
     push_release_commit: bool
     reason: str
+
+
+@dataclass(frozen=True)
+class RemoteReleaseProof:
+    ref: str
+    sha: str
 
 
 class ReleasePublisher:
@@ -221,30 +229,67 @@ class ReleasePublisher:
         branch = self._integration_branch()
         if not branch:
             return None
-        remote_ref = f"origin/{branch}"
         fetch = self._run(["git", "fetch", "origin", branch])
         if fetch.returncode != 0:
             return None
-        rev_parse = self._run(["git", "rev-parse", remote_ref])
-        if rev_parse.returncode != 0:
+        branch_proof = self._remote_reentry_proof(f"origin/{branch}")
+        state = self._remote_already_bumped_state_from_proof(branch_proof, version, tag)
+        if state is not None:
+            return state
+        for proof in self._remote_rollup_release_proofs():
+            state = self._remote_already_bumped_state_from_proof(proof, version, tag)
+            if state is not None:
+                return state
+        return None
+
+    def _remote_already_bumped_state_from_proof(
+        self, proof: RemoteReleaseProof | None, version: str, tag: str
+    ) -> ReleasePublicationState | None:
+        if proof is None:
             return None
-        remote_sha = rev_parse.stdout.strip()
-        if not remote_sha:
-            return None
-        subject = self._run(["git", "show", "-s", "--format=%s", remote_ref])
+        subject = self._run(["git", "show", "-s", "--format=%s", proof.ref])
         if subject.returncode != 0 or subject.stdout.strip() != self._release_bump_subject(version):
             return None
-        if self._remote_mapped_manifest_versions(remote_ref) != {version}:
+        if self._remote_mapped_manifest_versions(proof.ref) != {version}:
             return None
         return ReleasePublicationState(
             phase="already_bumped",
             version=version,
             tag=tag,
-            release_target_ref=remote_sha,
+            release_target_ref=proof.sha,
             skip_bump_commit=True,
             push_release_commit=False,
             reason="remote_already_bumped_reentry",
         )
+
+    def _remote_reentry_proof(self, ref: str) -> RemoteReleaseProof | None:
+        sha = self._rev_parse_ref(ref)
+        if not sha:
+            return None
+        return RemoteReleaseProof(ref=ref, sha=sha)
+
+    def _remote_rollup_release_proofs(self) -> list[RemoteReleaseProof]:
+        listing = self._run(["git", "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/rollup"])
+        if listing.returncode != 0:
+            return []
+        proofs: list[RemoteReleaseProof] = []
+        for ref in sorted(line.strip() for line in listing.stdout.splitlines() if line.strip()):
+            if not ref.startswith("origin/rollup/"):
+                continue
+            suffix = ref.rsplit("/", 1)[-1]
+            if not HEX_SHA_RE.fullmatch(suffix):
+                continue
+            resolved = self._rev_parse_ref(ref)
+            if resolved == suffix:
+                proofs.append(RemoteReleaseProof(ref=ref, sha=resolved))
+        return proofs
+
+    def _rev_parse_ref(self, ref: str) -> str | None:
+        rev_parse = self._run(["git", "rev-parse", ref])
+        if rev_parse.returncode != 0:
+            return None
+        sha = rev_parse.stdout.strip()
+        return sha or None
 
     def _remote_mapped_manifest_versions(self, remote_ref: str) -> set[str]:
         versions: set[str] = set()
