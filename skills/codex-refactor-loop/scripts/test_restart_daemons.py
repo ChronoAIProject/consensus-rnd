@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import sys
@@ -168,6 +169,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
     def start_count(self, name: str) -> int:
         path = self.repo / ".refactor-loop" / "logs" / f"{name}.starts"
         return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
+
+    def file_sha256(self, path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def assert_start_count(self, name: str, expected: int) -> None:
         self.assertEqual(expected, self.start_count(name))
@@ -342,6 +346,58 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertNotEqual(old_pid, new_pid)
         self.assertEqual(2, self.start_count("dev_sync_daemon"))
 
+    def test_restarts_when_host_env_content_fingerprint_changes_without_leaking_values(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("concurrency_monitor")
+        before = json.loads(self.fingerprint_path("concurrency_monitor").read_text(encoding="utf-8"))
+
+        self.host_env_path.write_text(
+            f'export REPO_ROOT="{self.repo}"\n'
+            'export GH_REPO_SLUG="example/repo"\n'
+            'export MAINTAINER_WHITELIST="maintainer"\n'
+            'export PHASE9_ROUTER_INTERVAL_SECONDS="45"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(
+            repo_root=self.repo,
+            skill_root=self.skill,
+            env={"CONSENSUS_RND_HOST_ENV": str(self.host_env_path)},
+        )
+        with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, FAKE_COMMAND) for name in DAEMON_NAMES)):
+            helper = RestartDaemons(ctx, self.config, runtime=self.runtime)
+            helper.start_daemon("concurrency_monitor", FAKE_COMMAND)
+
+        after = json.loads(self.fingerprint_path("concurrency_monitor").read_text(encoding="utf-8"))
+        self.assertNotEqual(old_pid, self.read_pid("concurrency_monitor"))
+        self.assertEqual(2, self.start_count("concurrency_monitor"))
+        self.assertEqual(str(self.host_env_path.resolve()), after["host_env_path"])
+        self.assertNotEqual(before["host_env_sha256"], after["host_env_sha256"])
+        fingerprint_text = json.dumps(after, sort_keys=True)
+        self.assertNotIn("MAINTAINER_WHITELIST", fingerprint_text)
+        self.assertNotIn("maintainer", fingerprint_text)
+        self.assertNotIn("PHASE9_ROUTER_INTERVAL_SECONDS", fingerprint_text)
+
+    def test_restarts_when_host_env_locator_fingerprint_changes(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("comment-monitor")
+        next_host_env = self.repo / ".config" / "consensus-rnd" / "alternate-host.env"
+        next_host_env.write_text(self.host_env_path.read_text(encoding="utf-8"), encoding="utf-8")
+        ctx = LoopContext.load(
+            repo_root=self.repo,
+            skill_root=self.skill,
+            env={"CONSENSUS_RND_HOST_ENV": str(next_host_env)},
+        )
+
+        with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, FAKE_COMMAND) for name in DAEMON_NAMES)):
+            helper = RestartDaemons(ctx, self.config, runtime=self.runtime)
+            helper.start_daemon("comment-monitor", FAKE_COMMAND)
+
+        fingerprint = json.loads(self.fingerprint_path("comment-monitor").read_text(encoding="utf-8"))
+        self.assertNotEqual(old_pid, self.read_pid("comment-monitor"))
+        self.assertEqual(2, self.start_count("comment-monitor"))
+        self.assertEqual(str(next_host_env.resolve()), fingerprint["host_env_path"])
+        self.assertEqual(self.file_sha256(next_host_env), fingerprint["host_env_sha256"])
+
     def test_restarts_when_fingerprint_missing(self) -> None:
         self.run_helper()
         self.fingerprint_path("codex-progress-reporter").unlink()
@@ -378,6 +434,8 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                 repaired = json.loads(self.fingerprint_path(name).read_text(encoding="utf-8"))
                 self.assertIsInstance(repaired["command"], list)
                 self.assertIn("entrypoint_sha256", repaired)
+                self.assertIn("host_env_path", repaired)
+                self.assertIn("host_env_sha256", repaired)
 
     def test_restarts_when_heartbeat_stale(self) -> None:
         self.run_helper()
@@ -591,6 +649,8 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             ".fingerprint.json",
             "package_tree_sha256",
             "entrypoint_sha256",
+            "host_env_path",
+            "host_env_sha256",
             "pid_alive(pid)",
             "FORBIDDEN_LIFECYCLE_AUTHORITY",
             "def restart_managed_daemon_names(",

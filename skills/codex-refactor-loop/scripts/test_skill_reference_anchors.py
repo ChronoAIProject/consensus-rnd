@@ -663,6 +663,13 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "CI",
             "policy",
             "HOST_*",
+            "does not write, load, unload, or delete cron entries or LaunchAgent plists",
+            "only loop action is to call the existing checked-in `consensus-rnd-cli restart-daemons` helper",
+            "When `host.env` path or contents change",
+            "`DaemonLaunchFingerprint`",
+            "launchctl bootstrap gui/$(id -u)",
+            "launchctl bootout gui/$(id -u)",
+            "Do not add a second watchdog or installer",
         )
         for needle in required:
             with self.subTest(needle=needle):
@@ -1699,6 +1706,31 @@ class WakeupRunnerContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.claude)
+
+    def test_safe_progress_scheduler_boundary_is_documented(self) -> None:
+        wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")
+        dispatch_protocol = self.skill[self.skill.index("### Dispatch queue protocol") :]
+        for needle in (
+            "`safe_progress_scheduler.py` is the sole risk admission owner",
+            "`risk_tier: \"low\" | \"medium\" | \"high\"`",
+            "`execution_policy: \"auto\" | \"cautious\" | \"blocked\"`",
+            "`.refactor-loop/state/safe-progress-blocked-queue.json`",
+            "dequeue/claim/list/status API",
+            "low/medium actions still require #396 runner validation",
+            "dispatch cwd guard",
+            "#191 owner",
+            "helper-specific preconditions",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+        for needle in (
+            "medium risk actions must carry `risk_tier: \"medium\"` plus `execution_policy: \"cautious\"`",
+            "`risk_tier: \"high\"` or blocked execution policy is a schema violation",
+        ):
+            with self.subTest(runner_needle=needle):
+                self.assertIn(needle.lower(), wakeup_runner.lower())
+        self.assertIn("classifies each dispatch payload through `safe_progress_scheduler.py`", dispatch_protocol)
+        self.assertIn("do not stall later low/medium queue files", dispatch_protocol)
 
     def test_consensus_implementation_projection_fact_source_is_judge_only(self) -> None:
         wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")

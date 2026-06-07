@@ -220,6 +220,40 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         archived = sorted((self.refactor_loop / "dispatch-dispatched").glob("*.json"))
         self.assertEqual([p.name for p in archived], ["audit-iter-5.json", "fix-pr44-round-3.json"])
 
+    def test_dispatch_queue_rejects_high_risk_payload_and_continues_to_low(self) -> None:
+        unsafe = self.write_dispatch("p0", "unsafe-task")
+        payload = json.loads(unsafe.read_text(encoding="utf-8"))
+        payload["argv"] = ["gh", "issue", "close", "1"]
+        unsafe.write_text(json.dumps(payload), encoding="utf-8")
+        self.write_dispatch("p0", "audit-iter-5")
+
+        with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+            self.monitor.top_up_from_dispatch_queue(actual=0, floor=2)
+
+        self.assertEqual([intent["task_id"] for intent in self.harness_spawn_intents()], ["audit-iter-5"])
+        rejected = self.refactor_loop / "dispatch-rejected" / "unsafe-task.json"
+        self.assertTrue(rejected.exists())
+        rejected_payload = json.loads(rejected.read_text(encoding="utf-8"))
+        self.assertIn("forbidden_fields:argv", rejected_payload["reject_reason"])
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("DISPATCH_REJECTED:unsafe-task:p0:safe-progress:forbidden_fields:argv", events)
+        self.assertIn("DISPATCH_INTENT:audit-iter-5:p0", events)
+
+    def test_dispatch_queue_limits_medium_payloads_per_tick(self) -> None:
+        self.write_dispatch("p0", "fix-pr44-round-1")
+        self.write_dispatch("p0", "fix-pr45-round-1")
+        self.write_dispatch("p0", "audit-iter-5")
+
+        with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+            self.monitor.top_up_from_dispatch_queue(actual=0, floor=3)
+
+        intents = self.harness_spawn_intents()
+        self.assertEqual(["audit-iter-5", "fix-pr44-round-1"], sorted(intent["task_id"] for intent in intents))
+        self.assertTrue((self.refactor_loop / "dispatch-queue" / "p0" / "fix-pr45-round-1.dispatch.json").exists())
+        dispatched_fix = json.loads((self.refactor_loop / "dispatch-dispatched" / "fix-pr44-round-1.json").read_text(encoding="utf-8"))
+        self.assertEqual("medium", dispatched_fix["risk_tier"])
+        self.assertEqual("cautious", dispatched_fix["execution_policy"])
+
     # Refactor (impl/issue191-single-active-controller): Old pattern: any
     # device-local concurrency monitor could dispatch and archive queue entries.
     # New principle: non-owner monitors preserve queue files and write no
@@ -793,14 +827,15 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                     self.monitor.tick()
 
         self.assertEqual(calls, [])
-        self.assertEqual(len(self.harness_spawn_intents()), 2)
+        self.assertEqual(len(self.harness_spawn_intents()), 1)
+        self.assertTrue((self.refactor_loop / "dispatch-queue" / "p0" / "fix-pr57-round-1-b.dispatch.json").exists())
         alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
         self.assertIn("P0 no-gap-violation", alert)
         state = json.loads((self.refactor_loop / ".concurrency-monitor-state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["zero_streak"], 1)
         events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("DISPATCH_INTENT:fix-pr57-round-1-a:p0:fix-pr57-round-1-a needed", events)
-        self.assertIn("DISPATCH_INTENT:fix-pr57-round-1-b:p0:fix-pr57-round-1-b needed", events)
+        self.assertNotIn("DISPATCH_INTENT:fix-pr57-round-1-b:p0:fix-pr57-round-1-b needed", events)
 
     # Refactor (fix/pr242-narrow-allowlist-and-nonowner-test): Old: tick()
     # only proved the owner/default-local queue top-up path. New: non-owner

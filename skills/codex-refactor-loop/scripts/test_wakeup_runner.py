@@ -278,6 +278,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         )
         self.ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
         self.supervisor = FakeSupervisor()
+        self.expected_skill_root = SCRIPT_DIR.parent
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -342,6 +343,71 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual("applied", result[0].status)
         self.assertEqual([("apply_default_issue_intake_claim", 77)], actions.calls)
+
+    def test_runner_blocks_high_risk_action_before_helper_dispatch(self) -> None:
+        action = self.release_dispatch_action(
+            risk_tier="high",
+            execution_policy="blocked",
+            argv=["gh", "release", "create"],
+        )
+        actions = FakeActions()
+
+        result = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual("blocked", result[0].status)
+        self.assertEqual("risk_tier_high", result[0].reason)
+        self.assertEqual([], actions.calls)
+
+    def test_runner_blocks_medium_without_cautious_policy(self) -> None:
+        action = self.release_dispatch_action(risk_tier="medium", execution_policy="auto")
+        actions = FakeActions()
+
+        result = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual("blocked", result[0].status)
+        self.assertEqual("medium_requires_cautious_execution_policy", result[0].reason)
+        self.assertEqual([], actions.calls)
+
+    def test_runner_applies_at_most_one_medium_non_spawn_per_tick(self) -> None:
+        base = {
+            "kind": "default-issue-intake-claim",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "default_issue_intake_enabled",
+                "live_open_target",
+                "non_pr_issue",
+                "target_not_managed",
+                "github_comment_claim_protocol",
+            ],
+            "source_artifact": "github-open-default-issue-intake-candidates",
+            "controller_action": "apply_default_issue_intake_claim",
+            "no_generic_command": True,
+            "no_lifecycle_authority": True,
+            "risk_tier": "medium",
+            "execution_policy": "cautious",
+        }
+        first = {
+            **base,
+            "action_id": "default-issue-intake-claim:issue:77",
+            "source_marker": "default-issue-intake-candidate:issue:77",
+            "target_kind": "issue",
+            "target_number": 77,
+            "target": {"kind": "issue", "number": 77},
+        }
+        second = {
+            **base,
+            "action_id": "default-issue-intake-claim:issue:78",
+            "source_marker": "default-issue-intake-candidate:issue:78",
+            "target_kind": "issue",
+            "target_number": 78,
+            "target": {"kind": "issue", "number": 78},
+        }
+        actions = FakeActions()
+
+        results = self.run_result(self.batch_plan([first, second], dispatch_required=2, deficit=2), gh_labels=[], actions=actions)
+
+        self.assertEqual(["default-issue-intake-claim:issue:77"], [result.action_id for result in results])
 
     def test_apply_default_issue_intake_claim_rejects_pr_shape(self) -> None:
         action = {
@@ -512,7 +578,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "mode": "closed-action-projection",
             "apply_authority": "wakeup-runner-396-only",
             "no_lifecycle_authority": True,
-            "actions": [action],
+            "actions": [self.annotate_safe_progress(action)],
+            "blocked_queue": [],
         }
 
     def release_dispatch_action(self, **overrides) -> dict:
@@ -577,8 +644,17 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "no_lifecycle_authority": True,
             "concurrency": {"deficit": deficit},
             "hard_gate": {"active": active, "dispatch_required": dispatch_required},
-            "actions": actions,
+            "actions": [self.annotate_safe_progress(action) for action in actions],
+            "blocked_queue": [],
         }
+
+    def annotate_safe_progress(self, action: dict) -> dict:
+        annotated = dict(action)
+        if "risk_tier" not in annotated:
+            annotated["risk_tier"] = "low" if annotated.get("controller_action") == "spawn_codex_harness_background" else "medium"
+        if "execution_policy" not in annotated:
+            annotated["execution_policy"] = "cautious" if annotated["risk_tier"] == "medium" else "auto"
+        return annotated
 
     def spawn_action(self, **overrides) -> dict:
         prompt = self.repo / ".refactor-loop/prompts/task.md"
@@ -808,7 +884,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "host_checks_green",
                 "single_linked_managed_issue",
                 "worker_authored_pr_artifacts",
-                "no_conflicting_open_implementation_pr",
+                "matching_open_managed_pr",
             ],
             "source_artifact": ".refactor-loop/logs/implement-issue77.log",
             "source_marker": marker,
@@ -1136,7 +1212,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         args, kwargs = popen.call_args
         command = args[0]
         self.assertIn("spawn-codex", command)
-        self.assertIn(str(self.repo.resolve()), command[0])
+        self.assertEqual(command[0], str((self.expected_skill_root / "scripts" / "consensus-rnd-cli").resolve()))
+        self.assertEqual(kwargs["cwd"], str(self.repo.resolve()))
         self.assertEqual(command[command.index("--cd") + 1], str(self.repo))
         self.assertEqual(command[command.index("--prompt") + 1], str(self.repo / ".refactor-loop/prompts/task.md"))
         self.assertEqual(command[command.index("--log") + 1], str(self.repo / ".refactor-loop/logs/task.log"))
@@ -1376,7 +1453,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "no_conflicting_open_implementation_pr",
+                "matching_open_managed_pr",
             ],
         )
         later = self.spawn_action(action_id="spawn:after-blocked-lifecycle")
@@ -1436,7 +1513,6 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             results = self.run_result(
                 self.batch_plan([*status_only_prefix, duplicate, applied_lifecycle, *spawn_batch], dispatch_required=3, deficit=3),
                 actions=actions,
-                duplicate_prs=[],
                 git_diff_code=1,
             )
 
@@ -1495,7 +1571,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "no_conflicting_open_implementation_pr",
+                "matching_open_managed_pr",
             ],
         )
         spawns = [
@@ -1579,7 +1655,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "no_conflicting_open_implementation_pr",
+                "matching_open_managed_pr",
             ],
         )
         close = self.close_action(action_id="close-managed-item:53:after-blocked-publish")
@@ -1932,6 +2008,16 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("WAKEUP_RUNNER_SPAWN_LAUNCH_EXIT:spawn:supervisor-exit-3:3", pending)
         self.assertIn("WAKEUP_RUNNER_HELPER_EXIT:spawn:supervisor-exit-3:spawn_codex_harness_background:3", pending)
+
+    def test_harness_spawn_passes_context_skill_root_to_supervisor(self) -> None:
+        action = self.spawn_action(action_id="spawn:skill-root")
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(action))
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(Path(launch.call_args.kwargs["skill_root"]).resolve(), self.expected_skill_root.resolve())
+        self.assertEqual(Path(launch.call_args.kwargs["repo_root"]).resolve(), self.repo.resolve())
 
     def test_harness_spawn_existing_target_log_blocks_before_supervisor(self) -> None:
         actions = FakeActions()
@@ -2324,6 +2410,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             results = self.run_result(self.base_plan(self.remote_ci_fix_action()), actions=actions)
 
         self.assertEqual(results[0].status, "applied")
+        self.assertEqual(Path(launch.call_args.kwargs["skill_root"]).resolve(), self.expected_skill_root.resolve())
         self.assertEqual(Path(launch.call_args.kwargs["cd"]).resolve(), worktree.resolve())
         prompt = Path(launch.call_args.kwargs["prompt"])
         self.assertEqual(prompt.name, f"remote-ci-fix-pr77-contract-tests-{'a' * 12}-a1.md")
@@ -2857,7 +2944,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                         "clean_scoped_diff",
                         "single_linked_managed_issue",
                         "worker_authored_pr_artifacts",
-                        "no_conflicting_open_implementation_pr",
+                        "matching_open_managed_pr",
                     ],
                 ),
                 "publish_implementation_missing_precondition:host_checks_green",
@@ -3404,7 +3491,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_implementation_output")
 
-    def test_publish_implementation_output_allows_missing_pr_so_publish_can_open_it(self) -> None:
+    def test_publish_implementation_output_blocks_missing_matching_pr_before_helper(self) -> None:
         actions = FakeActions()
 
         def command_runner(command):
@@ -3436,8 +3523,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         results = runner.run_once()
 
-        self.assertEqual(results[0].status, "applied")
-        self.assertEqual(actions.calls[0][0], "publish_implementation_output")
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "publish_implementation_matching_pr_missing")
+        self.assertEqual(actions.calls, [])
 
     def test_dispatch_reviewers_routes_to_named_helper_after_pr_target_validation(self) -> None:
         actions = FakeActions()

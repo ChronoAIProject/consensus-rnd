@@ -192,7 +192,20 @@ class HeadlessDogfoodFixture:
     def fake_command_runner(self, command) -> subprocess.CompletedProcess[str]:
         return self.fake_subprocess_run(list(command), cwd=self.repo)
 
-    def fake_spawn_supervisor(self, *, repo_root: Path, cd: Path, prompt: Path, log: Path, stall: int, env: dict[str, str]) -> int:
+    def fake_spawn_supervisor(
+        self,
+        *,
+        repo_root: Path,
+        skill_root: Path,
+        cd: Path,
+        prompt: Path,
+        log: Path,
+        stall: int,
+        env: dict[str, str],
+    ) -> int:
+        self.testcase.assertEqual(self.repo.resolve(), repo_root.resolve())
+        self.testcase.assertEqual(SKILL_ROOT.resolve(), skill_root.resolve())
+        self.testcase.assertTrue((skill_root / "scripts" / "consensus-rnd-cli").is_file())
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text("spawned\n", encoding="utf-8")
         self.spawn_counts[str(log)] = self.spawn_counts.get(str(log), 0) + 1

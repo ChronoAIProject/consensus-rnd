@@ -37,6 +37,7 @@ from .pr_checks import PrMergeReadinessProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.gate import AutoReleaseGate
 from .release.publish_preflight import ReleasePublishPreflight
+from .safe_progress_scheduler import MEDIUM_NON_SPAWN_LIMIT_PER_TICK, validate_runner_action
 from .state import read_json
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import (
@@ -243,12 +244,19 @@ class WakeupRunner:
         budget = WakeupApplyBudget.from_plan(plan)
         results: list[RunnerResult] = []
         applied_spawns = 0
+        applied_medium_non_spawns = 0
         worker_top_up_only = False
         for action in plan.get("actions", []):
             if not isinstance(action, dict) or action.get("status_only") is True:
                 continue
             is_spawn_action = budget.is_spawn_action(action)
             consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)
+            if (
+                action.get("risk_tier") == "medium"
+                and not consumes_spawn_budget
+                and applied_medium_non_spawns >= MEDIUM_NON_SPAWN_LIMIT_PER_TICK
+            ):
+                continue
             if worker_top_up_only and not consumes_spawn_budget:
                 continue
             if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:
@@ -267,6 +275,8 @@ class WakeupRunner:
             if consumes_spawn_budget:
                 applied_spawns += 1
                 continue
+            if result.status == "applied" and action.get("risk_tier") == "medium":
+                applied_medium_non_spawns += 1
             if budget.hard_gate_active and applied_spawns < budget.spawn_budget:
                 worker_top_up_only = True
                 continue
@@ -326,6 +336,9 @@ class WakeupRunner:
         return None
 
     def _validate_action(self, action: Mapping[str, Any]) -> str | None:
+        safe_progress_error = validate_runner_action(action)
+        if safe_progress_error:
+            return safe_progress_error
         forbidden = _forbidden_action_field_paths(action)
         if forbidden:
             return "forbidden_fields:" + ",".join(forbidden)
@@ -793,7 +806,7 @@ class WakeupRunner:
             "host_checks_green",
             "single_linked_managed_issue",
             "worker_authored_pr_artifacts",
-            "no_conflicting_open_implementation_pr",
+            "matching_open_managed_pr",
         ):
             if required not in preconditions:
                 return f"publish_implementation_missing_precondition:{required}"
@@ -807,7 +820,7 @@ class WakeupRunner:
         worktree_error = self._validate_implementation_worktree(action)
         if worktree_error:
             return worktree_error
-        return self._validate_no_conflicting_open_implementation_pr(action)
+        return self._validate_matching_open_implementation_pr(action)
 
     def _validate_implementation_pr_artifacts(self, action: Mapping[str, Any]) -> str | None:
         target = action.get("target_number")
@@ -940,7 +953,7 @@ class WakeupRunner:
             return "rollup_auto_merge_base_mismatch"
         return None
 
-    def _validate_no_conflicting_open_implementation_pr(self, action: Mapping[str, Any]) -> str | None:
+    def _validate_matching_open_implementation_pr(self, action: Mapping[str, Any]) -> str | None:
         head_ref = str(action.get("head_ref") or "").strip()
         if not _safe_branch_name(head_ref):
             return "publish_implementation_invalid_head_ref"
@@ -954,7 +967,7 @@ class WakeupRunner:
         if not isinstance(payload, list):
             return "publish_implementation_matching_pr_invalid_json"
         if len(payload) == 0:
-            return None
+            return "publish_implementation_matching_pr_missing"
         if len(payload) > 1:
             return "publish_implementation_multiple_matching_open_pr"
         pr = payload[0]
@@ -1143,6 +1156,7 @@ class WakeupRunner:
     def _launch_spawn_codex_supervisor(self, *, cd: Path, prompt: Path, log: Path, stall: int) -> int:
         return launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
+            skill_root=self.ctx.skill_root,
             cd=cd,
             prompt=prompt,
             log=log,
@@ -1158,6 +1172,7 @@ class WakeupRunner:
             return 3
         return launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
+            skill_root=self.ctx.skill_root,
             cd=worktree,
             prompt=self.ctx.repo_root / spec.prompt_path,
             log=self.ctx.repo_root / spec.log_path,
@@ -1205,6 +1220,7 @@ class WakeupRunner:
         self._record_remote_ci_fix_attempt(attempt_key)
         exit_code = launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
+            skill_root=self.ctx.skill_root,
             cd=worktree,
             prompt=prompt,
             log=log,
