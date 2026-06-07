@@ -329,6 +329,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "`consensus-rnd-cli runtime-retention` is the canonical command",
             "$RUNTIME_RETENTION_ENABLE=true",
             "$REPO_ROOT/.refactor-loop/{logs,prompts,runs}",
+            "fails closed until a file-level planner proof surface and producer exist",
+            "deleted=0 kept=0",
             "same inode",
             ".controller-pending-events.log",
             ".refactor-loop/state/runtime-retention-plan.json",
