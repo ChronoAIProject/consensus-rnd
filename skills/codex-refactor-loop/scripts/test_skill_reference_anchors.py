@@ -271,6 +271,29 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, python_policy)
 
+    def test_issue_651_main_checkout_follow_boundary_is_documented(self) -> None:
+        claude = read(REPO_ROOT / "CLAUDE.md")
+        integration = section_after_heading(self.skill, "Named runtime exception — integration sync daemon(per #53)")
+        daemon_body = section_after_anchor_until_heading(self.skill, "daemon-command-bodies", 2)
+
+        for needle in (
+            "integration publish/write authority remains only in the dedicated integration worktree",
+            "safe_sync_main",
+            "branch==`$INTEGRATION_BRANCH`",
+            "tracked-clean",
+            "no in-progress git operation",
+            "remote-only-ahead",
+            "git merge --ff-only origin/$INTEGRATION_BRANCH",
+            "main checkout HEAD as publish authorization",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, claude)
+                self.assertIn(needle, integration)
+        self.assertIn("LOCAL_AHEAD_PENDING_ONLY", daemon_body)
+        self.assertIn("DEV_SYNC_PENDING:local-ahead-managed-adoption-required:<json>", daemon_body)
+        self.assertNotIn("push-local-ahead", daemon_body)
+        self.assertNotIn("direct push", integration)
+
     def test_default_issue_intake_claim_anchor_and_contract_are_documented(self) -> None:
         available = reference_anchors(self.skill)
         anchor = "named-runtime-exception---default-issue-intake-claimper-623"
@@ -663,6 +686,13 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "CI",
             "policy",
             "HOST_*",
+            "does not write, load, unload, or delete cron entries or LaunchAgent plists",
+            "only loop action is to call the existing checked-in `consensus-rnd-cli restart-daemons` helper",
+            "When `host.env` path or contents change",
+            "`DaemonLaunchFingerprint`",
+            "launchctl bootstrap gui/$(id -u)",
+            "launchctl bootout gui/$(id -u)",
+            "Do not add a second watchdog or installer",
         )
         for needle in required:
             with self.subTest(needle=needle):
@@ -887,9 +917,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
-        self.assertIn("`MERGE`: post 中文 merge comment, then call `merge_pr <pr>` for ready+merge.", self.skill)
+        self.assertIn("`MERGE`: post merge comment according to `$HOST_WORK_LANGUAGE`, then call `merge_pr <pr>` for ready+merge.", self.skill)
         self.assertIn(
-            "`MERGE_WITH_COMMENTS`: surface comment evidence, post 中文 merge comment, then call `merge_pr <pr>` for ready+merge.",
+            "`MERGE_WITH_COMMENTS`: surface comment evidence, post merge comment according to `$HOST_WORK_LANGUAGE`, then call `merge_pr <pr>` for ready+merge.",
             self.skill,
         )
         for needle in (
@@ -1328,7 +1358,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 "worker_markers.py",
             },
             "solver-issue": {"monitors/concurrency.py", "phase9/router.py"},
-            "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py"},
+            "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py", "worker_markers.py"},
             "review-pr": {"controller_actions.py", "monitors/progress.py", "monitors/concurrency.py", "peek.py", "wakeup_plan.py", "wakeup_runner.py"},
             "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py", "wakeup_runner.py"},
             "crnd:": {"default_issue_intake.py", "labels.py", "triage.py"},
@@ -1360,7 +1390,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         concurrency = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "concurrency.py").read_text(encoding="utf-8")
         controller_actions = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
         git = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "git.py").read_text(encoding="utf-8")
-        self.assertIn("PROGRESS_PHASE9_TARGET_RE", progress)
+        self.assertIn("global-dashboard-status-card", progress)
+        self.assertIn("_valid_fixed_comment_patch", progress)
+        self.assertNotIn("PROGRESS_PHASE9_TARGET_RE", progress)
         self.assertIn("MAIN_READONLY_DISPATCH_PATTERNS", concurrency)
         self.assertIn("SAFE_WORKTREE_CLUSTER_RE", controller_actions)
         self.assertIn("SAFE_WORKTREE_CLUSTER_RE", git)
@@ -1596,10 +1628,13 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(needle, self.skill)
         self.assertIn("DONE_PREFIX_RE.fullmatch", wakeup_plan)
         self.assertNotIn("' '.join(tail_lines(log_path, 40))", wakeup_plan)
-        self.assertIn("MARKER_RE.fullmatch", router)
+        worker_markers = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "worker_markers.py").read_text(encoding="utf-8")
+        self.assertIn("read_worker_terminal_marker", router)
+        self.assertIn("GENERIC_DONE_PREFIX_RE.fullmatch", worker_markers)
         self.assertNotIn("stripped.find(prefix)", router)
-        self.assertIn("Raw log tail is intentionally omitted", progress)
-        self.assertIn("异常诊断 tail (non-zero EXIT only)", progress)
+        self.assertIn("worker-log-status", progress)
+        self.assertNotIn("Raw log tail is intentionally omitted", progress)
+        self.assertNotIn("异常诊断 tail (non-zero EXIT only)", progress)
 
 
 class AutoLoopStatuslineContractTests(unittest.TestCase):
@@ -1708,6 +1743,31 @@ class WakeupRunnerContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.claude)
 
+    def test_safe_progress_scheduler_boundary_is_documented(self) -> None:
+        wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")
+        dispatch_protocol = self.skill[self.skill.index("### Dispatch queue protocol") :]
+        for needle in (
+            "`safe_progress_scheduler.py` is the sole risk admission owner",
+            "`risk_tier: \"low\" | \"medium\" | \"high\"`",
+            "`execution_policy: \"auto\" | \"cautious\" | \"blocked\"`",
+            "`.refactor-loop/state/safe-progress-blocked-queue.json`",
+            "dequeue/claim/list/status API",
+            "low/medium actions still require #396 runner validation",
+            "dispatch cwd guard",
+            "#191 owner",
+            "helper-specific preconditions",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+        for needle in (
+            "medium risk actions must carry `risk_tier: \"medium\"` plus `execution_policy: \"cautious\"`",
+            "`risk_tier: \"high\"` or blocked execution policy is a schema violation",
+        ):
+            with self.subTest(runner_needle=needle):
+                self.assertIn(needle.lower(), wakeup_runner.lower())
+        self.assertIn("classifies each dispatch payload through `safe_progress_scheduler.py`", dispatch_protocol)
+        self.assertIn("do not stall later low/medium queue files", dispatch_protocol)
+
     def test_consensus_implementation_projection_fact_source_is_judge_only(self) -> None:
         wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")
         meta_judge = read(SKILL_ROOT / "prompts" / "meta-judge.md")
@@ -1803,7 +1863,7 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "merge_pr",
             "mock.patch(\"codex_refactor_loop.phase9.router.subprocess.run\"",
             "mock.patch(\"codex_refactor_loop.wakeup_plan.subprocess.run\"",
-            "mock.patch(\"codex_refactor_loop.wakeup_runner.PrChecksProjection\"",
+            "mock.patch(\"codex_refactor_loop.wakeup_runner.PrMergeReadinessProjection\"",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, source)
@@ -1864,6 +1924,10 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "Review artifact verdict authority does not bypass current-head binding; merge readiness requires every required reviewer artifact to bind to the live PR head.",
             "review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`",
             "`wakeup-plan` action `head_sha` is not reviewer-head authority",
+            "target-required PR merge-readiness checks",
+            "raw PR-head check buckets or advisory check buckets are display-only diagnostics, not merge/fix lifecycle authority",
+            "target-required CI pending/fail/missing/unavailable",
+            "remote-ci worker only for target-required failed checks with `target_required_checks_red`",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)
@@ -1897,19 +1961,22 @@ class WakeupRunnerContractTests(unittest.TestCase):
     def test_no_shared_controller_runtime_registry_or_tick_envelope_scaffold(self) -> None:
         inventory = section_after_anchor_until_heading(self.skill, "tier0-scaffold-inventory", level=3)
         for needle in (
-            "prose-only and non-authoritative",
-            "not a machine-readable catalog, registry, runtime scaffold, or package API",
-            "not imported by runtime code",
-            "no dispatch, write, state-transition, or authorization authority",
+            "prose plus the single test-owned/data-only `controller_runtime_inventory.py`",
+            "remains non-authoritative",
+            "not a runtime scaffold, package API, or executable registry",
+            "Runtime execution paths must not import/read `controller_runtime_inventory.py`",
+            "no dispatch, write, state-transition, pending-events, label mutation, GitHub/git, or authorization authority",
             "restart.py::DAEMON_COMMANDS",
             "restart_managed_daemon_names()",
+            "daemon name, owner module/CLI command, tick import path, authority note, and test owner",
+            "callable, argv/shell/cmd/env, git/gh, executor, dispatch, authorization, pending-events, state-transition, or lifecycle owner fields",
             "cli.py::COMMANDS[*].authority",
             "SKILL.md#work-unit-contract",
             "ctx.paths.pending_events",
             ".refactor-loop/.controller-pending-events.log",
             "no pending-events authority",
             "owner-local files",
-            "shared `TickOutcome`, `tick_helpers.py`, or controller-runtime catalog",
+            "shared `TickOutcome`, `DaemonReconcileTick`, `ReconcileTickResult`, `tick_helpers.py`, `reconcile_ticks.py`, `reconcile_registry.py`, or controller-runtime catalog",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, inventory)
@@ -1922,6 +1989,8 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "tick_helpers.py",
             "tick_outcome.py",
             "tick_outcomes.py",
+            "reconcile_ticks.py",
+            "reconcile_registry.py",
             "daemon_registry.json",
             "daemon_registry.yaml",
             "daemon_registry.yml",

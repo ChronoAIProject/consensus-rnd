@@ -38,15 +38,15 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## Artifact Requirements
 
-Use the implementation summary, implementation log, and current implementation worktree diff only as evidence. Write a non-placeholder Chinese PR title to the title output path. It must be exactly one non-empty line and must not contain `Closes #` or the sentinel.
+Use the implementation summary, implementation log, and current implementation worktree diff only as evidence. Write a non-placeholder PR title that follows ${HOST_WORK_LANGUAGE} to the title output path. It must be exactly one non-empty line and must not contain `Closes #` or the sentinel.
 
 Internal marker-bearing runs/*.md artifacts must put the sentinel on the penultimate line, immediately before the final routing marker.
 
-Write a self-contained Chinese PR body to the body output path. It must include these sections:
+Write a self-contained PR body that follows `${HOST_WORK_LANGUAGE}` to the body output path. It must include these section concepts, rendered in the selected work language:
 
-- `## 修改文件`
-- `## 测试结果`
-- `## deviation 记录`
+- changed files
+- test results
+- deviation record
 
 The body must contain exactly one matching closing link:
 

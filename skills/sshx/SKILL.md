@@ -54,6 +54,8 @@ Run the stages in this exact order:
 6. `review_triplet_workers`
 7. `fix_or_done`
 
+`WorkerModeGate` is a prompt-level dispatch gate, not a runtime API. During `intake`, the caller may use its own read-only tools to inspect the user's input and write `GoalArtifact`; this caller-owned read-only intake is not worker dispatch. Before any worker dispatch, including delegated intake context-gathering by subagent, Agent, Task, or codex, the caller must complete the non-mutating `codex-cli` capability check and resolve `WorkerMode`.
+
 Each thinking or review record must include these fields:
 
 - `role`
@@ -61,6 +63,7 @@ Each thinking or review record must include these fields:
 - `visible_inputs`
 - `worker_mode`
 - `worker_carrier`
+- `worker_flight_ref`
 - `verdict`
 - `conclusion`
 - `log_ref`
@@ -81,9 +84,33 @@ Each `visible_inputs` value must include the same `GoalArtifact.normalized_goal`
 
 `codex-cli` is the default worker carrier after a non-mutating capability check. The check may confirm that a Codex CLI worker can be invoked, but it must not mutate files, Git state, GitHub state, labels, releases, host configuration, or lifecycle state.
 
-`isolated-token-subagent` is the fallback when `codex-cli` is unavailable. It must run with isolated token context so same-round workers cannot read one another's full reasoning or peer outputs before returning their own verdict.
+`isolated-token-subagent` is the fallback when `codex-cli` is unavailable or the capability check fails. It must run with isolated token context so same-round workers cannot read one another's full reasoning or peer outputs before returning their own verdict. Whenever this fallback is selected, `worker_delegation.reason` and the gate record must state the concrete `codex-cli` unavailable or failed reason.
 
 `abstain` is required when neither `codex-cli` nor `isolated-token-subagent` is available. Do not self-apply the triplet inside the caller context and present it as worker consensus.
+
+Every worker dispatch must create a prompt-level `SshxWorkerFlightRecord` before the worker is launched. The caller-carried transcript must keep these records under `worker_flights`, and each worker result record must reference the matching `flight_id` through `worker_flight_ref`.
+
+`SshxWorkerFlightRecord` has exactly these fields:
+
+- `flight_id`
+- `stage`
+- `role`
+- `worker_mode`
+- `worker_carrier`
+- `work_target`
+- `status`
+- `retry_budget`
+- `attempt`
+- `result_envelope_ref`
+- `completion_sentinel_ref`
+
+`status` is one of `in-flight`, `retrying`, `terminal`, or `abstained`. `retry_budget` is a finite integer decided before the first launch for that flight. `result_envelope_ref` and `completion_sentinel_ref` are empty until a terminal worker result exists.
+
+While any `SshxWorkerFlightRecord` for the same `work_target` is `in-flight` or `retrying`, the caller is read-only for that target. The caller must not mutate files, Git state, GitHub state, labels, releases, host configuration, lifecycle state, or the same external resource. The caller must not take over the same `work_target` because a process snapshot, log text, or workspace state appears quiet.
+
+`codex-cli` completion is recognized only when the caller has both a terminal `SshxResultEnvelope` and the worker-owned `completion_sentinel_ref` recorded on the matching flight. `pgrep`, process-table snapshots, log marker strings, and empty `git status` output are never completion evidence.
+
+If `codex-cli` exits abnormally without both the terminal envelope and the completion sentinel, the caller must stay read-only for that `work_target`, consume the finite same-carrier retry budget, and record the next attempt on the same `SshxWorkerFlightRecord`. If the bounded `codex-cli` retry path still lacks terminal completion, the caller may fall back to `isolated-token-subagent` when available. If no fallback carrier is available or the fallback cannot produce terminal completion, the result is `abstain`; the caller must not implement, repair, or otherwise mutate the same `work_target` itself.
 
 ## Result Envelope
 
@@ -93,6 +120,19 @@ Each `visible_inputs` value must include the same `GoalArtifact.normalized_goal`
 - `log_ref`: artifact reference for the non-inline worker, meta-judge, implementation, review, or fix log. The caller may open the referenced artifact on demand, but caller-carried transcripts and final reports must keep only the reference and must not inline the log body.
 
 Logs are not inline in caller context. Final reports aggregate `conclusion` values only and retain `log_ref` references for optional inspection.
+
+## Worker Completion Contract
+
+For `codex-cli` workers, caller-side completion and verdict routing must be decided only from:
+
+- the worker carrier process has exited with status `0`;
+- the caller-assigned `result_ref` artifact exists;
+- the `result_ref` artifact parses as a valid `SshxResultEnvelope`;
+- `conclusion.verdict`, when the stage requires a verdict, is present and is one of that stage's allowed verdict values.
+
+A worker is not done while its carrier process is still running, even if a partial `result_ref` artifact already exists. A worker is not done when completion markers or verdict-looking text appear only in stdout, stderr, raw transcripts, final text, prompt echoes, `log_ref` content, or log tails. Those surfaces are diagnostic only and must not participate in done detection or verdict routing.
+
+`log_ref` remains required as a diagnostic artifact reference, but it is never a verdict source. Missing `conclusion`, missing `log_ref`, placeholder verdicts, and verdicts outside the stage's allowed set fail closed.
 
 ## No Context Pollution
 
@@ -223,15 +263,33 @@ intake:
     iteration_question:
   strict_peer_invisibility_required:
 worker_delegation:
+  worker_mode_gate:
+    codex_cli_capability_check:
+    resolved_before_any_worker_dispatch:
+    delegated_intake_context_gathering_allowed:
+    fallback_reason:
   worker_mode:
   worker_carrier:
   reason:
+worker_flights:
+  - flight_id:
+    stage:
+    role:
+    worker_mode:
+    worker_carrier:
+    work_target:
+    status:
+    retry_budget:
+    attempt:
+    result_envelope_ref:
+    completion_sentinel_ref:
 thinking_triplet_workers:
   - role: minimal
     bias:
     visible_inputs:
     worker_mode:
     worker_carrier:
+    worker_flight_ref:
     verdict:
     conclusion:
     log_ref:
@@ -240,6 +298,7 @@ thinking_triplet_workers:
     visible_inputs:
     worker_mode:
     worker_carrier:
+    worker_flight_ref:
     verdict:
     conclusion:
     log_ref:
@@ -248,6 +307,7 @@ thinking_triplet_workers:
     visible_inputs:
     worker_mode:
     worker_carrier:
+    worker_flight_ref:
     verdict:
     conclusion:
     log_ref:
@@ -260,21 +320,25 @@ meta_judge:
   log_ref:
 implementation_worker:
   worker_mode:
+  worker_flight_ref:
   conclusion:
   log_ref:
 review_triplet_workers:
   - role: architecture
     worker_mode:
+    worker_flight_ref:
     verdict:
     conclusion:
     log_ref:
   - role: quality
     worker_mode:
+    worker_flight_ref:
     verdict:
     conclusion:
     log_ref:
   - role: tests
     worker_mode:
+    worker_flight_ref:
     verdict:
     conclusion:
     log_ref:

@@ -28,7 +28,7 @@ FORBIDDEN_NEW_TEST_TOKENS = (
     "历史 bilingual 规则的位置",
     "不能用 `env $(grep ... host.env)`",
     "禁止** 裸 `nohup python3 <daemon> &`",
-    "Source files are English-only; external user-facing artifacts are 中文 by default",
+    "GitHub issue/PR/commit/design artifacts remain 中文 by default",
     "No mandatory parallel English section",
     "iter5/prompt-gh-ban-marker-only",
     "lifecycle / label ",

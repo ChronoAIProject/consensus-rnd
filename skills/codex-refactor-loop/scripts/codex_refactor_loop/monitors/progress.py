@@ -13,7 +13,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
@@ -21,14 +21,14 @@ from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from ..holistic_status import collect as collect_holistic_status
 from ..holistic_status import render_markdown as render_holistic_markdown
-from ..secondary_mutation_backoff import currently_backing_off, record_backoff_from_gh_output
+from ..secondary_mutation_backoff import (
+    currently_backing_off,
+    record_backoff_from_gh_output,
+    record_content_creation_backoff,
+)
 
 
 AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
-PROGRESS_COMMENT_MUTATION_BUDGET_PER_TICK = 4
-PROGRESS_REVIEW_TARGET_RE = re.compile(r"^review-pr([0-9]+)-[A-Za-z][A-Za-z0-9_-]*-r[0-9]+$")
-PROGRESS_FIX_TARGET_RE = re.compile(r"^fix-pr([0-9]+)-(?:r[0-9]+|round[0-9]+|round-[0-9]+)(?:-[A-Za-z0-9._-]+)?$")
-PROGRESS_PHASE9_TARGET_RE = re.compile(r"^phase9-issue([0-9]+)-r[0-9]+-(?:minimal|structural|delete|judge|reflector)$")
 
 
 def exit_status(log: Path) -> str:
@@ -41,11 +41,6 @@ def exit_status(log: Path) -> str:
         if match:
             return "exit_ok" if match.group(1) == "0" else "exit_failed"
     return "in_flight"
-
-
-def extract_tail(log: Path) -> str:
-    lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
-    return "\n".join(lines[-30:-5] if len(lines) >= 30 else lines[:25])
 
 
 def hash_body(body: str) -> str:
@@ -62,7 +57,6 @@ class ProgressReporter:
         self.state_dir = ctx.paths.refactor_loop
         self.state_file = self.state_dir / "codex-progress-state.json"
         self.log_dir = self.state_dir / "logs"
-        self.prompts_dir = self.state_dir / "prompts"
         self.state_dir.mkdir(parents=True, exist_ok=True)
         if not self.state_file.exists():
             self.state_file.write_text("{}\n", encoding="utf-8")
@@ -71,7 +65,7 @@ class ProgressReporter:
     def run_forever(self) -> int:
         while True:
             self.log_msg("tick")
-            self.tick()
+            self.heartbeat.run_with_lease(lambda: run_progress_reporter_reconcile_tick(self))
             self.heartbeat.beat()
             self.heartbeat.sleep_with_lease(self.interval)
 
@@ -86,31 +80,12 @@ class ProgressReporter:
                 f"mutation={backoff.mutation or 'unknown'} until_epoch={int(backoff.until_epoch)}"
             )
             return
-        remaining_mutations = PROGRESS_COMMENT_MUTATION_BUDGET_PER_TICK
-        mutation_backoff = False
         for log in sorted(self.log_dir.glob("*.log")):
-            if remaining_mutations <= 0:
-                self.log_tick_status("skip:comment-mutation-budget-exhausted")
-                break
-            backoff = currently_backing_off(self.ctx.paths.state)
-            if backoff.active:
-                self.log_tick_status(
-                    "skip:secondary-mutation-backoff "
-                    f"mutation={backoff.mutation or 'unknown'} until_epoch={int(backoff.until_epoch)}"
-                )
-                break
             base = log.stem
             if base.startswith("audit-iter-") or base.startswith("remote-ci-"):
                 continue
-            result = self.post_or_update(base, log)
-            if result in {"mutated", "mutation_failed"}:
-                remaining_mutations -= 1
-            if result == "mutation_failed":
-                mutation_backoff = True
-                self.log_tick_status(f"skip:comment-mutation-failure-backoff base={base}")
-                break
-        if remaining_mutations > 0 and not mutation_backoff:
-            self.sync_global_status_card()
+            self.record_worker_log_status(base, log)
+        self.sync_global_status_card()
 
     def sync_global_status_card(self) -> None:
         config = self._global_status_config()
@@ -148,7 +123,7 @@ class ProgressReporter:
                 ["-X", "PATCH", f"repos/{self.repo}/issues/comments/{config['comment_id']}", "-F", f"body=@{body_file}"],
                 check=False,
             )
-        if patch.returncode == 0:
+        if _valid_fixed_comment_patch(patch, int(config["comment_id"])):
             self._state_set_global_status(
                 key,
                 target=str(config["issue_number"]),
@@ -161,13 +136,19 @@ class ProgressReporter:
                 f"issue=#{config['issue_number']} comment_id={config['comment_id']}"
             )
         else:
-            recorded = record_backoff_from_gh_output(self.ctx.paths.state, patch.stdout, patch.stderr, env=self.ctx.env_for_subprocess())
+            recorded = record_backoff_from_gh_output(
+                self.ctx.paths.state,
+                patch.stdout,
+                patch.stderr,
+                env=self.ctx.env_for_subprocess(),
+            )
             if recorded is not None:
                 self.log_msg(
                     "global-dashboard-status-card=secondary-backoff "
                     f"comment_id={config['comment_id']} mutation={recorded.mutation} until_epoch={int(recorded.until_epoch)}"
                 )
                 return
+            record_content_creation_backoff(self.ctx, "global-dashboard-status-card", patch)
             self.log_msg(f"global-dashboard-status-card=FAIL patch comment_id={config['comment_id']}")
 
     def build_global_status_body(self) -> str:
@@ -196,30 +177,6 @@ class ProgressReporter:
             "interval_seconds": interval,
         }
 
-    def parse_target(self, base: str) -> str:
-        for pattern in (PROGRESS_REVIEW_TARGET_RE, PROGRESS_FIX_TARGET_RE, PROGRESS_PHASE9_TARGET_RE):
-            match = pattern.fullmatch(base)
-            if match:
-                return match.group(1)
-        prompt = self.prompts_dir / f"{base}.md"
-        if prompt.is_file():
-            matches = re.findall(r"#[0-9]+", prompt.read_text(encoding="utf-8", errors="replace"))
-            if matches:
-                return matches[-1].lstrip("#")
-        return ""
-
-    def parse_kind(self, target: str) -> str:
-        result = self.gh_api([f"repos/{self.repo}/issues/{target}"], check=False)
-        if result.returncode != 0 or not result.stdout.strip():
-            return "issue"
-        try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            return "issue"
-        if isinstance(payload, dict) and isinstance(payload.get("pull_request"), dict):
-            return "pr"
-        return "issue"
-
     def is_zombie(self, log: Path) -> bool:
         if exit_status(log) == "exit_ok":
             return False
@@ -228,151 +185,12 @@ class ProgressReporter:
         except OSError:
             return False
 
-    def build_body(self, base: str, log: Path, finished: str) -> str:
-        try:
-            elapsed_min = int((time.time() - log.stat().st_ctime) / 60)
-        except OSError:
-            elapsed_min = 0
-        if finished == "failed":
-            status_line = f"❌ 失败; 已跑 {elapsed_min} min"
-            details = f"""异常诊断 tail (non-zero EXIT only):
-
-```
-{extract_tail(log)}
-```"""
-            delete_note = "codex 已非零退出;保留此 comment 直到 controller 处理失败。"
-        else:
-            status_line = f"⏳ 进行中; 已跑 {elapsed_min} min"
-            details = f"""Task id: `{base}`
-Log: `{log.name}`
-Raw log tail is intentionally omitted while the worker is still running."""
-            delete_note = "自动更新每 10 分钟;edit-in-place 不堆评论;codex EXIT=0 后此 comment 自动删除。"
-        body = f"""## 📊 codex 进展 {base} ({status_line})
-
-{details}
-
-> {delete_note}
-🤖 controller progress reporter
-
-{AI_SENTINEL}
-"""
-        return body
-
-    def post_or_update(self, base: str, log: Path) -> str:
-        decision = require_active_controller(self.ctx, "progress-reporter-write")
-        write_active_controller_status(self.ctx, decision)
-        if not decision.allowed:
-            self.log_msg(f"active_controller=noop:not-owner progress-reporter {base} owner={decision.owner_device}")
-            return "noop"
-        backoff = currently_backing_off(self.ctx.paths.state)
-        if backoff.active:
-            self.log_msg(
-                "progress-reporter: skip comment mutation secondary-backoff "
-                f"base={base} mutation={backoff.mutation or 'unknown'} until_epoch={int(backoff.until_epoch)}"
-            )
-            return "mutation_failed"
-        state = self._state()
-        item = state.get(base, {}) if isinstance(state.get(base), dict) else {}
-        target = str(item.get("target") or "")
-        if not target:
-            target = self.parse_target(base)
-            if not target:
-                self.log_msg(f"skip {base}: no target")
-                return "noop"
-            kind = self.parse_kind(target)
-            cid: str | int | None = None
-            prev_md5 = ""
-        else:
-            kind = str(item.get("kind") or "issue")
-            cid = item.get("comment_id")
-            prev_md5 = str(item.get("last_md5") or "")
+    def record_worker_log_status(self, base: str, log: Path) -> None:
         status = exit_status(log)
-        finished = "true" if status == "exit_ok" else "failed" if status == "exit_failed" else "false"
-        if finished == "false" and self.is_zombie(log):
+        if status == "in_flight" and self.is_zombie(log):
             self.log_msg(f"skip zombie log {base} (no EXIT, mtime > 30 min)")
-            return "noop"
-        prev_finished = str(item.get("finished") or "")
-        needs_delete_retry = finished == "true" and cid not in (None, "", "null", 0, "0")
-        if finished == prev_finished and not needs_delete_retry and finished in ("true", "failed"):
-            return "noop"
-        if finished == "true" and cid not in (None, "", "null", 0, "0"):
-            delete = self.gh_api(["-X", "DELETE", f"repos/{self.repo}/issues/comments/{cid}"], check=False)
-            if delete.returncode == 0:
-                self.log_msg(f"deleted progress comment for {base} (finished, cid={cid} was={kind} #{target})")
-                self._state_set(base, target, kind, 0, "deleted", "true")
-                return "mutated"
-            else:
-                recorded = record_backoff_from_gh_output(self.ctx.paths.state, delete.stdout, delete.stderr, env=self.ctx.env_for_subprocess())
-                if recorded is not None:
-                    self.log_msg(
-                        "progress-reporter: secondary mutation backoff recorded "
-                        f"base={base} mutation={recorded.mutation} until_epoch={int(recorded.until_epoch)}"
-                    )
-                    return "mutation_failed"
-                exists = self.gh_api([f"repos/{self.repo}/issues/comments/{cid}"], check=False)
-                if exists.returncode != 0:
-                    self.log_msg(f"comment {cid} for {base} already 404; marking finished")
-                    self._state_set(base, target, kind, 0, "gone", "true")
-                    return "mutation_failed"
-                else:
-                    self.log_msg(f"FAIL delete comment {cid} for {base}; comment still exists, retry next tick")
-                    return "mutation_failed"
-        body = self.build_body(base, log, finished)
-        cur_md5 = hash_body(body)
-        if cur_md5 == prev_md5 and finished == prev_finished:
-            return "noop"
-        with temp_body_file(body) as body_file:
-            if cid in (None, "", "null"):
-                url = self._create_comment(kind, target, body_file)
-                new_cid = _comment_id(url)
-                if new_cid:
-                    if not url_for_kind(url, kind):
-                        kind = "issue" if kind == "pr" else "pr"
-                    self._state_set(base, target, kind, int(new_cid), cur_md5, finished)
-                    self.log_msg(f"created progress comment for {base} → {kind} #{target} (cid={new_cid})")
-                    return "mutated"
-                else:
-                    self.log_msg(f"FAIL to create comment for {base} → {kind} #{target}")
-                    return "mutation_failed"
-            else:
-                patch = self.gh_api(["-X", "PATCH", f"repos/{self.repo}/issues/comments/{cid}", "-F", f"body=@{body_file}"], check=False)
-                if patch.returncode == 0:
-                    self._state_set(base, target, kind, cid, cur_md5, finished)
-                    self.log_msg(f"edited progress comment for {base} (cid={cid}, finished={finished})")
-                    return "mutated"
-                else:
-                    recorded = record_backoff_from_gh_output(self.ctx.paths.state, patch.stdout, patch.stderr, env=self.ctx.env_for_subprocess())
-                    if recorded is not None:
-                        self.log_msg(
-                            "progress-reporter: secondary mutation backoff recorded "
-                            f"base={base} mutation={recorded.mutation} until_epoch={int(recorded.until_epoch)}"
-                        )
-                        return "mutation_failed"
-                    self.log_msg(f"FAIL to edit comment {cid} for {base}; will retry next tick")
-                    return "mutation_failed"
-        return "noop"
-
-    def _create_comment(self, kind: str, target: str, body_file: Path) -> str:
-        first = self.gh([kind, "comment", target, "--body-file", str(body_file)], check=False)
-        if first.returncode == 0 and first.stdout.strip():
-            return first.stdout.strip().splitlines()[-1]
-        recorded = record_backoff_from_gh_output(self.ctx.paths.state, first.stdout, first.stderr, env=self.ctx.env_for_subprocess())
-        if recorded is not None:
-            self.log_msg(
-                "progress-reporter: secondary mutation backoff recorded "
-                f"target={kind}#{target} mutation={recorded.mutation} until_epoch={int(recorded.until_epoch)}"
-            )
-            return ""
-        other_kind = "issue" if kind == "pr" else "pr"
-        second = self.gh([other_kind, "comment", target, "--body-file", str(body_file)], check=False)
-        recorded = record_backoff_from_gh_output(self.ctx.paths.state, second.stdout, second.stderr, env=self.ctx.env_for_subprocess())
-        if recorded is not None:
-            self.log_msg(
-                "progress-reporter: secondary mutation backoff recorded "
-                f"target={other_kind}#{target} mutation={recorded.mutation} until_epoch={int(recorded.until_epoch)}"
-            )
-            return ""
-        return second.stdout.strip().splitlines()[-1] if second.returncode == 0 and second.stdout.strip() else ""
+            return
+        self.log_msg(f"worker-log-status {base}: {status}")
 
     def _state(self) -> dict[str, object]:
         try:
@@ -380,19 +198,6 @@ Raw log tail is intentionally omitted while the worker is still running."""
         except Exception:
             data = {}
         return data if isinstance(data, dict) else {}
-
-    def _state_set(self, key: str, target: str, kind: str, cid: object, md5: str, finished: str) -> None:
-        state = self._state()
-        state[key] = {
-            "target": target,
-            "kind": kind,
-            "comment_id": cid,
-            "last_md5": md5,
-            "finished": finished,
-        }
-        tmp = self.state_file.with_name(f".{self.state_file.name}.tmp.{os.getpid()}")
-        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, self.state_file)
 
     def _state_set_global_status(self, key: str, *, target: str, cid: str, md5: str, synced_at: int) -> None:
         state = self._state()
@@ -407,9 +212,6 @@ Raw log tail is intentionally omitted while the worker is still running."""
         tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp, self.state_file)
 
-    def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        return _run(["gh", *args, "--repo", self.repo], self.ctx.repo_root, check=check)
-
     def gh_api(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         return _run(["gh", "api", *args], self.ctx.repo_root, check=check)
 
@@ -422,6 +224,10 @@ Raw log tail is intentionally omitted while the worker is still running."""
     def log_tick_status(action: str) -> None:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         print(f"[{ts}] progress-reporter: tick {action}", flush=True)
+
+
+def run_progress_reporter_reconcile_tick(reporter: ProgressReporter) -> None:
+    reporter.tick()
 
 
 @contextmanager
@@ -444,15 +250,6 @@ def _run(command: Sequence[str], cwd: Path, *, check: bool) -> subprocess.Comple
     return result
 
 
-def _comment_id(url: str) -> str:
-    match = re.search(r"issuecomment-([0-9]+)", url)
-    return match.group(1) if match else ""
-
-
-def url_for_kind(url: str, kind: str) -> bool:
-    return f"/{'pull' if kind == 'pr' else 'issues'}/" in url
-
-
 def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -462,6 +259,25 @@ def _safe_int(value: object) -> int | None:
         return int(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _valid_fixed_comment_patch(result: subprocess.CompletedProcess[str], expected_comment_id: int) -> bool:
+    if result.returncode != 0 or not result.stdout.strip():
+        return False
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    try:
+        comment_id = int(str(payload.get("id") or ""))
+    except ValueError:
+        return False
+    if comment_id != expected_comment_id:
+        return False
+    url = str(payload.get("html_url") or "")
+    return not url or f"issuecomment-{expected_comment_id}" in url
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -485,7 +301,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f"{exc}\n")
         return 2
     if args.once or os.environ.get("TEST_NO_LOOP") == "1":
-        reporter.tick()
+        run_progress_reporter_reconcile_tick(reporter)
         return 0
     return reporter.run_forever()
 

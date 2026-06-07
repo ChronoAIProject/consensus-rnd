@@ -7,7 +7,6 @@ import json
 import subprocess
 import sys
 import tempfile
-import threading as real_threading
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
@@ -19,10 +18,6 @@ from unittest import mock
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-REAL_CONDITION = real_threading.Condition
-REAL_EVENT = real_threading.Event
-REAL_THREAD = real_threading.Thread
-
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest
 from codex_refactor_loop import labels
@@ -32,10 +27,10 @@ from codex_refactor_loop.wakeup_runner import (
     RunnerResult,
     SUPPORTED_CONTROLLER_ACTIONS,
     _log_tick_status,
-    _run_once_with_periodic_heartbeat,
     _wakeup_tick_action,
     main as wakeup_runner_main,
     _source_log_has_clean_marker,
+    run_wakeup_runner_reconcile_tick,
 )
 
 
@@ -268,102 +263,6 @@ class FakeReviewFixActions(FakeActions):
         return type("Spec", (), {"prompt_path": prompt_path, "log_path": log_path})()
 
 
-class FakeHeartbeatLease:
-    heartbeat_interval = 7
-
-    def __init__(self) -> None:
-        self.beats = 0
-        self.coordinator: HeartbeatCoordinator | None = None
-
-    def beat(self) -> None:
-        self.beats += 1
-        if self.coordinator is not None:
-            self.coordinator.record_beat()
-
-
-class HeartbeatCoordinator:
-    def __init__(self) -> None:
-        self.condition = REAL_CONDITION()
-        self.run_once_entered = False
-        self.beat_during_run_once = False
-        self.stop_requested = False
-        self.waiting_for_stop = False
-
-    def enter_run_once(self) -> None:
-        with self.condition:
-            self.run_once_entered = True
-            self.condition.notify_all()
-
-    def record_beat(self) -> None:
-        with self.condition:
-            if self.run_once_entered and not self.stop_requested:
-                self.beat_during_run_once = True
-            self.condition.notify_all()
-
-    def wait_for_heartbeat_while_run_once_is_pending(self) -> bool:
-        with self.condition:
-            return self.condition.wait_for(lambda: self.beat_during_run_once, timeout=1.0)
-
-    def request_stop(self) -> None:
-        with self.condition:
-            self.stop_requested = True
-            self.condition.notify_all()
-
-
-class ScriptedEvent:
-    instances: list["ScriptedEvent"] = []
-    coordinator: HeartbeatCoordinator | None = None
-
-    def __init__(self) -> None:
-        self.wait_timeouts: list[float] = []
-        self.set_called = False
-        ScriptedEvent.instances.append(self)
-
-    def wait(self, timeout: float | None = None) -> bool:
-        self.wait_timeouts.append(float(timeout or 0))
-        if ScriptedEvent.coordinator is None:
-            return True
-        coordinator = ScriptedEvent.coordinator
-        with coordinator.condition:
-            if not coordinator.run_once_entered:
-                coordinator.condition.wait_for(lambda: coordinator.run_once_entered or coordinator.stop_requested, timeout=1.0)
-            if coordinator.stop_requested:
-                return True
-            if not coordinator.beat_during_run_once:
-                return False
-            coordinator.waiting_for_stop = True
-            coordinator.condition.notify_all()
-            coordinator.condition.wait_for(lambda: coordinator.stop_requested, timeout=1.0)
-            return True
-
-    def set(self) -> None:
-        self.set_called = True
-        if ScriptedEvent.coordinator is not None:
-            ScriptedEvent.coordinator.request_stop()
-
-
-class InlineThread:
-    instances: list["InlineThread"] = []
-
-    def __init__(self, *, target, name: str, daemon: bool) -> None:
-        self.target = target
-        self.name = name
-        self.daemon = daemon
-        self.started = False
-        with mock.patch("threading.Event", REAL_EVENT):
-            self.thread = REAL_THREAD(target=self.target, name=name, daemon=daemon)
-        self.join_timeouts: list[float] = []
-        InlineThread.instances.append(self)
-
-    def start(self) -> None:
-        self.started = True
-        self.thread.start()
-
-    def join(self, timeout: float | None = None) -> None:
-        self.join_timeouts.append(float(timeout or 0))
-        self.thread.join(timeout=timeout)
-
-
 class WakeupRunnerBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -380,6 +279,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         )
         self.ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
         self.supervisor = FakeSupervisor()
+        self.expected_skill_root = SCRIPT_DIR.parent
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -444,6 +344,71 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual("applied", result[0].status)
         self.assertEqual([("apply_default_issue_intake_claim", 77)], actions.calls)
+
+    def test_runner_blocks_high_risk_action_before_helper_dispatch(self) -> None:
+        action = self.release_dispatch_action(
+            risk_tier="high",
+            execution_policy="blocked",
+            argv=["gh", "release", "create"],
+        )
+        actions = FakeActions()
+
+        result = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual("blocked", result[0].status)
+        self.assertEqual("risk_tier_high", result[0].reason)
+        self.assertEqual([], actions.calls)
+
+    def test_runner_blocks_medium_without_cautious_policy(self) -> None:
+        action = self.release_dispatch_action(risk_tier="medium", execution_policy="auto")
+        actions = FakeActions()
+
+        result = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual("blocked", result[0].status)
+        self.assertEqual("medium_requires_cautious_execution_policy", result[0].reason)
+        self.assertEqual([], actions.calls)
+
+    def test_runner_applies_at_most_one_medium_non_spawn_per_tick(self) -> None:
+        base = {
+            "kind": "default-issue-intake-claim",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "default_issue_intake_enabled",
+                "live_open_target",
+                "non_pr_issue",
+                "target_not_managed",
+                "github_comment_claim_protocol",
+            ],
+            "source_artifact": "github-open-default-issue-intake-candidates",
+            "controller_action": "apply_default_issue_intake_claim",
+            "no_generic_command": True,
+            "no_lifecycle_authority": True,
+            "risk_tier": "medium",
+            "execution_policy": "cautious",
+        }
+        first = {
+            **base,
+            "action_id": "default-issue-intake-claim:issue:77",
+            "source_marker": "default-issue-intake-candidate:issue:77",
+            "target_kind": "issue",
+            "target_number": 77,
+            "target": {"kind": "issue", "number": 77},
+        }
+        second = {
+            **base,
+            "action_id": "default-issue-intake-claim:issue:78",
+            "source_marker": "default-issue-intake-candidate:issue:78",
+            "target_kind": "issue",
+            "target_number": 78,
+            "target": {"kind": "issue", "number": 78},
+        }
+        actions = FakeActions()
+
+        results = self.run_result(self.batch_plan([first, second], dispatch_required=2, deficit=2), gh_labels=[], actions=actions)
+
+        self.assertEqual(["default-issue-intake-claim:issue:77"], [result.action_id for result in results])
 
     def test_apply_default_issue_intake_claim_rejects_pr_shape(self) -> None:
         action = {
@@ -515,6 +480,10 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 if endpoint == f"repos/owner/repo/commits/{'a' * 40}/check-runs":
                     payload = [{"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}]
                     return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+                if endpoint == "repos/owner/repo/branches/main/protection/required_status_checks":
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"contexts": ["ci"]}), "")
+                if endpoint == "repos/owner/repo/rules/branches/main":
+                    return subprocess.CompletedProcess(command, 1, "", "404 Not Found")
                 if endpoint == "repos/owner/repo/issues/77":
                     if gh_state is None:
                         return subprocess.CompletedProcess(command, 1, "", "not found")
@@ -556,6 +525,13 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     if "--jq" not in command:
                         return subprocess.CompletedProcess(command, 0, json.dumps({"headRefName": gh_head_ref}), "")
                     return subprocess.CompletedProcess(command, 0, gh_head_ref + "\n", "")
+                if "baseRefName,headRefOid,mergeStateStatus" in command:
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        json.dumps({"baseRefName": "main", "headRefOid": "a" * 40, "mergeStateStatus": "DIRTY"}),
+                        "",
+                    )
                 if ".headRefOid" in command:
                     return subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", "")
                 if "mergeable,isDraft" in command:
@@ -603,7 +579,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "mode": "closed-action-projection",
             "apply_authority": "wakeup-runner-396-only",
             "no_lifecycle_authority": True,
-            "actions": [action],
+            "actions": [self.annotate_safe_progress(action)],
+            "blocked_queue": [],
         }
 
     def release_dispatch_action(self, **overrides) -> dict:
@@ -695,8 +672,17 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "no_lifecycle_authority": True,
             "concurrency": {"deficit": deficit},
             "hard_gate": {"active": active, "dispatch_required": dispatch_required},
-            "actions": actions,
+            "actions": [self.annotate_safe_progress(action) for action in actions],
+            "blocked_queue": [],
         }
+
+    def annotate_safe_progress(self, action: dict) -> dict:
+        annotated = dict(action)
+        if "risk_tier" not in annotated:
+            annotated["risk_tier"] = "low" if annotated.get("controller_action") == "spawn_codex_harness_background" else "medium"
+        if "execution_policy" not in annotated:
+            annotated["execution_policy"] = "cautious" if annotated["risk_tier"] == "medium" else "auto"
+        return annotated
 
     def spawn_action(self, **overrides) -> dict:
         prompt = self.repo / ".refactor-loop/prompts/task.md"
@@ -730,7 +716,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "kind": "ci-red",
             "action_id": "ci-red:77:" + "a" * 40 + ":contract-tests",
             "runner_authority": "wakeup-runner-396",
-            "preconditions": ["active_controller_owner", "live_open_target", "checks_red"],
+            "preconditions": ["active_controller_owner", "live_open_target", "target_required_checks_red"],
             "source_artifact": "github-check-runs",
             "source_marker": "ci-red:77:" + "a" * 40 + ":contract-tests",
             "target_kind": "PR",
@@ -962,7 +948,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "host_checks_green",
                 "single_linked_managed_issue",
                 "worker_authored_pr_artifacts",
-                "no_conflicting_open_implementation_pr",
+                "matching_open_managed_pr",
             ],
             "source_artifact": ".refactor-loop/logs/implement-issue77.log",
             "source_marker": marker,
@@ -1290,7 +1276,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         args, kwargs = popen.call_args
         command = args[0]
         self.assertIn("spawn-codex", command)
-        self.assertIn(str(self.repo.resolve()), command[0])
+        self.assertEqual(command[0], str((self.expected_skill_root / "scripts" / "consensus-rnd-cli").resolve()))
+        self.assertEqual(kwargs["cwd"], str(self.repo.resolve()))
         self.assertEqual(command[command.index("--cd") + 1], str(self.repo))
         self.assertEqual(command[command.index("--prompt") + 1], str(self.repo / ".refactor-loop/prompts/task.md"))
         self.assertEqual(command[command.index("--log") + 1], str(self.repo / ".refactor-loop/logs/task.log"))
@@ -1387,6 +1374,30 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         launch.assert_called_once()
         pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("WAKEUP_RUNNER_STALE_SPAWN_LEDGER:harness-spawn-intent:phase9-router:104:1:minimal-retry:target-log-absent", pending)
+
+    def test_wakeup_runner_stale_applied_spawn_ledger_does_not_retry_clean_markerless_phase9_solver(self) -> None:
+        log = self.repo / ".refactor-loop/logs/phase9-issue659-r2-minimal.log"
+        log.write_text("clean markerless solver output\nEXIT=0\n", encoding="utf-8")
+        action = self.design_consensus_spawn_action(
+            action_id="harness-spawn-intent:phase9-router:659:2:minimal",
+            log=str(log),
+        )
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "harness-spawn-intent"})
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=FakeActions())
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "duplicate")
+        launch.assert_not_called()
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending_text = pending.read_text(encoding="utf-8") if pending.exists() else ""
+        self.assertNotIn("WAKEUP_RUNNER_STALE_SPAWN_LEDGER", pending_text)
 
     def test_wakeup_runner_stale_applied_spawn_ledger_retries_failed_implement_log(self) -> None:
         log = self.repo / ".refactor-loop/logs/implement-issue-537.log"
@@ -1664,7 +1675,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "no_conflicting_open_implementation_pr",
+                "matching_open_managed_pr",
             ],
         )
         later = self.spawn_action(action_id="spawn:after-blocked-lifecycle")
@@ -1724,7 +1735,6 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             results = self.run_result(
                 self.batch_plan([*status_only_prefix, duplicate, applied_lifecycle, *spawn_batch], dispatch_required=3, deficit=3),
                 actions=actions,
-                duplicate_prs=[],
                 git_diff_code=1,
             )
 
@@ -1783,7 +1793,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "no_conflicting_open_implementation_pr",
+                "matching_open_managed_pr",
             ],
         )
         spawns = [
@@ -1867,7 +1877,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "no_conflicting_open_implementation_pr",
+                "matching_open_managed_pr",
             ],
         )
         close = self.close_action(action_id="close-managed-item:53:after-blocked-publish")
@@ -2245,6 +2255,16 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("WAKEUP_RUNNER_SPAWN_LAUNCH_EXIT:spawn:supervisor-exit-3:3", pending)
         self.assertIn("WAKEUP_RUNNER_HELPER_EXIT:spawn:supervisor-exit-3:spawn_codex_harness_background:3", pending)
+
+    def test_harness_spawn_passes_context_skill_root_to_supervisor(self) -> None:
+        action = self.spawn_action(action_id="spawn:skill-root")
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(action))
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(Path(launch.call_args.kwargs["skill_root"]).resolve(), self.expected_skill_root.resolve())
+        self.assertEqual(Path(launch.call_args.kwargs["repo_root"]).resolve(), self.repo.resolve())
 
     def test_harness_spawn_existing_target_log_blocks_before_supervisor(self) -> None:
         actions = FakeActions()
@@ -2652,6 +2672,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             results = self.run_result(self.base_plan(self.remote_ci_fix_action()), actions=actions)
 
         self.assertEqual(results[0].status, "applied")
+        self.assertEqual(Path(launch.call_args.kwargs["skill_root"]).resolve(), self.expected_skill_root.resolve())
         self.assertEqual(Path(launch.call_args.kwargs["cd"]).resolve(), worktree.resolve())
         prompt = Path(launch.call_args.kwargs["prompt"])
         self.assertEqual(prompt.name, f"remote-ci-fix-pr77-contract-tests-{'a' * 12}-a1.md")
@@ -2660,6 +2681,19 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         attempts = json.loads((self.repo / ".refactor-loop/state/remote-ci-fix-attempts.json").read_text(encoding="utf-8"))
         self.assertEqual(attempts[f"pr77:{'a' * 40}:contract-tests"], 1)
         self.assertEqual(actions.calls, [])
+
+    def test_ci_red_dispatch_rejects_legacy_raw_checks_red_precondition(self) -> None:
+        action = self.remote_ci_fix_action(preconditions=["active_controller_owner", "live_open_target", "checks_red"])
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor") as launch:
+            results = self.run_result(self.base_plan(action), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(
+            results[0].reason,
+            "dispatch_remote_ci_fix_missing_precondition:target_required_checks_red",
+        )
+        launch.assert_not_called()
 
     def test_ci_red_dispatch_retry_cap_stops_third_attempt_per_check(self) -> None:
         worktree = self.repo / ".worktrees" / "iter77-worker"
@@ -3194,7 +3228,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                         "clean_scoped_diff",
                         "single_linked_managed_issue",
                         "worker_authored_pr_artifacts",
-                        "no_conflicting_open_implementation_pr",
+                        "matching_open_managed_pr",
                     ],
                 ),
                 "publish_implementation_missing_precondition:host_checks_green",
@@ -3741,7 +3775,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_implementation_output")
 
-    def test_publish_implementation_output_allows_missing_pr_so_publish_can_open_it(self) -> None:
+    def test_publish_implementation_output_blocks_missing_matching_pr_before_helper(self) -> None:
         actions = FakeActions()
 
         def command_runner(command):
@@ -3773,8 +3807,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         results = runner.run_once()
 
-        self.assertEqual(results[0].status, "applied")
-        self.assertEqual(actions.calls[0][0], "publish_implementation_output")
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "publish_implementation_matching_pr_missing")
+        self.assertEqual(actions.calls, [])
 
     def test_dispatch_reviewers_routes_to_named_helper_after_pr_target_validation(self) -> None:
         actions = FakeActions()
@@ -4060,64 +4095,6 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
-    def test_daemon_run_once_periodically_renews_heartbeat_during_long_tick(self) -> None:
-        ScriptedEvent.instances = []
-        ScriptedEvent.coordinator = HeartbeatCoordinator()
-        InlineThread.instances = []
-        lease = FakeHeartbeatLease()
-        lease.coordinator = ScriptedEvent.coordinator
-        expected = [object()]
-
-        with mock.patch("codex_refactor_loop.wakeup_runner.threading.Event", ScriptedEvent), mock.patch(
-            "codex_refactor_loop.wakeup_runner.threading.Thread",
-            InlineThread,
-        ):
-
-            def run_once():
-                ScriptedEvent.coordinator.enter_run_once()
-                self.assertTrue(ScriptedEvent.coordinator.wait_for_heartbeat_while_run_once_is_pending())
-                return expected
-
-            result = _run_once_with_periodic_heartbeat(run_once, lease)
-
-        self.assertIs(result, expected)
-        self.assertGreaterEqual(lease.beats, 1)
-        self.assertTrue(ScriptedEvent.coordinator.beat_during_run_once)
-        self.assertGreaterEqual(ScriptedEvent.instances[0].wait_timeouts.count(7.0), 1)
-        self.assertTrue(ScriptedEvent.instances[0].set_called)
-        self.assertTrue(InlineThread.instances[0].started)
-        self.assertTrue(InlineThread.instances[0].daemon)
-        self.assertEqual(InlineThread.instances[0].name, "wakeup-runner-heartbeat-renewer")
-        self.assertEqual(InlineThread.instances[0].join_timeouts, [1.0])
-        ScriptedEvent.coordinator = None
-
-    def test_daemon_run_once_periodic_heartbeat_propagates_exception_and_stops_thread(self) -> None:
-        ScriptedEvent.instances = []
-        ScriptedEvent.coordinator = HeartbeatCoordinator()
-        InlineThread.instances = []
-        lease = FakeHeartbeatLease()
-        lease.coordinator = ScriptedEvent.coordinator
-
-        with mock.patch("codex_refactor_loop.wakeup_runner.threading.Event", ScriptedEvent), mock.patch(
-            "codex_refactor_loop.wakeup_runner.threading.Thread",
-            InlineThread,
-        ):
-
-            def run_once():
-                ScriptedEvent.coordinator.enter_run_once()
-                self.assertTrue(ScriptedEvent.coordinator.wait_for_heartbeat_while_run_once_is_pending())
-                raise RuntimeError("boom")
-
-            with self.assertRaisesRegex(RuntimeError, "boom"):
-                _run_once_with_periodic_heartbeat(run_once, lease)
-
-        self.assertGreaterEqual(lease.beats, 1)
-        self.assertTrue(ScriptedEvent.coordinator.beat_during_run_once)
-        self.assertTrue(ScriptedEvent.instances[0].set_called)
-        self.assertTrue(InlineThread.instances[0].started)
-        self.assertEqual(InlineThread.instances[0].join_timeouts, [1.0])
-        ScriptedEvent.coordinator = None
-
     def test_wakeup_runner_continues_after_blocked_non_spawn_lifecycle_action(self) -> None:
         blocked_lifecycle = self.implementation_output_action(
             action_id="publish-implementation:missing-verified-head-before-reviewer-dispatch",
@@ -4290,6 +4267,13 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             out.getvalue().strip(),
             r"^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] wakeup-runner: tick dispatched spawn:1$",
         )
+
+    def test_reconcile_tick_wrapper_preserves_wakeup_runner_results(self) -> None:
+        runner = mock.Mock(spec=WakeupRunner)
+        runner.run_once.return_value = [RunnerResult("action-1", "applied")]
+
+        self.assertEqual([RunnerResult("action-1", "applied")], run_wakeup_runner_reconcile_tick(runner))
+        runner.run_once.assert_called_once_with()
 
     def test_refactor_loop_host_env_is_not_production_topology_ssot(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")

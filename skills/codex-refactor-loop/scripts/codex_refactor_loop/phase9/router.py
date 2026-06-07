@@ -30,8 +30,10 @@ from ..context import LoopContext
 from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from ..managed_work_snapshot import load_open_managed_work_snapshot
+from ..managed_work_snapshot import ManagedWorkSnapshotItem
 from ..prompt_contracts import inline_prompt_contracts
 from ..transition_assessment import TransitionAssessment, TransitionAssessmentReader, projection_lines
+from ..worker_markers import log_has_clean_exit, read_worker_terminal_marker
 from ..workflow_stages import format_stage
 from .. import labels as label_catalog
 
@@ -48,12 +50,6 @@ LIFECYCLE_PREFIXES = (
     "TEST_ADD_DONE",
     "META_RESOLVED",
 )
-KNOWN_PREFIXES = (
-    "SOLVER_DONE:",
-    "META_JUDGE_DONE:",
-    *LIFECYCLE_PREFIXES,
-)
-MARKER_RE = re.compile(r"^(?:[A-Z][A-Z0-9_]*_(?:DONE|RESOLVED|BLOCKED)|META_JUDGE_DONE):[^\s`]+$")
 
 
 class Phase9MarkerGrammar:
@@ -130,6 +126,7 @@ class IssueSourceSnapshot:
     comments: tuple[dict[str, str], ...]
     read_at: str
     source: str
+    updated_at: str
     truncated: bool
     unavailable_reason: str | None = None
     comments_loaded: bool = False
@@ -315,6 +312,7 @@ class Phase9Router:
         self._source_issue_decisions: dict[str, Phase9SourceIssueDecision] = {}
         self._issue_source_snapshots: dict[str, IssueSourceSnapshot] = {}
         self._terminal_decisions: dict[str, Phase9TerminalDecision] = {}
+        self._managed_work_items_by_number: dict[str, ManagedWorkSnapshotItem] | None = None
         self._pending_spawn_intent_logs: set[str] = set()
         self._ledger_entries_by_key: dict[str, list[dict[str, object]]] = {}
         self._tick_dispatch_count = 0
@@ -336,6 +334,7 @@ class Phase9Router:
         self._source_issue_decisions = {}
         self._issue_source_snapshots = {}
         self._terminal_decisions = {}
+        self._managed_work_items_by_number = None
         self._pending_spawn_intent_logs = self._read_pending_spawn_intent_logs()
         self._ledger_entries_by_key = self._read_ledger_entries_by_key()
         ledger = set(self._ledger_entries_by_key)
@@ -404,85 +403,28 @@ class Phase9Router:
         return markers
 
     def _final_marker_from_path(self, path: Path) -> str | None:
-        return self._final_marker_from_completed_log(path) or self._companion_artifact_marker_fallback(path)
-
-    def _final_marker_from_completed_log(self, path: Path) -> str | None:
-        tail = self._read_tail_lines(path, self.MARKER_TAIL_LINES)
-        try:
-            exit_index = max(index for index, line in enumerate(tail) if line.strip() == "EXIT=0")
-        except ValueError:
+        marker_read = read_worker_terminal_marker(path)
+        marker = marker_read.marker
+        if marker is None:
             return None
-        before_exit = tail[:exit_index]
-        for line in reversed(before_exit):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            marker = self._extract_marker(stripped)
-            if marker is not None:
-                return marker
-            break
-        for index, line in enumerate(before_exit):
-            if "⟦AI:AUTO-LOOP⟧" not in line:
-                continue
-            for candidate in before_exit[index + 1 : index + 4]:
-                marker = self._extract_marker(candidate.strip())
-                if marker is not None:
-                    return marker
-        return None
-
-    def _companion_artifact_marker_fallback(self, log_path: Path) -> str | None:
-        identity = self._identity_from_path(log_path)
+        identity = self._identity_from_path(path)
         if identity is None:
             return None
-        if identity.actor not in (*self._solver_roles(), self._judge_role()):
-            return None
-        if not self._is_clean_exit(log_path):
-            return None
-        artifact = self.runs_dir / f"{log_path.stem}.md"
-        allowed_prefix = "SOLVER_DONE:" if identity.actor in self._solver_roles() else "META_JUDGE_DONE:"
-        for line in reversed(self._read_tail_lines(artifact, self.MARKER_TAIL_LINES)):
-            marker = self._extract_marker(line.strip())
-            if marker and marker.startswith(allowed_prefix):
+        if identity.actor in self._solver_roles():
+            return marker if marker.startswith(f"SOLVER_DONE:{identity.actor}:") else None
+        if identity.actor == self._judge_role():
+            if marker.startswith("META_JUDGE_DONE:"):
                 return marker
+            if any(marker.startswith(prefix) for prefix in LIFECYCLE_PREFIXES):
+                return marker
+            return Phase9MarkerGrammar.parse_marker_candidate(marker)
+        if identity.actor == "reflector":
+            if marker.startswith("META_RESOLVED:"):
+                return marker
+            if any(marker.startswith(prefix) for prefix in LIFECYCLE_PREFIXES):
+                return marker
+            return Phase9MarkerGrammar.parse_marker_candidate(marker)
         return None
-
-    def _extract_marker(self, line: str) -> str | None:
-        stripped = line.strip()
-        if stripped.startswith("+") and not stripped.startswith("+++"):
-            stripped = stripped[1:].strip()
-        stripped = stripped.strip("`")
-        if self._is_placeholder_or_echo(stripped):
-            return None
-        candidate: str | None = None
-        if any(stripped.startswith(prefix) for prefix in KNOWN_PREFIXES):
-            candidate = stripped
-        if candidate is None:
-            match = MARKER_RE.fullmatch(stripped)
-            if match:
-                candidate = match.group(0)
-        if candidate is None:
-            return None
-        if any(candidate.startswith(prefix) for prefix in LIFECYCLE_PREFIXES):
-            return candidate
-        return Phase9MarkerGrammar.parse_marker_candidate(candidate)
-
-    def _is_placeholder_or_echo(self, text: str) -> bool:
-        if "<" in text and ">" in text:
-            return True
-        lowered = text.lower()
-        if "template" in lowered or "example" in lowered or "emits `" in lowered:
-            return True
-        if "round-n" in lowered:
-            return True
-        if "|" in text and any(prefix in text for prefix in KNOWN_PREFIXES):
-            return True
-        if "\\\"" in text or '\\"' in text:
-            return True
-        if "r+1" in text or "round-k+" in lowered or "round-n+" in lowered:
-            return True
-        if any(f"{prefix}*" in text or f"{prefix}:*" in text for prefix in KNOWN_PREFIXES):
-            return True
-        return False
 
     def _load_persisted_fallback_seen(self) -> set[str]:
         """Seed _fallback_seen from existing pending-events log so restart is idempotent."""
@@ -528,10 +470,7 @@ class Phase9Router:
         return parse_phase9_log_identity(path.name)
 
     def _is_clean_exit(self, path: Path) -> bool:
-        tail = self._read_tail_lines(path, 5)
-        if not tail:
-            return False
-        return any(re.match(r"^EXIT=0$", line) for line in tail)
+        return log_has_clean_exit(path)
 
     def _dispatch_solver_triplets(self, markers: list[Marker], ledger: set[str]) -> None:
         solver_roles = self._solver_roles()
@@ -972,10 +911,10 @@ class Phase9Router:
         return timedelta(hours=hours)
 
     def _recover_actor_health(self, ledger: set[str]) -> None:
-        self._quarantine_markerless_solver_logs()
+        self._append_markerless_solver_exhausted_events()
         self._recover_stale_ledgered_actors(ledger)
 
-    def _quarantine_markerless_solver_logs(self) -> None:
+    def _append_markerless_solver_exhausted_events(self) -> None:
         markerless_by_round: dict[tuple[str, int], list[Phase9ActorHealth]] = {}
         for log_path in sorted(self.logs_dir.glob("*.log")):
             identity = self._identity_from_path(log_path)
@@ -985,33 +924,20 @@ class Phase9Router:
             if health.markerless_clean_log is not None and health.valid_marker is None:
                 markerless_by_round.setdefault((identity.issue, identity.round), []).append(health)
         for (issue, round_no), healths in markerless_by_round.items():
-            quarantined = []
-            for health in healths:
-                assert health.markerless_clean_log is not None
-                quarantined.append(self._quarantine_markerless_log(health.markerless_clean_log))
             self._append_actor_health_fallback_event(
                 issue,
                 round_no,
-                "phase9-actor-markerless-quarantine",
+                "phase9-solver-markerless-exhausted",
                 "solver_triplet_to_judge",
                 {
-                    "quarantined_logs": [self._artifact_path(path) for path in quarantined],
+                    "markerless_logs": [
+                        self._artifact_path(health.markerless_clean_log)
+                        for health in healths
+                        if health.markerless_clean_log is not None
+                    ],
                     "roles": sorted(health.actor for health in healths),
                 },
             )
-
-    def _quarantine_markerless_log(self, log_path: Path) -> Path:
-        target = log_path.with_name(f"{log_path.stem}.markerless-quarantine.log")
-        if not target.exists():
-            log_path.replace(target)
-            return target
-        suffix = 1
-        while True:
-            candidate = log_path.with_name(f"{log_path.stem}.markerless-quarantine-{suffix}.log")
-            if not candidate.exists():
-                log_path.replace(candidate)
-                return candidate
-            suffix += 1
 
     def _recover_stale_ledgered_actors(self, ledger: set[str]) -> None:
         now = datetime.now(timezone.utc)
@@ -1231,10 +1157,12 @@ class Phase9Router:
         return self._source_issue_decisions[issue]
 
     def _read_source_issue_decision(self, issue: str) -> Phase9SourceIssueDecision:
-        snapshot = self._read_issue_metadata_snapshot(issue)
-        if snapshot.source == "unavailable":
+        if not self.ctx.gh_repo_slug:
             return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
-        state = snapshot.source
+        issue_result = self._gh_api_json(f"repos/{self.ctx.gh_repo_slug}/issues/{issue}")
+        if not isinstance(issue_result, dict):
+            return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
+        state = str(issue_result.get("state") or "")
         if not isinstance(state, str) or not state.strip():
             return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
         normalized = state.strip().upper()
@@ -1288,8 +1216,8 @@ class Phase9Router:
         snapshot = self._read_issue_metadata_snapshot(issue)
         if snapshot.unavailable_reason is not None or snapshot.comments_loaded:
             return snapshot
-        comments_result = self._gh_api_json(f"repos/{self.ctx.gh_repo_slug}/issues/{issue}/comments?per_page=20")
-        if not isinstance(comments_result, list):
+        comments_result, comments_source = self._issue_comments_projection(issue, snapshot.updated_at)
+        if comments_result is None:
             snapshot = IssueSourceSnapshot(
                 number=snapshot.number,
                 title=snapshot.title,
@@ -1297,6 +1225,7 @@ class Phase9Router:
                 comments=(),
                 read_at=snapshot.read_at,
                 source=snapshot.source,
+                updated_at=snapshot.updated_at,
                 truncated=snapshot.truncated,
                 unavailable_reason="comments-read-failed",
                 comments_loaded=True,
@@ -1325,7 +1254,8 @@ class Phase9Router:
             body=snapshot.body,
             comments=tuple(comments),
             read_at=snapshot.read_at,
-            source=snapshot.source,
+            source=f"{snapshot.source};comments={comments_source}",
+            updated_at=snapshot.updated_at,
             truncated=snapshot.truncated or comments_truncated or len(comments_result) > 20,
             comments_loaded=True,
         )
@@ -1341,12 +1271,26 @@ class Phase9Router:
         read_at = self._now()
         if not self.ctx.gh_repo_slug:
             return self._unavailable_issue_source_snapshot(issue, read_at, "missing-gh-repo-slug")
+        item = self._managed_work_item(issue)
+        if item is not None:
+            body, body_truncated = self._bounded_text(item.body, 20_000)
+            return IssueSourceSnapshot(
+                number=str(issue),
+                title=item.title,
+                body=body,
+                comments=(),
+                read_at=read_at,
+                source=item.state,
+                updated_at=item.updated_at,
+                truncated=body_truncated,
+            )
         issue_result = self._gh_api_json(f"repos/{self.ctx.gh_repo_slug}/issues/{issue}")
         if not isinstance(issue_result, dict):
             return self._unavailable_issue_source_snapshot(issue, read_at, "issue-read-failed")
         title = str(issue_result.get("title") or "")
         body, body_truncated = self._bounded_text(str(issue_result.get("body") or ""), 20_000)
         state = str(issue_result.get("state") or "")
+        updated_at = str(issue_result.get("updated_at") or issue_result.get("updatedAt") or "")
         return IssueSourceSnapshot(
             number=str(issue),
             title=title,
@@ -1354,6 +1298,7 @@ class Phase9Router:
             comments=(),
             read_at=read_at,
             source=state,
+            updated_at=updated_at,
             truncated=body_truncated,
         )
 
@@ -1372,9 +1317,66 @@ class Phase9Router:
             comments=(),
             read_at=read_at,
             source=source or "unavailable",
+            updated_at="",
             truncated=False,
             unavailable_reason=reason,
         )
+
+    def _managed_work_item(self, issue: str) -> ManagedWorkSnapshotItem | None:
+        if self._managed_work_items_by_number is None:
+            snapshot = load_open_managed_work_snapshot(self.ctx)
+            self._managed_work_items_by_number = {}
+            if snapshot.loaded_ok:
+                for item in snapshot.items:
+                    if item.kind == "issue":
+                        self._managed_work_items_by_number[str(item.number)] = item
+        return self._managed_work_items_by_number.get(str(issue))
+
+    def _issue_comments_projection(self, issue: str, updated_at: str) -> tuple[list[dict[str, object]] | None, str]:
+        cache = self._read_comments_cache()
+        row = cache.get(str(issue))
+        if updated_at and isinstance(row, dict) and str(row.get("updated_at") or "") == str(updated_at):
+            comments = row.get("comments")
+            if isinstance(comments, list):
+                return [comment for comment in comments if isinstance(comment, dict)], "cache:fresh"
+        comments_result = self._gh_api_json(f"repos/{self.ctx.gh_repo_slug}/issues/{issue}/comments?per_page=20")
+        if not isinstance(comments_result, list):
+            return None, "unavailable"
+        cache[str(issue)] = {
+            "updated_at": str(updated_at or ""),
+            "comments": comments_result[-20:],
+            "not_live_state_fact_source": True,
+            "not_host_production_ssot": True,
+            "no_lifecycle_authority": True,
+        }
+        self._write_comments_cache(cache)
+        return comments_result, "live"
+
+    def _comments_cache_path(self) -> Path:
+        return self.ctx.paths.state / "phase9-router-comments-cache.json"
+
+    def _read_comments_cache(self) -> dict[str, object]:
+        try:
+            data = json.loads(self._comments_cache_path().read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        issues = data.get("issues")
+        return issues if isinstance(issues, dict) else {}
+
+    def _write_comments_cache(self, cache: dict[str, object]) -> None:
+        path = self._comments_cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "issues": cache,
+            "not_live_state_fact_source": True,
+            "not_host_production_ssot": True,
+            "no_lifecycle_authority": True,
+        }
+        tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
 
     def _gh_api_json(self, path: str) -> Any:
         command = ["gh", "api", path]
@@ -1626,7 +1628,7 @@ class Phase9Router:
         issue: str,
         round_no: int,
         reason: Literal[
-            "phase9-actor-markerless-quarantine",
+            "phase9-solver-markerless-exhausted",
             "phase9-actor-recovery-prompt-unavailable",
         ],
         route: str,
@@ -2062,6 +2064,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def run_phase9_router_reconcile_tick(router: Phase9Router) -> None:
+    router.tick()
+
+
 def main(argv: list[str] | None = None, command_runner: Callable[[dict[str, object]], None] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     repo_root = Path(args.repo_root) if args.repo_root else LoopContext.load(cwd=os.getcwd()).repo_root
@@ -2070,12 +2076,12 @@ def main(argv: list[str] | None = None, command_runner: Callable[[dict[str, obje
     router = Phase9Router(repo_root, dry_run=args.dry_run, command_runner=command_runner)
     with router.singleton():
         if args.once:
-            router.tick()
+            run_phase9_router_reconcile_tick(router)
             return 0
         lease = DaemonHeartbeatLease("phase9_router_daemon", repo_root)
         while True:
             try:
-                router.tick()
+                lease.run_with_lease(lambda: run_phase9_router_reconcile_tick(router))
             except Exception as exc:
                 print(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}] EXCEPTION in tick: {exc!r}", flush=True)
             lease.beat()

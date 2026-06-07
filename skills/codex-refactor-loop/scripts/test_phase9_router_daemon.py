@@ -27,6 +27,7 @@ from codex_refactor_loop.phase9.router import (
     Phase9TerminalDecision,
     main,
     parse_phase9_log_identity,
+    run_phase9_router_reconcile_tick,
 )
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 
@@ -48,7 +49,9 @@ def managed_snapshot(rows: list[dict[str, object]]) -> ManagedWorkSnapshotResult
                 kind="issue",
                 number=int(row.get("number", 0)),
                 title=str(row.get("title", "")),
+                body=str(row.get("body", "")),
                 labels=tuple(labels),
+                updated_at=str(row.get("updated_at", "")),
             )
         )
     return ManagedWorkSnapshotResult(tuple(items), True, "cache:fresh")
@@ -267,7 +270,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.assertIsNone(self.router._final_marker_from_path(log))
 
-    def test_phase9_router_quarantines_markerless_clean_solver_log_and_recovers_missing_role(self) -> None:
+    def test_phase9_router_markerless_clean_solver_log_is_terminal_format_failure_without_recovery(self) -> None:
         self.write_log("phase9-issue505-r1-minimal.log", "clean but no valid marker")
         self.write_log("phase9-issue505-r1-structural.log", "SOLVER_DONE:structural:artifact:summary")
         self.write_log("phase9-issue505-r1-delete.log", "SOLVER_DONE:delete:artifact:summary")
@@ -281,21 +284,16 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.router.tick()
 
-        self.assertFalse((self.repo / ".refactor-loop/logs/phase9-issue505-r1-minimal.log").exists())
-        self.assertTrue((self.repo / ".refactor-loop/logs/phase9-issue505-r1-minimal.markerless-quarantine.log").exists())
-        self.assertEqual(len(self.commands), 1)
-        self.assertEqual(self.commands[0]["route"], "actor_health_recovery")
-        self.assertEqual(self.commands[0]["log"], ".refactor-loop/logs/phase9-issue505-r1-minimal.log")
+        self.assertTrue((self.repo / ".refactor-loop/logs/phase9-issue505-r1-minimal.log").exists())
+        self.assertFalse((self.repo / ".refactor-loop/logs/phase9-issue505-r1-minimal.markerless-quarantine.log").exists())
+        self.assertEqual(self.commands, [])
         events = self.pending_event_payloads()
         self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["reason"], "phase9-actor-markerless-quarantine")
-        self.assertEqual(events[0]["quarantined_logs"], [".refactor-loop/logs/phase9-issue505-r1-minimal.markerless-quarantine.log"])
-        entries = self.ledger_entries()
-        self.assertEqual(entries[-1]["key"], "505-1-minimal")
-        self.assertEqual(entries[-1]["route"], "actor_health_recovery")
-        self.assertEqual(entries[-1]["recovery"], "Phase9ActorHealth")
+        self.assertEqual(events[0]["reason"], "phase9-solver-markerless-exhausted")
+        self.assertEqual(events[0]["markerless_logs"], [".refactor-loop/logs/phase9-issue505-r1-minimal.log"])
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["505-1-minimal"])
 
-    def test_phase9_router_markerless_quarantine_restart_dedupe_preserves_log(self) -> None:
+    def test_phase9_router_markerless_exhausted_restart_dedupe_preserves_log(self) -> None:
         self.write_log("phase9-issue505-r1-minimal.log", "clean but no marker")
 
         self.router.tick()
@@ -303,8 +301,9 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
         fresh_router.tick()
 
-        self.assertEqual(self.pending_events().count("phase9-actor-health:505-1-phase9-actor-markerless-quarantine"), 1)
-        self.assertTrue((self.repo / ".refactor-loop/logs/phase9-issue505-r1-minimal.markerless-quarantine.log").exists())
+        self.assertEqual(self.pending_events().count("phase9-actor-health:505-1-phase9-solver-markerless-exhausted"), 1)
+        self.assertTrue((self.repo / ".refactor-loop/logs/phase9-issue505-r1-minimal.log").exists())
+        self.assertFalse((self.repo / ".refactor-loop/logs/phase9-issue505-r1-minimal.markerless-quarantine.log").exists())
         self.assertEqual(self.commands, [])
 
     def test_phase9_router_recovers_judge_marker_from_companion_artifact(self) -> None:
@@ -334,6 +333,21 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn("phase9-issue450-r4-delete.log", logs)
         self.assertIn("449-2-judge", [entry["key"] for entry in self.ledger_entries()])
         self.assertIn("450-4-minimal", [entry["key"] for entry in self.ledger_entries()])
+
+    def test_phase9_router_accepts_solver_marker_before_terminal_exit_with_later_diagnostics(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue659-r2-{role}.log",
+                f"SOLVER_DONE:{role}:propose:bounded-tail",
+                "https://github.com/example/repo/issues/659",
+                "DONE_AT=2026-06-07T00:00:00Z",
+            )
+
+        self.router.tick()
+
+        logs = " ".join(self.intent_text(command) for command in self.commands)
+        self.assertIn("phase9-issue659-r2-judge.log", logs)
+        self.assertIn("659-2-judge", [entry["key"] for entry in self.ledger_entries()])
 
     def test_phase9_router_accepts_sentinel_marker_before_completion_summary(self) -> None:
         judge = self.repo / ".refactor-loop" / "logs" / "phase9-issue451-r3-judge.log"
@@ -458,7 +472,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(len(self.commands), 1)
         self.assertEqual(self.ledger_entries()[0]["key"], "38-4-judge")
 
-    def test_phase9_router_ignores_standalone_marker_followed_by_raw_prose(self) -> None:
+    def test_phase9_router_accepts_standalone_solver_marker_followed_by_raw_prose(self) -> None:
         for role in ("minimal", "structural", "delete"):
             self.write_log(
                 f"phase9-issue39-r4-{role}.log",
@@ -468,8 +482,8 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.router.tick()
 
-        self.assertEqual(self.commands, [])
-        self.assertEqual(self.ledger_entries(), [])
+        self.assertEqual(len(self.commands), 1)
+        self.assertEqual(self.ledger_entries()[0]["key"], "39-4-judge")
 
     def test_phase9_router_solver_triplet_dispatches_meta_judge_once(self) -> None:
         self.solver_triplet(issue=37, round_no=4)
@@ -935,7 +949,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
             self.router.tick()
 
-        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427"), 1)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427"), 2)
         self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427/comments?per_page=20"), 1)
         prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue427-r4-judge.md").read_text(encoding="utf-8")
         self.assertIn("## Issue source snapshot", prompt)
@@ -944,6 +958,69 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn("recent comment", prompt)
         self.assertNotIn("gh issue view 427", prompt)
         self.assertNotIn(str(self.repo), prompt)
+
+    def test_phase9_router_uses_managed_snapshot_and_private_comments_cache(self) -> None:
+        calls: list[str] = []
+        self.router._read_source_issue_decision = self.original_source_issue_reader.__get__(self.router, Phase9Router)  # type: ignore[method-assign]
+        self.solver_triplet(issue=427, round_no=4)
+        snapshot = managed_snapshot(
+            [
+                {
+                    "number": 427,
+                    "title": "Snapshot title",
+                    "body": "Snapshot body",
+                    "updated_at": "2026-06-01T00:00:00Z",
+                    "labels": [{"name": "crnd:lifecycle:managed"}],
+                }
+            ]
+        )
+
+        def fake_run(command, **kwargs):
+            calls.append(command[2])
+            if command[2].endswith("/comments?per_page=20"):
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        [
+                            {
+                                "id": 10,
+                                "user": {"login": "maintainer"},
+                                "body": "recent comment",
+                                "created_at": "2026-06-01T00:00:00Z",
+                            }
+                        ]
+                    ),
+                    stderr="",
+                )
+            return mock.Mock(returncode=0, stdout=json.dumps({"state": "open", "title": "live title", "body": "live body"}), stderr="")
+
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=snapshot):
+            with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+                self.router.tick()
+
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427"), 1)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427/comments?per_page=20"), 1)
+        cache_path = self.repo / ".refactor-loop/state/phase9-router-comments-cache.json"
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        self.assertTrue(cache["not_live_state_fact_source"])
+        self.assertTrue(cache["not_host_production_ssot"])
+        self.assertTrue(cache["no_lifecycle_authority"])
+        prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue427-r4-judge.md").read_text(encoding="utf-8")
+        self.assertIn("# Issue #427: Snapshot title", prompt)
+        self.assertIn("Snapshot body", prompt)
+        self.assertIn("recent comment", prompt)
+
+        second = self.new_router()
+        second._read_source_issue_decision = self.original_source_issue_reader.__get__(second, Phase9Router)  # type: ignore[method-assign]
+        second._ledger_entries_by_key = {}
+        calls.clear()
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=snapshot):
+            with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+                comments = second._read_issue_source_snapshot("427").comments
+
+        self.assertEqual([comment["body"] for comment in comments], ["recent comment"])
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427"), 0)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427/comments?per_page=20"), 0)
 
     def test_phase9_router_comments_read_failure_injects_unavailable_snapshot_only(self) -> None:
         calls: list[str] = []
@@ -963,7 +1040,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
             self.router.tick()
 
-        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/429"), 1)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/429"), 2)
         self.assertEqual(calls.count("repos/example/consensus-rnd/issues/429/comments?per_page=20"), 1)
         self.assertEqual(len(self.commands), 1)
         prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue429-r4-judge.md").read_text(encoding="utf-8")
@@ -1118,6 +1195,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             comments=(),
             read_at="2026-06-01T00:00:00Z",
             source="open",
+            updated_at="2026-06-01T00:00:00Z",
             truncated=False,
             comments_loaded=True,
         )
@@ -1658,6 +1736,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             comments=(),
             read_at="2026-06-01T00:00:00Z",
             source="open",
+            updated_at="2026-06-01T00:00:00Z",
             truncated=False,
             comments_loaded=True,
         )
@@ -2096,7 +2175,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             "META_JUDGE_DONE:consensus:structural:summary",
             "IMPLEMENT_DONE:cluster:ok",
             "VERIFY_DONE:cluster:ok",
-            "REVIEW_DONE:pr:quality:approve",
+            "REVIEW_DONE:42:quality:approve",
             "FIX_DONE:pr:ok",
             "FIX_BLOCKED:pr:reason",
             "TEST_ADD_DONE:pr:ok",
@@ -2232,16 +2311,14 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertNotIn("Phase9RoundProjection(", src)
         self.assertNotIn("VALID_MARKER_PAYLOAD.match(candidate)", src)
 
-    def test_phase9_router_source_regression_has_solver_judge_artifact_marker_fallback(self) -> None:
+    def test_phase9_router_source_regression_uses_shared_worker_marker_reader(self) -> None:
         src = PHASE9_ROUTER.read_text(encoding="utf-8")
 
         for required in (
-            "def _companion_artifact_marker_fallback",
-            'artifact = self.runs_dir / f"{log_path.stem}.md"',
-            'allowed_prefix = "SOLVER_DONE:"',
-            'allowed_prefix = "SOLVER_DONE:" if identity.actor in self._solver_roles() else "META_JUDGE_DONE:"',
-            "self._extract_marker(line.strip())",
-            "if not self._is_clean_exit(log_path):",
+            "from ..worker_markers import log_has_clean_exit, read_worker_terminal_marker",
+            "marker_read = read_worker_terminal_marker(path)",
+            "return log_has_clean_exit(path)",
+            "marker.startswith(f\"SOLVER_DONE:{identity.actor}:\")",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, src)
@@ -2298,6 +2375,13 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(commands, [])
         self.assertEqual(self.ledger_entries(), [])
+
+    def test_reconcile_tick_wrapper_preserves_phase9_tick_behavior(self) -> None:
+        router = mock.Mock(spec=Phase9Router)
+
+        run_phase9_router_reconcile_tick(router)
+
+        router.tick.assert_called_once_with()
 
 
 if __name__ == "__main__":

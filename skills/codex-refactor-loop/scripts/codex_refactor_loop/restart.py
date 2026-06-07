@@ -87,6 +87,8 @@ class DaemonLaunchFingerprint:
     entrypoint_sha256: str
     package_tree_sha256: str
     fingerprinted_files_count: int
+    host_env_path: str
+    host_env_sha256: str
 
     @classmethod
     def current(
@@ -105,6 +107,8 @@ class DaemonLaunchFingerprint:
             entrypoint_sha256=_file_digest(ctx.skill_root / "scripts" / CLI_ENTRYPOINT_NAME),
             package_tree_sha256=package_tree_sha256,
             fingerprinted_files_count=fingerprinted_files_count,
+            host_env_path=str(ctx.host_env_location) if ctx.host_env_location is not None else "",
+            host_env_sha256=_file_digest(ctx.host_env_location) if ctx.host_env_location is not None else "missing",
         )
 
     @classmethod
@@ -121,6 +125,8 @@ class DaemonLaunchFingerprint:
             entrypoint_sha256 = raw["entrypoint_sha256"]
             package_tree_sha256 = raw["package_tree_sha256"]
             fingerprinted_files_count = raw["fingerprinted_files_count"]
+            host_env_path = raw["host_env_path"]
+            host_env_sha256 = raw["host_env_sha256"]
         except KeyError:
             return None
         if (
@@ -130,6 +136,8 @@ class DaemonLaunchFingerprint:
             or not isinstance(entrypoint_sha256, str)
             or not isinstance(package_tree_sha256, str)
             or not isinstance(fingerprinted_files_count, int)
+            or not isinstance(host_env_path, str)
+            or not isinstance(host_env_sha256, str)
         ):
             return None
         return cls(
@@ -138,6 +146,8 @@ class DaemonLaunchFingerprint:
             entrypoint_sha256=entrypoint_sha256,
             package_tree_sha256=package_tree_sha256,
             fingerprinted_files_count=fingerprinted_files_count,
+            host_env_path=host_env_path,
+            host_env_sha256=host_env_sha256,
         )
 
     def write(self, path: Path) -> None:
@@ -154,6 +164,8 @@ class DaemonLaunchFingerprint:
             "entrypoint_sha256": self.entrypoint_sha256,
             "package_tree_sha256": self.package_tree_sha256,
             "fingerprinted_files_count": self.fingerprinted_files_count,
+            "host_env_path": self.host_env_path,
+            "host_env_sha256": self.host_env_sha256,
         }
 
 

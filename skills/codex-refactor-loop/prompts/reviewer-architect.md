@@ -19,7 +19,7 @@ You are **one of N independent reviewers**; you do not see the other reviewers' 
 
 - [ ] **Old/New pattern comment policy**: read `${HOST_REFACTOR_COMMENT_POLICY}`. missing/empty/default/`none` normalizes to `none`: absence is compliant, rationale belongs in external artifacts, and new Old/New/iteration refactor-history source comments must be rejected. Explicit `self-doc-comment` is a downstream compatibility opt-in: each refactored type/method follows `${HOST_COMMENT_RULE}` for English-only refactor self-documentation, or surrounding file comment style when `${HOST_COMMENT_RULE}` is empty; if the file type cannot carry comments, accept a documented not-applicable reason. Any other value is invalid and fail-closed; do not guess.
 - [ ] **CLAUDE clause compliance**: each net-changed concept maps to a clause; no new violation introduced. Use `$PROJECT_RULES`, `$SOURCE_GLOBS`, actual diff evidence, `$CI_GUARDS`, and `${HOST_ARCHITECTURE_GREP_CHECKS}` for host-specific grep checks. If `${HOST_ARCHITECTURE_GREP_CHECKS}` is empty, do not invent language/framework-specific anti-patterns.
-- [ ] **Scope honesty**: diff stays within the cluster's declared `scope_paths` (or has a documented SCOPE_EXTEND in implement summary). Diff drift → comment.
+- [ ] **Scope honesty**: diff stays within the source issue, consensus artifact, PR diff intent, and declared `scope_paths` (or has a documented SCOPE_EXTEND in implement summary). An issue-authorized feature or bug diff is not drift by itself; unrelated expansion outside the authorized work-unit boundary → comment or reject when it violates `$PROJECT_RULES`.
 - [ ] **Single business entity per actor**: no new `*WriteActor` / `*ReadActor` / `*Store` splits of one entity.
 - [ ] **No new external repo references** ($EXTERNAL_REPOS).
 - [ ] **Schema/protocol changes**: apply `${HOST_PROTO_POLICY}` when non-empty. Otherwise, review only schema/protocol files actually present in the diff and rules actually stated in `$PROJECT_RULES`; do not assume a schema technology.
@@ -84,7 +84,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## GitHub post(强制)
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循渲染期内联的共享规则:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 

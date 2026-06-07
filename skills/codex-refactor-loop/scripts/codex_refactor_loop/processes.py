@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ class ProcessSupervisor:
         stall: int,
         preamble: str = "",
         env: Mapping[str, str] | None = None,
+        cwd: Path | None = None,
     ) -> int:
         if not stdin.is_file():
             raise ValueError(f"prompt file not found: {stdin}")
@@ -52,6 +54,7 @@ class ProcessSupervisor:
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                     env=dict(env) if env is not None else None,
+                    cwd=str(cwd) if cwd is not None else None,
                 )
             except OSError as exc:
                 _append(log, f"SPAWN_FAILED={exc}\nEXIT=127\nDONE_AT={_utc_now()}\n")
@@ -86,6 +89,7 @@ class ProcessSupervisor:
 def launch_spawn_codex_supervisor(
     *,
     repo_root: Path,
+    skill_root: Path,
     cd: Path,
     prompt: Path,
     log: Path,
@@ -100,8 +104,16 @@ def launch_spawn_codex_supervisor(
     if stall <= 0:
         raise ValueError(f"stall must be positive: {stall}")
     repo_root = repo_root.resolve()
+    skill_root = skill_root.resolve()
+    cli = skill_root / "scripts" / "consensus-rnd-cli"
+    if not cli.is_file():
+        diagnostic = f"SPAWN_SUPERVISOR_CLI_MISSING:{cli}\n"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        _append(log, diagnostic)
+        sys.stderr.write(diagnostic)
+        return 127
     command = [
-        str(repo_root / "skills" / "codex-refactor-loop" / "scripts" / "consensus-rnd-cli"),
+        str(cli),
         "spawn-codex",
         "--cd",
         str(cd),

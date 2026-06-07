@@ -21,7 +21,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
-from codex_refactor_loop.monitors.comment import CommentMonitor, is_controller_post
+from codex_refactor_loop.monitors.comment import CommentMonitor, is_controller_post, main as comment_monitor_main, run_comment_monitor_reconcile_tick
 from test_support.authorization_projection import project_python
 
 
@@ -205,6 +205,33 @@ class CommentMonitorTests(unittest.TestCase):
         self.assertTrue(any(call[:2] == ["issue", "comment"] for call in gh_calls), gh_calls)
         self.assertTrue(monitor.seen("99"))
 
+    def test_banner_comment_failures_record_secondary_backoff_after_issue_and_pr_fail(self) -> None:
+        monitor = CommentMonitor(self.ctx, interval=1)
+        decision = mock.Mock(allowed=True, owner_device="device-b", status="owner", action="comment-monitor-write", lease_id="lease", expires_at="")
+        gh_calls: list[list[str]] = []
+
+        def fail_content_creation(args, *, check=True):
+            del check
+            gh_calls.append(list(args))
+            return subprocess.CompletedProcess(
+                args,
+                1,
+                "",
+                "You have exceeded a secondary rate limit and have been temporarily blocked from content creation",
+            )
+
+        with mock.patch("codex_refactor_loop.monitors.comment.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.monitors.comment.GitHubAuthenticatedActor.require_admission"):
+                with mock.patch.object(monitor, "gh_api", return_value=subprocess.CompletedProcess(["gh"], 0, "", "")):
+                    with mock.patch.object(monitor, "gh", side_effect=fail_content_creation):
+                        monitor.handle_comment("42", {"id": 99, "author": "maintainer", "body": "please check"})
+
+        self.assertEqual([["issue", "comment"], ["pr", "comment"]], [call[:2] for call in gh_calls])
+        self.assertTrue(monitor.seen("99"))
+        backoff = json.loads((self.tmp / ".refactor-loop/state/secondary-mutation-backoff.json").read_text(encoding="utf-8"))
+        self.assertEqual("comment-monitor-banner", backoff["contentCreation"]["operation"])
+        self.assertEqual("secondary-content-creation-limit", backoff["contentCreation"]["reason"])
+
     def test_updated_at_unchanged_skips_comments_rest_query(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
         state_path = self.tmp / ".refactor-loop" / "comment-monitor-state.json"
@@ -297,7 +324,7 @@ class CommentMonitorTests(unittest.TestCase):
             mock.patch.object(monitor, "_poll_once", return_value={"targets": 2, "fetched": 1, "comments": 3}),
             redirect_stdout(output),
         ):
-            monitor.tick()
+            run_comment_monitor_reconcile_tick(monitor)
 
         line = output.getvalue().strip()
         self.assertRegex(
@@ -307,6 +334,20 @@ class CommentMonitorTests(unittest.TestCase):
         )
         self.assertNotIn("TickOutcome", line)
         self.assertNotIn("registry", line)
+
+    def test_once_cli_invokes_reconcile_tick_wrapper_and_exits_zero(self) -> None:
+        monitor = mock.Mock(spec=CommentMonitor)
+
+        with (
+            mock.patch("codex_refactor_loop.monitors.comment.LoopContext.load", return_value=self.ctx) as load_context,
+            mock.patch("codex_refactor_loop.monitors.comment.CommentMonitor", return_value=monitor) as monitor_class,
+            mock.patch("codex_refactor_loop.monitors.comment.run_comment_monitor_reconcile_tick") as wrapper,
+        ):
+            self.assertEqual(0, comment_monitor_main(["--once"]))
+
+        load_context.assert_called_once()
+        monitor_class.assert_called_once_with(self.ctx)
+        wrapper.assert_called_once_with(monitor)
 
     def test_last_updated_at_persists_and_reload_skips_unchanged_item(self) -> None:
         calls: list[str] = []

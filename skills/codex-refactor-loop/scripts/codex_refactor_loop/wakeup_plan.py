@@ -41,10 +41,14 @@ from codex_refactor_loop.issue_decomposition import (
 )
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.phase9.progress import issue_has_terminal_consensus_judge
-from codex_refactor_loop.pr_checks import PrChecksProjection
+from codex_refactor_loop.pr_checks import PrMergeReadinessProjection
 from codex_refactor_loop.release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from codex_refactor_loop.release.gate import canonical_digest, decide_release_artifact, parse_time
 from codex_refactor_loop.restart import restart_managed_daemon_names
+from codex_refactor_loop.safe_progress_scheduler import (
+    project_wakeup_actions,
+    write_blocked_queue,
+)
 from codex_refactor_loop.state import read_json
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
 from codex_refactor_loop.worker_markers import (
@@ -386,6 +390,8 @@ def _harness_spawn_intent_action(
         "stall": int(intent.get("stall", 5400)),
         "run_in_background_required": True,
         "no_lifecycle_authority": True,
+        "risk_tier": intent.get("risk_tier"),
+        "execution_policy": intent.get("execution_policy"),
         "reason": intent.get("reason"),
         "evidence": evidence,
         "source_artifact": ".refactor-loop/.controller-pending-events.log",
@@ -1191,11 +1197,13 @@ def completed_marker_actions(
             action["preconditions"] = ["active_controller_owner", "clean_exit_source_marker", "live_open_target", "live_managed_target"]
         if action["controller_action"] == "publish_implementation_output":
             _attach_implementation_pr_artifacts(repo_root, action)
+        _apply_remote_ci_fix_done_target_gate(action, open_targets)
         target = _action_target_key(action)
         if (
             open_targets is not None
             and target is not None
             and target not in open_targets
+            and not action.get("status_only")
             and not marker.startswith("META_JUDGE_DONE:consensus")
             and controller_action_from_marker(marker) != "close_managed_item_from_drop_marker"
         ):
@@ -1440,6 +1448,35 @@ def _action_target_key(action: dict[str, Any]) -> tuple[str, int] | None:
     number = action.get("target_number")
     if kind in {"PR", "issue"} and isinstance(number, int):
         return kind, number
+    return None
+
+
+def _apply_remote_ci_fix_done_target_gate(action: dict[str, Any], open_targets: set[tuple[str, int]] | None) -> None:
+    if action.get("controller_action") != "dispatch_remote_ci_fix":
+        return
+    reason = _remote_ci_fix_done_target_suppressed_reason(action, open_targets)
+    if not reason:
+        return
+    action["status_only"] = True
+    action["no_lifecycle_authority"] = True
+    action["suppressed_reason"] = reason
+    action.pop("runner_authority", None)
+    action.pop("no_generic_command", None)
+
+
+def _remote_ci_fix_done_target_suppressed_reason(
+    action: dict[str, Any],
+    open_targets: set[tuple[str, int]] | None,
+) -> str | None:
+    target = _action_target_key(action)
+    if target is None:
+        return "remote_ci_fix_target_missing"
+    if target[0] != "PR":
+        return "remote_ci_fix_target_not_pr"
+    if open_targets is None:
+        return "open_managed_read_model_unavailable"
+    if target not in open_targets:
+        return "target_not_open"
     return None
 
 
@@ -2601,7 +2638,7 @@ def ci_red_actions(repo_root: Path, items: list[GhItem], ctx: LoopContext | None
     slug = github_repo_slug()
     if not slug:
         return []
-    projection: PrChecksProjection | None = None
+    projection: PrMergeReadinessProjection | None = None
     actions: list[dict[str, Any]] = []
     for item in items:
         if item.kind != "PR":
@@ -2609,11 +2646,11 @@ def ci_red_actions(repo_root: Path, items: list[GhItem], ctx: LoopContext | None
         if is_release_rollup_pr(item, ctx):
             continue
         if projection is None:
-            projection = PrChecksProjection(cwd=repo_root)
+            projection = PrMergeReadinessProjection(cwd=repo_root)
         status = projection.check_pr(slug, item.number)
         if not status.ok:
             continue
-        failed_checks = [check for check in status.runs if check.bucket == "fail"]
+        failed_checks = list(status.required_failed)
         fail_count = len(failed_checks)
         if fail_count <= 0:
             continue
@@ -2637,7 +2674,7 @@ def ci_red_actions(repo_root: Path, items: list[GhItem], ctx: LoopContext | None
                     "target_kind": "PR",
                     "target_number": item.number,
                     "target": {"kind": "PR", "number": item.number},
-                    "preconditions": ["active_controller_owner", "live_open_target", "checks_red"],
+                    "preconditions": ["active_controller_owner", "live_open_target", "target_required_checks_red"],
                     "controller_action": "dispatch_remote_ci_fix",
                     "runner_authority": RUNNER_AUTHORITY,
                     "no_generic_command": True,
@@ -3962,14 +3999,20 @@ def _stale_publish_implementation_reason(
         return artifact_reason
     match_error = _matching_open_pr_error(action, target, gh_items=gh_items, head_ref=head_ref)
     if match_error:
-        return match_error
+        if match_error == "matching_pr_missing" and _retryable_create_pr_secondary_limit(repo_root, action):
+            preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])
+            if "retry_after_create_pull_request_secondary_limit" not in preconditions:
+                preconditions.append("retry_after_create_pull_request_secondary_limit")
+            action["preconditions"] = preconditions
+        else:
+            return match_error
     preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])
     for required in (
         "canonical_implementation_identity",
         "fresh_integration_base",
         "single_linked_managed_issue",
         "worker_authored_pr_artifacts",
-        "no_conflicting_open_implementation_pr",
+        "matching_open_managed_pr",
         "host_checks_green",
         "clean_scoped_diff",
     ):
@@ -4114,7 +4157,7 @@ def _matching_open_pr_error(
         return "single_linked_managed_issue_missing"
     matches = [item for item in gh_items if item.kind == "PR" and item.head_ref == head_ref]
     if not matches:
-        return None
+        return "matching_pr_missing"
     if len(matches) > 1:
         return "multiple_matching_open_pr"
     pr = matches[0]
@@ -4125,6 +4168,31 @@ def _matching_open_pr_error(
         return "matching_pr_issue_mismatch"
     action["target_pr_number"] = pr.number
     return None
+
+
+def _retryable_create_pr_secondary_limit(repo_root: Path, action: dict[str, Any]) -> bool:
+    action_id = str(action.get("action_id") or "")
+    if not action_id:
+        return False
+    ledger = repo_root / ".refactor-loop" / "state" / "wakeup-runner-ledger.jsonl"
+    try:
+        lines = ledger.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    for line in reversed(lines):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("action_id") or "") != action_id:
+            continue
+        if str(row.get("status") or "") != "blocked":
+            continue
+        reason = str(row.get("reason") or "")
+        return "createPullRequest" in reason and "was submitted too quickly" in reason
+    return False
 
 
 def _single_linked_issue_from_body(body: str) -> int | None:
@@ -4335,9 +4403,13 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         actions.append(fallback)
     actions.sort(key=action_priority_sort_key)
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)
+    closed_actions = close_projection_actions(actions)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    safe_progress = project_wakeup_actions(closed_actions, now=now)
+    write_blocked_queue(repo_root, safe_progress.blocked_queue, now=now)
 
     recommendation: str | None = None
-    non_status_actions = [action for action in actions if action.get("kind") != "release-countdown"]
+    non_status_actions = [action for action in safe_progress.actions if action.get("kind") != "release-countdown"]
     if not non_status_actions:
         if concurrency["hard_gate"].get("reason") == "single_active_audit_in_flight":
             recommendation = "WAIT:single-active-audit"
@@ -4354,7 +4426,9 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         "daemon_health": health,
         "concurrency": concurrency,
         "hard_gate": concurrency["hard_gate"],
-        "actions": close_projection_actions(actions),
+        "actions": safe_progress.actions,
+        "blocked_queue": safe_progress.blocked_queue,
+        "safe_progress": safe_progress.as_dict(),
         "recommendation": recommendation,
     }
 

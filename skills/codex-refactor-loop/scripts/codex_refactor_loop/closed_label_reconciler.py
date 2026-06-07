@@ -281,6 +281,14 @@ def _log_tick_status(daemon: str, action: str) -> None:
     print(f"[{ts}] {daemon}: tick {action}", flush=True)
 
 
+def run_closed_label_reconciler_reconcile_tick(
+    reconciler: ClosedLabelReconciler,
+    *,
+    beat: Callable[[], None] | None = None,
+) -> int:
+    return reconciler.run_once(beat=beat)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="consensus-rnd-cli closed-label-reconciler")
     mode = parser.add_mutually_exclusive_group()
@@ -300,9 +308,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         lease.beat()
         interval = max(1, int(args.interval_seconds))
         while True:
-            reconciler.run_once(beat=lease.beat)
+            lease.run_with_lease(lambda: run_closed_label_reconciler_reconcile_tick(reconciler, beat=lease.beat))
             lease.sleep_with_lease(interval)
-    return reconciler.run_once()
+    return run_closed_label_reconciler_reconcile_tick(reconciler)
 
 
 if __name__ == "__main__":

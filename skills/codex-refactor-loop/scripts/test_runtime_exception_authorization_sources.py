@@ -51,7 +51,6 @@ TARGET_ANCHORS = {
 
 MAINTAINER_DIRECTIVE_ANCHORS = {
     "maintainer-directive-concurrency-auto-topup",
-    "maintainer-directive-progress-reporter-orphan-delete",
     "maintainer-directive-existing-issue-priority-over-audit",
     "maintainer-directive-stale-issue-3h-revival",
     "maintainer-directive-floor-no-exemption",
@@ -346,6 +345,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         issue_entry = mirror_entry(self.mirror, "issue-decomposition-403")
         issue_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "issue_decomposition.py")
         wakeup_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_runner.py")
+        scheduler_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "safe_progress_scheduler.py")
         minimum_forbidden_fields = (
             "cmd",
             "argv",
@@ -366,10 +366,33 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(field, runner_entry)
                 self.assertIn(field, issue_entry)
                 self.assertIn(f'"{field}"', issue_source)
-                self.assertIn(f'"{field}"', wakeup_source)
+                self.assertIn(f'"{field}"', scheduler_source)
+        self.assertIn("validate_runner_action", wakeup_source)
         self.assertIn("existing extra `args` rejection retained", runner_entry)
         self.assertIn('"args"', issue_source)
-        self.assertIn('"args"', wakeup_source)
+        self.assertIn('"args"', scheduler_source)
+
+    def test_safe_progress_admission_boundary_is_mirrored(self) -> None:
+        runner_entry = mirror_entry(self.mirror, "wakeup-runner-396")
+        scheduler_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "safe_progress_scheduler.py")
+        wakeup_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        concurrency_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "concurrency.py")
+
+        for needle in (
+            "safe_progress_scheduler.py",
+            "sole risk admission owner",
+            "risk_tier: \"medium\"",
+            "execution_policy: \"cautious\"",
+            ".refactor-loop/state/safe-progress-blocked-queue.json",
+            "not final side-effect authorization",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, runner_entry)
+        self.assertIn("project_wakeup_actions", wakeup_source)
+        self.assertIn("write_blocked_queue", wakeup_source)
+        self.assertIn("classify_dispatch_payload", concurrency_source)
+        self.assertIn("MEDIUM_NON_SPAWN_LIMIT_PER_TICK", scheduler_source)
+        self.assertIn("MEDIUM_DISPATCH_LIMIT_PER_TICK", scheduler_source)
 
     def test_runtime_retention_437_preserves_narrow_local_gc_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "runtime-retention-437")
@@ -519,6 +542,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         claude = self.repo_rules
         cli_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
         patrol_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "patrol.py")
+        analysis_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "patrol_analysis.py")
         publisher_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "patrol_issue_publisher.py")
         restart_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "restart.py")
         holistic_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "holistic_status.py")
@@ -527,11 +551,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "active-controller owner only",
             "$PATROL_INSPECTOR_ENABLE=true",
             "worker terminal failure envelopes from local logs",
-            "raw log prose is diagnostic text, not an issue-intake fact source",
+            "generate patrol-private `PatrolCandidateSignal`",
+            "raw log prose is diagnostic text, not an issue-intake fact source, and may be used only as codex prompt context",
+            "structured codex `PatrolAnalysisDecision` with `is_real_issue=true`",
             "runs artifacts",
             "wakeup-plan/peek projections",
             "GitHub managed item snapshot",
             "PatrolFinding",
+            "public issue bodies may use only analysis fields",
             "durable fingerprint",
             "fixed patrol/design-intake label bundle",
             "update may edit only the patrol issue body",
@@ -555,6 +582,16 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for needle in (
             "#541 是唯一 patrol-inspector issue-intake carveout",
             "host opt-in",
+            "PatrolCandidateSignal",
+            "PatrolAnalysisDecision",
+            "is_real_issue=true",
+            "codex exec",
+            "prompts/patrol-analysis.md",
+            ".refactor-loop/prompts/patrol-analysis/<signal>.md",
+            ".refactor-loop/logs/patrol-analysis-<signal>.log",
+            ".refactor-loop/runs/patrol-analysis/<signal>.json",
+            "非 generic codex fallback",
+            "无 git/GitHub/lifecycle authority",
             "PatrolFinding",
             "fingerprint create/update patrol-owned issue",
             "update 仅改该 patrol issue body",
@@ -562,6 +599,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, claude)
+        for needle in (
+            "PatrolCandidateSignal",
+            "PatrolAnalysisDecision",
+            "is_real_issue",
+        ):
+            with self.subTest(skill_only_needle=needle):
+                self.assertIn(needle, entry)
+                self.assertIn(needle, skill_section)
 
         self.assertIn('"patrol-inspector": CommandSpec(', cli_source)
         self.assertNotIn('"patrol_inspector_daemon"', restart_source)
@@ -570,6 +615,28 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("require_active_controller", patrol_source)
         self.assertIn("PATROL_INSPECTOR_ENABLE", patrol_source)
         self.assertIn("PATROL_INSPECTOR_INTERVAL_SECONDS", patrol_source)
+        self.assertIn("class PatrolCandidateSignal", analysis_source)
+        self.assertIn("class PatrolAnalysisDecision", analysis_source)
+        self.assertIn("is_real_issue", analysis_source)
+        self.assertIn("PATROL_ANALYSIS_PROMPT", analysis_source)
+        self.assertIn('"codex"', analysis_source)
+        self.assertIn('"exec"', analysis_source)
+        self.assertIn('"--sandbox"', analysis_source)
+        self.assertIn('"read-only"', analysis_source)
+        self.assertIn('"--ephemeral"', analysis_source)
+        self.assertIn('"--ignore-user-config"', analysis_source)
+        self.assertIn('"--ignore-rules"', analysis_source)
+        self.assertIn('"--skip-git-repo-check"', analysis_source)
+        self.assertIn('"--output-last-message"', analysis_source)
+        self.assertIn("patrol_analysis_env", analysis_source)
+        self.assertIn("PATROL_ANALYSIS_ENV_ALLOWLIST", analysis_source)
+        self.assertIn("PATROL_ANALYSIS_ENV_DENY_TOKENS", analysis_source)
+        self.assertIn("PATROL_ANALYSIS_CODEX_HOME", analysis_source)
+        self.assertIn("PATROL_ANALYSIS_CWD", analysis_source)
+        self.assertIn('ctx.paths.prompts / "patrol-analysis"', analysis_source)
+        self.assertIn('ctx.paths.logs / f"patrol-analysis-{_signal_id(signal)}.log"', analysis_source)
+        self.assertIn('ctx.paths.runs / "patrol-analysis"', analysis_source)
+        self.assertIn("PATROL_ANALYSIS_STALL_SECONDS", analysis_source)
         self.assertIn("PATROL_LABEL_BUNDLE", publisher_source)
         self.assertIn('"create"', publisher_source)
         self.assertIn('"edit"', publisher_source)
@@ -577,10 +644,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("patrol-inspector.json", holistic_source)
         for forbidden in ("git push", "git commit", "gh pr", "issue close", "issue reopen", "release create"):
             with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, (patrol_source + publisher_source).lower())
+                self.assertNotIn(forbidden, (patrol_source + analysis_source + publisher_source).lower())
 
     def test_maintainer_directive_entries_have_required_fields(self) -> None:
-        self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 7)
+        self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 6)
         mirror_projection = project_markdown(self.mirror)
         for anchor in MAINTAINER_DIRECTIVE_ANCHORS:
             entry = mirror_entry(self.mirror, anchor)
@@ -592,6 +659,26 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn("no_new_runtime_authority", entry)
                 for field in MAINTAINER_DIRECTIVE_REQUIRED_FIELDS:
                     self.assertIn(field, entry_projection.bullet_fields)
+
+    def test_progress_reporter_orphan_delete_authorization_is_obsolete(self) -> None:
+        entry = mirror_entry(self.mirror, "maintainer-directive-progress-reporter-orphan-delete")
+        section = self.skill[self.skill.index("## Named runtime surface — codex-progress-reporter TEST_NO_LOOP(per #69)") :]
+
+        for required in (
+            "obsolete/deleted by #626",
+            "grants no recurring daemon delete path",
+            "no per-worker progress comment create/edit/delete/get/read path",
+            "Per-worker GitHub progress comment existence is no longer read or maintained",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry + section)
+        for forbidden in (
+            "retry nonterminal delete failures",
+            "allow terminal orphan retry",
+            "own-comment maintenance surface",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, entry)
 
     def test_floor_no_exemption_mirror_preserves_single_active_audit_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "maintainer-directive-floor-no-exemption")
@@ -904,8 +991,12 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "`wakeup-plan` evidence-bound closed action projection",
             "clean `EXIT=0` source marker",
             "review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`",
+            "target-required PR merge-readiness checks",
             "missing/stale per-reviewer head SHA",
             "`wakeup-plan` action `head_sha` is not reviewer-head authority",
+            "raw PR-head check buckets or advisory check buckets are display-only diagnostics, not merge/fix lifecycle authority",
+            "remote-ci worker only for target-required failed checks with `target_required_checks_red`",
+            "merge PR under review truth table plus target-required readiness",
             "OPEN/live GitHub state",
             "release #322 preflight",
             "helper-specific precondition",
@@ -1284,10 +1375,19 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn(expected_command, self.repo_rules)
         self.assertIn(expected_command, self.skill)
         self.assertIn(expected_command, integration_entry)
+        self.assertIn("integration publish/write authority remains only in the dedicated integration worktree", integration_entry)
+        self.assertIn("ControllerActions.safe_sync_main()", integration_entry)
+        self.assertIn("branch==`$INTEGRATION_BRANCH`", integration_entry)
+        self.assertIn("tracked-clean", integration_entry)
+        self.assertIn("no in-progress git operation", integration_entry)
+        self.assertIn("remote-only-ahead", integration_entry)
+        self.assertIn("git merge --ff-only origin/$INTEGRATION_BRANCH", integration_entry)
+        self.assertIn("no main checkout local-ahead push", integration_entry)
+        self.assertIn("use of main checkout HEAD as publish authorization", integration_entry)
         self.assertIn("daemon-owned execution", integration_entry)
         self.assertIn("integration-branch git allowlist", integration_entry)
-        self.assertIn("no worker-diff commit", integration_entry)
-        self.assertIn("no PR create, merge, close, or edit", integration_entry)
+        self.assertIn("worker-diff commit", integration_entry)
+        self.assertIn("PR create, merge, close, or edit", integration_entry)
         for token in (
             "reset --hard",
             "rebase --rebase-merges",
@@ -1453,11 +1553,11 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for token in (
             "Phase9ActorHealth",
             "_recover_actor_health",
-            "_quarantine_markerless_solver_logs",
+            "_append_markerless_solver_exhausted_events",
             "_recover_stale_ledgered_actors",
             "_actor_recovery_allowed",
             "_read_pending_spawn_intent_logs",
-            "phase9-actor-markerless-quarantine",
+            "phase9-solver-markerless-exhausted",
             "actor_health_recovery",
             "STALE_REVIVAL_HOURS",
         ):
@@ -1465,9 +1565,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(token, router)
         for token in (
             "router-private `Phase9ActorHealth`",
-            "markerless clean solver logs",
-            "quarantine",
-            "phase9-actor-markerless-quarantine",
+            "clean markerless solver target logs",
+            "preserved in place",
+            "phase9-solver-markerless-exhausted",
+            "terminal format failure",
             "actor_health_recovery",
             "STALE_REVIVAL_HOURS",
             "source issue is OPEN",
@@ -1720,14 +1821,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         section = rest if next_heading == -1 else rest[:next_heading]
 
         for required in (
-            "Progress target/kind facts are owned locally by `monitors/progress.py`",
-            "exact log basenames are the canonical target source",
-            "prompt fallback applies only when the matching prompt file exists",
+            "Progress-reporter per-worker GitHub progress comments are deleted",
+            "#504 separately allows only PATCH of exactly one host-configured global status-card comment id",
             "Comment-monitor controller-post identity is owned locally by `monitors/comment.py`",
             "final `⟦AI:AUTO-LOOP⟧` sentinel is canonical",
             "`CONTROLLER_PREFIXES` is only a legacy compatibility skip list",
             "private `.refactor-loop` paths derived from `LoopContext`, not host env surfaces",
             "#191 `ActiveControllerLease` / `require_active_controller(...)` gate",
+            "per-worker progress comment create/edit/delete/get/read",
             "label mutation",
             "issue/PR close/create/merge",
             "release/tag",

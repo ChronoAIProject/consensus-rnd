@@ -224,7 +224,7 @@ class GraphqlBackoffBehaviorTests(unittest.TestCase):
         self.assertIn("WAKEUP_RUNNER_SPAWN_BACKOFF:spawn-low-headroom:graphql-headroom-low", pending)
         supervisor.supervise.assert_not_called()
 
-    def test_progress_reporter_low_headroom_skips_post_or_update(self) -> None:
+    def test_progress_reporter_low_headroom_skips_worker_log_status(self) -> None:
         reporter = ProgressReporter(self.ctx, interval=1)
         reporter.log_dir.mkdir(parents=True, exist_ok=True)
         log = reporter.log_dir / "fix-pr434-round-1.log"
@@ -233,7 +233,7 @@ class GraphqlBackoffBehaviorTests(unittest.TestCase):
         out = io.StringIO()
         with (
             mock.patch("codex_refactor_loop.monitors.progress.graphql_headroom_ok", return_value=False),
-            mock.patch.object(reporter, "post_or_update", side_effect=AssertionError("progress post/update should be skipped")),
+            mock.patch.object(reporter, "record_worker_log_status", side_effect=AssertionError("worker log status should be skipped")),
             redirect_stdout(out),
         ):
             reporter.tick()

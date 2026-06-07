@@ -16,7 +16,7 @@ from typing import Any, Mapping, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
 from .banners import BannerRequest, build_status_banner, gh_comment_command
-from .context import LoopContext
+from .context import LoopContext, normalize_host_work_language
 from .default_issue_intake import DefaultIssueIntakeClaim, DefaultIssueIntakeResult
 from .gh_invoke import build_gh_argv
 from .github_actor import GitHubActorAdmission, GitHubAuthenticatedActor
@@ -41,7 +41,11 @@ from .review_fix_dispatch import (
     ReviewThreadCompletionEvidence,
     validate_review_thread_completion,
 )
-from .secondary_mutation_backoff import currently_backing_off, record_backoff_from_gh_output
+from .secondary_mutation_backoff import (
+    currently_backing_off,
+    record_backoff_from_gh_output,
+    record_content_creation_backoff,
+)
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import consensus_implementation_suppressed_reason, zero_code_implementation_completion_proven
@@ -99,6 +103,11 @@ ROLLUP_AUTO_MERGE_POLICY_LINE = _utf8_hex(
 ROLLUP_SINGLETON_POLICY_LINE = _utf8_hex(
     "2d20e8afa520505220e698af2072656c6561736520726f6c6c75702073696e676c65746f6e3be5b7b2e69c89206f70656e20726f6c6c757020e697b620636f6e74726f6c6c657220e58faae69bb4e696b0206865616420e5928c20626f64792ce4b88de5bc80e696b0205052e38082"
 )
+IMPLEMENTATION_RESERVATION_TITLE_PREFIX = _utf8_hex("e9a284e795992069737375652023")
+IMPLEMENTATION_RESERVATION_TITLE_SUFFIX = _utf8_hex("20e5ae9ee78eb0e58886e694af")
+IMPLEMENTATION_RESERVATION_FILES_HEADING = _utf8_hex("232320e4bfaee694b9e69687e4bbb60a0a")
+IMPLEMENTATION_RESERVATION_TESTS_HEADING = _utf8_hex("232320e6b58be8af95e7bb93e69e9c0a0a")
+IMPLEMENTATION_RESERVATION_DEVIATION_HEADING = _utf8_hex("232320646576696174696f6e20e8aeb0e5bd950a0a")
 
 
 class ControllerActions:
@@ -254,30 +263,95 @@ class ControllerActions:
     def safe_sync_main(self, remote: str = "origin", branch: str = "") -> int:
         if not self._require_owner_or_return("safe-sync-main", code=3):
             return 3
-        branch = branch or self._current_branch()
-        if not branch or branch == "HEAD":
+        branch = branch or self.integration_branch
+        if not branch:
+            sys.stderr.write("safe_sync_main: missing target integration branch; skipping\n")
+            return 2
+        current_branch = self._current_branch()
+        if not current_branch or current_branch == "HEAD":
             sys.stderr.write("safe_sync_main: cannot determine branch; skipping\n")
+            return 0
+        if current_branch != branch:
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:branch-mismatch:{current_branch}:{branch}")
+            sys.stderr.write(f"safe_sync_main: current branch {current_branch} is not target {branch}; skipping\n")
+            return 0
+        if not self._tracked_tree_clean(self.ctx.repo_root):
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:tracked-dirty:{branch}")
+            sys.stderr.write("safe_sync_main: tracked worktree changes present; skipping\n")
+            return 0
+        in_progress = self._git_operation_in_progress(self.ctx.repo_root)
+        if in_progress:
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:git-operation-in-progress:{branch}:{in_progress}")
+            sys.stderr.write(f"safe_sync_main: git operation in progress ({in_progress}); skipping\n")
             return 0
         fetch = self.git(["fetch", remote, branch], check=False)
         if fetch.stdout:
             print(fetch.stdout, end="")
         if fetch.stderr:
             print("\n".join(fetch.stderr.splitlines()[-3:]))
-        behind = self.git(["rev-list", "--count", f"HEAD..{remote}/{branch}"], check=False)
-        try:
-            behind_count = int((behind.stdout or "0").strip() or "0")
-        except ValueError:
-            behind_count = 0
+        if fetch.returncode != 0:
+            sys.stderr.write(f"safe_sync_main: fetch failed for {remote}/{branch}\n")
+            return fetch.returncode
+        ahead_range = f"{remote}/{branch}..HEAD"
+        behind_range = f"HEAD..{remote}/{branch}"
+        ahead_count = self._rev_count(ahead_range)
+        behind_count = self._rev_count(behind_range)
+        if ahead_count is None or behind_count is None:
+            failed_range = ahead_range if ahead_count is None else behind_range
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:rev-count-failed:{branch}:{failed_range}")
+            sys.stderr.write(
+                f"safe_sync_main: rev-list count failed for {failed_range} on {remote}/{branch}; skipping\n"
+            )
+            return 0
+        if ahead_count > 0:
+            state = "diverged" if behind_count > 0 else "local-ahead"
+            self._append_pending_event(f"SAFE_SYNC_MAIN_PENDING:{state}:{branch}:ahead={ahead_count}:behind={behind_count}")
+            sys.stderr.write(
+                f"safe_sync_main: {state} from {remote}/{branch} "
+                f"(ahead={ahead_count}, behind={behind_count}); adoption PR/review recovery required\n"
+            )
+            return 0
         if behind_count > 0:
-            print(f"safe_sync_main: local behind {remote}/{branch} by {behind_count}; pulling --rebase --autostash")
-            pull = self.git(["pull", "--rebase", "--autostash", remote, branch], check=False)
-            if pull.stdout:
-                print(pull.stdout, end="")
-            if pull.stderr:
-                sys.stderr.write(pull.stderr)
-            return pull.returncode
+            print(f"safe_sync_main: remote-only ahead {remote}/{branch} by {behind_count}; merging --ff-only")
+            merge = self.git(["merge", "--ff-only", f"{remote}/{branch}"], check=False)
+            if merge.stdout:
+                print(merge.stdout, end="")
+            if merge.stderr:
+                sys.stderr.write(merge.stderr)
+            return merge.returncode
         print(f"safe_sync_main: already up to date with {remote}/{branch}")
         return 0
+
+    def _rev_count(self, revision_range: str) -> int | None:
+        result = self.git(["rev-list", "--count", revision_range], check=False)
+        if result.returncode != 0:
+            return None
+        try:
+            return int((result.stdout or "0").strip() or "0")
+        except ValueError:
+            return None
+
+    def _tracked_tree_clean(self, worktree: Path) -> bool:
+        unstaged = self._git_in(worktree, ["diff", "--quiet"], check=False)
+        staged = self._git_in(worktree, ["diff", "--cached", "--quiet"], check=False)
+        return unstaged.returncode == 0 and staged.returncode == 0
+
+    def _git_operation_in_progress(self, worktree: Path) -> str:
+        for name in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REBASE_HEAD"):
+            git_path = self._git_in(worktree, ["rev-parse", "--git-path", name], check=False)
+            path = self._git_path_from_output(worktree, git_path.stdout)
+            if git_path.returncode == 0 and path.exists():
+                return name
+        for name in ("rebase-merge", "rebase-apply"):
+            git_path = self._git_in(worktree, ["rev-parse", "--git-path", name], check=False)
+            path = self._git_path_from_output(worktree, git_path.stdout)
+            if git_path.returncode == 0 and path.exists():
+                return name
+        return ""
+
+    def _git_path_from_output(self, worktree: Path, output: str) -> Path:
+        path = Path(output.strip())
+        return path if path.is_absolute() else worktree / path
 
     def safe_worktree(self, iteration: str, cluster: str, base: str) -> tuple[Path, str]:
         _validate_safe_worktree_fields(str(iteration), cluster)
@@ -496,7 +570,8 @@ class ControllerActions:
             )
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
-        if not match:
+        if created.returncode != 0 or not match:
+            record_content_creation_backoff(self.ctx, "open-pr", created)
             raise RuntimeError(f"open_pr_with_label: failed to extract PR num from: {output.strip()}")
         pr_target = self._normalize_lifecycle_target_or_raise(
             match.group(1),
@@ -549,6 +624,7 @@ class ControllerActions:
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/issues/([0-9]+)", output)
         if created.returncode != 0 or not match:
+            record_content_creation_backoff(self.ctx, "open-design-issue", created)
             raise RuntimeError(f"open_design_issue_with_labels: failed to extract issue num from: {output.strip()}")
         return int(match.group(1)), match.group(0)
 
@@ -596,6 +672,7 @@ class ControllerActions:
         finally:
             Path(comment_file).unlink(missing_ok=True)
         if result.returncode != 0:
+            record_content_creation_backoff(self.ctx, "issue-decomposition-parent-comment", result)
             raise RuntimeError(f"apply_issue_decomposition_plan: parent comment failed: {result.stderr.strip() or result.stdout.strip()}")
         return tuple(created)
 
@@ -1004,6 +1081,9 @@ class ControllerActions:
         if pr_error:
             sys.stderr.write(f"publish_implementation_output: {pr_error}\n")
             return 2
+        if pr_target is None:
+            sys.stderr.write("publish_implementation_output: matching_pr_missing\n")
+            return 2
         committed = self._commit_publish_implementation_diff(action, issue_target, head_ref, worktree)
         if committed != 0:
             return committed
@@ -1017,14 +1097,30 @@ class ControllerActions:
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
             return pushed
-        if pr_target is None:
-            pr_target, _url = self.open_pr_with_label(
-                self._implementation_pr_title(action, issue_target),
-                str(self._implementation_pr_body_file(action, issue_target)),
-                base=self.integration_branch,
-                head=head_ref,
-            )
+        updated = self._update_existing_implementation_pr(pr_target, action, issue_target)
+        if updated != 0:
+            return updated
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
+
+    def _update_existing_implementation_pr(
+        self,
+        pr_target: int,
+        action: Mapping[str, object],
+        issue_target: str,
+    ) -> int:
+        pr_target = str(pr_target)
+        if not self._require_github_actor_or_return("publish-implementation-output", code=3):
+            return 3
+        title = self._implementation_pr_title(action, issue_target)
+        body_file = self.ctx.durable_artifact_path(self._implementation_pr_body_file(action, issue_target))
+        result = self.gh(
+            ["pr", "edit", pr_target, "--title", title, "--body-file", body_file],
+            check=False,
+        )
+        if result.returncode != 0:
+            sys.stderr.write(f"publish_implementation_output: pr_update_failed: {_single_line(result.stderr or result.stdout)}\n")
+            return result.returncode or 2
+        return 0
 
     def _validate_publish_implementation_identity(
         self,
@@ -1204,6 +1300,15 @@ class ControllerActions:
         cluster_id = str(action["cluster_id"])
         iteration = str(action["iteration"])
         worktree, branch = self.fresh_safe_worktree(iteration, cluster_id, self.integration_branch)
+        reservation = self._reserve_implementation_pr(
+            action=action,
+            issue_target=number,
+            cluster_id=cluster_id,
+            branch=branch,
+            worktree=worktree,
+        )
+        if reservation != 0:
+            return reservation
         log = self.ctx.paths.logs / f"implement-{cluster_id}.log"
         self._clear_stale_implement_log_for_fresh_dispatch(log, action)
         prompt = self.ctx.paths.prompts / f"implement-{cluster_id}.md"
@@ -1236,6 +1341,71 @@ class ControllerActions:
             reason=f"issue #{number} consensus implementation",
         )
         return 0
+
+    def _reserve_implementation_pr(
+        self,
+        *,
+        action: Mapping[str, object],
+        issue_target: str,
+        cluster_id: str,
+        branch: str,
+        worktree: Path,
+    ) -> int:
+        body = self._reservation_implementation_pr_body(action, issue_target, cluster_id)
+        commit = self._git_in(worktree, ["commit", "--allow-empty", "-m", f"Reserve implementation PR for issue #{issue_target}"], check=False)
+        if commit.returncode != 0:
+            sys.stderr.write(
+                "dispatch_consensus_implementation: reservation_commit_failed: "
+                f"{_single_line(commit.stderr or commit.stdout)}\n"
+            )
+            return 2
+        pushed = self.safe_push(branch=branch, worktree=worktree)
+        if pushed != 0:
+            sys.stderr.write("dispatch_consensus_implementation: reservation_push_failed\n")
+            return pushed
+        try:
+            self.open_pr_with_label(
+                f"{IMPLEMENTATION_RESERVATION_TITLE_PREFIX}{issue_target}{IMPLEMENTATION_RESERVATION_TITLE_SUFFIX}",
+                self.ctx.durable_artifact_path(body),
+                base=self.integration_branch,
+                head=branch,
+            )
+        except Exception as exc:
+            sys.stderr.write(f"dispatch_consensus_implementation: reservation_pr_open_failed: {_single_line(str(exc))}\n")
+            return 2
+        pr_error, pr_target = self._matching_implementation_pr(branch, issue_target)
+        if pr_error or pr_target is None:
+            sys.stderr.write(f"dispatch_consensus_implementation: reservation_pr_unverified: {pr_error or 'matching_pr_missing'}\n")
+            return 2
+        return 0
+
+    def _reservation_implementation_pr_body(
+        self,
+        action: Mapping[str, object],
+        issue_target: str,
+        cluster_id: str,
+    ) -> Path:
+        path = self.ctx.paths.runs / f"implementation-reservation-{cluster_id}-body.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        body = (
+            IMPLEMENTATION_RESERVATION_FILES_HEADING
+            +
+            f"{str(action.get('scope_paths') or '').strip() or '- pending implementation'}\n\n"
+            +
+            IMPLEMENTATION_RESERVATION_TESTS_HEADING
+            +
+            "- pending implementation\n\n"
+            +
+            IMPLEMENTATION_RESERVATION_DEVIATION_HEADING
+            +
+            "- none\n\n"
+            +
+            f"Closes #{issue_target}\n\n"
+            +
+            f"{FINAL_SENTINEL}\n"
+        )
+        path.write_text(body, encoding="utf-8")
+        return path
 
     def _move_issue_to_implementing_phase(self, issue_target: str) -> int:
         add_labels = (labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO)
@@ -1483,6 +1653,7 @@ class ControllerActions:
         self._ensure_rebase_resolve_prompt_fully_rendered(prompt)
         return launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
+            skill_root=self.ctx.skill_root,
             cd=worktree,
             prompt=prompt,
             log=log,
@@ -1944,8 +2115,13 @@ class ControllerActions:
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)
+        values["HOST_WORK_LANGUAGE"] = normalize_host_work_language(
+            raw=self.ctx.host_env.get("HOST_WORK_LANGUAGE") or values.get("HOST_WORK_LANGUAGE"),
+            env=values,
+        )
         if env:
             values.update(env)
+            values["HOST_WORK_LANGUAGE"] = normalize_host_work_language(env=values)
         aliases = {
             "work_unit_id": values.get("WORK_UNIT_ID") or values.get("CLUSTER_ID") or "",
             "cluster_id": values.get("CLUSTER_ID", ""),
@@ -1962,6 +2138,7 @@ class ControllerActions:
         for key, value in aliases.items():
             template = template.replace("{{" + key + "}}", value)
         rendered = inline_prompt_contracts(Template(template).safe_substitute(values), skill_root=self.ctx.skill_root)
+        rendered = rendered.replace("${HOST_WORK_LANGUAGE}", values.get("HOST_WORK_LANGUAGE") or "en")
         Path(output_path).write_text(rendered, encoding="utf-8")
 
     def _review_fix_pr_facts(self, pr_number: str, existing: Mapping[str, str]) -> dict[str, str]:
@@ -2040,6 +2217,7 @@ class ControllerActions:
             "ITERATION": "",
             "PROJECT_RULES": "CLAUDE.md",
             "HOST_REFACTOR_COMMENT_POLICY": "none",
+            "HOST_WORK_LANGUAGE": self.ctx.host_env.get("HOST_WORK_LANGUAGE") or "en",
         }
         render_env.update(env or {})
         render_env.update(self._review_fix_pr_facts(spec.pr_number, render_env))

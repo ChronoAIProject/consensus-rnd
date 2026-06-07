@@ -34,11 +34,11 @@ blocking demands come only from `reject` reviewer evidence. Comments are context
 
 Categorize each demand into one of:
 
-- **(A) Fixable in-scope** — concrete code change within `scope_paths` of this cluster. Apply it.
-- **(B) Fixable but scope-extend** — concrete code change outside scope_paths. Record `scope-extend: <file> <reason>` in the fix report and apply it ONLY if rejecting this demand would block consensus AND the file is in the same logical refactor (e.g. add missing test file for the new public method).
+- **(A) Fixable in-scope** — concrete code change within the source issue, consensus artifact, PR diff intent, and `scope_paths` of this cluster. Apply it.
+- **(B) Fixable but scope-extend** — concrete code change outside the authorized work-unit boundary. Record `scope-extend: <file> <reason>` in the fix report and apply it ONLY if rejecting this demand would block consensus AND the file is in the same logical refactor (e.g. add missing test file for the new public method).
 - **(C) False positive** — the reviewer mis-read (e.g. cited a file not in the PR, cited a deletion that never happened, demand contradicts `$PROJECT_RULES`). Do NOT apply. Record in the fix artifact at `${FIX_OUTPUT_PATH}` with evidence proving it's a false positive.
 - **(D) Conflicting demands** — Architect demands X, Quality demands ¬X. Do NOT apply either side without resolution. Record both sides in the fix artifact at `${FIX_OUTPUT_PATH}` and emit `FIX_BLOCKED:conflict:<short>` at the end.
-- **(E) Outside fix-codex authority** — demand requires a design decision (e.g. "delete this feature entirely" / "split this into 3 PRs" / "rename core type that other clusters depend on"). Record in the fix artifact at `${FIX_OUTPUT_PATH}` and emit `FIX_BLOCKED:human-decision:<short>`.
+- **(E) Outside fix-codex authority** — demand requires a design decision (e.g. "delete this authorized capability entirely" / "split this into 3 PRs" / "rename core type that other clusters depend on"). Record in the fix artifact at `${FIX_OUTPUT_PATH}` and emit `FIX_BLOCKED:human-decision:<short>`.
 
 ### Step 2 — Apply (A) and selected (B) fixes
 
@@ -130,7 +130,7 @@ Begin.
 
 ## GitHub post(强制)
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循渲染期内联的共享规则:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 

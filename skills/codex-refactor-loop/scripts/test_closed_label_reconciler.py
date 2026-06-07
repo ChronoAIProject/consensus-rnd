@@ -17,7 +17,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import labels
-from codex_refactor_loop.closed_label_reconciler import ClosedLabelReconciler
+from codex_refactor_loop.closed_label_reconciler import ClosedLabelReconciler, run_closed_label_reconciler_reconcile_tick
 from codex_refactor_loop.closed_phase_labels import (
     ClosedPhaseLabelPlan,
     RECENT_CLOSED_MANAGED_WINDOW_LIMIT,
@@ -978,7 +978,10 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
 
         with mock.patch("codex_refactor_loop.closed_label_reconciler.require_active_controller", return_value=decision):
             with mock.patch.object(reconciler, "collect_plans", return_value=plans):
-                self.assertEqual(0, reconciler.run_once(beat=lambda: beats.append("beat")))
+                self.assertEqual(
+                    0,
+                    run_closed_label_reconciler_reconcile_tick(reconciler, beat=lambda: beats.append("beat")),
+                )
 
         self.assertEqual(["beat", "beat", "beat"], beats)
 

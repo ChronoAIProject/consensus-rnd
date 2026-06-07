@@ -19,6 +19,7 @@ from ..github_actor import GitHubAuthenticatedActor
 from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from ..managed_work_snapshot import load_open_managed_work_snapshot
+from ..secondary_mutation_backoff import record_content_creation_backoff
 
 
 AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
@@ -65,7 +66,7 @@ class CommentMonitor:
 
     def run_forever(self) -> int:
         while True:
-            self.tick()
+            self.heartbeat.run_with_lease(lambda: run_comment_monitor_reconcile_tick(self))
             self.heartbeat.beat()
             self.heartbeat.sleep_with_lease(self.interval)
 
@@ -204,10 +205,12 @@ class CommentMonitor:
             if issue.returncode == 0:
                 print(f"daemon-banner-posted: {number} {comment_id} {_first_url(issue.stdout)}", flush=True)
                 return
+            record_content_creation_backoff(self.ctx, "comment-monitor-banner", issue)
             pr = self.gh(["pr", "comment", number, "--body-file", str(body_file)], check=False)
             if pr.returncode == 0:
                 print(f"daemon-banner-posted: {number} {comment_id} {_first_url(pr.stdout)}", flush=True)
             else:
+                record_content_creation_backoff(self.ctx, "comment-monitor-banner", pr)
                 first = (pr.stderr or pr.stdout).splitlines()[0] if (pr.stderr or pr.stdout).splitlines() else ""
                 print(f"daemon-banner-FAILED: {number} {comment_id} {first}", flush=True)
 
@@ -270,6 +273,10 @@ class CommentMonitor:
     def _log_tick_status(action: str) -> None:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         print(f"[{ts}] comment-monitor: tick {action}", flush=True)
+
+
+def run_comment_monitor_reconcile_tick(monitor: CommentMonitor) -> None:
+    monitor.tick()
 
 
 def is_controller_post(first_line: str, body: str) -> bool:
@@ -337,15 +344,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--daemon", action="store_true", help="run persistently")
     mode.add_argument("--once", action="store_true", help="run one tick and exit")
-    parser.parse_args(argv)
+    args = parser.parse_args(argv)
     try:
         ctx = LoopContext.load(cwd=os.getcwd())
         monitor = CommentMonitor(ctx)
     except (LoopContextError, RuntimeError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
-    if os.environ.get("TEST_NO_LOOP") == "1":
-        monitor.tick()
+    if args.once or os.environ.get("TEST_NO_LOOP") == "1":
+        run_comment_monitor_reconcile_tick(monitor)
         return 0
     return monitor.run_forever()
 

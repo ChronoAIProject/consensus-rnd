@@ -764,7 +764,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   esac
                   exit 0
                 fi
-                if [[ "$cmd1" == "api" ]]; then
+                  if [[ "$cmd1" == "api" ]]; then
                   if [[ -n "${WAKEUP_PLAN_GH_QUERY_LOG:-}" && "$api_path" == repos/owner/repo/milestones* ]]; then
                     printf 'api milestones\n' >> "$WAKEUP_PLAN_GH_QUERY_LOG"
                   fi
@@ -837,6 +837,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     fi
                     exit 0
                   fi
+                  if [[ "$api_path" == "repos/owner/repo/branches/main/protection/required_status_checks" ]]; then
+                    if [[ "$fixture" == "ci_red" ]]; then
+                      printf '{"contexts":["unit"]}\n'
+                    else
+                      printf '{"contexts":[]}\n'
+                    fi
+                    exit 0
+                  fi
+                  if [[ "$api_path" == "repos/owner/repo/rules/branches/main" ]]; then
+                    printf 'Not Found\n' >&2
+                    exit 1
+                  fi
                   if [[ "$api_path" == "repos/owner/repo/pulls/31" ]]; then
                     printf '{"head":{"sha":"ci-red-sha"}}\n'
                     exit 0
@@ -846,6 +858,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$cmd1 $cmd2" == "pr view" && "$cmd3" == "177" ]]; then
                   printf '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"stale-head-sha"}\n'
+                  exit 0
+                fi
+                if [[ "$cmd1 $cmd2" == "pr view" && "$cmd3" == "31" ]]; then
+                  printf '{"baseRefName":"main","headRefOid":"ci-red-sha","mergeStateStatus":"DIRTY"}\n'
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "pr view" && ( "$fixture" == "draft_rollup_missing_snapshot_draft" || "$fixture" == "draft_rollup_only_missing_snapshot_draft" ) && "$cmd3" == "572" ]]; then
@@ -937,6 +953,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "local_iter_branch_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "local_iter_branch_issue20_committed_no_pr": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "local_iter_branch_issue20_noop": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "local_iter_branch_issue20_missing_pr": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "remote_iter_branch_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "open_issue_331": [issue(331, "different open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "open_issues_330_331_332": [
@@ -1145,7 +1162,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     printf 'worktree %s/.worktrees/pr77\nbranch refs/heads/impl/pr77\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                     exit 0
                   fi
-                  if [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "local_iter_branch_issue20_committed_no_pr" ]]; then
+                  if [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "local_iter_branch_issue20_committed_no_pr" || "$fixture" == "local_iter_branch_issue20_missing_pr" ]]; then
                     printf 'worktree %s/.worktrees/iter20-issue-20\nbranch refs/heads/refactor/iter20-issue-20\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                     exit 0
                   fi
@@ -1170,7 +1187,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/heads/refactor/iter20-issue-20"* ]]; then
-                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "local_iter_branch_issue20_committed_no_pr" ]] && printf 'local-iter-sha\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "local_iter_branch_issue20_committed_no_pr" || "$fixture" == "local_iter_branch_issue20_missing_pr" ]] && printf 'local-iter-sha\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/heads/refactor/iter581-issue-581"* ]]; then
@@ -1178,7 +1195,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter20-issue-20"* ]]; then
-                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "local_iter_branch_issue20_committed_no_pr" || "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "local_iter_branch_issue20_committed_no_pr" || "$fixture" == "local_iter_branch_issue20_missing_pr" || "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter581-issue-581"* ]]; then
@@ -1227,6 +1244,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   [[ "$fixture" == "local_iter_branch_issue20_stale_base" ]] && printf 'refactor/iter20-issue-20\n' && exit 0
                   [[ "$fixture" == "local_iter_branch_issue20_noop" ]] && printf 'refactor/iter20-issue-20\n' && exit 0
                   [[ "$fixture" == "local_iter_branch_issue20_committed_no_pr" ]] && printf 'refactor/iter20-issue-20\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20_missing_pr" ]] && printf 'refactor/iter20-issue-20\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *".worktrees/iter581-issue-581"* && "$*" == *"rev-parse --abbrev-ref HEAD"* ]]; then
@@ -1238,7 +1256,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     printf 'old-base\n'
                     exit 0
                   fi
-                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "local_iter_branch_issue20_committed_no_pr" ]] && printf 'fresh-base\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "local_iter_branch_issue20_committed_no_pr" || "$fixture" == "local_iter_branch_issue20_missing_pr" ]] && printf 'fresh-base\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *".worktrees/iter581-issue-581"* && "$*" == *"merge-base HEAD origin/auto-refact-dev"* ]]; then
@@ -1250,7 +1268,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     printf 'new-base\n'
                     exit 0
                   fi
-                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "local_iter_branch_issue20_committed_no_pr" ]] && printf 'fresh-base\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "local_iter_branch_issue20_committed_no_pr" || "$fixture" == "local_iter_branch_issue20_missing_pr" ]] && printf 'fresh-base\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *".worktrees/iter581-issue-581"* && "$*" == *"rev-parse --verify origin/auto-refact-dev"* ]]; then
@@ -1266,7 +1284,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$*" == *"rev-list --count refs/remotes/origin/refactor/iter20-issue-20..HEAD"* ]]; then
-                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "local_iter_branch_issue20_committed_no_pr" ]] && printf '2\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "local_iter_branch_issue20_committed_no_pr" || "$fixture" == "local_iter_branch_issue20_missing_pr" ]] && printf '2\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-list --count refs/remotes/origin/refactor/iter581-issue-581..HEAD"* ]]; then
@@ -1276,7 +1294,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 if [[ "$*" == *"diff"* && "$*" == *"--quiet"* ]]; then
                   [[ "$fixture" == "fix_done_dirty_worktree" ]] && exit 1
                   [[ "$fixture" == "fix_done_clean_worktree" ]] && exit 0
-                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" ]] && exit 1
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_missing_pr" ]] && exit 1
                   [[ "$fixture" == "local_iter_branch_issue20_committed_no_pr" && "$*" == *"fresh-base HEAD"* ]] && exit 1
                   [[ "$fixture" == "local_iter_branch_issue20_committed_no_pr" ]] && exit 0
                   exit 0
@@ -1826,6 +1844,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(action["no_lifecycle_authority"])
         self.assertNotIn("argv", action)
         self.assertNotIn("shell", action)
+
+    def test_safe_progress_annotates_valid_spawn_intent_and_writes_empty_blocked_queue(self) -> None:
+        self.append_harness_spawn_intent()
+
+        plan = self.run_plan(fixture="open_issue_330")
+
+        action_ids = [action["action_id"] for action in plan["actions"] if action["kind"] == "harness-spawn-intent"]
+        self.assertEqual(["harness-spawn-intent:phase9-router:330:4:judge"], action_ids)
+        action = next(action for action in plan["actions"] if action["kind"] == "harness-spawn-intent")
+        self.assertEqual("low", action["risk_tier"])
+        self.assertEqual("auto", action["execution_policy"])
+        self.assertEqual([], plan["blocked_queue"])
+        queue_path = self.repo / ".refactor-loop/state/safe-progress-blocked-queue.json"
+        document = json.loads(queue_path.read_text(encoding="utf-8"))
+        self.assertEqual("safe-progress-blocked-queue", document["schema"])
+        self.assertEqual(0, document["counters"]["high"])
+        self.assertTrue(document["no_lifecycle_authority"])
 
     def test_review_gate_completed_marker_routes_before_new_work_spawn_intents(self) -> None:
         self.append_harness_spawn_intent(
@@ -2603,6 +2638,15 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(recovered[0]["target_kind"], "issue")
         self.assertEqual(recovered[0]["target_number"], 505)
 
+    def test_markerless_clean_solver_log_without_artifact_does_not_project_completed_marker(self) -> None:
+        self.write_markerless_clean_log("phase9-issue659-r2-minimal.log")
+
+        actions = completed_marker_actions(self.repo, open_targets={("issue", 659)})
+
+        self.assertFalse(
+            [action for action in actions if action.get("source_artifact") == ".refactor-loop/logs/phase9-issue659-r2-minimal.log"]
+        )
+
     def test_judge_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
         log = self.write_markerless_clean_log("phase9-issue505-r2-judge.log")
         self.write_run_artifact("phase9-issue505-r2-judge", "META_JUDGE_DONE:converge:round-3:artifact")
@@ -2710,7 +2754,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("canonical_implementation_identity", action["preconditions"])
         self.assertIn("fresh_integration_base", action["preconditions"])
         self.assertIn("worker_authored_pr_artifacts", action["preconditions"])
-        self.assertIn("no_conflicting_open_implementation_pr", action["preconditions"])
+        self.assertIn("matching_open_managed_pr", action["preconditions"])
         self.assertEqual(action["target_pr_number"], 320)
         self.assertNotIn("verified_pr_head", action["preconditions"])
 
@@ -2738,6 +2782,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
         self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
+
+    def test_publish_implementation_marker_without_matching_pr_is_status_only(self) -> None:
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="local_iter_branch_issue20_missing_pr")
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue20"))
+        self.assertEqual(action["controller_action"], "publish_implementation_output")
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "matching_pr_missing")
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
 
     def test_noop_implementation_done_empty_scoped_diff_is_status_only_not_hard_gate(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
@@ -3175,7 +3236,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(publish["head_ref"], "refactor/iter20-issue-20")
         self.assertEqual(Path(publish["worktree"]).resolve(), (self.repo / ".worktrees/iter20-issue-20").resolve())
         self.assertEqual(publish["runner_authority"], "wakeup-runner-396")
-        self.assertIn("no_conflicting_open_implementation_pr", publish["preconditions"])
+        self.assertIn("matching_open_managed_pr", publish["preconditions"])
         self.assertEqual(publish["target_pr_number"], 320)
         self.assertTrue(log.exists())
         self.assertFalse(
@@ -3872,6 +3933,67 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["source_marker"], marker)
         self.assertNotIn("status_only", action)
 
+    def test_remote_ci_fix_done_without_pr_target_is_status_only(self) -> None:
+        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
+        (self.logs / "remote-ci-fix-contract-tests.log").write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+
+        plan = self.run_plan(fixture="open_pr_77")
+
+        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-contract-tests")
+        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
+        self.assertIsNone(action["target_kind"])
+        self.assertIsNone(action["target_number"])
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "remote_ci_fix_target_missing")
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+
+    def test_remote_ci_fix_done_issue_target_is_status_only(self) -> None:
+        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
+        (self.logs / "remote-ci-fix-issue77-contract-tests.log").write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+
+        plan = self.run_plan(fixture="open_pr_77")
+
+        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-issue77-contract-tests")
+        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
+        self.assertEqual(action["target_kind"], "issue")
+        self.assertEqual(action["target_number"], 77)
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "remote_ci_fix_target_not_pr")
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+
+    def test_remote_ci_fix_done_non_open_pr_target_is_status_only(self) -> None:
+        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
+        (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+
+        plan = self.run_plan(fixture="open_issue_331")
+
+        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-pr77-contract-tests")
+        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 77)
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "target_not_open")
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+
+    def test_remote_ci_fix_done_when_read_model_unavailable_is_status_only(self) -> None:
+        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
+        (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+
+        plan = self.run_plan(fixture="gh_failure")
+
+        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-pr77-contract-tests")
+        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 77)
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertEqual(action["suppressed_reason"], "open_managed_read_model_unavailable")
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+
     def test_remote_ci_fix_done_conflicting_duplicate_marker_fails_closed(self) -> None:
         (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(
             "REMOTE_CI_FIX_DONE:contract-tests:blocked\n"
@@ -4431,7 +4553,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         )
         ctx = mock.Mock(host_env={"REVIEW_BASE_BRANCH": "review"})
 
-        with mock.patch("codex_refactor_loop.wakeup_plan.PrChecksProjection") as checks_projection:
+        with mock.patch("codex_refactor_loop.wakeup_plan.PrMergeReadinessProjection") as checks_projection:
             review_actions = review_evidence_redispatch_actions(self.repo, [item], ctx)
             ci_actions = ci_red_actions(self.repo, [item], ctx)
 
@@ -5100,7 +5222,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "close_managed_item_from_drop_marker",
             "implementation_worktree_missing",
             "implementation_head_ref_missing",
-            "no_conflicting_open_implementation_pr",
+            "matching_open_managed_pr",
+            "matching_pr_missing",
             "status_only",
         ):
             with self.subTest(token=token):
@@ -5201,16 +5324,41 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["actor"], "remote-ci-fix-codex")
         self.assertEqual(plan["actions"][0]["check_names"], ["unit"])
         self.assertEqual(plan["actions"][0]["head_sha"], "ci-red-sha")
+        self.assertIn("target_required_checks_red", plan["actions"][0]["preconditions"])
         self.assertNotIn("REMOTE_CI_DONE", json.dumps(plan))
 
-    def test_ci_red_uses_pr_checks_projection_without_legacy_pr_checks_command(self) -> None:
+    def test_ci_red_uses_merge_readiness_projection_without_legacy_pr_checks_command(self) -> None:
         plan = self.run_plan(fixture="ci_red")
 
         self.assertEqual(plan["actions"][0]["kind"], "ci-red")
         projection = wakeup_plan_projection()
-        self.assertIn("PrChecksProjection", projection.imported_names)
+        self.assertIn("PrMergeReadinessProjection", projection.imported_names)
         self.assertNotIn("pr", projection.set_members.get("LEGACY_PR_CHECKS_COMMAND", frozenset()))
         self.assertNotIn("checks", projection.set_members.get("LEGACY_PR_CHECKS_COMMAND", frozenset()))
+
+    def test_ci_red_actions_ignore_advisory_failed_checks(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=31,
+            title="ci",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_CI_RUNNING),
+            head_sha="ci-red-sha",
+        )
+        ctx = mock.Mock(host_env={})
+        status = mock.Mock(
+            ok=True,
+            head_sha="ci-red-sha",
+            required_failed=(),
+            advisory_failed=(mock.Mock(name="unit", link="https://checks/unit"),),
+        )
+        with (
+            mock.patch("codex_refactor_loop.wakeup_plan.github_repo_slug", return_value="owner/repo"),
+            mock.patch("codex_refactor_loop.wakeup_plan.PrMergeReadinessProjection") as projection,
+        ):
+            projection.return_value.check_pr.return_value = status
+            actions = ci_red_actions(self.repo, [item], ctx)
+
+        self.assertEqual([], actions)
 
     def test_no_gap_routes_before_milestone(self) -> None:
         (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(

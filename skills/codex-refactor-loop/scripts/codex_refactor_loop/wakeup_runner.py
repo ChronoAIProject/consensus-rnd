@@ -8,7 +8,6 @@ import os
 import re
 import subprocess
 import sys
-import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
-from .context import LoopContext
+from .context import LoopContext, LoopContextError
 from .controller_actions import ControllerActions
 from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok
@@ -35,12 +34,13 @@ from .issue_decomposition import (
     issue_decomposition_plan_file_digest,
     load_issue_decomposition_plan,
 )
-from .pr_checks import PrChecksProjection
+from .pr_checks import PrMergeReadinessProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.gate import AutoReleaseGate
 from .release.commits import write_release_commits
 from .release.publish_preflight import ReleasePublishPreflight
 from .release.publisher import ReleasePublisher
+from .safe_progress_scheduler import MEDIUM_NON_SPAWN_LIMIT_PER_TICK, validate_runner_action
 from .state import read_json
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import (
@@ -248,12 +248,19 @@ class WakeupRunner:
         budget = WakeupApplyBudget.from_plan(plan)
         results: list[RunnerResult] = []
         applied_spawns = 0
+        applied_medium_non_spawns = 0
         worker_top_up_only = False
         for action in self._actions_for_apply(plan.get("actions", []), budget):
             if not isinstance(action, dict) or action.get("status_only") is True:
                 continue
             is_spawn_action = budget.is_spawn_action(action)
             consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)
+            if (
+                action.get("risk_tier") == "medium"
+                and not consumes_spawn_budget
+                and applied_medium_non_spawns >= MEDIUM_NON_SPAWN_LIMIT_PER_TICK
+            ):
+                continue
             if worker_top_up_only and not consumes_spawn_budget:
                 continue
             if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:
@@ -272,6 +279,8 @@ class WakeupRunner:
             if consumes_spawn_budget:
                 applied_spawns += 1
                 continue
+            if result.status == "applied" and action.get("risk_tier") == "medium":
+                applied_medium_non_spawns += 1
             if budget.hard_gate_active and applied_spawns < budget.spawn_budget:
                 worker_top_up_only = True
                 continue
@@ -347,6 +356,9 @@ class WakeupRunner:
         return None
 
     def _validate_action(self, action: Mapping[str, Any]) -> str | None:
+        safe_progress_error = validate_runner_action(action)
+        if safe_progress_error:
+            return safe_progress_error
         forbidden = _forbidden_action_field_paths(action)
         if forbidden:
             return "forbidden_fields:" + ",".join(forbidden)
@@ -845,7 +857,7 @@ class WakeupRunner:
             "host_checks_green",
             "single_linked_managed_issue",
             "worker_authored_pr_artifacts",
-            "no_conflicting_open_implementation_pr",
+            "matching_open_managed_pr",
         ):
             if required not in preconditions:
                 return f"publish_implementation_missing_precondition:{required}"
@@ -859,7 +871,7 @@ class WakeupRunner:
         worktree_error = self._validate_implementation_worktree(action)
         if worktree_error:
             return worktree_error
-        return self._validate_no_conflicting_open_implementation_pr(action)
+        return self._validate_matching_open_implementation_pr(action)
 
     def _validate_implementation_pr_artifacts(self, action: Mapping[str, Any]) -> str | None:
         target = action.get("target_number")
@@ -895,7 +907,7 @@ class WakeupRunner:
         preconditions = action.get("preconditions")
         if not isinstance(preconditions, list):
             return "dispatch_remote_ci_fix_missing_preconditions"
-        for required in ("active_controller_owner", "live_open_target", "checks_red"):
+        for required in ("active_controller_owner", "live_open_target", "target_required_checks_red"):
             if required not in preconditions:
                 return f"dispatch_remote_ci_fix_missing_precondition:{required}"
         if not str(action.get("head_sha") or "").strip():
@@ -992,7 +1004,7 @@ class WakeupRunner:
             return "rollup_auto_merge_base_mismatch"
         return None
 
-    def _validate_no_conflicting_open_implementation_pr(self, action: Mapping[str, Any]) -> str | None:
+    def _validate_matching_open_implementation_pr(self, action: Mapping[str, Any]) -> str | None:
         head_ref = str(action.get("head_ref") or "").strip()
         if not _safe_branch_name(head_ref):
             return "publish_implementation_invalid_head_ref"
@@ -1006,7 +1018,7 @@ class WakeupRunner:
         if not isinstance(payload, list):
             return "publish_implementation_matching_pr_invalid_json"
         if len(payload) == 0:
-            return None
+            return "publish_implementation_matching_pr_missing"
         if len(payload) > 1:
             return "publish_implementation_multiple_matching_open_pr"
         pr = payload[0]
@@ -1214,6 +1226,7 @@ class WakeupRunner:
     def _launch_spawn_codex_supervisor(self, *, cd: Path, prompt: Path, log: Path, stall: int) -> int:
         return launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
+            skill_root=self.ctx.skill_root,
             cd=cd,
             prompt=prompt,
             log=log,
@@ -1229,6 +1242,7 @@ class WakeupRunner:
             return 3
         return launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
+            skill_root=self.ctx.skill_root,
             cd=worktree,
             prompt=self.ctx.repo_root / spec.prompt_path,
             log=self.ctx.repo_root / spec.log_path,
@@ -1276,6 +1290,7 @@ class WakeupRunner:
         self._record_remote_ci_fix_attempt(attempt_key)
         exit_code = launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
+            skill_root=self.ctx.skill_root,
             cd=worktree,
             prompt=prompt,
             log=log,
@@ -1313,6 +1328,7 @@ class WakeupRunner:
                 "SHA_SHORT": sha_short,
                 "PROJECT_RULES": "CLAUDE.md",
                 "HOST_REFACTOR_COMMENT_POLICY": "none",
+                "HOST_WORK_LANGUAGE": self.ctx.host_env.get("HOST_WORK_LANGUAGE") or "en",
             },
         )
         self._replace_remote_ci_fix_shell_defaults(prompt)
@@ -1584,17 +1600,17 @@ class WakeupRunner:
     def _review_gate_ci_error(self, pr_number: int, live_head_sha: str) -> str | None:
         if not self.ctx.gh_repo_slug:
             return "missing_gh_repo_slug"
-        status = PrChecksProjection(runner=self.command_runner).check_pr(self.ctx.gh_repo_slug, pr_number)
+        status = PrMergeReadinessProjection(runner=self.command_runner).check_pr(self.ctx.gh_repo_slug, pr_number)
         if not status.ok:
             return f"ci_unavailable:{status.reason or 'unknown'}"
         if status.head_sha != live_head_sha:
             return "ci_stale_head_sha"
-        if not status.runs:
-            return "ci_missing_checks"
-        if any(run.bucket == "pending" for run in status.runs):
-            return "ci_pending"
-        if any(run.bucket == "fail" for run in status.runs):
-            return "ci_failed"
+        if status.missing_required:
+            return "required_ci_missing"
+        if status.required_pending:
+            return "required_ci_pending"
+        if status.required_failed:
+            return "required_ci_failed"
         return None
 
     def _review_gate_mergeability_error(self, pr_number: int) -> str | None:
@@ -1746,6 +1762,8 @@ class WakeupRunner:
             if state.redispatch and not implement_attempt_is_terminal_or_noop_completion(state):
                 return f"target-log-redispatchable:{state.reason}"
             return ""
+        if _phase9_solver_log_is_clean_markerless(log):
+            return ""
         if _spawn_log_suppresses_retry(log):
             return ""
         return "target-log-terminal-failed"
@@ -1781,6 +1799,13 @@ def _source_log_has_clean_marker(path: Path, marker: str) -> bool:
     if not is_implement_log(path):
         return False
     return _implement_run_artifact_done_marker(path) == marker
+
+
+def _phase9_solver_log_is_clean_markerless(path: Path) -> bool:
+    if re.fullmatch(r"phase9-issue[1-9][0-9]*-r[1-9][0-9]*-(?:minimal|structural|delete)\.log", path.name) is None:
+        return False
+    marker_read = read_worker_terminal_marker(path)
+    return marker_read.reason == "marker_missing"
 
 
 def _plan_level_judge_log_path(repo_root: Path, artifact_path: str) -> Path | None:
@@ -1922,28 +1947,13 @@ def _release_int(value: Any, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
-def _run_once_with_periodic_heartbeat(
-    run_once: Callable[[], list[RunnerResult]],
-    lease: DaemonHeartbeatLease,
-) -> list[RunnerResult]:
-    stop = threading.Event()
-
-    def renew_lease() -> None:
-        while not stop.wait(max(1.0, float(lease.heartbeat_interval))):
-            lease.beat()
-
-    renewer = threading.Thread(target=renew_lease, name="wakeup-runner-heartbeat-renewer", daemon=True)
-    renewer.start()
-    try:
-        return run_once()
-    finally:
-        stop.set()
-        renewer.join(timeout=1.0)
-
-
 def load_plan_file(path: Path) -> Mapping[str, Any]:
     data = read_json(path, {})
     return data if isinstance(data, dict) else {}
+
+
+def run_wakeup_runner_reconcile_tick(runner: WakeupRunner) -> list[RunnerResult]:
+    return runner.run_once()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1971,10 +1981,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         lease.beat()
         interval = max(1, int(args.interval_seconds))
         while True:
-            results = _run_once_with_periodic_heartbeat(runner.run_once, lease)
+            results = lease.run_with_lease(lambda: run_wakeup_runner_reconcile_tick(runner))
             _log_tick_status("wakeup-runner", _wakeup_tick_action(results))
             lease.sleep_with_lease(interval)
-    results = runner.run_once()
+    results = run_wakeup_runner_reconcile_tick(runner)
     _log_tick_status("wakeup-runner", _wakeup_tick_action(results))
     blocked = [result for result in results if result.status == "blocked"]
     return 3 if blocked else 0

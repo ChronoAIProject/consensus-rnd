@@ -24,6 +24,10 @@ from ..issue_decomposition import applied_issue_decomposition_parent_suppresses_
 from ..phase9.progress import issue_has_terminal_consensus_judge
 from .. import labels as label_catalog
 from ..managed_work_snapshot import load_open_managed_work_snapshot
+from ..safe_progress_scheduler import (
+    MEDIUM_DISPATCH_LIMIT_PER_TICK,
+    classify_dispatch_payload,
+)
 from ..state import read_json, write_json
 from ..update_check import parse_time
 from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work, is_draft_release_rollup_pr
@@ -32,7 +36,7 @@ from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
 HEARTBEAT_STALE_SECONDS = 90
 PRIORITIES = ("p0", "p1", "p2")
-MUTABLE_DISPATCH_PREFIXES = ("implement-", "fix-pr", "remote-ci-fix", "test-add-", "verify-", "hotfix-")
+MUTABLE_DISPATCH_PREFIXES = ("implement-", "fix-pr", "remote-ci-fix", "test-add-", "verify-")
 MAIN_READONLY_DISPATCH_PREFIXES = ("audit-", "phase9-issue", "solver-", "meta-judge-", "review-pr", "reviewer-pr")
 MAIN_READONLY_DISPATCH_PATTERNS = (
     re.compile(r"^audit-iter-[0-9]+[A-Za-z0-9._-]*$"),
@@ -134,6 +138,7 @@ class ConcurrencyMonitor:
         self.dispatch_rejected = ctx.paths.dispatch_rejected
         self.state_file = ctx.paths.refactor_loop / ".concurrency-monitor-state.json"
         self._last_top_up_dispatches = 0
+        self._medium_dispatches_this_tick = 0
 
     def run(self, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return _run(cmd)
@@ -464,6 +469,10 @@ class ConcurrencyMonitor:
             "run_in_background_required": True,
             "no_lifecycle_authority": True,
         }
+        if payload.get("risk_tier"):
+            intent["risk_tier"] = payload["risk_tier"]
+        if payload.get("execution_policy"):
+            intent["execution_policy"] = payload["execution_policy"]
         self.write_pending_event(f"HARNESS_SPAWN_INTENT {json.dumps(intent, ensure_ascii=False, sort_keys=True)}")
         return intent
 
@@ -523,6 +532,16 @@ class ConcurrencyMonitor:
             reason = str(payload.get("reason", ""))
             payload["task_id"] = task_id
             payload["priority"] = priority
+            risk = classify_dispatch_payload(payload, task_id=task_id)
+            if risk.risk_tier == "high" or not risk.executable:
+                reject_reason = risk.blocker_reason or "safe-progress-high-risk"
+                self.archive_rejected(path, payload, task_id, priority, reject_reason)
+                event = f"DISPATCH_REJECTED:{task_id}:{priority}:safe-progress:{reject_reason}"
+                self.write_pending_event(event)
+                log(event)
+                continue
+            if risk.risk_tier == "medium" and self._medium_dispatches_this_tick >= MEDIUM_DISPATCH_LIMIT_PER_TICK:
+                continue
             ok, reject_reason = self.validate_dispatch_cwd(payload, task_id)
             if not ok:
                 self.archive_rejected(path, payload, task_id, priority, reject_reason)
@@ -534,7 +553,11 @@ class ConcurrencyMonitor:
             payload["intent_id"] = intent["intent_id"]
             payload["intent_queued_at"] = intent["queued_at"]
             payload["dispatch_state"] = "harness-intent"
+            payload["risk_tier"] = risk.risk_tier
+            payload["execution_policy"] = risk.execution_policy
             self.archive_dispatched(path, payload, task_id)
+            if risk.risk_tier == "medium":
+                self._medium_dispatches_this_tick += 1
             self.write_pending_event(f"DISPATCH_INTENT:{task_id}:{priority}:{reason}")
             log(f"DISPATCH_INTENT:{task_id}:{priority}:{reason}")
             return task_id, priority, reason
@@ -542,6 +565,7 @@ class ConcurrencyMonitor:
 
     def top_up_from_dispatch_queue(self, actual: int, floor: int) -> int:
         self._last_top_up_dispatches = 0
+        self._medium_dispatches_this_tick = 0
         if actual >= floor:
             return actual
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
@@ -673,11 +697,15 @@ class ConcurrencyMonitor:
         lease = DaemonHeartbeatLease("concurrency_monitor", self.repo_root)
         while True:
             try:
-                self.tick()
+                lease.run_with_lease(lambda: run_concurrency_reconcile_tick(self))
             except Exception as exc:
                 log(f"EXCEPTION in tick: {exc!r}")
             lease.beat()
             lease.sleep_with_lease(self.interval)
+
+
+def run_concurrency_reconcile_tick(monitor: ConcurrencyMonitor) -> None:
+    monitor.tick()
 
 
 def load_monitor(*, read_only: bool = False, allow_git_root_fallback: bool | None = None, cwd: str | Path | None = None) -> ConcurrencyMonitor:
@@ -786,7 +814,7 @@ def top_up_from_dispatch_queue(actual: int, floor: int) -> int:
 
 
 def tick() -> None:
-    _default_monitor().tick()
+    run_concurrency_reconcile_tick(_default_monitor())
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -813,7 +841,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(line)
         return 0
     if args.once:
-        monitor.tick()
+        run_concurrency_reconcile_tick(monitor)
         return 0
     return monitor.run_forever()
 
