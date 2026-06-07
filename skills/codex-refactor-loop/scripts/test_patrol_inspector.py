@@ -60,6 +60,61 @@ class PatrolInspectorTests(unittest.TestCase):
             {finding.kind for finding in findings},
         )
 
+    def test_clean_exit_worker_log_ignores_prompt_and_diff_exception_words(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
+            "\n".join(
+                (
+                    "Prompt says RuntimeError should be preserved in the diff.",
+                    "This prose mentions exception, fatal, and failed states.",
+                    "-raise RuntimeError('old')",
+                    "+raise RuntimeError('new')",
+                    "EXIT=0",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        self.assertEqual([], [finding for finding in findings if finding.kind == "exception-log"])
+
+    def test_clean_exit_worker_log_reports_standalone_post_failure(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
+            "RuntimeError appears only in prompt prose\nPOST_FAILED: gh comment failed\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
+        self.assertEqual(1, len(exception_findings))
+        self.assertEqual(("POST_FAILED: gh comment failed",), exception_findings[0].evidence)
+
+    def test_non_clean_worker_log_still_reports_traceback_and_runtime_error(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
+            "Traceback (most recent call last):\nRuntimeError: broken\nEXIT=1\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
+        self.assertEqual(1, len(exception_findings))
+        self.assertEqual(("Traceback (most recent call last):", "RuntimeError: broken"), exception_findings[0].evidence)
+
+    def test_daemon_log_without_exit_still_reports_fatal_and_failed_lines(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
+            "FATAL: route failed\nfailed: unable to publish status\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
+        self.assertEqual(1, len(exception_findings))
+        self.assertEqual(("FATAL: route failed", "failed: unable to publish status"), exception_findings[0].evidence)
+
     def test_run_once_publishes_findings_and_writes_dashboard_state(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("FATAL: failed\n", encoding="utf-8")
         publisher = FakePublisher()

@@ -188,7 +188,7 @@ def _find_log_exceptions(log_dir: Path) -> tuple[PatrolFinding, ...]:
     findings = []
     for path in sorted(log_dir.glob("*.log"))[-200:]:
         lines = _read_tail_or_fail(path, 80)
-        matched = [line for line in lines if _line_has_exception_signal(line)]
+        matched = _exception_signal_lines(lines)
         if not matched:
             continue
         findings.append(
@@ -277,6 +277,20 @@ def _item_ref(item: GhItem | Mapping[str, object]) -> str:
 def _line_has_exception_signal(line: str) -> bool:
     lowered = line.lower()
     return any(token in lowered for token in ("traceback", "exception", "runtimeerror", "fatal:", "failed"))
+
+
+def _exception_signal_lines(lines: Sequence[str]) -> tuple[str, ...]:
+    if _tail_has_clean_exit(lines):
+        return tuple(line for line in lines if _line_is_worker_self_post_failure(line))
+    return tuple(line for line in lines if _line_has_exception_signal(line))
+
+
+def _tail_has_clean_exit(lines: Sequence[str]) -> bool:
+    return any(line.strip() == "EXIT=0" for line in lines)
+
+
+def _line_is_worker_self_post_failure(line: str) -> bool:
+    return line.strip().startswith("POST_FAILED:")
 
 
 def _read_tail_or_fail(path: Path, max_lines: int) -> tuple[str, ...]:
