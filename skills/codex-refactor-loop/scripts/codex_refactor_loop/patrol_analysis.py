@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
@@ -13,6 +14,36 @@ from .processes import ProcessSupervisor
 
 PATROL_ANALYSIS_PROMPT = "patrol-analysis.md"
 PATROL_ANALYSIS_STALL_SECONDS = 900
+PATROL_ANALYSIS_CODEX_HOME = "patrol-analysis-codex-home"
+PATROL_ANALYSIS_CWD = "patrol-analysis-cwd"
+PATROL_ANALYSIS_ENV_ALLOWLIST = frozenset(
+    {
+        "HOME",
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TERM",
+        "TMPDIR",
+        "PYTHONIOENCODING",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+    }
+)
+PATROL_ANALYSIS_ENV_DENY_TOKENS = (
+    "GH",
+    "GITHUB",
+    "GIT_",
+    "TOKEN",
+    "AUTH",
+    "CREDENTIAL",
+    "PASSWORD",
+    "SECRET",
+    "COOKIE",
+    "SSH",
+    "KEY",
+)
 
 
 @dataclass(frozen=True)
@@ -57,16 +88,6 @@ class PatrolAnalysisDecision:
             fields[field] = value.strip()
         return cls(is_real_issue=raw_real_issue, **fields)
 
-    def to_json(self) -> dict[str, object]:
-        return {
-            "is_real_issue": self.is_real_issue,
-            "summary": self.summary,
-            "severity": self.severity,
-            "root_cause": self.root_cause,
-            "recommendation": self.recommendation,
-            "rationale": self.rationale,
-        }
-
 
 class CodexPatrolAnalysisProvider:
     def __init__(
@@ -85,15 +106,20 @@ class CodexPatrolAnalysisProvider:
         prompt_path = _analysis_prompt_path(self.ctx, signal)
         log_path = _analysis_log_path(self.ctx, signal)
         output_path = _analysis_output_path(self.ctx, signal)
+        analysis_cwd = _analysis_cwd(self.ctx)
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        analysis_cwd.mkdir(parents=True, exist_ok=True)
+        (self.ctx.paths.runs / PATROL_ANALYSIS_CODEX_HOME).mkdir(parents=True, exist_ok=True)
         prompt_path.write_text(prompt, encoding="utf-8")
         exit_code = self.supervisor.supervise(
             self.command_builder(output_path),
             stdin=prompt_path,
             log=log_path,
             stall=PATROL_ANALYSIS_STALL_SECONDS,
-            env=self.ctx.env_for_subprocess(),
+            env=patrol_analysis_env(self.ctx),
+            cwd=analysis_cwd,
         )
         if exit_code != 0:
             raise RuntimeError(f"patrol analysis failed: source={signal.source} exit={exit_code} log={log_path}")
@@ -138,6 +164,10 @@ def _analysis_output_path(ctx: LoopContext, signal: PatrolCandidateSignal) -> Pa
     return ctx.paths.runs / "patrol-analysis" / f"{_signal_id(signal)}.json"
 
 
+def _analysis_cwd(ctx: LoopContext) -> Path:
+    return ctx.paths.runs / PATROL_ANALYSIS_CWD
+
+
 def _signal_id(signal: PatrolCandidateSignal) -> str:
     payload = json.dumps(signal.to_json(), sort_keys=True, separators=(",", ":"))
     import hashlib
@@ -145,8 +175,37 @@ def _signal_id(signal: PatrolCandidateSignal) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def _default_codex_command(_output_path: Path) -> Sequence[str]:
-    return ("codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "-")
+def patrol_analysis_env(ctx: LoopContext) -> dict[str, str]:
+    source = ctx.env_for_subprocess()
+    env = {name: value for name, value in source.items() if name in PATROL_ANALYSIS_ENV_ALLOWLIST and not _is_denied_env_name(name)}
+    env["HOME"] = str(ctx.paths.runs / PATROL_ANALYSIS_CODEX_HOME)
+    env["CODEX_HOME"] = env["HOME"]
+    env["REPO_ROOT"] = str(ctx.repo_root)
+    env["NO_COLOR"] = "1"
+    if "PATH" not in env and "PATH" in os.environ:
+        env["PATH"] = os.environ["PATH"]
+    return env
+
+
+def _is_denied_env_name(name: str) -> bool:
+    upper = name.upper()
+    return any(token in upper for token in PATROL_ANALYSIS_ENV_DENY_TOKENS)
+
+
+def _default_codex_command(output_path: Path) -> Sequence[str]:
+    return (
+        "codex",
+        "exec",
+        "--sandbox",
+        "read-only",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--skip-git-repo-check",
+        "--output-last-message",
+        str(output_path),
+        "-",
+    )
 
 
 def _skill_root() -> Path:

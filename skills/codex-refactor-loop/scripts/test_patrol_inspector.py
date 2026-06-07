@@ -22,6 +22,7 @@ from codex_refactor_loop.patrol_analysis import (
     PatrolAnalysisDecision,
     PatrolCandidateSignal,
     load_patrol_analysis_decision,
+    patrol_analysis_env,
 )
 
 
@@ -200,15 +201,19 @@ class PatrolInspectorTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.stdin: Path | None = None
                 self.command = None
+                self.cwd: Path | None = None
+                self.env: dict[str, str] | None = None
                 self.log: Path | None = None
                 self.stall: int | None = None
 
-            def supervise(self, command, *, stdin, log, stall, env) -> int:
+            def supervise(self, command, *, stdin, log, stall, env, cwd=None) -> int:
                 self.command = command
                 self.stdin = stdin
                 self.log = log
                 self.stall = stall
-                output_path = Path(command[-1])
+                self.env = dict(env)
+                self.cwd = cwd
+                output_path = Path(command[command.index("--output-last-message") + 1])
                 output_path.write_text(
                     json.dumps(
                         {
@@ -225,7 +230,7 @@ class PatrolInspectorTests(unittest.TestCase):
                 return 0
 
         supervisor = FakeSupervisor()
-        provider = CodexPatrolAnalysisProvider(self.ctx, supervisor=supervisor, command_builder=lambda output: ("fake-codex", str(output)))
+        provider = CodexPatrolAnalysisProvider(self.ctx, supervisor=supervisor)
 
         decision = provider.analyze(
             PatrolCandidateSignal(
@@ -240,20 +245,65 @@ class PatrolInspectorTests(unittest.TestCase):
         self.assertEqual("analyzed patrol signal", decision.summary)
         self.assertIsNotNone(supervisor.stdin)
         self.assertIsNotNone(supervisor.log)
+        self.assertIsNotNone(supervisor.cwd)
+        self.assertIsNotNone(supervisor.env)
         self.assertEqual(900, supervisor.stall)
         self.assertEqual("patrol-analysis", supervisor.stdin.parent.name)
         self.assertEqual(".md", supervisor.stdin.suffix)
         self.assertEqual("logs", supervisor.log.parent.name)
         self.assertTrue(supervisor.log.name.startswith("patrol-analysis-"))
-        self.assertTrue(str(supervisor.command[-1]).endswith(".json"))
-        self.assertIn(".refactor-loop/runs/patrol-analysis/", str(supervisor.command[-1]))
+        output_arg = str(supervisor.command[supervisor.command.index("--output-last-message") + 1])
+        self.assertTrue(output_arg.endswith(".json"))
+        self.assertIn(".refactor-loop/runs/patrol-analysis/", output_arg)
+        self.assertIn("--sandbox", supervisor.command)
+        self.assertIn("read-only", supervisor.command)
+        self.assertIn("--ephemeral", supervisor.command)
+        self.assertIn("--ignore-user-config", supervisor.command)
+        self.assertIn("--ignore-rules", supervisor.command)
+        self.assertIn("--skip-git-repo-check", supervisor.command)
+        self.assertIn("--output-last-message", supervisor.command)
+        self.assertEqual("patrol-analysis-cwd", supervisor.cwd.name)
+        self.assertEqual("patrol-analysis-codex-home", Path(supervisor.env["CODEX_HOME"]).name)
+        self.assertNotIn("GH_REPO_SLUG", supervisor.env)
         prompt = supervisor.stdin.read_text(encoding="utf-8")
         self.assertIn("RuntimeError: raw diagnostic", prompt)
         self.assertIn("Do not copy raw log lines", prompt)
 
+    def test_patrol_analysis_env_strips_github_git_and_lifecycle_credentials(self) -> None:
+        source_env = {
+            "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+            "GH_TOKEN": "secret-gh-token",
+            "GITHUB_TOKEN": "secret-github-token",
+            "GIT_ASKPASS": "/tmp/askpass",
+            "SSH_AUTH_SOCK": "/tmp/ssh.sock",
+            "ACTIVE_CONTROLLER_DEVICE_ID": "device",
+            "PATH": "/usr/bin",
+            "LANG": "C.UTF-8",
+        }
+        with patch.dict("os.environ", source_env, clear=False):
+            ctx = LoopContext.load(repo_root=self.tmp, env=source_env)
+            env = patrol_analysis_env(ctx)
+
+        self.assertEqual(str(self.tmp.resolve()), env["REPO_ROOT"])
+        self.assertIn("PATH", env)
+        self.assertEqual("C.UTF-8", env["LANG"])
+        self.assertEqual("patrol-analysis-codex-home", Path(env["HOME"]).name)
+        self.assertEqual(env["HOME"], env["CODEX_HOME"])
+        for forbidden in (
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GH_REPO_SLUG",
+            "GIT_ASKPASS",
+            "SSH_AUTH_SOCK",
+            "ACTIVE_CONTROLLER_DEVICE_ID",
+            "CONSENSUS_RND_HOST_ENV",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, env)
+
     def test_codex_analysis_provider_failure_fails_closed_with_log_path(self) -> None:
         class FailingSupervisor:
-            def supervise(self, command, *, stdin, log, stall, env) -> int:
+            def supervise(self, command, *, stdin, log, stall, env, cwd=None) -> int:
                 return 23
 
         provider = CodexPatrolAnalysisProvider(self.ctx, supervisor=FailingSupervisor(), command_builder=lambda output: ("fake-codex", str(output)))

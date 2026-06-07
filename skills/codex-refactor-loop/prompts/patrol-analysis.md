@@ -16,9 +16,11 @@ Use raw evidence only as diagnostic context. Do not copy raw log lines, tracebac
 
 ## Output
 
-Write exactly one JSON object to:
+Return exactly one JSON object as your final response. The runner persists that final response to:
 
 `${PATROL_ANALYSIS_OUTPUT_PATH}`
+
+Do not run shell commands, Git commands, GitHub commands, network requests, or file edits. Use only the candidate signal below and this fixed prompt.
 
 Required fields:
 
