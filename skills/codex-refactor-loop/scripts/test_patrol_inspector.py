@@ -60,13 +60,17 @@ class PatrolInspectorTests(unittest.TestCase):
             {finding.kind for finding in findings},
         )
 
-    def test_failure_prose_and_direct_post_marker_do_not_create_exception_findings(self) -> None:
+    def test_log_exception_words_without_bounded_diagnostic_do_not_create_findings(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
             "\n".join(
                 (
                     "command failed after retries",
-                    "POST_FAILED:issue:5:failed to post progress",
                     "fallback prose says the task failed but no runtime crash was raised",
+                    "docs/runtime-exceptions.md",
+                    "authorization prose mentions exception handling boundaries",
+                    "diff --git a/runtime-exceptions.md b/runtime-exceptions.md",
+                    "+ failed markdown checklist item",
+                    "path-only failed-state.md",
                 )
             )
             + "\n",
@@ -76,6 +80,48 @@ class PatrolInspectorTests(unittest.TestCase):
         findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
 
         self.assertNotIn("exception-log", {finding.kind for finding in findings})
+
+    def test_log_traceback_block_is_reported_as_bounded_evidence(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
+            "\n".join(
+                (
+                    "before",
+                    "Traceback (most recent call last):",
+                    '  File "worker.py", line 4, in <module>',
+                    "    main()",
+                    "ValueError: broken",
+                    "after",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
+        self.assertEqual(1, len(exception_findings))
+        self.assertEqual(
+            (
+                "Traceback (most recent call last):",
+                '  File "worker.py", line 4, in <module>',
+                "    main()",
+                "ValueError: broken",
+            ),
+            exception_findings[0].evidence,
+        )
+
+    def test_log_command_failure_summary_is_reported(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
+            "command failed: exit=2 cmd=python3 -m pytest\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
+        self.assertEqual(1, len(exception_findings))
+        self.assertEqual(("command failed: exit=2 cmd=python3 -m pytest",), exception_findings[0].evidence)
 
     def test_run_once_publishes_findings_and_writes_dashboard_state(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("FATAL: failed\n", encoding="utf-8")
