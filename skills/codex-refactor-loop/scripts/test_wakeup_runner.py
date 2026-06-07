@@ -10,6 +10,7 @@ import tempfile
 import threading as real_threading
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from string import Template
@@ -25,6 +26,7 @@ REAL_THREAD = real_threading.Thread
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest
 from codex_refactor_loop import labels
+from codex_refactor_loop.release.gate import canonical_digest, isoformat
 from codex_refactor_loop.wakeup_runner import (
     WakeupRunner,
     RunnerResult,
@@ -35,6 +37,18 @@ from codex_refactor_loop.wakeup_runner import (
     main as wakeup_runner_main,
     _source_log_has_clean_marker,
 )
+
+
+def release_decision(from_version: str, to_version: str) -> dict:
+    return {
+        "from_version": from_version,
+        "to_version": to_version,
+        "bump_type": "patch",
+        "coordinate_policy": None,
+        "ready": True,
+        "signals": {"fresh_heartbeats": {"passed": True}},
+        "blocked_reasons": [],
+    }
 
 
 class SourceMarkerRevalidationFallbackTests(unittest.TestCase):
@@ -2060,6 +2074,53 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         candidate = json.loads(bad_candidate.read_text(encoding="utf-8"))
         self.assertTrue(candidate["ready"])
         self.assertEqual(candidate["target_ref"], "origin/dev")
+        self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
+
+    def test_release_dispatch_recovers_existing_candidate_for_previous_decision(self) -> None:
+        self.write_release_dispatch_fixtures()
+        current_decision = release_decision("1.2.3-beta.4", "1.2.3-beta.5")
+        old_decision = release_decision("1.2.3-beta.3", "1.2.3-beta.4")
+        (self.repo / ".refactor-loop/state/release-decision.json").write_text(
+            json.dumps(current_decision),
+            encoding="utf-8",
+        )
+        existing = self.repo / ".refactor-loop/state/release-candidate.json"
+        existing.write_text(
+            json.dumps(
+                {
+                    "ready": True,
+                    "target_ref": "origin/dev",
+                    "from_version": "1.2.3-beta.3",
+                    "to_version": "1.2.3-beta.4",
+                    "bump_type": "patch",
+                    "coordinate_policy": None,
+                    "generated_at": isoformat(datetime.now(timezone.utc)),
+                    "expires_at": isoformat(datetime.now(timezone.utc) + timedelta(minutes=120)),
+                    "decision_digest": canonical_digest(old_decision),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        results = self.run_result(
+            self.base_plan(
+                self.release_dispatch_action(
+                    preconditions=[
+                        "active_controller_owner",
+                        "release_auto_opt_in",
+                        "release_gate_ready",
+                        "decision_artifact_only",
+                        "release_candidate_target_ref_invalid",
+                    ],
+                )
+            ),
+            actions=FakeActions(),
+        )
+
+        self.assertEqual(results[0].status, "applied")
+        candidate = json.loads(existing.read_text(encoding="utf-8"))
+        self.assertEqual(candidate["target_ref"], "origin/dev")
+        self.assertEqual(candidate["from_version"], "1.2.3-beta.4")
         self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
 
     def test_release_dispatch_recovers_stale_applied_ledger_with_empty_target_ref(self) -> None:
