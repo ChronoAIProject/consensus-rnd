@@ -12,6 +12,7 @@ from typing import Callable, Sequence
 from . import labels as label_catalog
 from .context import LoopContext
 from .gh_invoke import build_gh_argv
+from .secondary_mutation_backoff import record_content_creation_backoff
 
 
 FINGERPRINT_PREFIX = f"{label_catalog.CANONICAL_PREFIX}:patrol:fingerprint:"
@@ -132,6 +133,7 @@ class PatrolIssuePublisher:
         finally:
             body_path.unlink(missing_ok=True)
         if result.returncode != 0:
+            record_content_creation_backoff(self.ctx, "patrol-issue-create", result)
             raise RuntimeError(f"patrol issue create failed: {result.stderr.strip() or result.returncode}")
         number = _issue_number_from_create_output(result.stdout)
         if number is None:
@@ -148,6 +150,7 @@ class PatrolIssuePublisher:
         finally:
             body_path.unlink(missing_ok=True)
         if result.returncode != 0:
+            record_content_creation_backoff(self.ctx, "patrol-issue-update", result)
             raise RuntimeError(f"patrol issue body update failed: {result.stderr.strip() or result.returncode}")
 
     def _default_runner(self, argv: Sequence[str]) -> subprocess.CompletedProcess[str]:

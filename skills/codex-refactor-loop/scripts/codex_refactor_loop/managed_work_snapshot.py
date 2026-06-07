@@ -31,6 +31,7 @@ query($searchQuery: String!, $perPage: Int!) {
         number
         title
         updatedAt
+        body
         labels(first: 30) {
           nodes {
             name
@@ -88,7 +89,7 @@ class ManagedWorkSnapshotItem:
             labels=labels,
             head_ref=(str(row.get("head_ref") or "") or None) if kind == "PR" else None,
             head_sha=str(row.get("head_sha") or "") if kind == "PR" else "",
-            body=str(row.get("body") or "") if kind == "PR" else "",
+            body=str(row.get("body") or ""),
             is_draft=bool(row.get("is_draft") is True) if kind == "PR" else False,
             state=str(row.get("state") or "open"),
             updated_at=str(row.get("updated_at") or ""),
@@ -221,7 +222,7 @@ class ManagedWorkSnapshot:
                     labels=labels,
                     head_ref=(str(row.get("headRefName") or "") or None) if kind == "PR" else None,
                     head_sha=str(row.get("headRefOid") or "") if kind == "PR" else "",
-                    body=str(row.get("body") or "") if kind == "PR" else "",
+                    body=str(row.get("body") or ""),
                     is_draft=bool(row.get("isDraft") is True) if kind == "PR" else False,
                     state="open",
                     updated_at=str(row.get("updatedAt") or ""),
