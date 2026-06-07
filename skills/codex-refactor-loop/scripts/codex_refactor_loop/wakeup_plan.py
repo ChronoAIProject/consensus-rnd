@@ -4274,7 +4274,7 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True))
     hard_gate_line = plan["hard_gate"].get("line")
     if hard_gate_line:
-        print(hard_gate_line)
+        print(hard_gate_line, file=sys.stderr)
     return 0
 
 

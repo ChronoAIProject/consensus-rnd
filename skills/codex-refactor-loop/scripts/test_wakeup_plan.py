@@ -1337,6 +1337,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ps_count: int = 5,
         active_audit: bool = False,
     ) -> tuple[dict, str]:
+        plan, stdout, _stderr = self.run_plan_with_streams(
+            fixture=fixture,
+            ps_count=ps_count,
+            active_audit=active_audit,
+        )
+        return plan, stdout
+
+    def run_plan_with_streams(
+        self,
+        *,
+        fixture: str = "empty",
+        ps_count: int = 5,
+        active_audit: bool = False,
+    ) -> tuple[dict, str, str]:
         self.write_managed_work_snapshot_fixture(fixture)
         env = os.environ.copy()
         env.update(
@@ -1364,10 +1378,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        json_text = result.stdout
-        if "\nHARD_GATE:" in json_text:
-            json_text = json_text.split("\nHARD_GATE:", 1)[0]
-        return json.loads(json_text), result.stdout
+        return json.loads(result.stdout), result.stdout, result.stderr
 
     def run_plan_with_env(
         self,
@@ -1403,10 +1414,15 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        json_text = result.stdout
-        if "\nHARD_GATE:" in json_text:
-            json_text = json_text.split("\nHARD_GATE:", 1)[0]
-        return json.loads(json_text), result.stdout
+        return json.loads(result.stdout), result.stdout
+
+    def test_wakeup_plan_cli_stdout_is_single_json_document_and_hard_gate_diagnostic_goes_to_stderr(self) -> None:
+        plan, stdout, stderr = self.run_plan_with_streams(fixture="many_active", ps_count=1)
+
+        self.assertEqual(json.loads(stdout), plan)
+        self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=5")
+        self.assertNotIn("\nHARD_GATE:", stdout)
+        self.assertIn("HARD_GATE:dispatch_required=5", stderr)
 
     def write_dispatch(self, priority: str, task_id: str) -> Path:
         priority_dir = self.repo / ".refactor-loop" / "dispatch-queue" / priority
@@ -4833,7 +4849,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(dispatch["suppressed_reason"], "in_flight_implement")
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=5")
         fallback = next(action for action in plan["actions"] if action.get("action_id") == "audit-fallback:audit-iter-1")
         self.assertEqual(fallback["controller_action"], "spawn_codex_harness_background")
         self.assertNotIn("status_only", fallback)
@@ -6072,7 +6088,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 1)
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=5")
 
     def test_unapplied_issue_decomposition_parent_still_counts_expected_worker(self) -> None:
         self.write_issue_decomposition_plan_artifacts(issue=537, round_no=6)
@@ -6086,7 +6102,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 1)
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=5")
 
     def test_draft_release_rollup_is_not_expected_active_review_task(self) -> None:
         plan = self.run_plan(fixture="draft_rollup_and_review_prs", ps_count=5)
@@ -6149,7 +6165,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         )
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=5")
 
     def test_pr_open_parent_issue_is_non_action_with_zero_expected_workers(self) -> None:
         plan = self.run_plan(fixture="pr_open_parent")
@@ -6295,7 +6311,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 6)
         self.assertEqual(plan["concurrency"]["target"], 6)
         self.assertEqual(plan["concurrency"]["deficit"], 5)
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=5")
 
     def test_terminal_phase9_consensus_issue_does_not_keep_hard_gate_open(self) -> None:
         self.write_completed_log("phase9-issue620-r2-judge.log", "META_JUDGE_DONE:consensus:false-positive")
@@ -6359,7 +6375,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIsNone(plan["recommendation"])
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertIsNone(plan["hard_gate"]["reason"])
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=5")
         action = next(action for action in plan["actions"] if action["action_id"] == "audit-fallback:audit-iter-9")
         self.assertEqual(action["controller_action"], "spawn_codex_harness_background")
         self.assertEqual(action.get("command"), "spawn-codex")
@@ -6441,7 +6457,6 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan, stdout = self.run_plan_with_stdout(ps_count=0)
 
-        self.assertIn("HARD_GATE:dispatch_required=3:audit_fallback=audit-iter-2", stdout)
         self.assertFalse((self.repo / ".refactor-loop" / "prompts" / "audit-iter-3.md").exists())
         action = next(action for action in plan["actions"] if action["action_id"] == "audit-fallback:audit-iter-2")
         self.assertEqual(action["controller_action"], "spawn_codex_harness_background")
@@ -6525,7 +6540,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
         self.assertEqual(plan["hard_gate"]["reason"], None)
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=5")
         self.assertTrue(any(action.get("action_id") == "audit-fallback:audit-iter-9" for action in plan["actions"]))
 
     def test_open_or_queued_work_bypasses_single_audit_wait(self) -> None:
@@ -6536,7 +6551,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 4)
         self.assertEqual(plan["hard_gate"]["reason"], None)
         self.assertNotEqual(plan.get("recommendation"), "WAIT:single-active-audit")
-        self.assertIn("HARD_GATE:dispatch_required=4", stdout)
+        self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=4")
 
     def test_harness_spawn_intent_bypasses_single_audit_wait(self) -> None:
         self.append_harness_spawn_intent()
@@ -6549,7 +6564,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 4)
         self.assertEqual(plan["hard_gate"]["reason"], None)
         self.assertNotEqual(plan.get("recommendation"), "WAIT:single-active-audit")
-        self.assertIn("HARD_GATE:dispatch_required=4", stdout)
+        self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=4")
 
     def test_queued_work_bypasses_single_audit_wait(self) -> None:
         self.write_dispatch("p1", "fix-pr294-round-3")
@@ -6562,7 +6577,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 4)
         self.assertEqual(plan["hard_gate"]["reason"], None)
         self.assertNotEqual(plan.get("recommendation"), "WAIT:single-active-audit")
-        self.assertIn("HARD_GATE:dispatch_required=4", stdout)
+        self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=4")
 
     def test_expected_active_work_bypasses_single_audit_wait(self) -> None:
         plan, stdout = self.run_plan_with_stdout(fixture="many_active", ps_count=0, active_audit=True)
@@ -6574,7 +6589,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
         self.assertEqual(plan["hard_gate"]["reason"], None)
         self.assertNotEqual(plan.get("recommendation"), "WAIT:single-active-audit")
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=5")
 
     def test_all_wakeup_actions_emit_registered_phase_slugs(self) -> None:
         (self.repo / ".refactor-loop" / ".controller-pending-events.log").unlink()
