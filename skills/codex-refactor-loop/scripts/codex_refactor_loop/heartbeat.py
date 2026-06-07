@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 from pathlib import Path
+from typing import Callable, TypeVar
 
 from .context import LoopContext
+
+T = TypeVar("T")
 
 
 class DaemonHeartbeatLease:
@@ -61,6 +65,26 @@ class DaemonHeartbeatLease:
             self.sleeper(chunk)
             self.beat()
             remaining -= chunk
+
+    def run_with_lease(self, callback: Callable[[], T]) -> T:
+        """Renew the heartbeat periodically while callback is still running."""
+        stop = threading.Event()
+
+        def renew_lease() -> None:
+            while not stop.wait(max(1.0, float(self.heartbeat_interval))):
+                self.beat()
+
+        renewer = threading.Thread(
+            target=renew_lease,
+            name=f"{self.name}-heartbeat-renewer",
+            daemon=True,
+        )
+        renewer.start()
+        try:
+            return callback()
+        finally:
+            stop.set()
+            renewer.join(timeout=1.0)
 
 
 def beat(name: str | None = None, repo_root: Path | str | None = None) -> None:
