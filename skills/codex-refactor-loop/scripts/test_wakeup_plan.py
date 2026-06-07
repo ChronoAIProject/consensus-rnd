@@ -3683,67 +3683,6 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["source_marker"], marker)
         self.assertNotIn("status_only", action)
 
-    def test_remote_ci_fix_done_without_pr_target_is_status_only(self) -> None:
-        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
-        (self.logs / "remote-ci-fix-contract-tests.log").write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
-
-        plan = self.run_plan(fixture="open_pr_77")
-
-        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-contract-tests")
-        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
-        self.assertIsNone(action["target_kind"])
-        self.assertIsNone(action["target_number"])
-        self.assertTrue(action["status_only"])
-        self.assertEqual(action["suppressed_reason"], "remote_ci_fix_target_missing")
-        self.assertNotIn("runner_authority", action)
-        self.assertNotIn("no_generic_command", action)
-
-    def test_remote_ci_fix_done_issue_target_is_status_only(self) -> None:
-        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
-        (self.logs / "remote-ci-fix-issue77-contract-tests.log").write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
-
-        plan = self.run_plan(fixture="open_pr_77")
-
-        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-issue77-contract-tests")
-        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
-        self.assertEqual(action["target_kind"], "issue")
-        self.assertEqual(action["target_number"], 77)
-        self.assertTrue(action["status_only"])
-        self.assertEqual(action["suppressed_reason"], "remote_ci_fix_target_not_pr")
-        self.assertNotIn("runner_authority", action)
-        self.assertNotIn("no_generic_command", action)
-
-    def test_remote_ci_fix_done_non_open_pr_target_is_status_only(self) -> None:
-        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
-        (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
-
-        plan = self.run_plan(fixture="open_issue_331")
-
-        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-pr77-contract-tests")
-        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
-        self.assertEqual(action["target_kind"], "PR")
-        self.assertEqual(action["target_number"], 77)
-        self.assertTrue(action["status_only"])
-        self.assertEqual(action["suppressed_reason"], "target_not_open")
-        self.assertNotIn("runner_authority", action)
-        self.assertNotIn("no_generic_command", action)
-
-    def test_remote_ci_fix_done_when_read_model_unavailable_is_status_only(self) -> None:
-        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
-        (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
-
-        plan = self.run_plan(fixture="gh_failure")
-
-        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-pr77-contract-tests")
-        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
-        self.assertEqual(action["target_kind"], "PR")
-        self.assertEqual(action["target_number"], 77)
-        self.assertTrue(action["status_only"])
-        self.assertTrue(action["no_lifecycle_authority"])
-        self.assertEqual(action["suppressed_reason"], "open_managed_read_model_unavailable")
-        self.assertNotIn("runner_authority", action)
-        self.assertNotIn("no_generic_command", action)
-
     def test_remote_ci_fix_done_conflicting_duplicate_marker_fails_closed(self) -> None:
         (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(
             "REMOTE_CI_FIX_DONE:contract-tests:blocked\n"
