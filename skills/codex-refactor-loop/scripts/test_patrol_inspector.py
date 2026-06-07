@@ -83,6 +83,8 @@ class PatrolInspectorTests(unittest.TestCase):
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
             "\n".join(
                 (
+                    "command failed after retries",
+                    "fallback prose says the task failed but no runtime crash was raised",
                     "docs/runtime-exceptions.md",
                     "authorization prose mentions exception handling boundaries",
                     "diff --git a/runtime-exceptions.md b/runtime-exceptions.md",
