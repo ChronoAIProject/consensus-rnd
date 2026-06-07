@@ -1144,6 +1144,7 @@ class WakeupRunner:
     def _launch_spawn_codex_supervisor(self, *, cd: Path, prompt: Path, log: Path, stall: int) -> int:
         return launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
+            skill_root=self.ctx.skill_root,
             cd=cd,
             prompt=prompt,
             log=log,
@@ -1159,6 +1160,7 @@ class WakeupRunner:
             return 3
         return launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
+            skill_root=self.ctx.skill_root,
             cd=worktree,
             prompt=self.ctx.repo_root / spec.prompt_path,
             log=self.ctx.repo_root / spec.log_path,
@@ -1206,6 +1208,7 @@ class WakeupRunner:
         self._record_remote_ci_fix_attempt(attempt_key)
         exit_code = launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
+            skill_root=self.ctx.skill_root,
             cd=worktree,
             prompt=prompt,
             log=log,

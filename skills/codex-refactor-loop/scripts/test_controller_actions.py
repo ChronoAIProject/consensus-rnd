@@ -510,6 +510,7 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertEqual(0, rc)
         self.assertEqual(1, len(launches))
+        self.assertEqual(self.actions.ctx.skill_root.resolve(), Path(launches[0]["skill_root"]).resolve())
         self.assertEqual(worktree.resolve(), launches[0]["cd"])
         self.assertEqual((self.tmp / ".refactor-loop" / "logs" / "rebase-resolve-pr77-r1.log").resolve(), Path(launches[0]["log"]).resolve())
         prompt_text = (self.tmp / ".refactor-loop" / "prompts" / "rebase-resolve-pr77-r1.md").read_text(encoding="utf-8")
