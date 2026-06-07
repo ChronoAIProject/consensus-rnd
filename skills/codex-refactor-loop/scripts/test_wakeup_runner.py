@@ -1286,6 +1286,30 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("WAKEUP_RUNNER_STALE_SPAWN_LEDGER:harness-spawn-intent:phase9-router:104:1:minimal-retry:target-log-absent", pending)
 
+    def test_wakeup_runner_stale_applied_spawn_ledger_does_not_retry_clean_markerless_phase9_solver(self) -> None:
+        log = self.repo / ".refactor-loop/logs/phase9-issue659-r2-minimal.log"
+        log.write_text("clean markerless solver output\nEXIT=0\n", encoding="utf-8")
+        action = self.design_consensus_spawn_action(
+            action_id="harness-spawn-intent:phase9-router:659:2:minimal",
+            log=str(log),
+        )
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "harness-spawn-intent"})
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=FakeActions())
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "duplicate")
+        launch.assert_not_called()
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending_text = pending.read_text(encoding="utf-8") if pending.exists() else ""
+        self.assertNotIn("WAKEUP_RUNNER_STALE_SPAWN_LEDGER", pending_text)
+
     def test_wakeup_runner_stale_applied_spawn_ledger_retries_failed_implement_log(self) -> None:
         log = self.repo / ".refactor-loop/logs/implement-issue-537.log"
         log.write_text("Error: No such file or directory (os error 2)\nEXIT=1\n", encoding="utf-8")

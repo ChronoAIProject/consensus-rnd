@@ -610,10 +610,12 @@ class Phase9RouterPackageTests(unittest.TestCase):
 
     def test_router_source_uses_standalone_marker_matching(self) -> None:
         src = PACKAGE_ROUTER.read_text(encoding="utf-8")
-        self.assertIn("MARKER_RE.fullmatch", src)
-        self.assertIn("stripped.startswith(prefix)", src)
+        worker_markers = (PACKAGE_ROUTER.parents[1] / "worker_markers.py").read_text(encoding="utf-8")
+        self.assertIn("read_worker_terminal_marker", src)
+        self.assertIn("GENERIC_DONE_PREFIX_RE.fullmatch", worker_markers)
+        self.assertIn("extract_standalone_marker", worker_markers)
         self.assertNotIn("stripped.find(prefix)", src)
-        self.assertNotIn("MARKER_RE.search", src)
+        self.assertNotIn("GENERIC_DONE_PREFIX_RE.search", worker_markers)
 
     def test_package_main_once_dispatches_via_absolute_repo_root(self) -> None:
         for role in ("minimal", "structural", "delete"):

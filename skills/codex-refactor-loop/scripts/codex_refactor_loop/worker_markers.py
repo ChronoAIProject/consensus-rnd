@@ -22,11 +22,12 @@ DONE_PREFIXES = (
     "TRIAGE_DECISION_DONE",
 )
 DONE_PREFIX_RE = re.compile(r"^(?:" + "|".join(re.escape(prefix) for prefix in DONE_PREFIXES) + r")(?::[^\s`]+)*$")
+GENERIC_DONE_PREFIX_RE = re.compile(r"^[A-Z][A-Z0-9_]*(?:_DONE|_RESOLVED|_BLOCKED)$")
 REVIEW_DONE_STRICT_RE = re.compile(r"^REVIEW_DONE:[1-9][0-9]*:[A-Za-z][A-Za-z0-9_-]*:(?:approve|comment|reject)(?::real)?$")
 IMPLEMENT_DONE_STATUSES = {"ok", "partial", "blocked"}
 IMPLEMENT_LOG_RE = re.compile(r"^implement-(?:issue-)?[A-Za-z0-9._-]+\.log$")
 SOLVER_LOG_RE = re.compile(r"^(?:" + "phase9-" + r"|solver-)issue[1-9][0-9]*-r[1-9][0-9]*-(?:minimal|structural|delete)\.log$")
-JUDGE_LOG_RE = re.compile(r"^" + "phase9-" + r"issue[1-9][0-9]*-r[1-9][0-9]*-judge\.log$")
+JUDGE_LOG_RE = re.compile(r"^(?:" + "phase9-" + r"issue[1-9][0-9]*-r[1-9][0-9]*-judge|meta-judge-issue[1-9][0-9]*-r[1-9][0-9]*)\.log$")
 PHASE9_REFLECTOR_LOG_RE = re.compile(r"^phase9-issue[1-9][0-9]*-r[1-9][0-9]*-reflector\.log$")
 REVIEW_LOG_RE = re.compile(r"^" + "review-" + r"pr[1-9][0-9]*-[A-Za-z][A-Za-z0-9_-]*-r[1-9][0-9]*\.log$")
 REFLECTOR_CONTEXT_MARKER_PREFIXES = ("SOLVER_DONE:", "META_JUDGE_DONE:")
@@ -80,6 +81,18 @@ def extract_standalone_marker(text: str) -> str:
     return ""
 
 
+def _extract_generic_standalone_marker(text: str) -> str:
+    stripped = _normalized_marker_candidate(text)
+    if not stripped:
+        return ""
+    if "<" in stripped and ">" in stripped:
+        return ""
+    parts = stripped.split(":")
+    if len(parts) >= 2 and GENERIC_DONE_PREFIX_RE.fullmatch(parts[0]):
+        return stripped
+    return ""
+
+
 def _malformed_standalone_marker(text: str) -> bool:
     stripped = _normalized_marker_candidate(text)
     if not stripped or ("<" in stripped and ">" in stripped):
@@ -116,10 +129,44 @@ def _marker_from_clean_log_lines(lines: list[str], log_name: str) -> WorkerMarke
         return WorkerMarkerRead()
     before_exit = lines[:exit_index]
     tail = before_exit[-MARKER_TAIL_LINES:]
+    solver_marker = _solver_tail_marker(tail, log_name)
+    if solver_marker.found or solver_marker.reason:
+        return solver_marker
     marker = _last_final_marker(tail, log_name)
     if marker.found or marker.reason:
         return marker
     return _sentinel_adjacent_marker(tail)
+
+
+def _solver_tail_marker(lines: list[str], log_name: str) -> WorkerMarkerRead:
+    role = _solver_log_role(log_name)
+    if role is None:
+        return WorkerMarkerRead()
+    if any(_malformed_standalone_marker(line) for line in lines):
+        return WorkerMarkerRead(reason="malformed_log_marker")
+    markers = [marker for marker in (extract_standalone_marker(line) for line in lines) if marker]
+    solver_markers = [marker for marker in markers if marker.startswith("SOLVER_DONE:")]
+    if not solver_markers:
+        if markers:
+            return WorkerMarkerRead(reason="duplicate_or_conflicting_log_marker")
+        return WorkerMarkerRead()
+    expected_prefix = f"SOLVER_DONE:{role}:"
+    if any(not marker.startswith(expected_prefix) for marker in solver_markers):
+        return WorkerMarkerRead(reason="duplicate_or_conflicting_log_marker")
+    if any(not marker.startswith("SOLVER_DONE:") for marker in markers):
+        return WorkerMarkerRead(reason="duplicate_or_conflicting_log_marker")
+    unique = set(solver_markers)
+    if len(unique) != 1:
+        return WorkerMarkerRead(reason="duplicate_or_conflicting_log_marker")
+    return WorkerMarkerRead(marker=solver_markers[-1], source="log")
+
+
+def _solver_log_role(log_name: str) -> str | None:
+    match = SOLVER_LOG_RE.fullmatch(log_name)
+    if match is None:
+        return None
+    stem = log_name.removesuffix(".log")
+    return stem.rsplit("-", 1)[-1]
 
 
 def _last_final_marker(lines: list[str], log_name: str) -> WorkerMarkerRead:
@@ -128,14 +175,17 @@ def _last_final_marker(lines: list[str], log_name: str) -> WorkerMarkerRead:
         stripped = lines[index].strip()
         if not stripped:
             continue
-        final_marker = extract_standalone_marker(stripped)
+        final_marker = extract_standalone_marker(stripped) or _router_generic_marker(stripped, log_name)
         if _malformed_standalone_marker(stripped):
             return WorkerMarkerRead(reason="malformed_log_marker")
         if not final_marker:
             return WorkerMarkerRead()
         markers = [
             marker
-            for marker in (extract_standalone_marker(line) for line in lines[: index + 1])
+            for marker in (
+                extract_standalone_marker(line) or _router_generic_marker(line, log_name)
+                for line in lines[: index + 1]
+            )
             if marker
         ]
         if _reflector_final_marker_tolerates_context_markers(log_name, final_marker, markers):
@@ -163,6 +213,12 @@ def _reflector_final_marker_tolerates_context_markers(log_name: str, final_marke
         marker == final_marker or marker.startswith(REFLECTOR_CONTEXT_MARKER_PREFIXES)
         for marker in earlier_markers
     )
+
+
+def _router_generic_marker(line: str, log_name: str) -> str:
+    if PHASE9_REFLECTOR_LOG_RE.fullmatch(log_name) is None and JUDGE_LOG_RE.fullmatch(log_name) is None:
+        return ""
+    return _extract_generic_standalone_marker(line)
 
 
 def _sentinel_adjacent_marker(lines: list[str]) -> WorkerMarkerRead:
@@ -200,6 +256,12 @@ def _marker_from_companion_artifact(log_path: Path) -> WorkerMarkerRead:
         return WorkerMarkerRead(reason="malformed_artifact_marker")
     all_markers = [marker for marker in (extract_standalone_marker(line) for line in lines[-MARKER_TAIL_LINES:]) if marker]
     markers = [marker for marker in all_markers if marker.startswith(allowed_prefixes)]
+    solver_role = _solver_log_role(log_path.name)
+    if solver_role is not None:
+        expected_prefix = f"SOLVER_DONE:{solver_role}:"
+        if any(marker.startswith("SOLVER_DONE:") and not marker.startswith(expected_prefix) for marker in markers):
+            return WorkerMarkerRead(reason="duplicate_or_conflicting_artifact_marker")
+        markers = [marker for marker in markers if marker.startswith(expected_prefix)]
     if all_markers and len(markers) != len(all_markers):
         return WorkerMarkerRead(reason="duplicate_or_conflicting_artifact_marker")
     unique = set(markers)
