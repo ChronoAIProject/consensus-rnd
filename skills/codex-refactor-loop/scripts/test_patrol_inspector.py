@@ -45,7 +45,7 @@ class PatrolInspectorTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_collects_local_exception_runtime_and_snapshot_findings(self) -> None:
-        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("ok\nRuntimeError: broken\n", encoding="utf-8")
+        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("ok\nEXIT=1\n", encoding="utf-8")
         (self.tmp / ".refactor-loop" / "runs" / "implement-issue-1.md").write_text("IMPLEMENT_DONE:issue-1:ok\n", encoding="utf-8")
         (self.tmp / ".refactor-loop" / "state" / "wakeup-plan.json").write_text(
             json.dumps({"status": "error", "reason": "bad"}) + "\n",
@@ -98,28 +98,34 @@ class PatrolInspectorTests(unittest.TestCase):
 
         self.assertNotIn("exception-log", {finding.kind for finding in findings})
 
-    def test_clean_exit_worker_log_reports_standalone_post_failure(self) -> None:
+    def test_clean_review_reject_prose_with_clean_exit_does_not_create_exception_log(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
-            "RuntimeError appears only in prompt prose\nPOST_FAILED: gh comment failed\nEXIT=0\n",
+            "\n".join(
+                (
+                    "---",
+                    "verdict: reject",
+                    "---",
+                    "This review rejects the patch because failed tests are mentioned in source prose.",
+                    "Traceback and RuntimeError examples belong to the review body, not issue intake.",
+                    "FATAL: quoted diagnostic from the diff",
+                    "EXIT=0",
+                )
+            )
+            + "\n",
             encoding="utf-8",
         )
 
         findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
 
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual(("POST_FAILED: gh comment failed",), exception_findings[0].evidence)
+        self.assertEqual([], [finding for finding in findings if finding.kind == "exception-log"])
 
-    def test_log_traceback_block_is_reported_as_bounded_evidence(self) -> None:
+    def test_nonzero_exit_worker_log_creates_exception_log_finding(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
             "\n".join(
                 (
-                    "before",
-                    "Traceback (most recent call last):",
-                    '  File "worker.py", line 4, in <module>',
-                    "    main()",
-                    "ValueError: broken",
-                    "after",
+                    "worker output",
+                    "diagnostic text",
+                    "EXIT=1",
                 )
             )
             + "\n",
@@ -130,19 +136,12 @@ class PatrolInspectorTests(unittest.TestCase):
 
         exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
         self.assertEqual(1, len(exception_findings))
-        self.assertEqual(
-            (
-                "Traceback (most recent call last):",
-                '  File "worker.py", line 4, in <module>',
-                "    main()",
-                "ValueError: broken",
-            ),
-            exception_findings[0].evidence,
-        )
+        self.assertEqual(("worker output", "diagnostic text", "EXIT=1"), exception_findings[0].evidence)
+        self.assertIn("EXIT=1", exception_findings[0].summary)
 
-    def test_non_clean_worker_log_still_reports_traceback_and_runtime_error(self) -> None:
+    def test_spawn_failed_terminal_envelope_creates_finding_with_spawn_evidence(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
-            "Traceback (most recent call last):\nRuntimeError: broken\nEXIT=1\n",
+            "setup\nSPAWN_FAILED=missing executable\nEXIT=127\n",
             encoding="utf-8",
         )
 
@@ -150,34 +149,34 @@ class PatrolInspectorTests(unittest.TestCase):
 
         exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
         self.assertEqual(1, len(exception_findings))
-        self.assertEqual(("Traceback (most recent call last):", "RuntimeError: broken"), exception_findings[0].evidence)
+        self.assertEqual(("SPAWN_FAILED=missing executable", "EXIT=127"), exception_findings[0].evidence)
+        self.assertIn("EXIT=127", exception_findings[0].summary)
 
-    def test_log_command_failure_summary_is_reported(self) -> None:
+    def test_stall_kill_terminal_envelope_creates_finding(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
+            "progress update\nSTALL_KILL_AFTER=600\nEXIT=137\n",
+            encoding="utf-8",
+        )
+
+        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
+
+        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
+        self.assertEqual(1, len(exception_findings))
+        self.assertEqual(("STALL_KILL_AFTER=600", "EXIT=137"), exception_findings[0].evidence)
+        self.assertIn("EXIT=137", exception_findings[0].summary)
+
+    def test_log_without_exit_ignores_raw_traceback_fatal_and_failed_prose(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
-            "command failed: exit=2 cmd=python3 -m pytest\n",
+            "Traceback (most recent call last):\nRuntimeError: broken\nFATAL: route failed\nfailed: unable to publish status\n",
             encoding="utf-8",
         )
 
         findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
 
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual(("command failed: exit=2 cmd=python3 -m pytest",), exception_findings[0].evidence)
-
-    def test_daemon_log_without_exit_still_reports_fatal_line(self) -> None:
-        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text(
-            "FATAL: route failed\nfailed: unable to publish status\n",
-            encoding="utf-8",
-        )
-
-        findings = PatrolInspector(self.ctx, github_items=()).collect_findings()
-
-        exception_findings = [finding for finding in findings if finding.kind == "exception-log"]
-        self.assertEqual(1, len(exception_findings))
-        self.assertEqual(("FATAL: route failed",), exception_findings[0].evidence)
+        self.assertEqual([], [finding for finding in findings if finding.kind == "exception-log"])
 
     def test_run_once_publishes_findings_and_writes_dashboard_state(self) -> None:
-        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("FATAL: failed\n", encoding="utf-8")
+        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("EXIT=1\n", encoding="utf-8")
         publisher = FakePublisher()
         inspector = PatrolInspector(
             self.ctx,
@@ -195,7 +194,7 @@ class PatrolInspectorTests(unittest.TestCase):
         self.assertEqual(1, len(state["published"]))
 
     def test_snapshot_load_failure_is_visible_and_blocks_publication(self) -> None:
-        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("FATAL: failed\n", encoding="utf-8")
+        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("EXIT=1\n", encoding="utf-8")
         publisher = FakePublisher()
         inspector = PatrolInspector(
             self.ctx,
