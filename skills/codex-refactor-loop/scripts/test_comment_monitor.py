@@ -21,7 +21,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
-from codex_refactor_loop.monitors.comment import CommentMonitor, is_controller_post
+from codex_refactor_loop.monitors.comment import CommentMonitor, is_controller_post, run_comment_monitor_reconcile_tick
 from test_support.authorization_projection import project_python
 
 
@@ -324,7 +324,7 @@ class CommentMonitorTests(unittest.TestCase):
             mock.patch.object(monitor, "_poll_once", return_value={"targets": 2, "fetched": 1, "comments": 3}),
             redirect_stdout(output),
         ):
-            monitor.tick()
+            run_comment_monitor_reconcile_tick(monitor)
 
         line = output.getvalue().strip()
         self.assertRegex(

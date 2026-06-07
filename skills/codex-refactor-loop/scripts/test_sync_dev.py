@@ -24,6 +24,7 @@ from codex_refactor_loop.sync.dev import (
     dispatch_codex_resolve,
     load_dev_sync_config,
     merge_in_progress,
+    run_dev_sync_reconcile_tick,
 )
 
 
@@ -756,6 +757,13 @@ class SyncDevSourceRegressionTests(unittest.TestCase):
     def test_no_whole_tick_halt_on_rollup_adoption_ambiguity(self) -> None:
         src = SYNC_DEV.read_text(encoding="utf-8")
         self.assertNotRegex(src, r'rollup\.status == "ambiguous"[\s\S]{0,120}\breturn\b')
+
+    def test_reconcile_tick_wrapper_preserves_integration_sync_tick_behavior(self) -> None:
+        daemon = mock.Mock(spec=IntegrationSyncDaemon)
+
+        run_dev_sync_reconcile_tick(daemon)
+
+        daemon.tick.assert_called_once_with()
 
     def test_skill_documents_rollup_ambiguity_fallthrough(self) -> None:
         skill = (SCRIPT_DIR.parent / "SKILL.md").read_text(encoding="utf-8")

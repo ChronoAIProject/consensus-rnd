@@ -2029,6 +2029,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def run_phase9_router_reconcile_tick(router: Phase9Router) -> None:
+    router.tick()
+
+
 def main(argv: list[str] | None = None, command_runner: Callable[[dict[str, object]], None] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     repo_root = Path(args.repo_root) if args.repo_root else LoopContext.load(cwd=os.getcwd()).repo_root
@@ -2037,12 +2041,12 @@ def main(argv: list[str] | None = None, command_runner: Callable[[dict[str, obje
     router = Phase9Router(repo_root, dry_run=args.dry_run, command_runner=command_runner)
     with router.singleton():
         if args.once:
-            router.tick()
+            run_phase9_router_reconcile_tick(router)
             return 0
         lease = DaemonHeartbeatLease("phase9_router_daemon", repo_root)
         while True:
             try:
-                lease.run_with_lease(router.tick)
+                lease.run_with_lease(lambda: run_phase9_router_reconcile_tick(router))
             except Exception as exc:
                 print(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}] EXCEPTION in tick: {exc!r}", flush=True)
             lease.beat()

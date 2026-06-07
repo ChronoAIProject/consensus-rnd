@@ -17,7 +17,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.monitors.progress import ProgressReporter, exit_status
+from codex_refactor_loop.monitors.progress import ProgressReporter, exit_status, run_progress_reporter_reconcile_tick
 
 
 class ProgressReporterTests(unittest.TestCase):
@@ -90,7 +90,7 @@ class ProgressReporterTests(unittest.TestCase):
             with mock.patch.object(reporter, "sync_global_status_card") as sync_global_status_card:
                 self.assertFalse(hasattr(reporter, "gh"))
                 with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("per-worker gh api comments are deleted")):
-                    reporter.tick()
+                    run_progress_reporter_reconcile_tick(reporter)
 
         sync_global_status_card.assert_called_once()
         self.assertEqual({}, reporter._state())

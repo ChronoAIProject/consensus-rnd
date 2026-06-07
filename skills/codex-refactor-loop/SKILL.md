@@ -2137,18 +2137,19 @@ Verification: `test_phase9_router_open_state_gate.py`, `test_phase9_router_daemo
 One-shot:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --repo-root "$REPO_ROOT"`; dry-run:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --dry-run --repo-root "$REPO_ROOT"`; monitor:`tail -50 .refactor-loop/logs/phase9-router-daemon.log`。
 
 <a id="tier0-scaffold-inventory"></a>
-### Tier 0 scaffold inventory(prose-only)
+### Tier 0 scaffold inventory
 
-This inventory is prose-only and non-authoritative. It is a reader index for existing owner-local surfaces, not a machine-readable catalog, registry, runtime scaffold, or package API. It is not imported by runtime code and has no dispatch, write, state-transition, or authorization authority.
+This inventory is prose plus the single test-owned/data-only `controller_runtime_inventory.py`, and remains non-authoritative. It is a reader index for existing owner-local surfaces, not a runtime scaffold, package API, or executable registry. Runtime execution paths must not import/read `controller_runtime_inventory.py`; it has no dispatch, write, state-transition, pending-events, label mutation, GitHub/git, or authorization authority.
 
 Owner-local fact sources stay where their behavior is owned:
 
 - Restart-helper-managed daemon commands are defined by `restart.py::DAEMON_COMMANDS` and projected by `restart_managed_daemon_names()`.
+- `controller_runtime_inventory.py` may list only daemon name, owner module/CLI command, tick import path, authority note, and test owner for tests; it must not contain callable, argv/shell/cmd/env, git/gh, executor, dispatch, authorization, pending-events, state-transition, or lifecycle owner fields.
 - Public CLI command authority tokens are defined by `cli.py::COMMANDS[*].authority`.
 - Work-unit behavior is owned by `SKILL.md#work-unit-contract` plus the worker prompt contracts and marker tests.
 - Pending controller events are owned by `ctx.paths.pending_events` / `.refactor-loop/.controller-pending-events.log`; this inventory has no pending-events authority.
 - Labels, workflow stage names, phase9 route names, progress target names, concurrency dispatch prefixes, and rollup heads stay with their existing owner-local files listed in [operational names](#operational-names).
-- Per-daemon tick action formatting, when extracted, stays inside the daemon owner module and is verified by behavior tests for observable log lines, pending-event deltas, dispatch suppression, and return status; it must not move into a shared `TickOutcome`, `tick_helpers.py`, or controller-runtime catalog.
+- Per-daemon tick action formatting, when extracted, stays inside the daemon owner module and is verified by behavior tests for observable log lines, pending-event deltas, dispatch suppression, and return status; it must not move into a shared `TickOutcome`, `DaemonReconcileTick`, `ReconcileTickResult`, `tick_helpers.py`, `reconcile_ticks.py`, `reconcile_registry.py`, or controller-runtime catalog.
 
 Allowlist(唯一 direct spawn-intent authority):
 There are five built-in phase9 direct routes.

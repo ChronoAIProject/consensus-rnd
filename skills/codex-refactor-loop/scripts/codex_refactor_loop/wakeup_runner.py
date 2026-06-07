@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
-from .context import LoopContext
+from .context import LoopContext, LoopContextError
 from .controller_actions import ControllerActions
 from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok
@@ -1854,6 +1854,10 @@ def load_plan_file(path: Path) -> Mapping[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def run_wakeup_runner_reconcile_tick(runner: WakeupRunner) -> list[RunnerResult]:
+    return runner.run_once()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="consensus-rnd-cli wakeup-runner")
     mode = parser.add_mutually_exclusive_group()
@@ -1879,10 +1883,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         lease.beat()
         interval = max(1, int(args.interval_seconds))
         while True:
-            results = lease.run_with_lease(runner.run_once)
+            results = lease.run_with_lease(lambda: run_wakeup_runner_reconcile_tick(runner))
             _log_tick_status("wakeup-runner", _wakeup_tick_action(results))
             lease.sleep_with_lease(interval)
-    results = runner.run_once()
+    results = run_wakeup_runner_reconcile_tick(runner)
     _log_tick_status("wakeup-runner", _wakeup_tick_action(results))
     blocked = [result for result in results if result.status == "blocked"]
     return 3 if blocked else 0
