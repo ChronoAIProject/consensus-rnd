@@ -1012,7 +1012,30 @@ class ControllerActions:
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
             return pushed
+        updated = self._update_existing_implementation_pr(pr_target, action, issue_target)
+        if updated != 0:
+            return updated
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
+
+    def _update_existing_implementation_pr(
+        self,
+        pr_target: int,
+        action: Mapping[str, object],
+        issue_target: str,
+    ) -> int:
+        pr_target = str(pr_target)
+        if not self._require_github_actor_or_return("publish-implementation-output", code=3):
+            return 3
+        title = self._implementation_pr_title(action, issue_target)
+        body_file = self.ctx.durable_artifact_path(self._implementation_pr_body_file(action, issue_target))
+        result = self.gh(
+            ["pr", "edit", pr_target, "--title", title, "--body-file", body_file],
+            check=False,
+        )
+        if result.returncode != 0:
+            sys.stderr.write(f"publish_implementation_output: pr_update_failed: {_single_line(result.stderr or result.stdout)}\n")
+            return result.returncode or 2
+        return 0
 
     def _validate_publish_implementation_identity(
         self,

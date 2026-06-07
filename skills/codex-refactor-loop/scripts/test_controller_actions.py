@@ -195,6 +195,9 @@ class ControllerActionsTests(unittest.TestCase):
             "matching_pr_issue_mismatch",
             "matching_pr_missing",
             "implementation_produced_no_diff",
+            "def _update_existing_implementation_pr",
+            '"pr", "edit", pr_target, "--title"',
+            "pr_update_failed",
             "return self.dispatch_reviewers",
             "def _reserve_implementation_pr",
             "Reserve implementation PR for issue",
@@ -412,6 +415,28 @@ class ControllerActionsTests(unittest.TestCase):
             encoding="utf-8",
         )
         return title, body
+
+    def successful_publish_pr_edit_response(self, args: Sequence[str], *, pr_number: int = 414) -> mock.Mock | None:
+        if list(args)[:3] != ["pr", "edit", str(pr_number)]:
+            return None
+        self.assertIn("--title", args)
+        self.assertIn("--body-file", args)
+        return mock.Mock(returncode=0, stdout="", stderr="")
+
+    def dispatch_consensus_implementation_action(self) -> dict[str, object]:
+        return {
+            "target_kind": "issue",
+            "target_number": 413,
+            "consensus_artifact": ".refactor-loop/runs/phase9-issue413-r5-judge.md",
+            "design_decision_path": ".refactor-loop/runs/phase9-issue413-r5-judge.md",
+            "scope_paths": "- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py",
+            "old_pattern": "old",
+            "new_principle": "new",
+            "verification_hints": "python3 -m unittest",
+            "cluster_id": "issue-413",
+            "iteration": "413",
+            "source_ref": "gh-issue-413",
+        }
 
     def matching_implementation_pr_payload(self, issue: int, head_ref: str, pr_number: int = 414) -> str:
         return json.dumps(
@@ -1461,10 +1486,10 @@ class ControllerActionsTests(unittest.TestCase):
         )
         self.assertIn("publish_implementation_output: matching_pr_missing", err.getvalue())
 
-    def test_publish_implementation_output_pushes_existing_open_pr_without_reopening(self) -> None:
+    def test_publish_implementation_output_updates_existing_open_pr_before_reviewers(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
-        self.write_implementation_pr_artifacts()
+        title_file, body_file = self.write_implementation_pr_artifacts()
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
         sequence: list[str] = []
 
@@ -1487,6 +1512,11 @@ class ControllerActionsTests(unittest.TestCase):
                     ),
                     stderr="",
                 )
+            if args[:3] == ["pr", "edit", "414"]:
+                sequence.append("gh:edit-pr")
+                self.assertEqual(title_file.read_text(encoding="utf-8").strip(), args[args.index("--title") + 1])
+                self.assertEqual(self.actions.ctx.durable_artifact_path(body_file), args[args.index("--body-file") + 1])
+                return mock.Mock(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected gh call: {args}")
 
         action = {
@@ -1544,7 +1574,71 @@ class ControllerActionsTests(unittest.TestCase):
                                 self.assertEqual(0, self.actions.publish_implementation_output(action))
 
         self.assertIn("safe_push", sequence)
+        self.assertLess(sequence.index("safe_push"), sequence.index("gh:edit-pr"))
+        self.assertLess(sequence.index("gh:edit-pr"), sequence.index("dispatch_reviewers"))
         self.assertIn("dispatch_reviewers", sequence)
+
+    def test_publish_implementation_output_fails_closed_when_existing_pr_update_fails(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+        sequence: list[str] = []
+        action = {
+            "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+            "target_kind": "issue",
+            "target_number": 77,
+            "head_ref": "refactor/iter77-issue-77",
+            "worktree": str(worktree),
+        }
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["issue", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=self.matching_implementation_pr_payload(77, "refactor/iter77-issue-77"),
+                    stderr="",
+                )
+            if args[:3] == ["pr", "edit", "414"]:
+                sequence.append("gh:edit-pr-failed")
+                return mock.Mock(returncode=9, stdout="", stderr="edit failed")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+            if args[:2] == ["bash", "-lc"]:
+                sequence.append(f"host:{args[2]}")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "fetch", "origin"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "merge-base", "HEAD", "origin/canonical-integration"]:
+                return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/canonical-integration"]:
+                return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
+            if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                return mock.Mock(returncode=1, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                return mock.Mock(returncode=0, stdout=" M implementation.txt\n", stderr="")
+            if args == ["git", "-C", str(worktree), "add", "-A"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected subprocess call: {args!r}")
+
+        err = io.StringIO()
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                    with mock.patch.object(self.actions, "safe_push", return_value=0):
+                        with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=AssertionError("must not dispatch reviewers")):
+                            with mock.patch("sys.stderr", err):
+                                self.assertEqual(9, self.actions.publish_implementation_output(action))
+
+        self.assertIn("gh:edit-pr-failed", sequence)
+        self.assertIn("publish_implementation_output: pr_update_failed: edit failed", err.getvalue())
 
     def test_publish_implementation_output_with_empty_diff_opens_no_pr_or_review(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
@@ -1631,6 +1725,9 @@ class ControllerActionsTests(unittest.TestCase):
                     ),
                     stderr="",
                 )
+            edit = self.successful_publish_pr_edit_response(args)
+            if edit is not None:
+                return edit
             raise AssertionError(f"unexpected gh call: {args}")
 
         def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
@@ -1711,6 +1808,9 @@ class ControllerActionsTests(unittest.TestCase):
                     ),
                     stderr="",
                 )
+            edit = self.successful_publish_pr_edit_response(args)
+            if edit is not None:
+                return edit
             raise AssertionError(f"unexpected gh call: {args}")
 
         def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
@@ -1890,6 +1990,9 @@ class ControllerActionsTests(unittest.TestCase):
                     ),
                     stderr="",
                 )
+            edit = self.successful_publish_pr_edit_response(args)
+            if edit is not None:
+                return edit
             raise AssertionError(f"unexpected gh call: {args}")
 
         def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
@@ -1972,6 +2075,9 @@ class ControllerActionsTests(unittest.TestCase):
                     ),
                     stderr="",
                 )
+            edit = self.successful_publish_pr_edit_response(args)
+            if edit is not None:
+                return edit
             raise AssertionError(f"unexpected gh call: {args}")
 
         def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
@@ -2188,6 +2294,82 @@ class ControllerActionsTests(unittest.TestCase):
                                 with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("must not render implement prompt")):
                                     self.assertEqual(7, self.actions.dispatch_consensus_implementation(action))
 
+        self.assertNotIn("HARNESS_SPAWN_INTENT", self.pending_events())
+
+    def test_dispatch_consensus_implementation_reservation_commit_failure_blocks_before_spawn(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
+        worktree = self.tmp / ".worktrees" / "iter413-issue-413"
+        action = self.dispatch_consensus_implementation_action()
+
+        stderr = io.StringIO()
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "fresh_safe_worktree", return_value=(worktree, "refactor/iter413-issue-413")):
+                with mock.patch.object(self.actions, "gh", return_value=mock.Mock(returncode=0, stdout="", stderr="")):
+                    with mock.patch.object(self.actions, "_git_in", return_value=mock.Mock(returncode=1, stdout="", stderr="commit failed")):
+                        with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("must not push after reservation commit failure")):
+                            with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("must not open PR after reservation commit failure")):
+                                with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("must not render implement prompt")):
+                                    with mock.patch("sys.stderr", stderr):
+                                        self.assertEqual(2, self.actions.dispatch_consensus_implementation(action))
+
+        self.assertIn("dispatch_consensus_implementation: reservation_commit_failed: commit failed", stderr.getvalue())
+        self.assertNotIn("HARNESS_SPAWN_INTENT", self.pending_events())
+
+    def test_dispatch_consensus_implementation_reservation_pr_open_failure_blocks_before_spawn(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
+        worktree = self.tmp / ".worktrees" / "iter413-issue-413"
+        action = self.dispatch_consensus_implementation_action()
+
+        stderr = io.StringIO()
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "fresh_safe_worktree", return_value=(worktree, "refactor/iter413-issue-413")):
+                with mock.patch.object(self.actions, "gh", return_value=mock.Mock(returncode=0, stdout="", stderr="")):
+                    with mock.patch.object(self.actions, "_git_in", return_value=mock.Mock(returncode=0, stdout="", stderr="")):
+                        with mock.patch.object(self.actions, "safe_push", return_value=0):
+                            with mock.patch.object(self.actions, "open_pr_with_label", side_effect=RuntimeError("open failed")):
+                                with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("must not render implement prompt")):
+                                    with mock.patch("sys.stderr", stderr):
+                                        self.assertEqual(2, self.actions.dispatch_consensus_implementation(action))
+
+        self.assertIn("dispatch_consensus_implementation: reservation_pr_open_failed: open failed", stderr.getvalue())
+        self.assertNotIn("HARNESS_SPAWN_INTENT", self.pending_events())
+
+    def test_dispatch_consensus_implementation_reservation_post_open_verification_failure_blocks_before_spawn(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
+        worktree = self.tmp / ".worktrees" / "iter413-issue-413"
+        action = self.dispatch_consensus_implementation_action()
+
+        def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            if list(args)[:4] == ["pr", "list", "--state", "open"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        [
+                            {
+                                "number": 414,
+                                "baseRefName": "canonical-integration",
+                                "headRefName": "refactor/iter413-issue-413",
+                                "labels": [{"name": "not-managed"}],
+                                "body": "Closes #413\n",
+                            }
+                        ]
+                    ),
+                    stderr="",
+                )
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        stderr = io.StringIO()
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "fresh_safe_worktree", return_value=(worktree, "refactor/iter413-issue-413")):
+                with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                    with mock.patch.object(self.actions, "_git_in", return_value=mock.Mock(returncode=0, stdout="", stderr="")):
+                        with mock.patch.object(self.actions, "safe_push", return_value=0):
+                            with mock.patch.object(self.actions, "open_pr_with_label", return_value=(414, "https://github.com/owner/repo/pull/414")):
+                                with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("must not render implement prompt")):
+                                    with mock.patch("sys.stderr", stderr):
+                                        self.assertEqual(2, self.actions.dispatch_consensus_implementation(action))
+
+        self.assertIn("dispatch_consensus_implementation: reservation_pr_unverified: matching_pr_not_managed", stderr.getvalue())
         self.assertNotIn("HARNESS_SPAWN_INTENT", self.pending_events())
 
     def test_dispatch_consensus_implementation_intent_round_trips_through_wakeup_plan(self) -> None:
