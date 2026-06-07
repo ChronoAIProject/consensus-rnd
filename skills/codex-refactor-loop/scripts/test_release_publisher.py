@@ -20,7 +20,8 @@ REPO_ROOT = SCRIPT_PATH.parents[3]
 NOW = datetime(2026, 5, 30, 12, 0, tzinfo=timezone.utc)
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
-from codex_refactor_loop.release.publish_preflight import PublishPreflightResult
+from codex_refactor_loop.release.gate import isoformat
+from codex_refactor_loop.release.publish_preflight import PublishPreflightResult, canonical_digest
 from codex_refactor_loop.release.publisher import ReleasePublisher
 FIXTURE_RELEASE_CHECKS = ("contract-tests", "manifest-version-sync", "skill-degradation")
 
@@ -54,6 +55,7 @@ def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
     (repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
     (repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
     (repo / ".config/consensus-rnd/host.env").write_text(
+        'export RELEASE_AUTO_ENABLE=true\n'
         'export GH_REPO_SLUG="owner/repo"\n'
         'export HOST_GITHUB_RELEASE_REQUIRED_CHECKS="contract-tests,manifest-version-sync,skill-degradation"\n',
         encoding="utf-8",
@@ -203,6 +205,61 @@ def set_mapped_version(repo: Path, version: str) -> None:
         else:
             current[last] = version
         write_json(path, data)
+
+
+def green_required_signals() -> dict[str, object]:
+    return {
+        "required_checks_recent_green": {
+            "passed": True,
+            "branches": {
+                "dev": {
+                    "contract-tests": True,
+                    "manifest-version-sync": True,
+                    "skill-degradation": True,
+                },
+                "auto-refact-dev": {
+                    "contract-tests": True,
+                    "manifest-version-sync": True,
+                    "skill-degradation": True,
+                },
+            },
+        },
+        "no_open_blocked_pr": {"passed": True},
+    }
+
+
+def write_ready_artifacts(
+    repo: Path,
+    *,
+    from_version: str = "2.0.0-beta.3",
+    version: str = "2.0.0-beta.4",
+    target_ref: str = "abc123",
+) -> None:
+    set_mapped_version(repo, from_version)
+    decision = {
+        "from_version": from_version,
+        "to_version": version,
+        "bump_type": "patch",
+        "signals": green_required_signals(),
+        "ready": True,
+    }
+    candidate = {
+        "schema": "decision-artifact-only/v2",
+        "generated_at": isoformat(NOW),
+        "expires_at": isoformat(NOW.replace(hour=13)),
+        "decision_artifact": ".refactor-loop/state/release-decision.json",
+        "from_version": from_version,
+        "to_version": version,
+        "bump_type": "patch",
+        "ready": True,
+        "target_ref": target_ref,
+        "required_signals": decision["signals"],
+        "decision_digest": canonical_digest(decision),
+        "publish_preflight": "controller-release-publish-preflight",
+        "lifecycle_owner": "controller",
+    }
+    write_json(repo / ".refactor-loop/state/release-decision.json", decision)
+    write_json(repo / ".refactor-loop/state/release-candidate.json", candidate)
 
 
 def expected_success_commands(version: str = "2.0.0-beta.4", prerelease: bool = True) -> list[list[str]]:
@@ -396,6 +453,25 @@ class ReleasePublisherTests(unittest.TestCase):
             self.assertIsInstance(payload, dict)
             assert isinstance(payload, dict)
             self.assertEqual(payload["target_ref"], "bumpcommit456")
+
+    def test_real_preflight_reentry_after_initial_push_failure_skips_bump_add_commit(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_ready_artifacts(repo, from_version="2.0.0-beta.3", version="2.0.0-beta.4")
+            set_mapped_version(repo, "2.0.0-beta.4")
+            runner = FakeRunner()
+            runner.head_subject = "Release v2.0.0-beta.4"
+            publisher = ReleasePublisher(repo, runner=runner, now=lambda: NOW)
+
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
+
+            self.assertTrue(result.published)
+            self.assertEqual(result.target_ref, "bumpcommit456")
+            self.assertEqual(runner.commands, expected_reentry_success_commands())
+            self.assertFalse(any(command[:2] == ["python3", ".github/scripts/bump_version.py"] for command in runner.commands))
+            self.assertFalse(any(command[:2] == ["git", "add"] for command in runner.commands))
+            self.assertFalse(any(command[:2] == ["git", "commit"] for command in runner.commands))
 
     def test_already_bumped_reentry_accepts_exact_sha_green_checks_completed_before_rerun_now(self) -> None:
         with copy_repo_fixture() as tmp:

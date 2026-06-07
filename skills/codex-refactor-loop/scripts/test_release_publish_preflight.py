@@ -6,11 +6,13 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Sequence
 from unittest import mock
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -138,6 +140,19 @@ def green_required_signals() -> dict[str, object]:
         "fresh_heartbeats": {"passed": True},
         "no_unresolved_human_escalation": {"passed": True},
     }
+
+
+class FakeRunner:
+    def __init__(self, *, head_subject: str = "Release v1.9.10") -> None:
+        self.head_subject = head_subject
+        self.commands: list[list[str]] = []
+
+    def __call__(self, cmd: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        command = list(cmd)
+        self.commands.append(command)
+        if command == ["git", "show", "-s", "--format=%s", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, stdout=f"{self.head_subject}\n", stderr="")
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected command")
 
 
 def write_ready_artifacts(
@@ -537,17 +552,34 @@ class ReleasePublishPreflightTests(unittest.TestCase):
             self.assertFalse(result.allowed)
             self.assertIn("manifest_version_mismatch", result.reasons)
 
-    def test_preflight_still_rejects_target_version_manifests(self) -> None:
+    def test_preflight_allows_already_bumped_release_head_reentry(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             write_host_opt_in(repo)
             write_ready_artifacts(repo, from_version="1.9.9", version="1.9.10")
             set_mapped_version(repo, "1.9.10")
+            runner = FakeRunner(head_subject="Release v1.9.10")
 
-            result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+            result = ReleasePublishPreflight(repo, now=lambda: NOW, runner=runner).validate(target_ref="abc123")
+
+            self.assertTrue(result.allowed, result.reasons)
+            self.assertTrue(result.already_bumped_reentry)
+            self.assertEqual(runner.commands, [["git", "show", "-s", "--format=%s", "HEAD"]])
+
+    def test_preflight_still_rejects_target_version_manifests_with_wrong_head_subject(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_opt_in(repo)
+            write_ready_artifacts(repo, from_version="1.9.9", version="1.9.10")
+            set_mapped_version(repo, "1.9.10")
+            runner = FakeRunner(head_subject="Release v1.9.9")
+
+            result = ReleasePublishPreflight(repo, now=lambda: NOW, runner=runner).validate(target_ref="abc123")
 
             self.assertFalse(result.allowed)
+            self.assertFalse(result.already_bumped_reentry)
             self.assertIn("manifest_version_mismatch", result.reasons)
+            self.assertEqual(runner.commands, [["git", "show", "-s", "--format=%s", "HEAD"]])
 
     def test_manifest_version_compare_ignores_build_metadata(self) -> None:
         with copy_repo_fixture() as tmp:
