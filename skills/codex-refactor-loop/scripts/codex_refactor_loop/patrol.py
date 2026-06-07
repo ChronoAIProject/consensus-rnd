@@ -17,6 +17,7 @@ from . import labels as label_catalog
 from .active_controller import require_active_controller, write_active_controller_status
 from .context import LoopContext, LoopContextError
 from .heartbeat import DaemonHeartbeatLease
+from .patrol_analysis import CodexPatrolAnalysisProvider, PatrolAnalysisDecision, PatrolCandidateSignal
 from .patrol_issue_publisher import PatrolIssuePublisher
 from .wakeup_plan import GhItem, load_github_items_with_status
 
@@ -35,7 +36,9 @@ class PatrolFinding:
     source: str
     summary: str
     severity: str
-    evidence: tuple[str, ...]
+    root_cause: str
+    recommendation: str
+    rationale: str
 
     @property
     def fingerprint(self) -> str:
@@ -44,6 +47,8 @@ class PatrolFinding:
             "source": self.source,
             "summary": self.summary,
             "severity": self.severity,
+            "root_cause": self.root_cause,
+            "recommendation": self.recommendation,
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
 
@@ -54,7 +59,9 @@ class PatrolFinding:
             "summary": self.summary,
             "severity": self.severity,
             "fingerprint": self.fingerprint,
-            "evidence": list(self.evidence),
+            "root_cause": self.root_cause,
+            "recommendation": self.recommendation,
+            "rationale": self.rationale,
         }
 
 
@@ -81,11 +88,13 @@ class PatrolInspector:
         *,
         config: PatrolInspectorConfig | None = None,
         publisher: PatrolIssuePublisher | None = None,
+        analysis_provider: CodexPatrolAnalysisProvider | None = None,
         github_items: Iterable[GhItem | Mapping[str, object]] | None = None,
     ) -> None:
         self.ctx = ctx
         self.config = config or PatrolInspectorConfig.from_context(ctx)
         self.publisher = publisher or PatrolIssuePublisher(ctx)
+        self.analysis_provider = analysis_provider or CodexPatrolAnalysisProvider(ctx)
         self.github_items = tuple(github_items) if github_items is not None else None
 
     def run_once(self, beat=None) -> int:
@@ -126,13 +135,36 @@ class PatrolInspector:
 
     def collect_findings(self) -> tuple[PatrolFinding, ...]:
         findings: list[PatrolFinding] = []
-        findings.extend(_find_log_exceptions(self.ctx.paths.logs))
-        findings.extend(_find_runtime_artifact_gaps(self.ctx.paths.runs))
-        findings.extend(_find_projection_gaps(self.ctx.paths.state))
-        findings.extend(_find_managed_snapshot_gaps(self._load_github_items_or_fail()))
+        for signal in self.collect_candidate_signals():
+            decision = self.analysis_provider.analyze(signal)
+            if not decision.is_real_issue:
+                continue
+            findings.append(_finding_from_decision(signal, decision))
         deduped: dict[str, PatrolFinding] = {}
         for finding in findings:
             deduped.setdefault(finding.fingerprint, finding)
+        return tuple(deduped.values())[: self.config.max_findings]
+
+    def collect_candidate_signals(self) -> tuple[PatrolCandidateSignal, ...]:
+        signals: list[PatrolCandidateSignal] = []
+        signals.extend(_find_log_exceptions(self.ctx.paths.logs))
+        signals.extend(_find_runtime_artifact_gaps(self.ctx.paths.runs))
+        signals.extend(_find_projection_gaps(self.ctx.paths.state))
+        signals.extend(_find_managed_snapshot_gaps(self._load_github_items_or_fail()))
+        deduped: dict[str, PatrolCandidateSignal] = {}
+        for signal in signals:
+            key = json.dumps(
+                {
+                    "kind": signal.kind,
+                    "source": signal.source,
+                    "summary": signal.summary,
+                    "severity": signal.severity,
+                    "evidence": list(signal.evidence),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            deduped.setdefault(hashlib.sha256(key.encode("utf-8")).hexdigest(), signal)
         return tuple(deduped.values())[: self.config.max_findings]
 
     def _load_github_items_or_fail(self) -> tuple[GhItem | Mapping[str, object], ...]:
@@ -171,7 +203,6 @@ def render_issue_title(finding: PatrolFinding) -> str:
 
 
 def render_issue_body(finding: PatrolFinding) -> str:
-    evidence = "\n".join(f"- `{line}`" for line in finding.evidence[:10]) or "- no local evidence lines"
     return (
         "## Patrol Finding\n"
         f"- Kind: `{finding.kind}`\n"
@@ -179,16 +210,18 @@ def render_issue_body(finding: PatrolFinding) -> str:
         f"- Severity: `{finding.severity}`\n"
         f"- Summary: {finding.summary}\n"
         "\n"
-        "## Evidence\n"
-        f"{evidence}\n"
+        "## Analysis\n"
+        f"- Root cause: {finding.root_cause}\n"
+        f"- Recommendation: {finding.recommendation}\n"
+        f"- Rationale: {finding.rationale}\n"
         "\n"
         "## Boundary\n"
-        "This issue is patrol-owned intake. The patrol inspector only reported local runtime evidence; normal design consensus remains the implementation gate.\n"
+        "This issue is patrol-owned intake. The patrol inspector publishes only structured analysis; raw local logs remain diagnostic context for the analysis gate.\n"
     )
 
 
-def _find_log_exceptions(log_dir: Path) -> tuple[PatrolFinding, ...]:
-    findings = []
+def _find_log_exceptions(log_dir: Path) -> tuple[PatrolCandidateSignal, ...]:
+    signals = []
     for path in sorted(log_dir.glob("*.log"))[-200:]:
         lines = _read_tail_or_fail(path, 80)
         signal = _log_failure_signal(lines)
@@ -197,8 +230,8 @@ def _find_log_exceptions(log_dir: Path) -> tuple[PatrolFinding, ...]:
         evidence = signal.evidence
         if not evidence:
             continue
-        findings.append(
-            PatrolFinding(
+        signals.append(
+            PatrolCandidateSignal(
                 kind="exception-log",
                 source=_repo_local_source(path),
                 summary=f"{signal.summary} in {path.name}",
@@ -206,18 +239,18 @@ def _find_log_exceptions(log_dir: Path) -> tuple[PatrolFinding, ...]:
                 evidence=evidence[-10:],
             )
         )
-    return tuple(findings)
+    return tuple(signals)
 
 
-def _find_runtime_artifact_gaps(runs_dir: Path) -> tuple[PatrolFinding, ...]:
-    findings = []
+def _find_runtime_artifact_gaps(runs_dir: Path) -> tuple[PatrolCandidateSignal, ...]:
+    signals = []
     for path in sorted(runs_dir.glob("*.md"))[-200:]:
         text = _read_text_or_fail(path)
         if not text:
             continue
         if "IMPLEMENT_DONE:" in text and "⟦AI:AUTO-LOOP⟧" not in text:
-            findings.append(
-                PatrolFinding(
+            signals.append(
+                PatrolCandidateSignal(
                     kind="runtime-artifact",
                     source=_repo_local_source(path),
                     summary=f"implementation artifact is missing AI sentinel in {path.name}",
@@ -225,19 +258,19 @@ def _find_runtime_artifact_gaps(runs_dir: Path) -> tuple[PatrolFinding, ...]:
                     evidence=("IMPLEMENT_DONE artifact without sentinel",),
                 )
             )
-    return tuple(findings)
+    return tuple(signals)
 
 
-def _find_projection_gaps(state_dir: Path) -> tuple[PatrolFinding, ...]:
-    findings = []
+def _find_projection_gaps(state_dir: Path) -> tuple[PatrolCandidateSignal, ...]:
+    signals = []
     for name in ("wakeup-plan.json", "peek.json"):
         path = state_dir / name
         if not path.exists():
             continue
         data = _json_or_fail(path)
         if isinstance(data, dict) and data.get("status") in {"error", "failed", "blocked"}:
-            findings.append(
-                PatrolFinding(
+            signals.append(
+                PatrolCandidateSignal(
                     kind="projection",
                     source=_repo_local_source(path),
                     summary=f"{name} reports {data.get('status')}",
@@ -245,10 +278,10 @@ def _find_projection_gaps(state_dir: Path) -> tuple[PatrolFinding, ...]:
                     evidence=(json.dumps(data, sort_keys=True)[:500],),
                 )
             )
-    return tuple(findings)
+    return tuple(signals)
 
 
-def _find_managed_snapshot_gaps(items: Iterable[GhItem | Mapping[str, object]]) -> tuple[PatrolFinding, ...]:
+def _find_managed_snapshot_gaps(items: Iterable[GhItem | Mapping[str, object]]) -> tuple[PatrolCandidateSignal, ...]:
     missing_phase: list[str] = []
     for item in items:
         labels = _item_labels(item)
@@ -257,13 +290,25 @@ def _find_managed_snapshot_gaps(items: Iterable[GhItem | Mapping[str, object]]) 
     if not missing_phase:
         return ()
     return (
-        PatrolFinding(
+        PatrolCandidateSignal(
             kind="managed-snapshot",
             source="github-managed-item-snapshot",
             summary="open managed items are missing phase labels",
             severity="medium",
             evidence=tuple(missing_phase[:10]),
         ),
+    )
+
+
+def _finding_from_decision(signal: PatrolCandidateSignal, decision: PatrolAnalysisDecision) -> PatrolFinding:
+    return PatrolFinding(
+        kind=signal.kind,
+        source=signal.source,
+        summary=decision.summary,
+        severity=decision.severity,
+        root_cause=decision.root_cause,
+        recommendation=decision.recommendation,
+        rationale=decision.rationale,
     )
 
 

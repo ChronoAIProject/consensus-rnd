@@ -95,7 +95,7 @@ def lifecycle_token_pattern(token: str) -> re.Pattern[str]:
 
 
 def prompt_paths() -> list[Path]:
-    return sorted(path for path in PROMPTS_DIR.glob("*.md") if path.name != "_github-post-rules.md")
+    return sorted(path for path in PROMPTS_DIR.glob("*.md") if path.name not in {"_github-post-rules.md", "patrol-analysis.md"})
 
 
 def marker_only_prompt_paths() -> list[Path]:
