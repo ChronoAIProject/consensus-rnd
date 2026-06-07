@@ -8,7 +8,6 @@ import os
 import re
 import subprocess
 import sys
-import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1824,25 +1823,6 @@ def _release_int(value: Any, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
-def _run_once_with_periodic_heartbeat(
-    run_once: Callable[[], list[RunnerResult]],
-    lease: DaemonHeartbeatLease,
-) -> list[RunnerResult]:
-    stop = threading.Event()
-
-    def renew_lease() -> None:
-        while not stop.wait(max(1.0, float(lease.heartbeat_interval))):
-            lease.beat()
-
-    renewer = threading.Thread(target=renew_lease, name="wakeup-runner-heartbeat-renewer", daemon=True)
-    renewer.start()
-    try:
-        return run_once()
-    finally:
-        stop.set()
-        renewer.join(timeout=1.0)
-
-
 def load_plan_file(path: Path) -> Mapping[str, Any]:
     data = read_json(path, {})
     return data if isinstance(data, dict) else {}
@@ -1873,7 +1853,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         lease.beat()
         interval = max(1, int(args.interval_seconds))
         while True:
-            results = _run_once_with_periodic_heartbeat(runner.run_once, lease)
+            results = lease.run_with_lease(runner.run_once)
             _log_tick_status("wakeup-runner", _wakeup_tick_action(results))
             lease.sleep_with_lease(interval)
     results = runner.run_once()

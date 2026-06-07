@@ -65,7 +65,7 @@ class CommentMonitor:
 
     def run_forever(self) -> int:
         while True:
-            self.tick()
+            self.heartbeat.run_with_lease(self.tick)
             self.heartbeat.beat()
             self.heartbeat.sleep_with_lease(self.interval)
 

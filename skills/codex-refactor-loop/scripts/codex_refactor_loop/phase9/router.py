@@ -2040,7 +2040,7 @@ def main(argv: list[str] | None = None, command_runner: Callable[[dict[str, obje
         lease = DaemonHeartbeatLease("phase9_router_daemon", repo_root)
         while True:
             try:
-                router.tick()
+                lease.run_with_lease(router.tick)
             except Exception as exc:
                 print(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}] EXCEPTION in tick: {exc!r}", flush=True)
             lease.beat()
