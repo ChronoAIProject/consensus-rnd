@@ -118,6 +118,41 @@ class SshxContractTests(unittest.TestCase):
         self.assertNotIn("sealed-transcript", contract_text)
         self.assertNotIn("actor-isolated", contract_text)
 
+    def test_sshx_worker_mode_gate_blocks_delegated_dispatch_before_mode_resolution(self) -> None:
+        text = read(SKILL)
+        self.assertIn("`WorkerModeGate` is a prompt-level dispatch gate, not a runtime API", text)
+        self.assertIn(
+            "During `intake`, the caller may use its own read-only tools to inspect the user's input and write `GoalArtifact`; this caller-owned read-only intake is not worker dispatch",
+            text,
+        )
+        self.assertIn(
+            "Before any worker dispatch, including delegated intake context-gathering by subagent, Agent, Task, or codex, the caller must complete the non-mutating `codex-cli` capability check and resolve `WorkerMode`",
+            text,
+        )
+        self.assertIn("resolved_before_any_worker_dispatch:", text)
+        self.assertIn("delegated_intake_context_gathering_allowed:", text)
+        self.assertLess(
+            text.index("Before any worker dispatch"),
+            text.index("Thinking, implementation, and review are worker dispatches"),
+        )
+        self.assertLess(
+            text.index("`WorkerModeGate`"),
+            text.index("Implementation must be delegated to a worker using the selected `WorkerMode`"),
+        )
+
+    def test_sshx_codex_cli_fallback_reason_is_required(self) -> None:
+        text = read(SKILL)
+        self.assertIn(
+            "`isolated-token-subagent` is the fallback when `codex-cli` is unavailable or the capability check fails",
+            text,
+        )
+        self.assertIn(
+            "Whenever this fallback is selected, `worker_delegation.reason` and the gate record must state the concrete `codex-cli` unavailable or failed reason",
+            text,
+        )
+        self.assertIn("codex_cli_capability_check:", text)
+        self.assertIn("fallback_reason:", text)
+
     def test_sshx_no_context_pollution_contract(self) -> None:
         text = read(SKILL)
         self.assertIn("The caller context must not carry worker full reasoning or same-round peer outputs", text)
