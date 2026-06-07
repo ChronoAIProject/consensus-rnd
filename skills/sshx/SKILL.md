@@ -63,6 +63,7 @@ Each thinking or review record must include these fields:
 - `visible_inputs`
 - `worker_mode`
 - `worker_carrier`
+- `worker_flight_ref`
 - `verdict`
 - `conclusion`
 - `log_ref`
@@ -86,6 +87,30 @@ Each `visible_inputs` value must include the same `GoalArtifact.normalized_goal`
 `isolated-token-subagent` is the fallback when `codex-cli` is unavailable or the capability check fails. It must run with isolated token context so same-round workers cannot read one another's full reasoning or peer outputs before returning their own verdict. Whenever this fallback is selected, `worker_delegation.reason` and the gate record must state the concrete `codex-cli` unavailable or failed reason.
 
 `abstain` is required when neither `codex-cli` nor `isolated-token-subagent` is available. Do not self-apply the triplet inside the caller context and present it as worker consensus.
+
+Every worker dispatch must create a prompt-level `SshxWorkerFlightRecord` before the worker is launched. The caller-carried transcript must keep these records under `worker_flights`, and each worker result record must reference the matching `flight_id` through `worker_flight_ref`.
+
+`SshxWorkerFlightRecord` has exactly these fields:
+
+- `flight_id`
+- `stage`
+- `role`
+- `worker_mode`
+- `worker_carrier`
+- `work_target`
+- `status`
+- `retry_budget`
+- `attempt`
+- `result_envelope_ref`
+- `completion_sentinel_ref`
+
+`status` is one of `in-flight`, `retrying`, `terminal`, or `abstained`. `retry_budget` is a finite integer decided before the first launch for that flight. `result_envelope_ref` and `completion_sentinel_ref` are empty until a terminal worker result exists.
+
+While any `SshxWorkerFlightRecord` for the same `work_target` is `in-flight` or `retrying`, the caller is read-only for that target. The caller must not mutate files, Git state, GitHub state, labels, releases, host configuration, lifecycle state, or the same external resource. The caller must not take over the same `work_target` because a process snapshot, log text, or workspace state appears quiet.
+
+`codex-cli` completion is recognized only when the caller has both a terminal `SshxResultEnvelope` and the worker-owned `completion_sentinel_ref` recorded on the matching flight. `pgrep`, process-table snapshots, log marker strings, and empty `git status` output are never completion evidence.
+
+If `codex-cli` exits abnormally without both the terminal envelope and the completion sentinel, the caller must stay read-only for that `work_target`, consume the finite same-carrier retry budget, and record the next attempt on the same `SshxWorkerFlightRecord`. If the bounded `codex-cli` retry path still lacks terminal completion, the caller may fall back to `isolated-token-subagent` when available. If no fallback carrier is available or the fallback cannot produce terminal completion, the result is `abstain`; the caller must not implement, repair, or otherwise mutate the same `work_target` itself.
 
 ## Result Envelope
 
@@ -233,12 +258,25 @@ worker_delegation:
   worker_mode:
   worker_carrier:
   reason:
+worker_flights:
+  - flight_id:
+    stage:
+    role:
+    worker_mode:
+    worker_carrier:
+    work_target:
+    status:
+    retry_budget:
+    attempt:
+    result_envelope_ref:
+    completion_sentinel_ref:
 thinking_triplet_workers:
   - role: minimal
     bias:
     visible_inputs:
     worker_mode:
     worker_carrier:
+    worker_flight_ref:
     verdict:
     conclusion:
     log_ref:
@@ -247,6 +285,7 @@ thinking_triplet_workers:
     visible_inputs:
     worker_mode:
     worker_carrier:
+    worker_flight_ref:
     verdict:
     conclusion:
     log_ref:
@@ -255,6 +294,7 @@ thinking_triplet_workers:
     visible_inputs:
     worker_mode:
     worker_carrier:
+    worker_flight_ref:
     verdict:
     conclusion:
     log_ref:
@@ -267,21 +307,25 @@ meta_judge:
   log_ref:
 implementation_worker:
   worker_mode:
+  worker_flight_ref:
   conclusion:
   log_ref:
 review_triplet_workers:
   - role: architecture
     worker_mode:
+    worker_flight_ref:
     verdict:
     conclusion:
     log_ref:
   - role: quality
     worker_mode:
+    worker_flight_ref:
     verdict:
     conclusion:
     log_ref:
   - role: tests
     worker_mode:
+    worker_flight_ref:
     verdict:
     conclusion:
     log_ref:

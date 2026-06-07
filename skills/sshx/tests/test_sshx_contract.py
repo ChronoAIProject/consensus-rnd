@@ -30,6 +30,30 @@ def frontmatter(text: str) -> dict[str, str]:
     return result
 
 
+def flight_blocks_mutation(flight: dict[str, object], work_target: str) -> bool:
+    return flight.get("work_target") == work_target and flight.get("status") in {"in-flight", "retrying"}
+
+
+def has_terminal_completion(flight: dict[str, object]) -> bool:
+    return (
+        flight.get("status") == "terminal"
+        and bool(flight.get("result_envelope_ref"))
+        and bool(flight.get("completion_sentinel_ref"))
+    )
+
+
+def resolve_abnormal_codex_exit(flight: dict[str, object], fallback_available: bool) -> str:
+    if has_terminal_completion(flight):
+        return "complete"
+    retry_budget = int(flight.get("retry_budget", 0))
+    attempt = int(flight.get("attempt", 0))
+    if flight.get("worker_mode") == "codex-cli" and attempt < retry_budget:
+        return "retry-same-carrier"
+    if fallback_available:
+        return "fallback-isolated-token-subagent"
+    return "abstain"
+
+
 class SshxContractTests(unittest.TestCase):
     def test_sshx_frontmatter_contract(self) -> None:
         meta = frontmatter(read(SKILL))
@@ -118,6 +142,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertNotIn("sealed-transcript", contract_text)
         self.assertNotIn("actor-isolated", contract_text)
 
+<<<<<<< HEAD
     def test_sshx_worker_mode_gate_blocks_delegated_dispatch_before_mode_resolution(self) -> None:
         text = read(SKILL)
         self.assertIn("`WorkerModeGate` is a prompt-level dispatch gate, not a runtime API", text)
@@ -152,6 +177,138 @@ class SshxContractTests(unittest.TestCase):
         )
         self.assertIn("codex_cli_capability_check:", text)
         self.assertIn("fallback_reason:", text)
+=======
+    def test_sshx_worker_flight_record_contract(self) -> None:
+        text = read(SKILL)
+        self.assertIn("`SshxWorkerFlightRecord`", text)
+        self.assertIn("Every worker dispatch must create a prompt-level `SshxWorkerFlightRecord`", text)
+        self.assertIn("worker result record must reference the matching `flight_id` through `worker_flight_ref`", text)
+        for field in [
+            "`flight_id`",
+            "`stage`",
+            "`role`",
+            "`worker_mode`",
+            "`worker_carrier`",
+            "`work_target`",
+            "`status`",
+            "`retry_budget`",
+            "`attempt`",
+            "`result_envelope_ref`",
+            "`completion_sentinel_ref`",
+        ]:
+            self.assertIn(field, text)
+        self.assertIn("`status` is one of `in-flight`, `retrying`, `terminal`, or `abstained`", text)
+        self.assertIn("`retry_budget` is a finite integer decided before the first launch", text)
+
+    def test_sshx_in_flight_worker_blocks_caller_mutation(self) -> None:
+        text = read(SKILL)
+        self.assertIn("While any `SshxWorkerFlightRecord` for the same `work_target` is `in-flight` or `retrying`", text)
+        self.assertIn("the caller is read-only for that target", text)
+        self.assertIn("must not mutate files, Git state, GitHub state", text)
+        self.assertIn("must not take over the same `work_target`", text)
+
+        in_flight = {"work_target": "skills/sshx/SKILL.md", "status": "in-flight"}
+        retrying = {"work_target": "skills/sshx/SKILL.md", "status": "retrying"}
+        terminal = {"work_target": "skills/sshx/SKILL.md", "status": "terminal"}
+        other_target = {"work_target": "README.md", "status": "in-flight"}
+
+        self.assertTrue(flight_blocks_mutation(in_flight, "skills/sshx/SKILL.md"))
+        self.assertTrue(flight_blocks_mutation(retrying, "skills/sshx/SKILL.md"))
+        self.assertFalse(flight_blocks_mutation(terminal, "skills/sshx/SKILL.md"))
+        self.assertFalse(flight_blocks_mutation(other_target, "skills/sshx/SKILL.md"))
+
+    def test_sshx_completion_requires_envelope_and_worker_sentinel(self) -> None:
+        text = read(SKILL)
+        self.assertIn("recognized only when the caller has both a terminal `SshxResultEnvelope`", text)
+        self.assertIn("worker-owned `completion_sentinel_ref` recorded on the matching flight", text)
+        for forbidden_evidence in [
+            "`pgrep`",
+            "process-table snapshots",
+            "log marker strings",
+            "empty `git status` output",
+        ]:
+            self.assertIn(forbidden_evidence, text)
+        self.assertIn("are never completion evidence", text)
+
+        self.assertTrue(
+            has_terminal_completion(
+                {
+                    "status": "terminal",
+                    "result_envelope_ref": "artifacts/sshx/worker-result.json",
+                    "completion_sentinel_ref": "artifacts/sshx/worker.done",
+                }
+            )
+        )
+        self.assertFalse(
+            has_terminal_completion(
+                {
+                    "status": "terminal",
+                    "result_envelope_ref": "artifacts/sshx/worker-result.json",
+                    "completion_sentinel_ref": "",
+                }
+            )
+        )
+        self.assertFalse(
+            has_terminal_completion(
+                {
+                    "status": "terminal",
+                    "result_envelope_ref": "",
+                    "completion_sentinel_ref": "artifacts/sshx/worker.done",
+                }
+            )
+        )
+
+    def test_sshx_abnormal_codex_exit_retries_falls_back_or_abstains(self) -> None:
+        text = read(SKILL)
+        self.assertIn("If `codex-cli` exits abnormally without both the terminal envelope and the completion sentinel", text)
+        self.assertIn("consume the finite same-carrier retry budget", text)
+        self.assertIn("fall back to `isolated-token-subagent` when available", text)
+        self.assertIn("the result is `abstain`", text)
+        self.assertIn("must not implement, repair, or otherwise mutate the same `work_target` itself", text)
+
+        self.assertEqual(
+            resolve_abnormal_codex_exit(
+                {
+                    "worker_mode": "codex-cli",
+                    "status": "retrying",
+                    "retry_budget": 2,
+                    "attempt": 1,
+                    "result_envelope_ref": "",
+                    "completion_sentinel_ref": "",
+                },
+                fallback_available=False,
+            ),
+            "retry-same-carrier",
+        )
+        self.assertEqual(
+            resolve_abnormal_codex_exit(
+                {
+                    "worker_mode": "codex-cli",
+                    "status": "retrying",
+                    "retry_budget": 2,
+                    "attempt": 2,
+                    "result_envelope_ref": "",
+                    "completion_sentinel_ref": "",
+                },
+                fallback_available=True,
+            ),
+            "fallback-isolated-token-subagent",
+        )
+        self.assertEqual(
+            resolve_abnormal_codex_exit(
+                {
+                    "worker_mode": "codex-cli",
+                    "status": "retrying",
+                    "retry_budget": 2,
+                    "attempt": 2,
+                    "result_envelope_ref": "",
+                    "completion_sentinel_ref": "",
+                },
+                fallback_available=False,
+            ),
+            "abstain",
+        )
+>>>>>>> origin/auto-refact-dev
 
     def test_sshx_no_context_pollution_contract(self) -> None:
         text = read(SKILL)
@@ -208,6 +365,7 @@ class SshxContractTests(unittest.TestCase):
             "thinking_triplet_workers": [
                 {
                     "role": "minimal",
+                    "worker_flight_ref": "flight-thinking-minimal",
                     "verdict": "propose",
                     "conclusion": {
                         "decision": "use the smallest contract edit",
@@ -224,6 +382,7 @@ class SshxContractTests(unittest.TestCase):
                 "log_ref": "artifacts/sshx/meta-judge.log",
             },
             "implementation_worker": {
+                "worker_flight_ref": "flight-implementation",
                 "conclusion": {
                     "changed_files": ["skills/sshx/SKILL.md"],
                     "tests": ["python3 -m unittest discover -s skills/sshx/tests -p 'test_*.py'"],
@@ -233,6 +392,7 @@ class SshxContractTests(unittest.TestCase):
             "review_triplet_workers": [
                 {
                     "role": "tests",
+                    "worker_flight_ref": "flight-review-tests",
                     "verdict": "approve",
                     "conclusion": {"coverage": "contract locks envelope-only output"},
                     "log_ref": "artifacts/sshx/review-tests.log",
@@ -268,6 +428,68 @@ class SshxContractTests(unittest.TestCase):
             "same-round peer output:",
         ]:
             self.assertNotIn(inline_log_phrase, rendered)
+
+    def test_sshx_transcript_worker_flights_shape(self) -> None:
+        text = read(SKILL)
+        for transcript_line in [
+            "worker_flights:",
+            "  - flight_id:",
+            "    stage:",
+            "    role:",
+            "    worker_mode:",
+            "    worker_carrier:",
+            "    work_target:",
+            "    status:",
+            "    retry_budget:",
+            "    attempt:",
+            "    result_envelope_ref:",
+            "    completion_sentinel_ref:",
+            "    worker_flight_ref:",
+        ]:
+            self.assertIn(transcript_line, text)
+
+        transcript = {
+            "worker_flights": [
+                {
+                    "flight_id": "flight-implementation",
+                    "stage": "implementation_worker",
+                    "role": "implementation",
+                    "worker_mode": "codex-cli",
+                    "worker_carrier": "codex-cli",
+                    "work_target": "skills/sshx/SKILL.md",
+                    "status": "terminal",
+                    "retry_budget": 2,
+                    "attempt": 1,
+                    "result_envelope_ref": "artifacts/sshx/implementation-result.json",
+                    "completion_sentinel_ref": "artifacts/sshx/implementation.done",
+                }
+            ],
+            "implementation_worker": {
+                "worker_flight_ref": "flight-implementation",
+                "conclusion": {"changed_files": ["skills/sshx/SKILL.md"]},
+                "log_ref": "artifacts/sshx/implementation.log",
+            },
+        }
+        self.assertEqual(
+            set(transcript["worker_flights"][0]),
+            {
+                "flight_id",
+                "stage",
+                "role",
+                "worker_mode",
+                "worker_carrier",
+                "work_target",
+                "status",
+                "retry_budget",
+                "attempt",
+                "result_envelope_ref",
+                "completion_sentinel_ref",
+            },
+        )
+        self.assertEqual(
+            transcript["implementation_worker"]["worker_flight_ref"],
+            transcript["worker_flights"][0]["flight_id"],
+        )
 
     def test_sshx_design_truth_table(self) -> None:
         text = read(SKILL)
