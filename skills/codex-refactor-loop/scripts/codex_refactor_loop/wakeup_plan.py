@@ -3973,7 +3973,7 @@ def _stale_publish_implementation_reason(
         "fresh_integration_base",
         "single_linked_managed_issue",
         "worker_authored_pr_artifacts",
-        "no_conflicting_open_implementation_pr",
+        "matching_open_managed_pr",
         "host_checks_green",
         "clean_scoped_diff",
     ):
@@ -3996,7 +3996,7 @@ def _matching_open_pr_error(
         return "single_linked_managed_issue_missing"
     matches = [item for item in gh_items if item.kind == "PR" and item.head_ref == head_ref]
     if not matches:
-        return None
+        return "matching_pr_missing"
     if len(matches) > 1:
         return "multiple_matching_open_pr"
     pr = matches[0]

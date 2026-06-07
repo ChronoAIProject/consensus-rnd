@@ -49,6 +49,9 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "zero duplicate canonical live wrapper",
             "static allowlist command",
             ".refactor-loop/locks/<daemon>.fingerprint.json",
+            "host_env_path",
+            "host_env_sha256",
+            "never host.env plaintext",
             "pid alive",
             "fingerprint current",
             "missing/malformed/mismatch fail-closed",
@@ -66,6 +69,11 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
         self.assertIn("consensus-rnd-cli daemon-status --json", self.skill)
         self.assertIn('source "$CONSENSUS_RND_HOST_ENV"', self.skill)
         self.assertIn("not a runtime fallback", self.skill)
+        self.assertIn("does not write, load, unload, or delete cron entries or LaunchAgent plists", self.skill)
+        self.assertIn("only loop action is to call the existing checked-in `consensus-rnd-cli restart-daemons` helper", self.skill)
+        self.assertIn("launchctl bootstrap gui/$(id -u)", self.skill)
+        self.assertIn("launchctl bootout gui/$(id -u)", self.skill)
+        self.assertIn("Do not add a second watchdog or installer", self.skill)
         self.assertIn("cron/launchd-only", self.skill)
 
     def test_restart_module_contains_singleton_and_heartbeat_checks(self) -> None:
@@ -81,6 +89,8 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             ".fingerprint.json",
             "package_tree_sha256",
             "entrypoint_sha256",
+            "host_env_path",
+            "host_env_sha256",
             "RESTART_DAEMON_HEARTBEAT_FILE",
             "RESTART_DAEMON_HEARTBEAT_INTERVAL",
             "pid_alive",

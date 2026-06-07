@@ -79,7 +79,7 @@ rg -n "<stringly typed identity / routing / subscription patterns>" $SOURCE_GLOB
 
 - **独立性**：与其它 cluster 文件交集 ≤ 5%。
 - **边界可控**：单 cluster 改动 ≤ 30 文件（小重构 ≤ 15）。
-- **不新增功能**：只清理违反位置；禁扩 scope。
+- **不越权扩展范围**：只处理当前 audit/issue 授权的 violation 或 work-unit scope；禁扩 scope。
 - **明确归因**：清楚 old/new pattern，后者直接写进代码注释。
 - **设计违规允许大 cluster**：如果是"需先定协议 / actor 化 / schema 迁移"的深层违规，**不要因为 >30 文件就拒绝**，标 `requires_design` 让 controller 决定是否拆。
 

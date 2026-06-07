@@ -39,15 +39,15 @@ in `SKILL.md` and the tests.
 ## maintainer-directive-progress-reporter-orphan-delete
 
 - source_kind: maintainer_directive
-- surface: `codex-progress-reporter orphan delete retry`
+- surface: `codex-progress-reporter obsolete orphan delete retry`
 - source_date: `2026-05-27`
 - source_evidence: maintainer loning, 2026-05-27 wakeup, said "这个 bug 直接改吧" for issue #69 accumulated progress comments; commit evidence `897a670 fix(skill): progress-reporter orphan delete retry (issue #69 实证) (#73)`.
 - local_original_pointer: `.refactor-loop/runs/maintainer-directives/2026-05-27-progress-reporter-orphan-delete.md`
-- affected_contracts: `SKILL.md` named runtime surface for progress reporter `TEST_NO_LOOP`; progress reporter orphan delete retry behavior.
-- allowed_directive: in `codex-progress-reporter`, mark `finished=true` only after delete success or 404, retry nonterminal delete failures on later ticks, allow terminal orphan retry when the log still exists, and expose `TEST_NO_LOOP=1` only as a source-time behavior-test seam.
-- forbidden_boundary: no daemon architecture rewrite, no interval default change, no GitHub cleanup of existing spam through this runtime path, no production use of `TEST_NO_LOOP`, no new state file, queue, lifecycle authority, host fact source, issue/PR lifecycle, label lifecycle, commit, push, merge, tag, or release authority.
+- affected_contracts: #626 deletes recurring per-worker progress comments; `SKILL.md` keeps only the source-time `TEST_NO_LOOP` test seam and #504 fixed global status-card PATCH.
+- allowed_directive: obsolete historical evidence only; it grants no recurring daemon delete path, no per-worker progress comment create/edit/delete/get/read path, and no own-comment maintenance authority.
+- forbidden_boundary: no GitHub progress comment delete retry, no GitHub cleanup of existing spam through this runtime path, no per-worker issue/PR comment create/edit/read/delete, no production use of `TEST_NO_LOOP`, no new queue, lifecycle authority, host fact source, issue/PR lifecycle, label lifecycle, commit, push, merge, tag, or release authority.
 - verification: `test_progress_reporter.py`, `test_codex_progress_reporter_orphan.py`, `test_ensure_project_rules_fixed_points.py`, `test_runtime_exception_authorization_sources.py`
-- no_new_runtime_authority: This entry mirrors the checked-in orphan retry bugfix authorization and does not widen progress reporter beyond its existing own-comment maintenance surface.
+- no_new_runtime_authority: This entry records that the old #69 carveout is deleted by #626 and grants no runtime GitHub write authority.
 
 <a id="maintainer-directive-existing-issue-priority-over-audit"></a>
 ## maintainer-directive-existing-issue-priority-over-audit
@@ -339,7 +339,7 @@ in `SKILL.md` and the tests.
 - source_round: `r7`
 - source_marker: `META_JUDGE_DONE:consensus`
 - skill_anchor: `#named-runtime-exception--observability-comment-writersper-53`
-- allowed: GitHub issue or PR comments, PR body edit, reactions, and deleting or updating own progress comments only; issue/PR target writes still require the #191 `ActiveControllerLease` / `require_active_controller(...)` gate, and this mirror is not a cross-device write permit.
+- allowed: GitHub issue or PR comments for controller status banners, PR body edit, and reactions only; progress-reporter per-worker progress comments are deleted and #504 separately allows only the fixed global status-card PATCH. Issue/PR target writes still require the #191 `ActiveControllerLease` / `require_active_controller(...)` gate, and this mirror is not a cross-device write permit.
 - forbidden: no label mutation, issue close, PR close, issue create, PR create, PR merge, release, tag, or git lifecycle authority.
 - verification: `test_banner_package.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror only replaces the missing ignored judge-log authorization path.
