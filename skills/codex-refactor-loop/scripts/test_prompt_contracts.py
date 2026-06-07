@@ -88,6 +88,37 @@ class PromptContractsTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, implement)
 
+    def test_prompts_use_scope_authorization_not_blanket_work_type_rejection(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        implement = (PROMPTS_DIR / "implement.md").read_text(encoding="utf-8")
+        triage = (PROMPTS_DIR / "triage-external-issue.md").read_text(encoding="utf-8")
+        architect = (PROMPTS_DIR / "reviewer-architect.md").read_text(encoding="utf-8")
+        quality = (PROMPTS_DIR / "reviewer-quality.md").read_text(encoding="utf-8")
+        fix = (PROMPTS_DIR / "review-fix.md").read_text(encoding="utf-8")
+        combined = "\n".join((skill, implement, triage, architect, quality, fix))
+
+        for needle in (
+            "No unauthorized scope expansion",
+            "source issue, consensus artifact, and `scope_paths`",
+            "feature、bug、doc、refactor 或 governance 工作",
+            "类别本身不是 reject 理由",
+            "issue-authorized feature or bug diff is not drift by itself",
+            "issue-authorized feature or bug work is allowed inside that boundary",
+            "outside the authorized work-unit boundary",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
+        forbidden_patterns = (
+            r"No new " + r"features",
+            r"不新增" + r"功能",
+            r"product-feature" + r"-request",
+            r"runtime-bug" + r"-report",
+        )
+        for pattern in forbidden_patterns:
+            with self.subTest(pattern=pattern):
+                self.assertIsNone(re.search(pattern, combined))
+
 
 def github_post_section(body: str) -> str:
     match = re.search(r"(?ms)^## GitHub post.*?(?=^## |\Z)", body)

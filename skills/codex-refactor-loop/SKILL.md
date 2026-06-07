@@ -880,7 +880,7 @@ Policy:the loop continues until an explicit stop condition or a visible `crnd:hu
 
 ## Hard rules (controller-level, propagated into every codex prompt)
 
-1. No new features; only clean the authorized violation or implement the consensus plan.
+1. No unauthorized scope expansion; implement only the current work-unit scope as defined by the source issue, consensus artifact, and `scope_paths`.
 2. No external repo changes; `$EXTERNAL_REPOS` are out of scope unless the user explicitly expands scope.
 3. Code refactor rationale follows `$HOST_REFACTOR_COMMENT_POLICY`: missing, empty, or default policy is `none`, which forbids refactor-history source comments and keeps rationale in external artifacts; explicit `self-doc-comment` is a downstream compatibility opt-in and must still obey source English-only.
 4. No `commit`, `push`, `checkout`, PR create/merge, or issue close inside worker prompts; controller owns git topology.
@@ -3233,7 +3233,7 @@ Bash(
 
 ## Hard rules (controller-level, propagated into every codex prompt)
 
-1. **No new features** — only clean violations of CLAUDE.md philosophy.
+1. **No unauthorized scope expansion** — implement only the current work-unit scope as defined by the source issue, consensus artifact, and `scope_paths`. Issue-authorized feature, bug, doc, refactor, and governance work may proceed after issue intake/design-consensus; unrequested expansion still requires `SCOPE_EXTEND` before any out-of-scope touch.
 2. **No external repo changes** — $EXTERNAL_REPOS are out of scope.
 3. **Code refactor rationale follows policy** — `$HOST_REFACTOR_COMMENT_POLICY` missing/empty/default is `none`: source refactor-history comments are forbidden and rationale belongs in external artifacts. Explicit `self-doc-comment` is a downstream compatibility opt-in for a 3-5 line host-style source comment with `Refactor (iterN/cluster-XXX)`, `Old pattern`, and `New principle`; it must still obey source English-only.
 4. **No `commit`/`push`/`checkout` inside codex prompts** — the controller owns git topology.
