@@ -38,6 +38,7 @@ from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.gate import AutoReleaseGate
 from .release.publish_preflight import ReleasePublishPreflight
+from .release.publisher import ReleasePublisher
 from .state import read_json
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import (
@@ -576,10 +577,18 @@ class WakeupRunner:
         target_ref = str(action.get("target_ref") or "")
         if not target_ref:
             return "release_target_ref_missing"
-        result = ReleasePublishPreflight(self.ctx.repo_root).validate(candidate_path=candidate_path, target_ref=target_ref)
+        preflight = ReleasePublishPreflight(self.ctx.repo_root, runner=self._run_release_command)
+        result = preflight.validate(candidate_path=candidate_path, target_ref=target_ref)
         if not result.allowed:
+            if result.reasons == ("manifest_version_mismatch",) and ReleasePublisher(
+                self.ctx.repo_root, preflight=preflight, runner=self._run_release_command
+            ).can_validate_remote_reentry(result):
+                return None
             return "release_preflight_denied:" + ",".join(result.reasons)
         return None
+
+    def _run_release_command(self, command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        return self.command_runner(command)
 
     def _validate_release_dispatch(self, action: Mapping[str, Any]) -> str | None:
         preconditions = action.get("preconditions")

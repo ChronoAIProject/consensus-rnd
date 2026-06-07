@@ -132,6 +132,16 @@ class ReleasePublisher:
             result_path=self.result_path,
         )
 
+    def can_validate_remote_reentry(self, result: PublishPreflightResult) -> bool:
+        """Return whether a denied preflight has publisher-proven remote reentry."""
+
+        state = self._inspect_publication_state(result)
+        return (
+            not result.allowed
+            and self._is_only_manifest_version_mismatch(result)
+            and state.reason == "remote_already_bumped_reentry"
+        )
+
     def _inspect_publication_state(self, result: PublishPreflightResult) -> ReleasePublicationState:
         version = result.version
         tag = f"v{version}" if version else ""
