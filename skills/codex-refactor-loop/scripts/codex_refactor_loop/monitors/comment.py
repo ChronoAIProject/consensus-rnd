@@ -19,6 +19,7 @@ from ..github_actor import GitHubAuthenticatedActor
 from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from ..managed_work_snapshot import load_open_managed_work_snapshot
+from ..secondary_mutation_backoff import record_content_creation_backoff
 
 
 AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
@@ -204,10 +205,12 @@ class CommentMonitor:
             if issue.returncode == 0:
                 print(f"daemon-banner-posted: {number} {comment_id} {_first_url(issue.stdout)}", flush=True)
                 return
+            record_content_creation_backoff(self.ctx, "comment-monitor-banner", issue)
             pr = self.gh(["pr", "comment", number, "--body-file", str(body_file)], check=False)
             if pr.returncode == 0:
                 print(f"daemon-banner-posted: {number} {comment_id} {_first_url(pr.stdout)}", flush=True)
             else:
+                record_content_creation_backoff(self.ctx, "comment-monitor-banner", pr)
                 first = (pr.stderr or pr.stdout).splitlines()[0] if (pr.stderr or pr.stdout).splitlines() else ""
                 print(f"daemon-banner-FAILED: {number} {comment_id} {first}", flush=True)
 

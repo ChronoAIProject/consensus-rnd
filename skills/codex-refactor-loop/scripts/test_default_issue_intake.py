@@ -26,9 +26,11 @@ from codex_refactor_loop.default_issue_intake import (  # noqa: E402
 
 
 class FakeGh:
-    def __init__(self, *, issue: dict, comments: list[dict] | None = None) -> None:
+    def __init__(self, *, issue: dict, comments: list[dict] | None = None, comment_returncode: int = 0, comment_stderr: str = "") -> None:
         self.issue = issue
         self.comments = list(comments or [])
+        self.comment_returncode = comment_returncode
+        self.comment_stderr = comment_stderr
         self.calls: list[list[str]] = []
         self.body_files: list[str] = []
 
@@ -41,7 +43,7 @@ class FakeGh:
             return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(self.comments), stderr="")
         if argv[:3] == ["gh", "issue", "comment"]:
             self.body_files.append(Path(argv[-1]).read_text(encoding="utf-8"))
-            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(argv, self.comment_returncode, stdout="", stderr=self.comment_stderr)
         if argv[:3] == ["gh", "issue", "edit"]:
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(argv, 1, stdout="", stderr="unexpected command")
@@ -100,6 +102,22 @@ class DefaultIssueIntakeTests(unittest.TestCase):
         self.assertEqual("bob", result.first_claimer)
         self.assertIn(STOP_MARKER, fake.body_files[0])
         self.assertFalse(any(call[:3] == ["gh", "issue", "edit"] for call in fake.calls))
+
+    def test_failed_claim_comment_records_secondary_backoff_without_label_mutation(self) -> None:
+        fake = FakeGh(
+            issue={"state": "open", "labels": []},
+            comment_returncode=1,
+            comment_stderr="You have exceeded a secondary rate limit",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "claim comment failed"):
+            DefaultIssueIntakeClaim(self.ctx, actor_login="alice", command_runner=fake).apply(77)
+
+        self.assertTrue(any(call[:3] == ["gh", "issue", "comment"] for call in fake.calls))
+        self.assertFalse(any(call[:3] == ["gh", "issue", "edit"] for call in fake.calls))
+        backoff = json.loads((self.repo / ".refactor-loop/state/secondary-mutation-backoff.json").read_text(encoding="utf-8"))
+        self.assertEqual("default-issue-intake-claim comment", backoff["contentCreation"]["operation"])
+        self.assertEqual("secondary-content-creation-limit", backoff["contentCreation"]["reason"])
 
     def test_managed_or_pr_targets_noop_before_comments(self) -> None:
         for issue, reason in (

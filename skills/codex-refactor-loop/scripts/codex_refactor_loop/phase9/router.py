@@ -30,6 +30,7 @@ from ..context import LoopContext
 from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from ..managed_work_snapshot import load_open_managed_work_snapshot
+from ..managed_work_snapshot import ManagedWorkSnapshotItem
 from ..prompt_contracts import inline_prompt_contracts
 from ..transition_assessment import TransitionAssessment, TransitionAssessmentReader, projection_lines
 from ..workflow_stages import format_stage
@@ -130,6 +131,7 @@ class IssueSourceSnapshot:
     comments: tuple[dict[str, str], ...]
     read_at: str
     source: str
+    updated_at: str
     truncated: bool
     unavailable_reason: str | None = None
     comments_loaded: bool = False
@@ -315,6 +317,7 @@ class Phase9Router:
         self._source_issue_decisions: dict[str, Phase9SourceIssueDecision] = {}
         self._issue_source_snapshots: dict[str, IssueSourceSnapshot] = {}
         self._terminal_decisions: dict[str, Phase9TerminalDecision] = {}
+        self._managed_work_items_by_number: dict[str, ManagedWorkSnapshotItem] | None = None
         self._pending_spawn_intent_logs: set[str] = set()
         self._ledger_entries_by_key: dict[str, list[dict[str, object]]] = {}
         self._tick_dispatch_count = 0
@@ -336,6 +339,7 @@ class Phase9Router:
         self._source_issue_decisions = {}
         self._issue_source_snapshots = {}
         self._terminal_decisions = {}
+        self._managed_work_items_by_number = None
         self._pending_spawn_intent_logs = self._read_pending_spawn_intent_logs()
         self._ledger_entries_by_key = self._read_ledger_entries_by_key()
         ledger = set(self._ledger_entries_by_key)
@@ -1196,10 +1200,12 @@ class Phase9Router:
         return self._source_issue_decisions[issue]
 
     def _read_source_issue_decision(self, issue: str) -> Phase9SourceIssueDecision:
-        snapshot = self._read_issue_metadata_snapshot(issue)
-        if snapshot.source == "unavailable":
+        if not self.ctx.gh_repo_slug:
             return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
-        state = snapshot.source
+        issue_result = self._gh_api_json(f"repos/{self.ctx.gh_repo_slug}/issues/{issue}")
+        if not isinstance(issue_result, dict):
+            return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
+        state = str(issue_result.get("state") or "")
         if not isinstance(state, str) or not state.strip():
             return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
         normalized = state.strip().upper()
@@ -1253,8 +1259,8 @@ class Phase9Router:
         snapshot = self._read_issue_metadata_snapshot(issue)
         if snapshot.unavailable_reason is not None or snapshot.comments_loaded:
             return snapshot
-        comments_result = self._gh_api_json(f"repos/{self.ctx.gh_repo_slug}/issues/{issue}/comments?per_page=20")
-        if not isinstance(comments_result, list):
+        comments_result, comments_source = self._issue_comments_projection(issue, snapshot.updated_at)
+        if comments_result is None:
             snapshot = IssueSourceSnapshot(
                 number=snapshot.number,
                 title=snapshot.title,
@@ -1262,6 +1268,7 @@ class Phase9Router:
                 comments=(),
                 read_at=snapshot.read_at,
                 source=snapshot.source,
+                updated_at=snapshot.updated_at,
                 truncated=snapshot.truncated,
                 unavailable_reason="comments-read-failed",
                 comments_loaded=True,
@@ -1290,7 +1297,8 @@ class Phase9Router:
             body=snapshot.body,
             comments=tuple(comments),
             read_at=snapshot.read_at,
-            source=snapshot.source,
+            source=f"{snapshot.source};comments={comments_source}",
+            updated_at=snapshot.updated_at,
             truncated=snapshot.truncated or comments_truncated or len(comments_result) > 20,
             comments_loaded=True,
         )
@@ -1306,12 +1314,26 @@ class Phase9Router:
         read_at = self._now()
         if not self.ctx.gh_repo_slug:
             return self._unavailable_issue_source_snapshot(issue, read_at, "missing-gh-repo-slug")
+        item = self._managed_work_item(issue)
+        if item is not None:
+            body, body_truncated = self._bounded_text(item.body, 20_000)
+            return IssueSourceSnapshot(
+                number=str(issue),
+                title=item.title,
+                body=body,
+                comments=(),
+                read_at=read_at,
+                source=item.state,
+                updated_at=item.updated_at,
+                truncated=body_truncated,
+            )
         issue_result = self._gh_api_json(f"repos/{self.ctx.gh_repo_slug}/issues/{issue}")
         if not isinstance(issue_result, dict):
             return self._unavailable_issue_source_snapshot(issue, read_at, "issue-read-failed")
         title = str(issue_result.get("title") or "")
         body, body_truncated = self._bounded_text(str(issue_result.get("body") or ""), 20_000)
         state = str(issue_result.get("state") or "")
+        updated_at = str(issue_result.get("updated_at") or issue_result.get("updatedAt") or "")
         return IssueSourceSnapshot(
             number=str(issue),
             title=title,
@@ -1319,6 +1341,7 @@ class Phase9Router:
             comments=(),
             read_at=read_at,
             source=state,
+            updated_at=updated_at,
             truncated=body_truncated,
         )
 
@@ -1337,9 +1360,66 @@ class Phase9Router:
             comments=(),
             read_at=read_at,
             source=source or "unavailable",
+            updated_at="",
             truncated=False,
             unavailable_reason=reason,
         )
+
+    def _managed_work_item(self, issue: str) -> ManagedWorkSnapshotItem | None:
+        if self._managed_work_items_by_number is None:
+            snapshot = load_open_managed_work_snapshot(self.ctx)
+            self._managed_work_items_by_number = {}
+            if snapshot.loaded_ok:
+                for item in snapshot.items:
+                    if item.kind == "issue":
+                        self._managed_work_items_by_number[str(item.number)] = item
+        return self._managed_work_items_by_number.get(str(issue))
+
+    def _issue_comments_projection(self, issue: str, updated_at: str) -> tuple[list[dict[str, object]] | None, str]:
+        cache = self._read_comments_cache()
+        row = cache.get(str(issue))
+        if updated_at and isinstance(row, dict) and str(row.get("updated_at") or "") == str(updated_at):
+            comments = row.get("comments")
+            if isinstance(comments, list):
+                return [comment for comment in comments if isinstance(comment, dict)], "cache:fresh"
+        comments_result = self._gh_api_json(f"repos/{self.ctx.gh_repo_slug}/issues/{issue}/comments?per_page=20")
+        if not isinstance(comments_result, list):
+            return None, "unavailable"
+        cache[str(issue)] = {
+            "updated_at": str(updated_at or ""),
+            "comments": comments_result[-20:],
+            "not_live_state_fact_source": True,
+            "not_host_production_ssot": True,
+            "no_lifecycle_authority": True,
+        }
+        self._write_comments_cache(cache)
+        return comments_result, "live"
+
+    def _comments_cache_path(self) -> Path:
+        return self.ctx.paths.state / "phase9-router-comments-cache.json"
+
+    def _read_comments_cache(self) -> dict[str, object]:
+        try:
+            data = json.loads(self._comments_cache_path().read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        issues = data.get("issues")
+        return issues if isinstance(issues, dict) else {}
+
+    def _write_comments_cache(self, cache: dict[str, object]) -> None:
+        path = self._comments_cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "issues": cache,
+            "not_live_state_fact_source": True,
+            "not_host_production_ssot": True,
+            "no_lifecycle_authority": True,
+        }
+        tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
 
     def _gh_api_json(self, path: str) -> Any:
         command = ["gh", "api", path]

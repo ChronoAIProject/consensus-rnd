@@ -108,36 +108,16 @@ class CommentProgressActiveControllerTests(unittest.TestCase):
 
         self.assertFalse(monitor.seen("123"))
 
-    def test_non_owner_progress_reporter_does_not_create_edit_or_delete_comments(self) -> None:
+    def test_progress_reporter_does_not_create_edit_delete_or_read_per_worker_comments(self) -> None:
         log = self.tmp / ".refactor-loop" / "logs" / "phase9-issue191-r2-minimal.log"
         log.write_text("running\n", encoding="utf-8")
         reporter = ProgressReporter(self.ctx)
 
-        with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=self.decision(False)):
-            with mock.patch.object(reporter, "gh", side_effect=AssertionError("gh should not be called")):
-                with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("gh api should not be called")):
-                    reporter.post_or_update(log.stem, log)
+        self.assertFalse(hasattr(reporter, "gh"))
+        with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("gh api should not be called")):
+            reporter.record_worker_log_status(log.stem, log)
 
         self.assertEqual({}, reporter._state())
-
-    def test_owner_progress_reporter_keeps_existing_comment_path(self) -> None:
-        log = self.tmp / ".refactor-loop" / "logs" / "phase9-issue191-r2-minimal.log"
-        log.write_text("running\n", encoding="utf-8")
-        reporter = ProgressReporter(self.ctx)
-        gh_calls: list[list[str]] = []
-
-        def fake_gh(args, check=True):
-            gh_calls.append(list(args))
-            if args[:2] == ["pr", "view"]:
-                return subprocess.CompletedProcess(args, 1, "", "not a pr")
-            return subprocess.CompletedProcess(args, 0, "https://github.com/owner/repo/issues/191#issuecomment-55\n", "")
-
-        with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=self.decision(True)):
-            with mock.patch.object(reporter, "gh", side_effect=fake_gh):
-                reporter.post_or_update(log.stem, log)
-
-        self.assertTrue(any(call[:2] == ["issue", "comment"] for call in gh_calls), gh_calls)
-        self.assertIn(log.stem, reporter._state())
 
 
 if __name__ == "__main__":

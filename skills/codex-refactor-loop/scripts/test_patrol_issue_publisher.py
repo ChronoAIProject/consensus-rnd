@@ -178,7 +178,7 @@ class PatrolIssuePublisherTests(unittest.TestCase):
         self.assertFalse(any(call[:3] == ["gh", "issue", "edit"] for call in runner.calls))
 
     def test_failed_create_raises_without_reporting_issue(self) -> None:
-        runner = FakeGhRunner([], create_returncode=1, create_stderr="validation failed")
+        runner = FakeGhRunner([], create_returncode=1, create_stderr="validation failed: temporarily blocked from content creation")
 
         with self.assertRaisesRegex(RuntimeError, "patrol issue create failed: validation failed"):
             PatrolIssuePublisher(self.ctx, command_runner=runner).publish(
@@ -189,6 +189,9 @@ class PatrolIssuePublisherTests(unittest.TestCase):
 
         self.assertEqual([["gh", "issue", "list"], ["gh", "issue", "create"]], [call[:3] for call in runner.calls])
         self.assertFalse(any(call[:3] == ["gh", "issue", "edit"] for call in runner.calls))
+        backoff = json.loads((self.tmp / ".refactor-loop/state/secondary-mutation-backoff.json").read_text(encoding="utf-8"))
+        self.assertEqual("patrol-issue-create", backoff["contentCreation"]["operation"])
+        self.assertEqual("secondary-content-creation-limit", backoff["contentCreation"]["reason"])
 
     def test_create_output_without_issue_number_raises(self) -> None:
         runner = FakeGhRunner([], create_stdout="created patrol issue\n")
@@ -215,7 +218,7 @@ class PatrolIssuePublisherTests(unittest.TestCase):
                 }
             ],
             edit_returncode=1,
-            edit_stderr="edit failed",
+            edit_stderr="edit failed: You have exceeded a secondary rate limit",
         )
 
         with self.assertRaisesRegex(RuntimeError, "patrol issue body update failed: edit failed"):
@@ -227,6 +230,9 @@ class PatrolIssuePublisherTests(unittest.TestCase):
 
         self.assertEqual([["gh", "issue", "list"], ["gh", "issue", "edit"]], [call[:3] for call in runner.calls])
         self.assertFalse(any(call[:3] == ["gh", "issue", "create"] for call in runner.calls))
+        backoff = json.loads((self.tmp / ".refactor-loop/state/secondary-mutation-backoff.json").read_text(encoding="utf-8"))
+        self.assertEqual("patrol-issue-update", backoff["contentCreation"]["operation"])
+        self.assertEqual("secondary-content-creation-limit", backoff["contentCreation"]["reason"])
 
     def test_body_fingerprint_line_is_single_durable_marker(self) -> None:
         body = ensure_fingerprint_line("one\ncrnd:patrol:fingerprint:old\n", "new")
