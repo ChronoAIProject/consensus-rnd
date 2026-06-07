@@ -40,6 +40,7 @@ from .review_fix_dispatch import (
     ReviewThreadCompletionEvidence,
     validate_review_thread_completion,
 )
+from .secondary_mutation_backoff import currently_backing_off, record_backoff_from_gh_output
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import consensus_implementation_suppressed_reason, zero_code_implementation_completion_proven
@@ -479,7 +480,19 @@ class ControllerActions:
                 source="body-link",
             )
         self._require_github_actor_or_raise("open-pr")
+        backoff = currently_backing_off(self.ctx.paths.state)
+        if backoff.active:
+            raise RuntimeError(
+                "open_pr_with_label: secondary mutation backoff active "
+                f"mutation={backoff.mutation or 'unknown'} until_epoch={int(backoff.until_epoch)}"
+            )
         created = self.gh(["pr", "create", "--draft", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
+        recorded = record_backoff_from_gh_output(self.ctx.paths.state, created.stdout, created.stderr, env=self.ctx.env_for_subprocess())
+        if recorded is not None:
+            raise RuntimeError(
+                "open_pr_with_label: secondary mutation backoff recorded "
+                f"mutation={recorded.mutation} until_epoch={int(recorded.until_epoch)}"
+            )
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
         if not match:

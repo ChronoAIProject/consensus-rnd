@@ -21,6 +21,7 @@ from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from ..holistic_status import collect as collect_holistic_status
 from ..holistic_status import render_markdown as render_holistic_markdown
+from ..secondary_mutation_backoff import currently_backing_off, record_backoff_from_gh_output
 
 
 AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
@@ -78,11 +79,25 @@ class ProgressReporter:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
             self.log_tick_status("skip:graphql-backoff remaining=unknown")
             return
+        backoff = currently_backing_off(self.ctx.paths.state)
+        if backoff.active:
+            self.log_tick_status(
+                "skip:secondary-mutation-backoff "
+                f"mutation={backoff.mutation or 'unknown'} until_epoch={int(backoff.until_epoch)}"
+            )
+            return
         remaining_mutations = PROGRESS_COMMENT_MUTATION_BUDGET_PER_TICK
         mutation_backoff = False
         for log in sorted(self.log_dir.glob("*.log")):
             if remaining_mutations <= 0:
                 self.log_tick_status("skip:comment-mutation-budget-exhausted")
+                break
+            backoff = currently_backing_off(self.ctx.paths.state)
+            if backoff.active:
+                self.log_tick_status(
+                    "skip:secondary-mutation-backoff "
+                    f"mutation={backoff.mutation or 'unknown'} until_epoch={int(backoff.until_epoch)}"
+                )
                 break
             base = log.stem
             if base.startswith("audit-iter-") or base.startswith("remote-ci-"):
@@ -146,6 +161,13 @@ class ProgressReporter:
                 f"issue=#{config['issue_number']} comment_id={config['comment_id']}"
             )
         else:
+            recorded = record_backoff_from_gh_output(self.ctx.paths.state, patch.stdout, patch.stderr, env=self.ctx.env_for_subprocess())
+            if recorded is not None:
+                self.log_msg(
+                    "global-dashboard-status-card=secondary-backoff "
+                    f"comment_id={config['comment_id']} mutation={recorded.mutation} until_epoch={int(recorded.until_epoch)}"
+                )
+                return
             self.log_msg(f"global-dashboard-status-card=FAIL patch comment_id={config['comment_id']}")
 
     def build_global_status_body(self) -> str:
@@ -242,6 +264,13 @@ Raw log tail is intentionally omitted while the worker is still running."""
         if not decision.allowed:
             self.log_msg(f"active_controller=noop:not-owner progress-reporter {base} owner={decision.owner_device}")
             return "noop"
+        backoff = currently_backing_off(self.ctx.paths.state)
+        if backoff.active:
+            self.log_msg(
+                "progress-reporter: skip comment mutation secondary-backoff "
+                f"base={base} mutation={backoff.mutation or 'unknown'} until_epoch={int(backoff.until_epoch)}"
+            )
+            return "mutation_failed"
         state = self._state()
         item = state.get(base, {}) if isinstance(state.get(base), dict) else {}
         target = str(item.get("target") or "")
@@ -273,6 +302,13 @@ Raw log tail is intentionally omitted while the worker is still running."""
                 self._state_set(base, target, kind, 0, "deleted", "true")
                 return "mutated"
             else:
+                recorded = record_backoff_from_gh_output(self.ctx.paths.state, delete.stdout, delete.stderr, env=self.ctx.env_for_subprocess())
+                if recorded is not None:
+                    self.log_msg(
+                        "progress-reporter: secondary mutation backoff recorded "
+                        f"base={base} mutation={recorded.mutation} until_epoch={int(recorded.until_epoch)}"
+                    )
+                    return "mutation_failed"
                 exists = self.gh_api([f"repos/{self.repo}/issues/comments/{cid}"], check=False)
                 if exists.returncode != 0:
                     self.log_msg(f"comment {cid} for {base} already 404; marking finished")
@@ -305,6 +341,13 @@ Raw log tail is intentionally omitted while the worker is still running."""
                     self.log_msg(f"edited progress comment for {base} (cid={cid}, finished={finished})")
                     return "mutated"
                 else:
+                    recorded = record_backoff_from_gh_output(self.ctx.paths.state, patch.stdout, patch.stderr, env=self.ctx.env_for_subprocess())
+                    if recorded is not None:
+                        self.log_msg(
+                            "progress-reporter: secondary mutation backoff recorded "
+                            f"base={base} mutation={recorded.mutation} until_epoch={int(recorded.until_epoch)}"
+                        )
+                        return "mutation_failed"
                     self.log_msg(f"FAIL to edit comment {cid} for {base}; will retry next tick")
                     return "mutation_failed"
         return "noop"
@@ -313,8 +356,22 @@ Raw log tail is intentionally omitted while the worker is still running."""
         first = self.gh([kind, "comment", target, "--body-file", str(body_file)], check=False)
         if first.returncode == 0 and first.stdout.strip():
             return first.stdout.strip().splitlines()[-1]
+        recorded = record_backoff_from_gh_output(self.ctx.paths.state, first.stdout, first.stderr, env=self.ctx.env_for_subprocess())
+        if recorded is not None:
+            self.log_msg(
+                "progress-reporter: secondary mutation backoff recorded "
+                f"target={kind}#{target} mutation={recorded.mutation} until_epoch={int(recorded.until_epoch)}"
+            )
+            return ""
         other_kind = "issue" if kind == "pr" else "pr"
         second = self.gh([other_kind, "comment", target, "--body-file", str(body_file)], check=False)
+        recorded = record_backoff_from_gh_output(self.ctx.paths.state, second.stdout, second.stderr, env=self.ctx.env_for_subprocess())
+        if recorded is not None:
+            self.log_msg(
+                "progress-reporter: secondary mutation backoff recorded "
+                f"target={other_kind}#{target} mutation={recorded.mutation} until_epoch={int(recorded.until_epoch)}"
+            )
+            return ""
         return second.stdout.strip().splitlines()[-1] if second.returncode == 0 and second.stdout.strip() else ""
 
     def _state(self) -> dict[str, object]:

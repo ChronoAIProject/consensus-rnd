@@ -22,6 +22,7 @@ from codex_refactor_loop.monitors.progress import (
     ProgressReporter,
     exit_status,
 )
+from codex_refactor_loop.secondary_mutation_backoff import record_secondary_mutation_backoff
 
 
 class ProgressReporterTests(unittest.TestCase):
@@ -228,6 +229,47 @@ class ProgressReporterTests(unittest.TestCase):
                             reporter.tick()
 
         self.assertEqual(["191"], attempted)
+        self.assertEqual({}, reporter._state())
+
+    def test_tick_skips_comment_mutations_during_secondary_backoff(self) -> None:
+        log = self.tmp / ".refactor-loop" / "logs" / "phase9-issue191-r1-minimal.log"
+        log.write_text("running\n", encoding="utf-8")
+        reporter = ProgressReporter(self.ctx)
+        record_secondary_mutation_backoff(self.ctx.paths.state, "addComment", now=4_102_444_800, env={"SECONDARY_MUTATION_BACKOFF_SECONDS": "600"})
+
+        with mock.patch("codex_refactor_loop.monitors.progress.graphql_headroom_ok", return_value=True):
+            with mock.patch.object(reporter, "gh", side_effect=AssertionError("gh comment mutation should not be called")):
+                with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("gh api mutation should not be called")):
+                    with mock.patch.object(reporter, "sync_global_status_card", side_effect=AssertionError("global card should not sync during secondary backoff")):
+                        reporter.tick()
+
+        self.assertEqual({}, reporter._state())
+
+    def test_add_comment_secondary_throttle_records_backoff_and_returns_mutation_failed(self) -> None:
+        log = self.tmp / ".refactor-loop" / "logs" / "phase9-issue191-r1-minimal.log"
+        log.write_text("running\n", encoding="utf-8")
+        reporter = ProgressReporter(self.ctx)
+        decision = mock.Mock(allowed=True, owner_device="device-b", status="owner", action="progress-reporter-write", lease_id="lease", expires_at="")
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args, check=True):
+            del check
+            gh_calls.append(list(args))
+            if args[:2] == ["issue", "comment"]:
+                return mock.Mock(returncode=1, stdout="", stderr="GraphQL: was submitted too quickly (addComment)")
+            raise AssertionError(f"unexpected fallback gh call after secondary throttle: {args}")
+
+        with mock.patch("codex_refactor_loop.secondary_mutation_backoff.time.time", return_value=100):
+            with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
+                with mock.patch.object(reporter, "gh_api", return_value=mock.Mock(returncode=0, stdout=json.dumps({}), stderr="")):
+                    with mock.patch.object(reporter, "gh", side_effect=fake_gh):
+                        self.assertEqual("mutation_failed", reporter.post_or_update(log.stem, log))
+
+        backoff = json.loads((self.tmp / ".refactor-loop" / "state" / "secondary-mutation-backoff.json").read_text(encoding="utf-8"))
+        self.assertEqual("addComment", backoff["mutation"])
+        self.assertEqual(700, backoff["until_epoch"])
+        self.assertEqual(1, len(gh_calls))
+        self.assertEqual(["issue", "comment", "191", "--body-file"], gh_calls[0][:4])
         self.assertEqual({}, reporter._state())
 
     def test_parse_kind_uses_rest_issue_pull_request_projection(self) -> None:
