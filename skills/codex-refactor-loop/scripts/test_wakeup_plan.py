@@ -58,6 +58,8 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     stale_revival_seconds,
     suppress_stale_unexecutable_actions,
     concurrency_plan,
+    default_issue_intake_actions,
+    load_default_issue_intake_candidates,
 )
 from test_support.authorization_projection import project_python  # noqa: E402
 
@@ -171,6 +173,47 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(77, action["target_number"])
         self.assertEqual("wakeup-runner-396", action["runner_authority"])
         self.assertTrue(action["no_generic_command"])
+
+    def test_default_issue_intake_projects_named_action_for_open_not_managed_issue(self) -> None:
+        ctx = mock.Mock(host_env={"DEFAULT_ISSUE_INTAKE_ENABLE": "true"})
+        actions = default_issue_intake_actions(
+            [
+                GhItem(kind="issue", number=88, title="new", labels=(), updated_at="2026-06-07T00:00:00Z"),
+                GhItem(kind="issue", number=89, title="managed", labels=(label_catalog.MANAGED,), updated_at="2026-06-07T00:00:00Z"),
+            ],
+            ctx,
+        )
+
+        self.assertEqual(1, len(actions))
+        action = actions[0]
+        self.assertEqual("default-issue-intake-claim", action["kind"])
+        self.assertEqual("apply_default_issue_intake_claim", action["controller_action"])
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertEqual("issue", action["target_kind"])
+        self.assertEqual(88, action["target_number"])
+        self.assertIn("target_not_managed", action["preconditions"])
+        self.assertTrue(action["no_generic_command"])
+
+    def test_default_issue_intake_projection_obeys_false_like_host_toggle(self) -> None:
+        ctx = mock.Mock(host_env={"DEFAULT_ISSUE_INTAKE_ENABLE": "false"})
+        actions = default_issue_intake_actions(
+            [GhItem(kind="issue", number=88, title="new", labels=(), updated_at="")],
+            ctx,
+        )
+
+        self.assertEqual([], actions)
+
+    def test_load_default_issue_intake_candidates_filters_managed_labels(self) -> None:
+        ctx = mock.Mock(host_env={}, gh_repo_slug="owner/repo")
+        payload = [
+            {"number": 88, "title": "new", "labels": [], "updatedAt": "2026-06-07T00:00:00Z"},
+            {"number": 89, "title": "managed", "labels": [{"name": label_catalog.MANAGED}], "updatedAt": ""},
+        ]
+        with mock.patch("codex_refactor_loop.wakeup_plan.run_json", return_value=payload) as run_json_mock:
+            candidates = load_default_issue_intake_candidates(self.repo, ctx)
+
+        self.assertEqual([88], [item.number for item in candidates])
+        run_json_mock.assert_called_once()
 
     def test_rebase_resolve_actions_fetch_live_mergeability_for_snapshot_pr(self) -> None:
         item = GhItem(
@@ -5476,17 +5519,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(release_publish_actions(self.repo), [])
 
     def test_release_gate_dispatch_requires_host_opt_in(self) -> None:
-        actions = release_gate_dispatch_actions(
-            self.repo,
-            scorer=lambda _: {
-                "from_version": "1.2.3-beta.4",
-                "to_version": "1.2.3-beta.5",
-                "stability_score": 100,
-                "ready": True,
-                "signals": {},
-                "blocked_reasons": [],
-            },
-        )
+        with mock.patch.dict(os.environ, {}, clear=True):
+            actions = release_gate_dispatch_actions(
+                self.repo,
+                scorer=lambda _: {
+                    "from_version": "1.2.3-beta.4",
+                    "to_version": "1.2.3-beta.5",
+                    "stability_score": 100,
+                    "ready": True,
+                    "signals": {},
+                    "blocked_reasons": [],
+                },
+            )
 
         self.assertEqual(actions, [])
 

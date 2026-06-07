@@ -45,6 +45,7 @@ TARGET_ANCHORS = {
     "repository-stalled-meta-reflector-506": "Repository-stalled meta-reflector(per #506)",
     "global-dashboard-status-card-504": "## Named runtime exception - global-dashboard-status-card(per #504)",
     "patrol-inspector-issue-intake-541": "## Named runtime exception - patrol-inspector issue-intake(per #541)",
+    "default-issue-intake-claim-623": "## Named runtime exception - default issue intake claim(per #623)",
     "consensus-gate-proof-579": "## ConsensusGateProof contract",
 }
 
@@ -383,6 +384,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "RUNTIME_RETENTION_ENABLE=true",
             "only canonical owner",
             "$REPO_ROOT/.refactor-loop/{logs,prompts,runs}",
+            "fails closed until a file-level planner proof surface and producer exist",
+            "deleted=0 kept=0",
             "same-inode compact",
             ".refactor-loop/state/runtime-retention-plan.json",
             "no_in_flight",
@@ -414,6 +417,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertNotIn('"' + "log" + '-retention": CommandSpec(', cli_source)
         self.assertIn("runtime_retention_main", cli_source)
         self.assertIn("RuntimeRetentionPlan", runtime_source)
+        self.assertIn("deleted = 0", runtime_source)
+        self.assertIn("kept = 0", runtime_source)
 
     def test_issue_504_global_dashboard_card_is_fixed_issue_comment_patch_only(self) -> None:
         entry = mirror_entry(self.mirror, "global-dashboard-status-card-504")
@@ -1656,6 +1661,43 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "test_effect_admission_boundary_rejects_minimum_forbidden_command_and_lifecycle_fields",
             read(SKILL_ROOT / "scripts" / "test_wakeup_runner.py"),
         )
+
+    def test_default_issue_intake_claim_surface_is_single_default_protocol(self) -> None:
+        entry = mirror_entry(self.mirror, "default-issue-intake-claim-623")
+        combined = "\n".join((entry, self.skill, self.repo_rules))
+        helper = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "default_issue_intake.py")
+        wakeup_plan = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        wakeup_runner = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_runner.py")
+        controller = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "controller_actions.py")
+
+        for required in (
+            "#623",
+            "DefaultIssueIntakeClaim",
+            "DEFAULT_ISSUE_INTAKE_ENABLE",
+            "apply_default_issue_intake_claim",
+            "crnd:default-issue-intake-claim",
+            "crnd:default-issue-intake-stop",
+            "labels.design_issue_label_bundle()",
+            "GitHub comment createdAt + author.login",
+            "admission/accounting fact",
+            "no `UNMANAGED_ISSUE_INTAKE_ENABLE`",
+            "test_default_issue_intake.py",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, combined)
+
+        for source in (helper, wakeup_plan, wakeup_runner, controller):
+            with self.subTest(source="python"):
+                self.assertNotIn("UNMANAGED_ISSUE_INTAKE_ENABLE", source)
+                self.assertNotIn("UnmanagedIssueIntakeClaim", source)
+                self.assertNotIn("intake_unmanaged_issue_claim", source)
+                self.assertNotIn("crnd:unmanaged-issue-intake", source)
+        self.assertIn("class DefaultIssueIntakeClaim", helper)
+        self.assertIn("CLAIM_MARKER", helper)
+        self.assertIn("STOP_MARKER", helper)
+        self.assertIn('"apply_default_issue_intake_claim"', wakeup_plan)
+        self.assertIn('"apply_default_issue_intake_claim"', wakeup_runner)
+        self.assertIn("def apply_default_issue_intake_claim", controller)
 
     def test_observability_comment_writers_owner_local_contract_is_locked(self) -> None:
         heading = "## Named runtime exception — observability-comment-writers(per #53)"

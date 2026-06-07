@@ -220,6 +220,10 @@ class FakeActions:
         self.calls.append(("apply_issue_decomposition_plan", plan_path))
         return ((501, "https://github.com/owner/repo/issues/501"),)
 
+    def apply_default_issue_intake_claim(self, issue_number: int):
+        self.calls.append(("apply_default_issue_intake_claim", issue_number))
+        return None
+
     def render_release_rollup_body_prompt(self, action: dict) -> Path:
         self.calls.append(("render_release_rollup_body_prompt", dict(action)))
         prompt = Path(action["prompt"])
@@ -412,6 +416,77 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(calls, [["gh", "pr", "view", "77", "--repo", "other/repo", "--json", "state"]])
 
+    def test_apply_default_issue_intake_claim_dispatches_named_helper(self) -> None:
+        action = {
+            "kind": "default-issue-intake-claim",
+            "action_id": "default-issue-intake-claim:issue:77",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "default_issue_intake_enabled",
+                "live_open_target",
+                "non_pr_issue",
+                "target_not_managed",
+                "github_comment_claim_protocol",
+            ],
+            "source_artifact": "github-open-default-issue-intake-candidates",
+            "source_marker": "default-issue-intake-candidate:issue:77",
+            "target_kind": "issue",
+            "target_number": 77,
+            "target": {"kind": "issue", "number": 77},
+            "controller_action": "apply_default_issue_intake_claim",
+            "no_generic_command": True,
+            "no_lifecycle_authority": True,
+        }
+        actions = FakeActions()
+
+        result = self.run_result(self.base_plan(action), gh_labels=[], actions=actions)
+
+        self.assertEqual("applied", result[0].status)
+        self.assertEqual([("apply_default_issue_intake_claim", 77)], actions.calls)
+
+    def test_apply_default_issue_intake_claim_rejects_pr_shape(self) -> None:
+        action = {
+            "kind": "default-issue-intake-claim",
+            "action_id": "default-issue-intake-claim:issue:77",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "default_issue_intake_enabled",
+                "live_open_target",
+                "non_pr_issue",
+                "target_not_managed",
+                "github_comment_claim_protocol",
+            ],
+            "source_artifact": "github-open-default-issue-intake-candidates",
+            "source_marker": "default-issue-intake-candidate:issue:77",
+            "target_kind": "issue",
+            "target_number": 77,
+            "target": {"kind": "issue", "number": 77},
+            "controller_action": "apply_default_issue_intake_claim",
+            "no_generic_command": True,
+            "no_lifecycle_authority": True,
+        }
+
+        def command_runner(command):
+            if command[:2] == ["gh", "api"]:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "pull_request": {}}), "")
+            if command[:3] == ["gh", "issue", "view"]:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"labels": [], "body": ""}), "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        runner = WakeupRunner(
+            self.ctx,
+            plan_loader=lambda _repo: self.base_plan(action),
+            actions=FakeActions(),
+            command_runner=command_runner,
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual("blocked", result[0].status)
+        self.assertEqual("default_issue_intake_target_is_pr", result[0].reason)
+
     def run_result(
         self,
         plan: dict,
@@ -439,6 +514,15 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
                 if endpoint == f"repos/owner/repo/commits/{'a' * 40}/check-runs":
                     payload = [{"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}]
+                    return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+                if endpoint == "repos/owner/repo/issues/77":
+                    if gh_state is None:
+                        return subprocess.CompletedProcess(command, 1, "", "not found")
+                    live_labels = gh_labels if gh_labels is not None else [labels.MANAGED]
+                    payload = {
+                        "state": str(gh_state).lower(),
+                        "labels": [{"name": name} for name in live_labels],
+                    }
                     return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
                 if "/pulls/" in endpoint or "/issues/" in endpoint:
                     if gh_state is None:
@@ -2018,6 +2102,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "dispatch_release_candidate",
             "publish_release_candidate",
             "apply_issue_decomposition_plan",
+            "apply_default_issue_intake_claim",
         }
 
         self.assertEqual(SUPPORTED_CONTROLLER_ACTIONS, expected_actions)
