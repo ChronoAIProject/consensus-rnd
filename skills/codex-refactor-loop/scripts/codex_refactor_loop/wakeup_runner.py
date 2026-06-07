@@ -33,7 +33,7 @@ from .issue_decomposition import (
     issue_decomposition_plan_file_digest,
     load_issue_decomposition_plan,
 )
-from .pr_checks import PrChecksProjection
+from .pr_checks import PrMergeReadinessProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.gate import AutoReleaseGate
 from .release.publish_preflight import ReleasePublishPreflight
@@ -856,7 +856,7 @@ class WakeupRunner:
         preconditions = action.get("preconditions")
         if not isinstance(preconditions, list):
             return "dispatch_remote_ci_fix_missing_preconditions"
-        for required in ("active_controller_owner", "live_open_target", "checks_red"):
+        for required in ("active_controller_owner", "live_open_target", "target_required_checks_red"):
             if required not in preconditions:
                 return f"dispatch_remote_ci_fix_missing_precondition:{required}"
         if not str(action.get("head_sha") or "").strip():
@@ -1530,17 +1530,17 @@ class WakeupRunner:
     def _review_gate_ci_error(self, pr_number: int, live_head_sha: str) -> str | None:
         if not self.ctx.gh_repo_slug:
             return "missing_gh_repo_slug"
-        status = PrChecksProjection(runner=self.command_runner).check_pr(self.ctx.gh_repo_slug, pr_number)
+        status = PrMergeReadinessProjection(runner=self.command_runner).check_pr(self.ctx.gh_repo_slug, pr_number)
         if not status.ok:
             return f"ci_unavailable:{status.reason or 'unknown'}"
         if status.head_sha != live_head_sha:
             return "ci_stale_head_sha"
-        if not status.runs:
-            return "ci_missing_checks"
-        if any(run.bucket == "pending" for run in status.runs):
-            return "ci_pending"
-        if any(run.bucket == "fail" for run in status.runs):
-            return "ci_failed"
+        if status.missing_required:
+            return "required_ci_missing"
+        if status.required_pending:
+            return "required_ci_pending"
+        if status.required_failed:
+            return "required_ci_failed"
         return None
 
     def _review_gate_mergeability_error(self, pr_number: int) -> str | None:

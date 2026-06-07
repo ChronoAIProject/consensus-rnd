@@ -96,6 +96,8 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         live_head: str = "a" * 40,
         check_status: str = "completed",
         check_conclusion: str = "success",
+        check_name: str = "ci",
+        required_checks: tuple[str, ...] = ("ci",),
         mergeable: str = "MERGEABLE",
         is_draft: bool = False,
     ) -> object:
@@ -111,8 +113,19 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": mergeable, "isDraft": is_draft}), "")
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/12":
                 return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": live_head}}), "")
+            if command[:3] == ["gh", "pr", "view"] and "baseRefName,headRefOid,mergeStateStatus" in command:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"baseRefName": "main", "headRefOid": live_head, "mergeStateStatus": "DIRTY"}),
+                    "",
+                )
+            if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/branches/main/protection/required_status_checks":
+                return subprocess.CompletedProcess(command, 0, json.dumps({"contexts": list(required_checks)}), "")
+            if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/rules/branches/main":
+                return subprocess.CompletedProcess(command, 1, "", "404 Not Found")
             if command[:2] == ["gh", "api"] and command[2] == f"repos/owner/repo/commits/{live_head}/check-runs":
-                payload = {"check_runs": [{"name": "ci", "status": check_status, "conclusion": check_conclusion}]}
+                payload = {"check_runs": [{"name": check_name, "status": check_status, "conclusion": check_conclusion}]}
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
             if command == ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"]:
                 return subprocess.CompletedProcess(
@@ -324,10 +337,10 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:invalid_review_marker:quality")
         self.assertEqual(self.actions.merged, [])
 
-    def test_ci_pending_or_failed_fails_closed_without_merge(self) -> None:
+    def test_target_required_ci_pending_or_failed_fails_closed_without_merge(self) -> None:
         for status, conclusion, reason in (
-            ("queued", "", "ci_pending"),
-            ("completed", "failure", "ci_failed"),
+            ("queued", "", "required_ci_pending"),
+            ("completed", "failure", "required_ci_failed"),
         ):
             with self.subTest(reason=reason):
                 self.actions.merged.clear()
@@ -340,6 +353,38 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
                 self.assertEqual(result.status, "blocked")
                 self.assertEqual(result.reason, f"WAIT_OR_REDISPATCH:{reason}")
                 self.assertEqual(self.actions.merged, [])
+
+    def test_missing_target_required_ci_fails_closed_without_merge(self) -> None:
+        self.write_review("architect", "approve")
+        self.write_review("tests", "approve")
+        self.write_review("quality", "comment")
+
+        result = self.run_action(self.action(action_id="review:12:required-ci-missing"), check_name="docs")
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:required_ci_missing")
+        self.assertEqual(self.actions.merged, [])
+
+    def test_advisory_ci_pending_or_failed_does_not_block_merge(self) -> None:
+        for status, conclusion in (
+            ("queued", ""),
+            ("completed", "failure"),
+        ):
+            with self.subTest(status=status, conclusion=conclusion):
+                self.actions.merged.clear()
+                self.write_review("architect", "approve")
+                self.write_review("tests", "approve")
+                self.write_review("quality", "comment")
+
+                result = self.run_action(
+                    self.action(action_id=f"review:12:advisory:{status}:{conclusion or 'pending'}"),
+                    check_status=status,
+                    check_conclusion=conclusion,
+                    required_checks=(),
+                )
+
+                self.assertEqual(result.status, "applied")
+                self.assertEqual(self.actions.merged, ["12"])
 
     def test_non_mergeable_pr_fails_closed_without_merge(self) -> None:
         self.write_review("architect", "approve")

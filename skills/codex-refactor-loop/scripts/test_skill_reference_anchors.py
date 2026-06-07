@@ -894,9 +894,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
-        self.assertIn("`MERGE`: post 中文 merge comment, then call `merge_pr <pr>` for ready+merge.", self.skill)
+        self.assertIn("`MERGE`: post merge comment according to `$HOST_WORK_LANGUAGE`, then call `merge_pr <pr>` for ready+merge.", self.skill)
         self.assertIn(
-            "`MERGE_WITH_COMMENTS`: surface comment evidence, post 中文 merge comment, then call `merge_pr <pr>` for ready+merge.",
+            "`MERGE_WITH_COMMENTS`: surface comment evidence, post merge comment according to `$HOST_WORK_LANGUAGE`, then call `merge_pr <pr>` for ready+merge.",
             self.skill,
         )
         for needle in (
@@ -1830,7 +1830,7 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "merge_pr",
             "mock.patch(\"codex_refactor_loop.phase9.router.subprocess.run\"",
             "mock.patch(\"codex_refactor_loop.wakeup_plan.subprocess.run\"",
-            "mock.patch(\"codex_refactor_loop.wakeup_runner.PrChecksProjection\"",
+            "mock.patch(\"codex_refactor_loop.wakeup_runner.PrMergeReadinessProjection\"",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, source)
@@ -1891,6 +1891,10 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "Review artifact verdict authority does not bypass current-head binding; merge readiness requires every required reviewer artifact to bind to the live PR head.",
             "review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`",
             "`wakeup-plan` action `head_sha` is not reviewer-head authority",
+            "target-required PR merge-readiness checks",
+            "raw PR-head check buckets or advisory check buckets are display-only diagnostics, not merge/fix lifecycle authority",
+            "target-required CI pending/fail/missing/unavailable",
+            "remote-ci worker only for target-required failed checks with `target_required_checks_red`",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)

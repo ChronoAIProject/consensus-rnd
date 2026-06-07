@@ -40,7 +40,7 @@ from codex_refactor_loop.issue_decomposition import (
     issue_decomposition_plan_file_digest,
 )
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
-from codex_refactor_loop.pr_checks import PrChecksProjection
+from codex_refactor_loop.pr_checks import PrMergeReadinessProjection
 from codex_refactor_loop.release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from codex_refactor_loop.release.gate import canonical_digest, decide_release_artifact, parse_time
 from codex_refactor_loop.restart import restart_managed_daemon_names
@@ -2630,7 +2630,7 @@ def ci_red_actions(repo_root: Path, items: list[GhItem], ctx: LoopContext | None
     slug = github_repo_slug()
     if not slug:
         return []
-    projection: PrChecksProjection | None = None
+    projection: PrMergeReadinessProjection | None = None
     actions: list[dict[str, Any]] = []
     for item in items:
         if item.kind != "PR":
@@ -2638,11 +2638,11 @@ def ci_red_actions(repo_root: Path, items: list[GhItem], ctx: LoopContext | None
         if is_release_rollup_pr(item, ctx):
             continue
         if projection is None:
-            projection = PrChecksProjection(cwd=repo_root)
+            projection = PrMergeReadinessProjection(cwd=repo_root)
         status = projection.check_pr(slug, item.number)
         if not status.ok:
             continue
-        failed_checks = [check for check in status.runs if check.bucket == "fail"]
+        failed_checks = list(status.required_failed)
         fail_count = len(failed_checks)
         if fail_count <= 0:
             continue
@@ -2666,7 +2666,7 @@ def ci_red_actions(repo_root: Path, items: list[GhItem], ctx: LoopContext | None
                     "target_kind": "PR",
                     "target_number": item.number,
                     "target": {"kind": "PR", "number": item.number},
-                    "preconditions": ["active_controller_owner", "live_open_target", "checks_red"],
+                    "preconditions": ["active_controller_owner", "live_open_target", "target_required_checks_red"],
                     "controller_action": "dispatch_remote_ci_fix",
                     "runner_authority": RUNNER_AUTHORITY,
                     "no_generic_command": True,
