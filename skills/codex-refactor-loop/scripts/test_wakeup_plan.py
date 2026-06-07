@@ -2582,6 +2582,15 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(recovered[0]["target_kind"], "issue")
         self.assertEqual(recovered[0]["target_number"], 505)
 
+    def test_markerless_clean_solver_log_without_artifact_does_not_project_completed_marker(self) -> None:
+        self.write_markerless_clean_log("phase9-issue659-r2-minimal.log")
+
+        actions = completed_marker_actions(self.repo, open_targets={("issue", 659)})
+
+        self.assertFalse(
+            [action for action in actions if action.get("source_artifact") == ".refactor-loop/logs/phase9-issue659-r2-minimal.log"]
+        )
+
     def test_judge_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
         log = self.write_markerless_clean_log("phase9-issue505-r2-judge.log")
         self.write_run_artifact("phase9-issue505-r2-judge", "META_JUDGE_DONE:converge:round-3:artifact")
