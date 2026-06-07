@@ -191,7 +191,7 @@ def _find_log_exceptions(log_dir: Path) -> tuple[PatrolFinding, ...]:
     findings = []
     for path in sorted(log_dir.glob("*.log"))[-200:]:
         lines = _read_tail_or_fail(path, 80)
-        evidence = _extract_log_diagnostic_evidence(lines)
+        evidence = _exception_signal_lines(lines)
         if not evidence:
             continue
         findings.append(
@@ -348,6 +348,20 @@ def _is_python_exception_line(line: str) -> bool:
         return False
     exception_type = line.split(":", 1)[0].strip()
     return exception_type.endswith(("Error", "Exception")) or exception_type in {"KeyboardInterrupt", "SystemExit"}
+
+
+def _exception_signal_lines(lines: Sequence[str]) -> tuple[str, ...]:
+    if _tail_has_clean_exit(lines):
+        return tuple(line for line in lines if _line_is_worker_self_post_failure(line))
+    return _extract_log_diagnostic_evidence(lines)
+
+
+def _tail_has_clean_exit(lines: Sequence[str]) -> bool:
+    return any(line.strip() == "EXIT=0" for line in lines)
+
+
+def _line_is_worker_self_post_failure(line: str) -> bool:
+    return line.strip().startswith("POST_FAILED:")
 
 
 def _read_tail_or_fail(path: Path, max_lines: int) -> tuple[str, ...]:
