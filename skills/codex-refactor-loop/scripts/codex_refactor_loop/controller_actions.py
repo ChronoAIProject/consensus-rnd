@@ -98,6 +98,11 @@ ROLLUP_AUTO_MERGE_POLICY_LINE = _utf8_hex(
 ROLLUP_SINGLETON_POLICY_LINE = _utf8_hex(
     "2d20e8afa520505220e698af2072656c6561736520726f6c6c75702073696e676c65746f6e3be5b7b2e69c89206f70656e20726f6c6c757020e697b620636f6e74726f6c6c657220e58faae69bb4e696b0206865616420e5928c20626f64792ce4b88de5bc80e696b0205052e38082"
 )
+IMPLEMENTATION_RESERVATION_TITLE_PREFIX = _utf8_hex("e9a284e795992069737375652023")
+IMPLEMENTATION_RESERVATION_TITLE_SUFFIX = _utf8_hex("20e5ae9ee78eb0e58886e694af")
+IMPLEMENTATION_RESERVATION_FILES_HEADING = _utf8_hex("232320e4bfaee694b9e69687e4bbb60a0a")
+IMPLEMENTATION_RESERVATION_TESTS_HEADING = _utf8_hex("232320e6b58be8af95e7bb93e69e9c0a0a")
+IMPLEMENTATION_RESERVATION_DEVIATION_HEADING = _utf8_hex("232320646576696174696f6e20e8aeb0e5bd950a0a")
 
 
 class ControllerActions:
@@ -991,6 +996,9 @@ class ControllerActions:
         if pr_error:
             sys.stderr.write(f"publish_implementation_output: {pr_error}\n")
             return 2
+        if pr_target is None:
+            sys.stderr.write("publish_implementation_output: matching_pr_missing\n")
+            return 2
         committed = self._commit_publish_implementation_diff(action, issue_target, head_ref, worktree)
         if committed != 0:
             return committed
@@ -1004,13 +1012,6 @@ class ControllerActions:
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
             return pushed
-        if pr_target is None:
-            pr_target, _url = self.open_pr_with_label(
-                self._implementation_pr_title(action, issue_target),
-                str(self._implementation_pr_body_file(action, issue_target)),
-                base=self.integration_branch,
-                head=head_ref,
-            )
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
 
     def _validate_publish_implementation_identity(
@@ -1191,6 +1192,15 @@ class ControllerActions:
         cluster_id = str(action["cluster_id"])
         iteration = str(action["iteration"])
         worktree, branch = self.fresh_safe_worktree(iteration, cluster_id, self.integration_branch)
+        reservation = self._reserve_implementation_pr(
+            action=action,
+            issue_target=number,
+            cluster_id=cluster_id,
+            branch=branch,
+            worktree=worktree,
+        )
+        if reservation != 0:
+            return reservation
         log = self.ctx.paths.logs / f"implement-{cluster_id}.log"
         self._clear_stale_implement_log_for_fresh_dispatch(log, action)
         prompt = self.ctx.paths.prompts / f"implement-{cluster_id}.md"
@@ -1223,6 +1233,71 @@ class ControllerActions:
             reason=f"issue #{number} consensus implementation",
         )
         return 0
+
+    def _reserve_implementation_pr(
+        self,
+        *,
+        action: Mapping[str, object],
+        issue_target: str,
+        cluster_id: str,
+        branch: str,
+        worktree: Path,
+    ) -> int:
+        body = self._reservation_implementation_pr_body(action, issue_target, cluster_id)
+        commit = self._git_in(worktree, ["commit", "--allow-empty", "-m", f"Reserve implementation PR for issue #{issue_target}"], check=False)
+        if commit.returncode != 0:
+            sys.stderr.write(
+                "dispatch_consensus_implementation: reservation_commit_failed: "
+                f"{_single_line(commit.stderr or commit.stdout)}\n"
+            )
+            return 2
+        pushed = self.safe_push(branch=branch, worktree=worktree)
+        if pushed != 0:
+            sys.stderr.write("dispatch_consensus_implementation: reservation_push_failed\n")
+            return pushed
+        try:
+            self.open_pr_with_label(
+                f"{IMPLEMENTATION_RESERVATION_TITLE_PREFIX}{issue_target}{IMPLEMENTATION_RESERVATION_TITLE_SUFFIX}",
+                self.ctx.durable_artifact_path(body),
+                base=self.integration_branch,
+                head=branch,
+            )
+        except Exception as exc:
+            sys.stderr.write(f"dispatch_consensus_implementation: reservation_pr_open_failed: {_single_line(str(exc))}\n")
+            return 2
+        pr_error, pr_target = self._matching_implementation_pr(branch, issue_target)
+        if pr_error or pr_target is None:
+            sys.stderr.write(f"dispatch_consensus_implementation: reservation_pr_unverified: {pr_error or 'matching_pr_missing'}\n")
+            return 2
+        return 0
+
+    def _reservation_implementation_pr_body(
+        self,
+        action: Mapping[str, object],
+        issue_target: str,
+        cluster_id: str,
+    ) -> Path:
+        path = self.ctx.paths.runs / f"implementation-reservation-{cluster_id}-body.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        body = (
+            IMPLEMENTATION_RESERVATION_FILES_HEADING
+            +
+            f"{str(action.get('scope_paths') or '').strip() or '- pending implementation'}\n\n"
+            +
+            IMPLEMENTATION_RESERVATION_TESTS_HEADING
+            +
+            "- pending implementation\n\n"
+            +
+            IMPLEMENTATION_RESERVATION_DEVIATION_HEADING
+            +
+            "- none\n\n"
+            +
+            f"Closes #{issue_target}\n\n"
+            +
+            f"{FINAL_SENTINEL}\n"
+        )
+        path.write_text(body, encoding="utf-8")
+        return path
 
     def _move_issue_to_implementing_phase(self, issue_target: str) -> int:
         add_labels = (labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO)
