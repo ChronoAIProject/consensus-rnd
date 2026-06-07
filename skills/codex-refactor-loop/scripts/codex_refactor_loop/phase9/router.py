@@ -426,9 +426,6 @@ class Phase9Router:
             return Phase9MarkerGrammar.parse_marker_candidate(marker)
         return None
 
-    def _companion_artifact_marker_fallback(self, log_path: Path) -> str | None:
-        return self._final_marker_from_path(log_path)
-
     def _load_persisted_fallback_seen(self) -> set[str]:
         """Seed _fallback_seen from existing pending-events log so restart is idempotent."""
         seen: set[str] = set()
