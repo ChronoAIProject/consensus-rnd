@@ -1178,7 +1178,7 @@ class WakeupRunner:
             )
             decision = gate.decide_release(
                 stability,
-                _release_int(self.ctx.host_env.get("RELEASE_AUTO_MIN_INTERVAL_HOURS"), 2),
+                _release_int(self.ctx.host_env.get("RELEASE_AUTO_MIN_INTERVAL_HOURS"), 24),
             )
             if decision.get("ready") is not True:
                 self._append_pending_event("WAKEUP_RUNNER_RELEASE_DISPATCH_BLOCKED:not-ready")
