@@ -19,6 +19,7 @@ DEFAULT_STAND_DOWN_WINDOW_SECONDS = 7200
 AdmissionStatus = Literal["allowed", "stand_down", "unavailable"]
 SignalSource = Literal["comment", "label", "unavailable"]
 Runner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
+LinkedIssueStatus = Literal["absent", "present", "unavailable"]
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,13 @@ class CrossInstanceAdmission:
     other_login: str = ""
     source: SignalSource = "unavailable"
     created_at: str = ""
+
+
+@dataclass(frozen=True)
+class LinkedManagedIssueProjection:
+    status: LinkedIssueStatus
+    issue: str = ""
+    reason: str = ""
 
 
 def check_cross_instance_admission(
@@ -58,8 +66,10 @@ def check_cross_instance_admission(
     targets = [(normalized_kind, target)]
     if normalized_kind == "pr":
         linked = _linked_managed_issue(ctx, target, run)
-        if linked:
-            targets.append(("issue", linked))
+        if linked.status == "unavailable":
+            return CrossInstanceAdmission("unavailable", linked.reason)
+        if linked.status == "present":
+            targets.append(("issue", linked.issue))
 
     for target_kind, target_number in targets:
         result = _check_one_target(ctx, target_kind, target_number, login, cutoff, run)
@@ -145,7 +155,7 @@ def _label_signal(event: object, current_login: str, cutoff_epoch: float) -> Cro
     if not actor or actor == current_login:
         return None
     label_name = _label_name(event.get("label"))
-    if labels.normalize_label_set([label_name]).canonical:
+    if label_name.startswith("crnd:") or labels.normalize_label_set([label_name]).canonical:
         return CrossInstanceAdmission(
             "stand_down",
             f"fresh_other_instance_label:{actor}",
@@ -156,35 +166,37 @@ def _label_signal(event: object, current_login: str, cutoff_epoch: float) -> Cro
     return None
 
 
-def _linked_managed_issue(ctx: LoopContext, pr_number: str, runner: Runner) -> str:
+def _linked_managed_issue(ctx: LoopContext, pr_number: str, runner: Runner) -> LinkedManagedIssueProjection:
     result = runner(_view_command("pr", pr_number, "body"), ctx.repo_root)
     if result.returncode != 0:
-        return ""
+        return LinkedManagedIssueProjection("unavailable", reason=f"linked_issue_pr_body_unavailable:pr:{pr_number}")
     try:
         payload = json.loads(result.stdout or "{}")
     except json.JSONDecodeError:
-        return ""
+        return LinkedManagedIssueProjection("unavailable", reason=f"linked_issue_pr_body_invalid_json:pr:{pr_number}")
     body = str(payload.get("body") or "") if isinstance(payload, Mapping) else ""
     if "Closes #" not in body and "closes #" not in body:
-        return ""
+        return LinkedManagedIssueProjection("absent")
     import re
 
     matches = re.findall(r"(?im)\bCloses\s+#([1-9][0-9]*)\b", body)
     if len(matches) != 1:
-        return ""
+        return LinkedManagedIssueProjection("absent")
     issue = matches[0]
     label_result = runner(_view_command("issue", issue, "labels"), ctx.repo_root)
     if label_result.returncode != 0:
-        return ""
+        return LinkedManagedIssueProjection("unavailable", reason=f"linked_issue_labels_unavailable:issue:{issue}")
     try:
         issue_payload = json.loads(label_result.stdout or "{}")
     except json.JSONDecodeError:
-        return ""
+        return LinkedManagedIssueProjection("unavailable", reason=f"linked_issue_labels_invalid_json:issue:{issue}")
     raw_labels = issue_payload.get("labels") if isinstance(issue_payload, Mapping) else None
     if not isinstance(raw_labels, list):
-        return ""
+        return LinkedManagedIssueProjection("unavailable", reason=f"linked_issue_labels_invalid_json:issue:{issue}")
     names = [item.get("name") for item in raw_labels if isinstance(item, Mapping)]
-    return issue if labels.MANAGED in labels.normalize_label_set(names).canonical else ""
+    if labels.MANAGED in labels.normalize_label_set(names).canonical:
+        return LinkedManagedIssueProjection("present", issue=issue)
+    return LinkedManagedIssueProjection("absent")
 
 
 def _view_command(kind: str, number: str, fields: str) -> list[str]:

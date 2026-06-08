@@ -1195,11 +1195,14 @@ class WakeupRunner:
             admission = actor.require_admission(f"wakeup-runner:{controller_action}")
         except RuntimeError as exc:
             return f"cross_instance_stand_down:{normalized_kind}:{number}:unavailable:{_single_line(str(exc))}"
+        current_login = str(getattr(admission, "login", "") or "").strip()
+        if not current_login:
+            return f"cross_instance_stand_down:{normalized_kind}:{number}:unavailable:missing_current_login"
         if hasattr(self.actions, "cross_instance_admission"):
             result = self.actions.cross_instance_admission(
                 normalized_kind,
                 number,
-                admission.login,
+                current_login,
                 datetime.now(timezone.utc),
             )
         else:
@@ -1207,7 +1210,7 @@ class WakeupRunner:
                 self.ctx,
                 normalized_kind,
                 number,
-                admission.login,
+                current_login,
                 datetime.now(timezone.utc),
                 runner=lambda command, cwd: self.command_runner(command),
             )
@@ -1215,7 +1218,7 @@ class WakeupRunner:
             return ""
         line = (
             f"CROSS_INSTANCE_STAND_DOWN:{controller_action}:{normalized_kind}:{number}:"
-            f"current={admission.login}:other={result.other_login}:source={result.source}:created_at={result.created_at}"
+            f"current={current_login}:other={result.other_login}:source={result.source}:created_at={result.created_at}"
         )
         if result.reason:
             line = f"{line}:reason={_single_line(result.reason)}"

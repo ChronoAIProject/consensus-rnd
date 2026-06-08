@@ -17,6 +17,8 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop import labels
 from codex_refactor_loop.controller_actions import ControllerActions
+from codex_refactor_loop.cross_instance_stand_down import CrossInstanceAdmission
+from codex_refactor_loop.github_actor import GitHubActorAdmission
 from codex_refactor_loop.wakeup_plan import GhItem, completed_marker_actions
 from codex_refactor_loop.wakeup_runner import WakeupRunner
 
@@ -30,6 +32,13 @@ class FakeActions:
         self.repo = repo
         self.merged: list[str] = []
         self.rendered_fixes: list[tuple[int, int]] = []
+        self.github_actor = self
+
+    def require_admission(self, action: str) -> GitHubActorAdmission:
+        return GitHubActorAdmission(login="controller-bot", repo_slug="owner/repo", permission="write")
+
+    def cross_instance_admission(self, kind: str, target: str | int, current_login: str, now) -> CrossInstanceAdmission:
+        return CrossInstanceAdmission("allowed", "test-allowed")
 
     def merge_pr(self, pr: str, linked_issue: str = "") -> int:
         self.merged.append(pr)
@@ -48,8 +57,8 @@ class FakeActions:
 
 
 class AllowingGitHubActor:
-    def require_admission(self, action: str) -> None:
-        pass
+    def require_admission(self, action: str) -> GitHubActorAdmission:
+        return GitHubActorAdmission(login="controller-bot", repo_slug="owner/repo", permission="write")
 
 
 class ReviewGateEndToEndTests(unittest.TestCase):
@@ -200,7 +209,11 @@ class ReviewGateEndToEndTests(unittest.TestCase):
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
             gh_calls.append(args)
             if args[:5] == ["pr", "view", "480", "--json", "body"]:
-                return mock.Mock(returncode=0, stdout="", stderr="")
+                return mock.Mock(returncode=0, stdout=json.dumps({"body": ""}), stderr="")
+            if args[:5] == ["pr", "view", "480", "--json", "comments"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"comments": []}), stderr="")
+            if args[:2] == ["api", "repos/owner/repo/issues/480/timeline"]:
+                return mock.Mock(returncode=0, stdout=json.dumps([]), stderr="")
             if args == ["pr", "view", "480", "--json", "changedFiles"]:
                 return mock.Mock(returncode=0, stdout=json.dumps({"changedFiles": 1}), stderr="")
             if args[:5] == ["pr", "view", "480", "--json", "isDraft"]:

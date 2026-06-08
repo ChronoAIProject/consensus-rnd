@@ -19,6 +19,8 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import labels as label_catalog  # noqa: E402
 from codex_refactor_loop.context import LoopContext  # noqa: E402
+from codex_refactor_loop.cross_instance_stand_down import CrossInstanceAdmission  # noqa: E402
+from codex_refactor_loop.github_actor import GitHubActorAdmission  # noqa: E402
 from codex_refactor_loop.phase9.router import Phase9Router  # noqa: E402
 from codex_refactor_loop.wakeup_plan import build_plan  # noqa: E402
 from codex_refactor_loop.wakeup_runner import WakeupRunner  # noqa: E402
@@ -33,6 +35,13 @@ class FakeOwnerDecision:
 class FakeControllerActions:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
+        self.github_actor = self
+
+    def require_admission(self, action: str) -> GitHubActorAdmission:
+        return GitHubActorAdmission(login="controller-bot", repo_slug="owner/repo", permission="write")
+
+    def cross_instance_admission(self, kind: str, target: str | int, current_login: str, now) -> CrossInstanceAdmission:
+        return CrossInstanceAdmission("allowed", "test-allowed")
 
     def dispatch_consensus_implementation(self, action: dict) -> int:
         self.calls.append(("dispatch_consensus_implementation", dict(action)))

@@ -56,7 +56,9 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
             '#!/bin/bash\n'
             'echo "$@" >> "$FAKE_GH_LOG"\n'
             'if [[ "$1 $2" == "api user" ]]; then printf \'%s\\n\' \'{"login":"controller-bot"}\'; exit 0; fi\n'
-            'if [[ "$1 $2" == "api repos/test-owner/test-repo/collaborators/controller-bot/permission" ]]; then printf \'%s\\n\' \'{"permission":"write"}\'; exit 0; fi\n',
+            'if [[ "$1 $2" == "api repos/test-owner/test-repo/collaborators/controller-bot/permission" ]]; then printf \'%s\\n\' \'{"permission":"write"}\'; exit 0; fi\n'
+            'if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json comments"* ]]; then printf \'%s\\n\' \'{"comments":[]}\'; exit 0; fi\n'
+            'if [[ "$1 $2" == "api repos/test-owner/test-repo/issues/55/timeline" ]]; then printf \'%s\\n\' \'[]\'; exit 0; fi\n',
             encoding="utf-8",
         )
         fake_gh.chmod(0o755)
@@ -114,7 +116,14 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
         return [
             call
             for call in self.gh_calls()
-            if call not in {"api user", "api repos/test-owner/test-repo/collaborators/controller-bot/permission"}
+            if call
+            not in {
+                "api user",
+                "api repos/test-owner/test-repo/collaborators/controller-bot/permission",
+                "pr view 55 --repo test-owner/test-repo --json body",
+                "pr view 55 --repo test-owner/test-repo --json comments",
+                "api repos/test-owner/test-repo/issues/55/timeline -H Accept: application/vnd.github+json",
+            }
         ]
 
     def assert_gh_not_called(self) -> None:
@@ -252,12 +261,32 @@ if [[ "$1 $2" == "api repos/test-owner/test-repo/collaborators/controller-bot/pe
   printf '%s\\n' '{{"permission":"write"}}'
   exit 0
 fi
+if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json comments"* ]]; then
+  printf '%s\\n' '{{"comments":[]}}'
+  exit 0
+fi
+if [[ "$1 $2" == "api repos/test-owner/test-repo/issues/55/timeline" ]]; then
+  printf '%s\\n' '[]'
+  exit 0
+fi
 if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json labels,body"* ]]; then
   printf '%s\\n' '{{"labels":[{{"name":"crnd:lifecycle:managed"}}],"body":""}}'
   exit 0
 fi
 if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json body"* ]]; then
-  printf '%s\\n' {json.dumps(body)}
+  printf '%s\\n' {json.dumps(json.dumps({"body": body}))}
+  exit 0
+fi
+if [[ "$1 $2 $3" == "issue view 145" && "$*" == *"--json comments"* ]]; then
+  printf '%s\\n' '{{"comments":[]}}'
+  exit 0
+fi
+if [[ "$1 $2" == "api repos/test-owner/test-repo/issues/145/timeline" ]]; then
+  printf '%s\\n' '[]'
+  exit 0
+fi
+if [[ "$1 $2 $3" == "issue view 145" && "$*" == *"--json labels"* ]]; then
+  printf '%s\\n' '{{"labels":[{{"name":"crnd:lifecycle:managed"}}]}}'
   exit 0
 fi
 if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json changedFiles"* ]]; then

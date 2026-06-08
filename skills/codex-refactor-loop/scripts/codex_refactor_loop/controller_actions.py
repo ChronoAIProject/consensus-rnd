@@ -164,8 +164,17 @@ class ControllerActions:
             sys.stderr.write("ERROR: apply_human_label_or_skip requires META_RESOLVED:escalate-human marker source\n")
             return 2
 
-        if not self._require_github_actor_or_return("controller-label", code=3):
+        admission = self._require_github_actor_admission_or_return("controller-label")
+        if admission is None:
             return 3
+        denied = self._require_item_write_admission_or_return(
+            "apply-human-label",
+            "pr",
+            pr_target,
+            current_login=admission.login,
+        )
+        if denied is not None:
+            return denied
         result = self.gh(["pr", "edit", pr_target, "--add-label", labels.HUMAN_MAINTAINER_DECISION], check=False)
         return result.returncode
 
@@ -2584,14 +2593,7 @@ class ControllerActions:
         current_login: str,
     ) -> int | None:
         now = datetime.now(timezone.utc)
-        result = check_cross_instance_admission(
-            self.ctx,
-            kind,
-            target,
-            current_login,
-            now,
-            runner=lambda command, cwd: self._cross_instance_runner(command, cwd),
-        )
+        result = self.cross_instance_admission(kind, target, current_login, now)
         if result.status == "allowed":
             return None
         self._record_cross_instance_stand_down(action_name, kind.lower(), str(target), current_login, result)

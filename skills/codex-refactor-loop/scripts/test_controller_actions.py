@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 from unittest import mock
@@ -29,7 +30,9 @@ from codex_refactor_loop.controller_actions import (
     ControllerActions,
     ISSUE_LABELS_REMOVE,
 )
+from codex_refactor_loop.cross_instance_stand_down import CrossInstanceAdmission
 from codex_refactor_loop.git import Git
+from codex_refactor_loop.github_actor import GitHubActorAdmission
 from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 from codex_refactor_loop.release.publisher import ReleasePublishResult
@@ -41,16 +44,28 @@ class AllowingGitHubActor:
     def __init__(self) -> None:
         self.actions: list[str] = []
 
-    def require_admission(self, action: str) -> None:
+    def require_admission(self, action: str) -> GitHubActorAdmission:
         self.actions.append(action)
+        return GitHubActorAdmission(login="controller-bot", repo_slug="owner/repo", permission="write")
+
+
+class AllowingGitHubActorWithLogin:
+    def __init__(self, login: str = "controller-bot") -> None:
+        self.login = login
+        self.actions: list[str] = []
+
+    def require_admission(self, action: str) -> GitHubActorAdmission:
+        self.actions.append(action)
+        return GitHubActorAdmission(login=self.login, repo_slug="owner/repo", permission="write")
 
 
 class SequencedGitHubActor:
     def __init__(self, sequence: list[str]) -> None:
         self.sequence = sequence
 
-    def require_admission(self, action: str) -> None:
+    def require_admission(self, action: str) -> GitHubActorAdmission:
         self.sequence.append(f"actor:{action}")
+        return GitHubActorAdmission(login="controller-bot", repo_slug="owner/repo", permission="write")
 
 
 class RejectingGitHubActor:
@@ -84,6 +99,11 @@ class ControllerActionsTests(unittest.TestCase):
             LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}),
             github_actor=self.actor,
         )
+        self.actions.cross_instance_admission = lambda kind, target, current_login, now: CrossInstanceAdmission(
+            "allowed",
+            "test-default-no-fresh-other-instance-signal",
+        )
+        self.actions._require_branch_push_admission_or_return = lambda action, branch, worktree, current_login="": None
         self.pr_body = self.tmp / "pr-body.md"
         self.pr_body.write_text("## 🤖 PR ready\n\nSelf-contained body.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
 
@@ -742,6 +762,10 @@ class ControllerActionsTests(unittest.TestCase):
     def test_post_status_banner_runs_github_actor_admission_after_owner_gate_before_mutation(self) -> None:
         sequence: list[str] = []
         actions = ControllerActions(self.actions.ctx, github_actor=SequencedGitHubActor(sequence))
+        actions.cross_instance_admission = lambda kind, target, current_login, now: (
+            sequence.append(f"cross-instance:{kind}:{target}:{current_login}")
+            or CrossInstanceAdmission("allowed", "test-allowed")
+        )
 
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
             sequence.append(f"gh:{args[0]}:{args[1]}")
@@ -765,7 +789,10 @@ class ControllerActionsTests(unittest.TestCase):
             with mock.patch.object(actions, "gh", side_effect=fake_gh):
                 actions.post_status_banner(self.banner_request())
 
-        self.assertEqual(sequence, ["owner:post-banner", "actor:post-banner", "gh:pr:comment"])
+        self.assertEqual(
+            sequence,
+            ["owner:post-banner", "actor:post-banner", "cross-instance:pr:77:controller-bot", "gh:pr:comment"],
+        )
 
     def test_post_status_banner_actor_denial_blocks_tempfile_and_gh_mutation(self) -> None:
         actor = RejectingGitHubActor()
@@ -905,6 +932,54 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(3, result)
         self.assertEqual(actor.actions, ["controller-label"])
         self.assertIn("github actor denied: action=controller-label", stderr.getvalue())
+
+    def test_apply_human_label_stands_down_on_fresh_other_activity_before_label_mutation(self) -> None:
+        actions = ControllerActions(self.actions.ctx, github_actor=AllowingGitHubActorWithLogin())
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="controller-label",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:5] == ["pr", "view", "77", "--json", "comments"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"comments": []}), stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"body": ""}), stderr="")
+            if args and args[0] == "api":
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        [
+                            {
+                                "event": "labeled",
+                                "created_at": "2026-06-09T00:59:00Z",
+                                "actor": {"login": "other-user"},
+                                "label": {"name": "crnd:phase:future-not-in-local-catalog"},
+                            }
+                        ]
+                    ),
+                    stderr="",
+                )
+            if args[:3] == ["pr", "edit", "77"]:
+                raise AssertionError("gh pr edit should not be called after cross-instance stand-down")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.controller_actions.datetime") as datetime_mock:
+                datetime_mock.now.return_value = datetime(2026, 6, 9, 1, 0, tzinfo=timezone.utc)
+                with mock.patch.object(actions, "gh", side_effect=fake_gh):
+                    result = actions.apply_human_label_or_skip("77", "META_RESOLVED:escalate-human:reason")
+
+        self.assertEqual(2, result)
+        self.assertIn("controller-label", actions.github_actor.actions)
+        self.assertNotIn(["pr", "edit", "77", "--add-label", labels.HUMAN_MAINTAINER_DECISION], gh_calls)
+        self.assertIn("CROSS_INSTANCE_STAND_DOWN:apply-human-label:pr:77", self.pending_events())
 
     def test_merge_pr_rejects_invalid_linked_issue_before_gh_or_git(self) -> None:
         with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
@@ -3923,7 +3998,7 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
         checks = {
             "apply_human_label_or_skip": (
                 'self._require_owner_or_return("controller-label", code=3)',
-                'self._require_github_actor_or_return("controller-label", code=3)',
+                'self._require_github_actor_admission_or_return("controller-label")',
                 'self.gh(["pr", "edit", pr_target',
             ),
             "publish_release_candidate": (
@@ -3938,7 +4013,7 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
             ),
             "merge_pr": (
                 'self._require_owner_or_return("merge-pr", code=3)',
-                'self._require_github_actor_or_return("merge-pr", code=3)',
+                'self._require_github_actor_admission_or_return("merge-pr")',
                 'ready = self._ensure_pr_ready_for_merge(pr_target)',
             ),
             "open_pr_with_label": (
@@ -3963,7 +4038,7 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
             ),
             "close_managed_item_from_drop_marker": (
                 'self._require_owner_or_return("close-managed-drop", code=3)',
-                'self._require_github_actor_or_return("close-managed-drop", code=3)',
+                'self._require_github_actor_admission_or_return("close-managed-drop")',
                 'self.gh(["',
             ),
         }
@@ -3978,6 +4053,11 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
                 self.assertIn(first_mutation, method)
                 self.assertLess(method.index(owner_gate), method.index(actor_gate))
                 self.assertLess(method.index(actor_gate), method.index(first_mutation))
+                if method_name == "apply_human_label_or_skip":
+                    item_admission = 'self._require_item_write_admission_or_return('
+                    self.assertIn(item_admission, method)
+                    self.assertLess(method.index(actor_gate), method.index(item_admission))
+                    self.assertLess(method.index(item_admission), method.index(first_mutation))
 
     def test_source_comments_do_not_use_refactor_history_when_policy_none(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
