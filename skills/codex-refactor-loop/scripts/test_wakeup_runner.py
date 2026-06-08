@@ -2383,7 +2383,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "applied")
         commits = json.loads((self.repo / ".refactor-loop/state/release-commits.json").read_text(encoding="utf-8"))
-        self.assertEqual(commits, {"commits": [{"sha": self.release_dispatch_fix_sha, "subject": "fix: next release", "body": ""}]})
+        self.assertEqual(commits["commits"], [{"sha": self.release_dispatch_fix_sha, "subject": "fix: next release", "body": ""}])
+        self.assertIn("latest_release_version", commits)
         decision = json.loads((self.repo / ".refactor-loop/state/release-decision.json").read_text(encoding="utf-8"))
         self.assertEqual(decision["commits"], [{"sha": self.release_dispatch_fix_sha, "subject": "fix: next release"}])
 

@@ -407,6 +407,11 @@ class AutoReleaseGate:
             commits.append(CommitInfo(sha=sha, subject=subject, body=body))
         return commits
 
+    def latest_release_version(self) -> str | None:
+        raw = read_json(self.release_commits_path, {})
+        version = raw.get("latest_release_version") if isinstance(raw, dict) else None
+        return version if isinstance(version, str) and version else None
+
     def decide_release(self, stability: StabilityResult, min_interval_hours: int) -> dict[str, Any]:
         now = self.now()
         from_version = self.current_version()
@@ -414,12 +419,20 @@ class AutoReleaseGate:
         commits = self.commits_since_latest_release()
         candidate_bump = classify_bump(commits) if commits else None
         release_ready = stability.ready and interval["passed"] and bool(commits)
+        version_already_released = False
         bump_type = candidate_bump if release_ready else None
         coordinate_policy = None
         if bump_type:
             coordinate_plan = plan_release_coordinate(from_version, bump_type)
             to_version = coordinate_plan.to_version
             coordinate_policy = coordinate_plan.policy
+            latest_release_version = self.latest_release_version()
+            if latest_release_version and compare_semver(to_version, latest_release_version) <= 0:
+                version_already_released = True
+                release_ready = False
+                bump_type = None
+                coordinate_policy = None
+                to_version = from_version
         else:
             to_version = from_version
         return {
@@ -432,7 +445,7 @@ class AutoReleaseGate:
             "stability_score": stability.score,
             "signals": stability.signals,
             "ready": release_ready,
-            "blocked_reasons": blocked_reasons(stability, interval, bool(commits)),
+            "blocked_reasons": blocked_reasons(stability, interval, bool(commits), version_already_released),
             "release_interval": interval,
         }
 
@@ -449,9 +462,11 @@ class AutoReleaseGate:
         }
 
     def dispatch_release(self, decision: dict[str, Any]) -> None:
-        if not decision.get("ready"):
-            raise RuntimeError("release decision is not ready")
         write_json(self.decision_path, decision)
+        if not decision.get("ready"):
+            if self.candidate_path.exists():
+                self.candidate_path.unlink()
+            return
         write_json(self.candidate_path, self.release_candidate(decision))
 
     def release_candidate(self, decision: dict[str, Any]) -> dict[str, Any]:
@@ -532,12 +547,19 @@ def classify_bump(commits: list[CommitInfo]) -> str:
     return highest
 
 
-def blocked_reasons(stability: StabilityResult, interval: dict[str, Any], has_commits: bool) -> list[str]:
+def blocked_reasons(
+    stability: StabilityResult,
+    interval: dict[str, Any],
+    has_commits: bool,
+    version_already_released: bool = False,
+) -> list[str]:
     reasons = [name for name, value in stability.signals.items() if not value["passed"]]
     if not interval["passed"]:
         reasons.append("min_interval")
     if not has_commits:
         reasons.append("no_commits_since_last_release")
+    if version_already_released:
+        reasons.append("release_version_already_tagged")
     return reasons
 
 
@@ -589,18 +611,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps({"stability": {"ready": stability.ready, "score": stability.score, "signals": stability.signals}}, ensure_ascii=False, indent=2))
             return 0
 
-        decision = gate.decide_release(stability, args.min_interval_hours)
-        print_summary(decision)
-        if not decision.get("ready"):
-            return 0
         if args.dispatch:
+            decision = gate.decide_release(stability, args.min_interval_hours)
+            print_summary(decision)
             gate.dispatch_release(decision)
+            if not decision.get("ready"):
+                print("auto-release dispatch not ready; stale release candidate cleared")
+                return 0
             print(
                 "auto-release dispatch artifact written: "
                 f"{gate.candidate_path.relative_to(repo_root)}; "
                 "controller-owned release publisher owns bump/commit/push/tag/release after preflight"
             )
         else:
+            decision = gate.decide_release(stability, args.min_interval_hours)
+            print_summary(decision)
+            if not decision.get("ready"):
+                return 0
             write_json(gate.decision_path, decision)
     except Exception as exc:
         print(f"release-gate: {exc}", file=sys.stderr)

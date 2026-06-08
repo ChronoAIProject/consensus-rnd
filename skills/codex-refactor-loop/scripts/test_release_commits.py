@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -16,6 +17,7 @@ SCRIPT_PATH = Path(__file__).resolve()
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from codex_refactor_loop.release import commits
+from codex_refactor_loop.release.gate import SIGNAL_NAMES, AutoReleaseGate, StabilityResult
 
 
 def read_json(path: Path) -> object:
@@ -125,6 +127,24 @@ def add_origin_ref(repo: Path, branch: str = "dev") -> None:
     git_ok(repo, "push", "-q", "--tags", "-u", "origin", branch)
 
 
+def set_mapped_version(repo: Path, version: str) -> None:
+    mapping = read_json(repo / ".version-bump.json")
+    assert isinstance(mapping, dict)
+    for item in mapping["files"]:
+        path = repo / item["path"]
+        data = read_json(path)
+        current = data
+        parts = item["field"].split(".")
+        for part in parts[:-1]:
+            current = current[int(part)] if isinstance(current, list) else current[part]
+        last = parts[-1]
+        if isinstance(current, list):
+            current[int(last)] = version
+        else:
+            current[last] = version
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+
 class ReleaseCommitsProducerTests(unittest.TestCase):
     def test_write_release_commits_writes_new_commits_since_latest_tag(self) -> None:
         with init_repo() as tmp:
@@ -145,6 +165,7 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
                     {"sha": feat_sha, "subject": "feat: add producer", "body": ""},
                 ],
             )
+            self.assertEqual(data["latest_release_version"], "1.0.0")
 
     def test_write_release_commits_writes_empty_commits_when_no_new_commit_exists(self) -> None:
         with init_repo() as tmp:
@@ -156,6 +177,7 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
             self.assertIsInstance(data, dict)
             assert isinstance(data, dict)
             self.assertEqual(data["commits"], [])
+            self.assertEqual(data["latest_release_version"], "1.0.0")
 
     def test_release_commits_cli_overwrites_fixture_with_git_derived_commits(self) -> None:
         with init_repo() as tmp:
@@ -174,7 +196,10 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
 
             self.assertEqual(0, result.returncode, result.stderr)
             data = read_json(fixture_path)
-            self.assertEqual(data, {"commits": [{"sha": fix_sha, "subject": "fix: cli fact source", "body": "Body from git"}]})
+            self.assertIsInstance(data, dict)
+            assert isinstance(data, dict)
+            self.assertEqual(data["commits"], [{"sha": fix_sha, "subject": "fix: cli fact source", "body": "Body from git"}])
+            self.assertEqual(data["latest_release_version"], "1.0.0")
             self.assertIn("release commits artifact written", result.stdout)
 
     def test_release_commits_cli_fails_closed_without_overwriting_fixture(self) -> None:
@@ -303,7 +328,71 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
             output = commits.write_release_commits(repo, target_ref="HEAD", fetch_tags=False)
 
             data = read_json(output)
-            self.assertEqual(data, {"commits": [{"sha": feature_sha, "subject": "fix: beta 11 candidate", "body": ""}]})
+            self.assertIsInstance(data, dict)
+            assert isinstance(data, dict)
+            self.assertEqual(data["commits"], [{"sha": feature_sha, "subject": "fix: beta 11 candidate", "body": ""}])
+            self.assertEqual(data["latest_release_version"], "1.0.0-beta.10")
+
+    def test_release_commits_uses_manifest_transition_when_latest_tag_is_orphaned(self) -> None:
+        with init_repo(tag_release=False) as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_env(repo)
+            for relative in ("package.json", ".codex-plugin/plugin.json"):
+                (repo / relative).parent.mkdir(parents=True, exist_ok=True)
+                (repo / relative).write_text(json.dumps({"version": "1.0.0-beta.9"}), encoding="utf-8")
+            (repo / ".version-bump.json").write_text(
+                json.dumps(
+                    {
+                        "files": [
+                            {"path": "package.json", "field": "version"},
+                            {"path": ".codex-plugin/plugin.json", "field": "version"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            git_ok(repo, "add", ".")
+            git_ok(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "Release v1.0.0-beta.9")
+            set_mapped_version(repo, "1.0.0-beta.10")
+            git_ok(repo, "add", ".")
+            git_ok(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "Release v1.0.0-beta.10")
+            transition_sha = git_ok(repo, "rev-parse", "HEAD")
+            since_shas = [
+                commit(repo, "fix: since orphan one"),
+                commit(repo, "refactor: since orphan two"),
+                commit(repo, "fix: since orphan three"),
+            ]
+            orphan_tree = git_ok(repo, "rev-parse", f"{transition_sha}^{{tree}}")
+            orphan_release = git_ok(
+                repo,
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit-tree",
+                orphan_tree,
+                "-m",
+                "Release v1.0.0-beta.10",
+            )
+            git_ok(repo, "tag", "v1.0.0-beta.10", orphan_release)
+            self.assertNotEqual(0, git(repo, "merge-base", "--is-ancestor", "v1.0.0-beta.10", "HEAD").returncode)
+
+            output = commits.write_release_commits(repo, target_ref="HEAD", fetch_tags=False)
+
+            data = read_json(output)
+            self.assertIsInstance(data, dict)
+            assert isinstance(data, dict)
+            self.assertEqual([item["sha"] for item in data["commits"]], since_shas)
+            self.assertEqual(data["latest_release_version"], "1.0.0-beta.10")
+            release_gate = AutoReleaseGate(repo, now=lambda: datetime(2026, 6, 9, tzinfo=timezone.utc))
+            decision = release_gate.decide_release(
+                StabilityResult(ready=True, score=100, signals={name: {"passed": True} for name in SIGNAL_NAMES}),
+                min_interval_hours=0,
+            )
+            self.assertTrue(decision["ready"])
+            self.assertEqual(decision["from_version"], "1.0.0-beta.10")
+            self.assertEqual(decision["to_version"], "1.0.0-beta.11")
+            self.assertEqual(len(decision["commits"]), 3)
 
     def test_release_commits_cli_fails_closed_without_review_base_branch_env(self) -> None:
         with init_repo() as tmp:
@@ -328,7 +417,10 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
 
             self.assertEqual(0, result.returncode, result.stderr)
             data = read_json(repo / ".refactor-loop/state/release-commits.json")
-            self.assertEqual(data, {"commits": [{"sha": fix_sha, "subject": "fix: host review branch", "body": ""}]})
+            self.assertIsInstance(data, dict)
+            assert isinstance(data, dict)
+            self.assertEqual(data["commits"], [{"sha": fix_sha, "subject": "fix: host review branch", "body": ""}])
+            self.assertEqual(data["latest_release_version"], "1.0.0")
 
     def test_release_gate_cli_does_not_rewrite_release_commits_artifact(self) -> None:
         with init_repo() as tmp:
@@ -362,6 +454,7 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
         self.assertIn("run_git", producer_source)
         self.assertIn("write_json", producer_source)
         self.assertIn("latest_release_ref", producer_source)
+        self.assertIn("manifest_version_transition_ref", producer_source)
         self.assertIn("missing required host branch env: REVIEW_BASE_BRANCH", producer_source)
         self.assertNotIn("DEFAULT_REVIEW_BASE_BRANCH", producer_source)
         self.assertNotIn("origin/dev", producer_source)
@@ -375,9 +468,9 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
         self.assertNotIn("write_release_commits", gate_source)
         for token in (
             "consensus-rnd-cli release-commits --target-ref origin/$REVIEW_BASE_BRANCH",
-            "Allowed: read git by fetching tags, describing the latest release tag, resolving the target ref, and logging the release range",
+            "Allowed: read git by fetching tags, resolving the latest release tag, resolving the target ref, selecting a branch-reachable release since-anchor from a tag ancestor or mapped manifest version transition, and logging that release range",
             "Forbidden: no gh, push, merge, reset, tag, release, lifecycle mutation, or inline execution inside release-gate",
-            "Fact source: local git tags and refs",
+            "Fact source: local git tags, target branch refs, `.version-bump.json`, and mapped manifest version fields",
             "Verification: behavior and source-regression coverage in test_release_commits.py and test_cli_command_router.py",
             "Release-gate only reads `.refactor-loop/state/release-commits.json`; it does not run git",
         ):
