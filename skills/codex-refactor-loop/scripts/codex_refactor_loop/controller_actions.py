@@ -17,6 +17,7 @@ from .active_controller import require_active_controller, write_active_controlle
 from . import labels
 from .banners import BannerRequest, build_status_banner, gh_comment_command
 from .context import LoopContext, normalize_host_work_language
+from .cross_instance_stand_down import CrossInstanceAdmission, check_cross_instance_admission
 from .default_issue_intake import DefaultIssueIntakeClaim, DefaultIssueIntakeResult
 from .gh_invoke import build_gh_argv
 from .github_actor import GitHubActorAdmission, GitHubAuthenticatedActor
@@ -163,8 +164,17 @@ class ControllerActions:
             sys.stderr.write("ERROR: apply_human_label_or_skip requires META_RESOLVED:escalate-human marker source\n")
             return 2
 
-        if not self._require_github_actor_or_return("controller-label", code=3):
+        admission = self._require_github_actor_admission_or_return("controller-label")
+        if admission is None:
             return 3
+        denied = self._require_item_write_admission_or_return(
+            "apply-human-label",
+            "pr",
+            pr_target,
+            current_login=admission.login,
+        )
+        if denied is not None:
+            return denied
         result = self.gh(["pr", "edit", pr_target, "--add-label", labels.HUMAN_MAINTAINER_DECISION], check=False)
         return result.returncode
 
@@ -186,16 +196,21 @@ class ControllerActions:
         if not branch or branch == "HEAD":
             sys.stderr.write("safe_push: cannot determine branch (HEAD detached?); aborting\n")
             return 2
+        admission = self._require_branch_push_admission_or_return("safe-push", branch, push_worktree)
+        if admission is not None:
+            return admission
         fetch = self._git_in(push_worktree, ["fetch", remote, branch], check=False)
         if fetch.stdout:
             print(fetch.stdout, end="")
         if fetch.stderr:
             print("\n".join(fetch.stderr.splitlines()[-3:]))
-        behind = self._git_in(push_worktree, ["rev-list", "--count", f"HEAD..{remote}/{branch}"], check=False)
-        try:
-            behind_count = int((behind.stdout or "0").strip() or "0")
-        except ValueError:
-            behind_count = 0
+        behind_count = 0
+        if fetch.returncode == 0:
+            behind = self._git_in(push_worktree, ["rev-list", "--count", f"HEAD..{remote}/{branch}"], check=False)
+            try:
+                behind_count = int((behind.stdout or "0").strip() or "0")
+            except ValueError:
+                behind_count = 0
         if behind_count > 0:
             print(f"safe_push: local behind {remote}/{branch} by {behind_count} commit(s); rebasing")
             pull = self._git_in(push_worktree, ["pull", "--rebase", "--autostash", remote, branch], check=False)
@@ -242,7 +257,15 @@ class ControllerActions:
             log=request.log,
             stall=request.stall,
         )
-        self._require_github_actor_or_raise("post-banner")
+        admission = self._require_github_actor_or_raise("post-banner")
+        denied = self._require_item_write_admission_or_return(
+            "post-banner",
+            normalized.kind,
+            normalized.target,
+            current_login=admission.login,
+        )
+        if denied is not None:
+            raise RuntimeError(f"post_status_banner: cross-instance admission denied rc={denied}")
         body = build_status_banner(normalized)
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
             handle.write(body)
@@ -354,6 +377,7 @@ class ControllerActions:
         branch = f"refactor/iter{iteration}-{cluster}"
         if wt_path.is_dir():
             sys.stderr.write(f"  ✓ worktree exists: {wt_path}\n")
+            self._write_branch_provenance(branch=branch, worktree=wt_path, issue=str(iteration), base_sha="")
             return wt_path, branch
         (self.ctx.repo_root / ".worktrees").mkdir(parents=True, exist_ok=True)
         if self.git(["show-ref", "--quiet", f"refs/heads/{branch}"], check=False).returncode == 0:
@@ -361,10 +385,14 @@ class ControllerActions:
         else:
             result = self.git(["worktree", "add", "-b", branch, str(wt_path), base])
         sys.stderr.write("\n".join(result.stderr.splitlines()[-2:]) + "\n")
+        self._write_branch_provenance(branch=branch, worktree=wt_path, issue=str(iteration), base_sha=base)
         return wt_path, branch
 
     def fresh_safe_worktree(self, iteration: str, cluster: str, base: str) -> tuple[Path, str]:
-        return Git(self.ctx.repo_root).fresh_safe_worktree(iteration, cluster, base)
+        worktree, branch = Git(self.ctx.repo_root).fresh_safe_worktree(iteration, cluster, base)
+        base_sha = self._git_in(worktree, ["rev-parse", "HEAD"], check=False).stdout.strip()
+        self._write_branch_provenance(branch=branch, worktree=worktree, issue=str(iteration), base_sha=base_sha)
+        return worktree, branch
 
     def _ensure_pr_ready_for_merge(self, pr_target: str) -> int:
         draft = self.gh(["pr", "view", pr_target, "--json", "isDraft", "--jq", ".isDraft"], check=False)
@@ -428,8 +456,16 @@ class ControllerActions:
                 if normalized is None:
                     return 1
                 issue_target = normalized
-        if not self._require_github_actor_or_return("merge-pr", code=3):
+        admission = self._require_github_actor_admission_or_return("merge-pr")
+        if admission is None:
             return 3
+        denied = self._require_item_write_admission_or_return("merge-pr", "pr", pr_target, current_login=admission.login)
+        if denied is not None:
+            return denied
+        if issue_target:
+            denied = self._require_item_write_admission_or_return("merge-pr", "issue", issue_target, current_login=admission.login)
+            if denied is not None:
+                return denied
         changed_files, changed_error = self._pr_changed_file_count(pr_target)
         if changed_error:
             line = f"merge_pr: empty_diff_guard_unavailable pr={pr_target} reason={changed_error}"
@@ -576,7 +612,11 @@ class ControllerActions:
                 action="open-pr",
                 source="body-link",
             )
-        self._require_github_actor_or_raise("open-pr")
+        admission = self._require_github_actor_or_raise("open-pr")
+        if issue_target and self._live_target_has_managed_label(kind="issue", target=issue_target):
+            denied = self._require_item_write_admission_or_return("open-pr", "issue", issue_target, current_login=admission.login)
+            if denied is not None:
+                raise RuntimeError(f"open_pr_with_label: cross-instance admission denied rc={denied}")
         backoff = currently_backing_off(self.ctx.paths.state)
         if backoff.active:
             raise RuntimeError(
@@ -654,13 +694,21 @@ class ControllerActions:
         self._require_owner_or_raise("apply-issue-decomposition-plan")
         plan = load_issue_decomposition_plan(self.ctx, plan_path)
         digest = issue_decomposition_plan_file_digest(self.ctx, plan_path)
-        self._require_github_actor_or_raise("apply-issue-decomposition-plan")
         parent_target = self._normalize_lifecycle_target_or_raise(
             plan.parent_issue,
             kind="issue",
             action="apply-issue-decomposition-plan",
             source="plan.parent_issue",
         )
+        admission = self._require_github_actor_or_raise("apply-issue-decomposition-plan")
+        denied = self._require_item_write_admission_or_return(
+            "apply-issue-decomposition-plan",
+            "issue",
+            parent_target,
+            current_login=admission.login,
+        )
+        if denied is not None:
+            raise RuntimeError(f"apply_issue_decomposition_plan: cross-instance admission denied rc={denied}")
         sentinel_count = self._issue_decomposition_parent_sentinel_count(parent_target, digest)
         if sentinel_count == 1:
             invalidate_open_managed_work_snapshot(self.ctx)
@@ -1084,10 +1132,29 @@ class ControllerActions:
         if not self._live_target_has_managed_label(kind="issue", target=issue_target):
             sys.stderr.write("publish_implementation_output: linked issue is not managed\n")
             return 2
+        admission = self._require_github_actor_admission_or_return("publish-implementation-output")
+        if admission is None:
+            return 3
+        denied = self._require_item_write_admission_or_return(
+            "publish-implementation-output",
+            "issue",
+            issue_target,
+            current_login=admission.login,
+        )
+        if denied is not None:
+            return denied
         identity_error = self._validate_publish_implementation_identity(action, issue_target, head_ref, worktree)
         if identity_error:
             sys.stderr.write(f"publish_implementation_output: {identity_error}\n")
             return 2
+        branch_admission = self._require_branch_push_admission_or_return(
+            "publish-implementation-output",
+            head_ref,
+            worktree,
+            current_login=admission.login,
+        )
+        if branch_admission is not None:
+            return branch_admission
         diff_ready = self._require_publish_implementation_diff(worktree)
         if diff_ready != 0:
             return diff_ready
@@ -1147,8 +1214,17 @@ class ControllerActions:
         issue_target: str,
     ) -> int:
         pr_target = str(pr_target)
-        if not self._require_github_actor_or_return("publish-implementation-output", code=3):
+        admission = self._require_github_actor_admission_or_return("publish-implementation-output")
+        if admission is None:
             return 3
+        denied = self._require_item_write_admission_or_return(
+            "publish-implementation-output",
+            "pr",
+            pr_target,
+            current_login=admission.login,
+        )
+        if denied is not None:
+            return denied
         title = self._implementation_pr_title(action, issue_target)
         body_file = self.ctx.durable_artifact_path(self._implementation_pr_body_file(action, issue_target))
         result = self.gh(
@@ -1332,6 +1408,17 @@ class ControllerActions:
         if readiness_reason:
             sys.stderr.write(f"dispatch_consensus_implementation: target not ready: {readiness_reason}\n")
             return 2
+        admission = self._require_github_actor_admission_or_return("dispatch-consensus-implementation")
+        if admission is None:
+            return 3
+        denied = self._require_item_write_admission_or_return(
+            "dispatch-consensus-implementation",
+            "issue",
+            number,
+            current_login=admission.login,
+        )
+        if denied is not None:
+            return denied
         phase_result = self._move_issue_to_implementing_phase(number)
         if phase_result != 0:
             return phase_result
@@ -1453,6 +1540,17 @@ class ControllerActions:
         )
         if pr_target is None:
             return 2
+        admission = self._require_github_actor_admission_or_return("dispatch-reviewers")
+        if admission is None:
+            return 3
+        denied = self._require_item_write_admission_or_return(
+            "dispatch-reviewers",
+            "pr",
+            pr_target,
+            current_login=admission.login,
+        )
+        if denied is not None:
+            return denied
         pr = self.gh(["pr", "view", pr_target, "--json", "title,baseRefName,headRefName,headRefOid"], check=False)
         if pr.returncode != 0:
             return pr.returncode
@@ -1546,6 +1644,17 @@ class ControllerActions:
         if not self._live_target_has_managed_label(kind="pr", target=pr_target):
             sys.stderr.write("dispatch_pr_rebase_resolve: live PR is not managed\n")
             return 2
+        admission = self._require_github_actor_admission_or_return("dispatch-pr-rebase-resolve")
+        if admission is None:
+            return 3
+        denied = self._require_item_write_admission_or_return(
+            "dispatch-pr-rebase-resolve",
+            "pr",
+            pr_target,
+            current_login=admission.login,
+        )
+        if denied is not None:
+            return denied
         worktree = self._ensure_managed_pr_worktree(head_ref)
         if worktree is None:
             return 2
@@ -1675,6 +1784,28 @@ class ControllerActions:
             self._abort_merge_if_present(worktree)
             sys.stderr.write("commit_push_resolved_pr_rebase: live PR is not managed\n")
             return 2
+        admission = self._require_github_actor_admission_or_return("commit-push-resolved-pr-rebase")
+        if admission is None:
+            self._abort_merge_if_present(worktree)
+            return 3
+        denied = self._require_item_write_admission_or_return(
+            "commit-push-resolved-pr-rebase",
+            "pr",
+            pr_target,
+            current_login=admission.login,
+        )
+        if denied is not None:
+            self._abort_merge_if_present(worktree)
+            return denied
+        branch_admission = self._require_branch_push_admission_or_return(
+            "commit-push-resolved-pr-rebase",
+            head_ref,
+            worktree,
+            current_login=admission.login,
+        )
+        if branch_admission is not None:
+            self._abort_merge_if_present(worktree)
+            return branch_admission
         if not self._worktree_under_controller_root(worktree):
             sys.stderr.write("commit_push_resolved_pr_rebase: worktree outside controller-owned .worktrees\n")
             return 2
@@ -1972,8 +2103,18 @@ class ControllerActions:
             )
             sys.stderr.write("close_managed_item_from_drop_marker: live target is not managed\n")
             return 2
-        if not self._require_github_actor_or_return("close-managed-drop", code=3):
+        admission = self._require_github_actor_admission_or_return("close-managed-drop")
+        if admission is None:
             return 3
+        target_kind = "pr" if kind == "pr" else "issue"
+        denied = self._require_item_write_admission_or_return(
+            "close-managed-drop",
+            target_kind,
+            issue_target,
+            current_login=admission.login,
+        )
+        if denied is not None:
+            return denied
         if zero_code_completion:
             comment = "Closed from zero-code implementation completion.\n\nReason: scope_paths none and empty scoped diff.\n\n⟦AI:AUTO-LOOP⟧"
         else:
@@ -2331,6 +2472,186 @@ class ControllerActions:
                 return current
         return None
 
+    def _write_branch_provenance(self, *, branch: str, worktree: Path, issue: str, base_sha: str) -> None:
+        if not self._canonical_managed_head(branch):
+            return
+        actor_login = ""
+        actor = self.github_actor or GitHubAuthenticatedActor(self.ctx)
+        try:
+            admission = actor.require_admission("branch-provenance")
+        except RuntimeError:
+            admission = None
+        if isinstance(admission, GitHubActorAdmission):
+            actor_login = admission.login
+        elif admission is not None:
+            actor_login = str(getattr(admission, "login", "") or "")
+        path = self._branch_provenance_path(branch)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "branch": branch,
+            "worktree": str(worktree.resolve()),
+            "owner_device": self._current_owner_device(),
+            "github_login": actor_login,
+            "issue": issue,
+            "created_at": self._now(),
+            "base_sha": base_sha,
+            "authority": "local_admission_evidence_only_not_durable_claim",
+        }
+        path.write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+    def _require_branch_push_admission_or_return(
+        self,
+        action: str,
+        branch: str,
+        worktree: Path,
+        *,
+        current_login: str = "",
+    ) -> int | None:
+        if not self._canonical_managed_head(branch):
+            return None
+        if branch in {self.integration_branch, self.review_base_branch} or branch.startswith(ROLLUP_HEAD_PREFIX):
+            self._append_pending_event(f"PUSH_OWNERSHIP_BLOCKED:{action}:{branch}:protected-branch")
+            sys.stderr.write(f"push_ownership_guard:{action}: protected branch {branch}\n")
+            return 2
+        admission_login = current_login or self._github_login_for_action(action)
+        if not admission_login:
+            self._append_pending_event(f"PUSH_OWNERSHIP_BLOCKED:{action}:{branch}:github-login-unavailable")
+            sys.stderr.write(f"push_ownership_guard:{action}: github login unavailable\n")
+            return 3
+        provenance = self._read_branch_provenance(branch)
+        if provenance is None:
+            self._append_pending_event(f"PUSH_OWNERSHIP_BLOCKED:{action}:{branch}:missing-provenance")
+            sys.stderr.write(f"push_ownership_guard:{action}: missing provenance for {branch}\n")
+            return 2
+        current_owner = self._current_owner_device()
+        if (
+            provenance.get("branch") != branch
+            or str(provenance.get("owner_device") or "") != current_owner
+            or str(provenance.get("worktree") or "") != str(worktree.resolve())
+        ):
+            self._append_pending_event(f"PUSH_OWNERSHIP_BLOCKED:{action}:{branch}:provenance-mismatch")
+            sys.stderr.write(f"push_ownership_guard:{action}: provenance mismatch for {branch}\n")
+            return 2
+        actual_branch = self._current_branch(worktree)
+        if actual_branch != branch:
+            self._append_pending_event(f"PUSH_OWNERSHIP_BLOCKED:{action}:{branch}:worktree-branch-mismatch:{actual_branch}")
+            sys.stderr.write(f"push_ownership_guard:{action}: worktree branch mismatch {actual_branch!r}\n")
+            return 2
+        author = self._open_pr_author_for_head(branch)
+        if author is None:
+            self._append_pending_event(f"PUSH_OWNERSHIP_BLOCKED:{action}:{branch}:branch-pr-author-unavailable")
+            sys.stderr.write(f"push_ownership_guard:{action}: open PR author unavailable for {branch}\n")
+            return 3
+        if author and author != admission_login:
+            self._append_pending_event(
+                f"PUSH_OWNERSHIP_BLOCKED:{action}:{branch}:branch_pr_author_mismatch:current={admission_login}:author={author}"
+            )
+            sys.stderr.write(f"push_ownership_guard:{action}: branch_pr_author_mismatch current={admission_login} author={author}\n")
+            return 2
+        return None
+
+    def _read_branch_provenance(self, branch: str) -> dict[str, object] | None:
+        path = self._branch_provenance_path(branch)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _branch_provenance_path(self, branch: str) -> Path:
+        safe = branch.replace("/", "__")
+        return self.ctx.paths.state / "branch-provenance" / f"{safe}.json"
+
+    def _open_pr_author_for_head(self, branch: str) -> str | None:
+        result = self.gh(["pr", "list", "--state", "open", "--head", branch, "--json", "author,headRefName"], check=False)
+        if result.returncode != 0:
+            return None
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, list):
+            return None
+        matching = [item for item in payload if isinstance(item, dict) and str(item.get("headRefName") or "") == branch]
+        if not matching:
+            return ""
+        if len(matching) != 1:
+            return None
+        author = matching[0].get("author")
+        return str(author.get("login") or "").strip() if isinstance(author, Mapping) else None
+
+    def _github_login_for_action(self, action: str) -> str:
+        admission = self._require_github_actor_admission_or_return(action)
+        return admission.login if admission is not None else ""
+
+    def _require_item_write_admission_or_return(
+        self,
+        action_name: str,
+        kind: str,
+        target: str | int,
+        *,
+        current_login: str,
+    ) -> int | None:
+        now = datetime.now(timezone.utc)
+        result = self.cross_instance_admission(kind, target, current_login, now)
+        if result.status == "allowed":
+            return None
+        self._record_cross_instance_stand_down(action_name, kind.lower(), str(target), current_login, result)
+        return 3 if result.status == "unavailable" else 2
+
+    def cross_instance_admission(
+        self,
+        kind: str,
+        target: str | int,
+        current_login: str,
+        now: datetime,
+    ) -> CrossInstanceAdmission:
+        return check_cross_instance_admission(
+            self.ctx,
+            kind,
+            target,
+            current_login,
+            now,
+            runner=lambda command, cwd: self._cross_instance_runner(command, cwd),
+        )
+
+    def _cross_instance_runner(self, command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        argv = list(command)
+        if argv and argv[0] == "gh":
+            return self.gh(argv[1:], check=False)
+        return subprocess.run(argv, cwd=str(cwd), capture_output=True, text=True, check=False)
+
+    def _record_cross_instance_stand_down(
+        self,
+        action_name: str,
+        kind: str,
+        target: str,
+        current_login: str,
+        result: CrossInstanceAdmission,
+    ) -> None:
+        line = (
+            f"CROSS_INSTANCE_STAND_DOWN:{action_name}:{kind}:{target}:"
+            f"current={current_login}:other={result.other_login}:source={result.source}:created_at={result.created_at}"
+        )
+        if result.reason:
+            line = f"{line}:reason={_single_line(result.reason)}"
+        self._append_pending_event(line)
+        sys.stderr.write(f"{line}\n")
+
+    def _current_owner_device(self) -> str:
+        raw = str(self.ctx.env_for_subprocess().get("ACTIVE_CONTROLLER_DEVICE_ID") or "").strip()
+        if raw:
+            return raw
+        try:
+            payload = json.loads((self.ctx.paths.state / "active-controller-status.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        if isinstance(payload, dict):
+            owner = str(payload.get("owner_device") or "").strip()
+            if owner:
+                return owner
+        return "local-single-device"
+
     def _require_owner_or_return(self, action: str, *, code: int) -> bool:
         decision = require_active_controller(self.ctx, action)
         write_active_controller_status(self.ctx, decision)
@@ -2346,13 +2667,22 @@ class ControllerActions:
             raise RuntimeError(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}")
 
     def _require_github_actor_or_return(self, action: str, *, code: int) -> bool:
+        return self._require_github_actor_admission_or_return(action) is not None
+
+    def _require_github_actor_admission_or_return(self, action: str) -> GitHubActorAdmission | None:
         actor = self.github_actor or GitHubAuthenticatedActor(self.ctx)
         try:
-            actor.require_admission(action)
+            admission = actor.require_admission(action)
         except RuntimeError as exc:
             sys.stderr.write(str(exc) + "\n")
-            return False
-        return True
+            return None
+        if isinstance(admission, GitHubActorAdmission):
+            return admission
+        login = str(getattr(admission, "login", "") or "")
+        permission = str(getattr(admission, "permission", "write") or "write")
+        if permission not in {"read", "triage", "write", "maintain", "admin"}:
+            permission = "write"
+        return GitHubActorAdmission(login=login, repo_slug=self.ctx.gh_repo_slug or "", permission=permission)  # type: ignore[arg-type]
 
     def _require_github_actor_or_raise(self, action: str) -> GitHubActorAdmission:
         actor = self.github_actor or GitHubAuthenticatedActor(self.ctx)

@@ -15,6 +15,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.cross_instance_stand_down import CrossInstanceAdmission
+from codex_refactor_loop.github_actor import GitHubActorAdmission
 from codex_refactor_loop.wakeup_runner import WakeupRunner
 
 
@@ -22,6 +24,13 @@ class FakeActions:
     def __init__(self) -> None:
         self.merged: list[str] = []
         self.rendered: list[tuple[int, int]] = []
+        self.github_actor = self
+
+    def require_admission(self, action: str) -> GitHubActorAdmission:
+        return GitHubActorAdmission(login="controller-bot", repo_slug="owner/repo", permission="write")
+
+    def cross_instance_admission(self, kind: str, target: str | int, current_login: str, now) -> CrossInstanceAdmission:
+        return CrossInstanceAdmission("allowed", "test-allowed")
 
     def merge_pr(self, pr: str, linked_issue: str = "") -> int:
         self.merged.append(pr)

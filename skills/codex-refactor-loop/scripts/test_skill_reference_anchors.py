@@ -1361,7 +1361,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py", "worker_markers.py"},
             "review-pr": {"controller_actions.py", "monitors/progress.py", "monitors/concurrency.py", "peek.py", "wakeup_plan.py", "wakeup_runner.py"},
             "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py", "wakeup_runner.py"},
-            "crnd:": {"default_issue_intake.py", "labels.py", "triage.py"},
+            "crnd:": {"cross_instance_stand_down.py", "default_issue_intake.py", "labels.py", "triage.py"},
             "refactor/iter": {"controller_actions.py", "git.py", "implement_lifecycle.py", "wakeup_runner.py"},
             "rollup/": {
                 "controller_actions.py",
