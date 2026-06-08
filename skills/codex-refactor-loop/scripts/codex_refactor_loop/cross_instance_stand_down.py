@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,9 @@ AdmissionStatus = Literal["allowed", "stand_down", "unavailable"]
 SignalSource = Literal["comment", "label", "unavailable"]
 Runner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
 LinkedIssueStatus = Literal["absent", "present", "unavailable"]
+_CLOSING_KEYWORDS = "close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved"
+_CLOSING_MARKER_RE = re.compile(rf"(?im)\b(?:{_CLOSING_KEYWORDS})\s*:?\s*#")
+_VALID_CLOSING_REF_RE = re.compile(rf"(?im)\b(?:{_CLOSING_KEYWORDS})\s*:?\s+#([1-9][0-9]*)\b")
 
 
 @dataclass(frozen=True)
@@ -86,14 +90,14 @@ def _check_one_target(
     cutoff_epoch: float,
     runner: Runner,
 ) -> CrossInstanceAdmission:
-    comments_result = runner(_view_command(kind, number, "comments"), ctx.repo_root)
+    comments_result = runner(_comments_command(ctx, number), ctx.repo_root)
     if comments_result.returncode != 0:
         return CrossInstanceAdmission("unavailable", f"comments_unavailable:{kind}:{number}")
     try:
-        comments_payload = json.loads(comments_result.stdout or "{}")
+        comments_payload = json.loads(comments_result.stdout or "[]")
     except json.JSONDecodeError:
         return CrossInstanceAdmission("unavailable", f"comments_invalid_json:{kind}:{number}")
-    comments = comments_payload.get("comments") if isinstance(comments_payload, dict) else None
+    comments = _paginated_items(comments_payload)
     if not isinstance(comments, list):
         return CrossInstanceAdmission("unavailable", f"comments_invalid_json:{kind}:{number}")
     for comment in comments:
@@ -108,7 +112,7 @@ def _check_one_target(
         timeline = json.loads(timeline_result.stdout or "[]")
     except json.JSONDecodeError:
         return CrossInstanceAdmission("unavailable", f"timeline_invalid_json:{kind}:{number}")
-    events = timeline if isinstance(timeline, list) else timeline.get("timelineItems") if isinstance(timeline, dict) else None
+    events = _paginated_items(timeline)
     if not isinstance(events, list):
         return CrossInstanceAdmission("unavailable", f"timeline_invalid_json:{kind}:{number}")
     for event in events:
@@ -175,14 +179,16 @@ def _linked_managed_issue(ctx: LoopContext, pr_number: str, runner: Runner) -> L
     except json.JSONDecodeError:
         return LinkedManagedIssueProjection("unavailable", reason=f"linked_issue_pr_body_invalid_json:pr:{pr_number}")
     body = str(payload.get("body") or "") if isinstance(payload, Mapping) else ""
-    if "Closes #" not in body and "closes #" not in body:
+    if not _CLOSING_MARKER_RE.search(body):
         return LinkedManagedIssueProjection("absent")
-    import re
 
-    matches = re.findall(r"(?im)\bCloses\s+#([1-9][0-9]*)\b", body)
-    if len(matches) != 1:
-        return LinkedManagedIssueProjection("absent")
+    markers = _CLOSING_MARKER_RE.findall(body)
+    matches = _VALID_CLOSING_REF_RE.findall(body)
+    if len(markers) != 1 or len(matches) != 1:
+        return LinkedManagedIssueProjection("unavailable", reason=f"linked_issue_closing_ref_ambiguous:pr:{pr_number}")
     issue = matches[0]
+    if not issue.isdigit() or int(issue) <= 0:
+        return LinkedManagedIssueProjection("unavailable", reason=f"linked_issue_closing_ref_ambiguous:pr:{pr_number}")
     label_result = runner(_view_command("issue", issue, "labels"), ctx.repo_root)
     if label_result.returncode != 0:
         return LinkedManagedIssueProjection("unavailable", reason=f"linked_issue_labels_unavailable:issue:{issue}")
@@ -203,6 +209,19 @@ def _view_command(kind: str, number: str, fields: str) -> list[str]:
     return ["gh", kind, "view", number, "--json", fields]
 
 
+def _comments_command(ctx: LoopContext, number: str) -> list[str]:
+    if not ctx.gh_repo_slug:
+        return ["gh", "api", ""]
+    owner, _, repo = ctx.gh_repo_slug.partition("/")
+    return [
+        "gh",
+        "api",
+        f"repos/{owner}/{repo}/issues/{number}/comments?per_page=100",
+        "--paginate",
+        "--slurp",
+    ]
+
+
 def _timeline_command(ctx: LoopContext, kind: str, number: str) -> list[str]:
     if not ctx.gh_repo_slug:
         return ["gh", "api", ""]
@@ -211,10 +230,23 @@ def _timeline_command(ctx: LoopContext, kind: str, number: str) -> list[str]:
     return [
         "gh",
         "api",
-        f"repos/{owner}/{repo}/{endpoint}/{number}/timeline",
+        f"repos/{owner}/{repo}/{endpoint}/{number}/timeline?per_page=100",
         "-H",
         "Accept: application/vnd.github+json",
+        "--paginate",
+        "--slurp",
     ]
+
+
+def _paginated_items(payload: object) -> list[object] | None:
+    if isinstance(payload, list):
+        if all(isinstance(page, list) for page in payload):
+            return [item for page in payload for item in page]
+        return payload
+    if isinstance(payload, Mapping):
+        items = payload.get("timelineItems") or payload.get("comments")
+        return items if isinstance(items, list) else None
+    return None
 
 
 def _stand_down_window_seconds(host_env: Mapping[str, str]) -> int:

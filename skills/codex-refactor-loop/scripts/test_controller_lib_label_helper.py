@@ -58,7 +58,8 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
             'if [[ "$1 $2" == "api user" ]]; then printf \'%s\\n\' \'{"login":"controller-bot"}\'; exit 0; fi\n'
             'if [[ "$1 $2" == "api repos/test-owner/test-repo/collaborators/controller-bot/permission" ]]; then printf \'%s\\n\' \'{"permission":"write"}\'; exit 0; fi\n'
             'if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json comments"* ]]; then printf \'%s\\n\' \'{"comments":[]}\'; exit 0; fi\n'
-            'if [[ "$1 $2" == "api repos/test-owner/test-repo/issues/55/timeline" ]]; then printf \'%s\\n\' \'[]\'; exit 0; fi\n',
+            'if [[ "$1 $2" == "api repos/test-owner/test-repo/issues/55/comments?per_page=100" ]]; then printf \'%s\\n\' \'[]\'; exit 0; fi\n'
+            'if [[ "$1 $2" == "api repos/test-owner/test-repo/issues/55/timeline?per_page=100" ]]; then printf \'%s\\n\' \'[]\'; exit 0; fi\n',
             encoding="utf-8",
         )
         fake_gh.chmod(0o755)
@@ -123,6 +124,8 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
                 "pr view 55 --repo test-owner/test-repo --json body",
                 "pr view 55 --repo test-owner/test-repo --json comments",
                 "api repos/test-owner/test-repo/issues/55/timeline -H Accept: application/vnd.github+json",
+                "api repos/test-owner/test-repo/issues/55/comments?per_page=100 --paginate --slurp",
+                "api repos/test-owner/test-repo/issues/55/timeline?per_page=100 -H Accept: application/vnd.github+json --paginate --slurp",
             }
         ]
 

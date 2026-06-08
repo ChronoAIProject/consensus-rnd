@@ -51,6 +51,7 @@ class CrossInstanceStandDownTests(unittest.TestCase):
         self.assertEqual("stand_down", result.status)
         self.assertEqual("other-user", result.other_login)
         self.assertEqual("comment", result.source)
+        self.assertTrue(runner.seen_comments_paginate)
 
     def test_same_login_and_stale_activity_are_allowed(self) -> None:
         for name, comments in {
@@ -102,6 +103,35 @@ class CrossInstanceStandDownTests(unittest.TestCase):
         self.assertEqual("stand_down", result.status)
         self.assertEqual("label", result.source)
 
+    def test_fresh_other_loop_label_on_second_timeline_page_stands_down(self) -> None:
+        runner = self.runner(
+            timeline_pages=[
+                [
+                    {
+                        "event": "labeled",
+                        "created_at": self.iso(minutes=-3),
+                        "actor": {"login": "current-user"},
+                        "label": {"name": labels.PHASE_REVIEWING},
+                    }
+                ],
+                [
+                    {
+                        "event": "labeled",
+                        "created_at": self.iso(minutes=-2),
+                        "actor": {"login": "other-user"},
+                        "label": {"name": labels.PHASE_IMPLEMENTING},
+                    }
+                ],
+            ]
+        )
+
+        result = check_cross_instance_admission(self.ctx, "issue", 77, "current-user", self.now, runner=runner)
+
+        self.assertEqual("stand_down", result.status)
+        self.assertEqual("other-user", result.other_login)
+        self.assertEqual("label", result.source)
+        self.assertTrue(runner.seen_timeline_paginate)
+
     def test_fresh_other_unknown_crnd_label_stands_down_without_catalog_match(self) -> None:
         unknown = "crnd:phase:future-not-in-local-catalog"
         self.assertNotIn(unknown, labels.canonical_labels())
@@ -140,6 +170,38 @@ class CrossInstanceStandDownTests(unittest.TestCase):
                 result = check_cross_instance_admission(self.ctx, "pr", 77, "current-user", self.now, runner=runner)
                 self.assertEqual("unavailable", result.status)
                 self.assertIn("linked_issue_", result.reason)
+
+    def test_pr_linked_managed_issue_ambiguous_closing_refs_are_unavailable(self) -> None:
+        cases = {
+            "zero-valid": "Closes #0",
+            "malformed": "Fixes:#99",
+            "multiple": "Closes #99\n\nResolves #100",
+        }
+        for name, body in cases.items():
+            with self.subTest(name=name):
+                result = check_cross_instance_admission(
+                    self.ctx,
+                    "pr",
+                    77,
+                    "current-user",
+                    self.now,
+                    runner=self.runner(pr_body_json=json.dumps({"body": body})),
+                )
+
+                self.assertEqual("unavailable", result.status)
+                self.assertIn("linked_issue_closing_ref_ambiguous", result.reason)
+
+    def test_pr_without_closing_marker_allows_when_no_other_signal(self) -> None:
+        result = check_cross_instance_admission(
+            self.ctx,
+            "pr",
+            77,
+            "current-user",
+            self.now,
+            runner=self.runner(pr_body_json=json.dumps({"body": "No linked managed issue here."})),
+        )
+
+        self.assertEqual("allowed", result.status)
 
     def test_stand_down_window_env_override_and_invalid_falls_back_to_default(self) -> None:
         short_window_ctx = self.ctx_with_host_env('export CROSS_INSTANCE_STAND_DOWN_WINDOW_SECONDS="60"\n')
@@ -184,28 +246,37 @@ class CrossInstanceStandDownTests(unittest.TestCase):
         self,
         *,
         comments: list[dict] | None = None,
+        comments_pages: list[list[dict]] | None = None,
         timeline: list[dict] | None = None,
+        timeline_pages: list[list[dict]] | None = None,
         comments_json: str | None = None,
         pr_body_json: str | None = None,
         pr_body_returncode: int = 0,
         issue_labels_json: str | None = None,
         issue_labels_returncode: int = 0,
     ):
-        def _run(command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-            if command[:3] in (["gh", "issue", "view"], ["gh", "pr", "view"]) and "comments" in command:
-                stdout = comments_json if comments_json is not None else json.dumps({"comments": comments or []})
-                return subprocess.CompletedProcess(command, 0, stdout, "")
-            if command[:3] == ["gh", "pr", "view"] and "body" in command:
-                stdout = pr_body_json if pr_body_json is not None else json.dumps({"body": ""})
-                return subprocess.CompletedProcess(command, pr_body_returncode, stdout, "pr body failed" if pr_body_returncode else "")
-            if command[:3] == ["gh", "issue", "view"] and "labels" in command:
-                stdout = issue_labels_json if issue_labels_json is not None else json.dumps({"labels": [{"name": labels.MANAGED}]})
-                return subprocess.CompletedProcess(command, issue_labels_returncode, stdout, "issue labels failed" if issue_labels_returncode else "")
-            if command[:2] == ["gh", "api"]:
-                return subprocess.CompletedProcess(command, 0, json.dumps(timeline or []), "")
-            return subprocess.CompletedProcess(command, 0, json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), "")
+        class FakeRunner:
+            seen_timeline_paginate = False
+            seen_comments_paginate = False
 
-        return _run
+            def __call__(self, command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+                if command[:2] == ["gh", "api"] and "/comments" in command[2]:
+                    self.seen_comments_paginate = "--paginate" in command and "--slurp" in command and "per_page=100" in command[2]
+                    stdout = comments_json if comments_json is not None else json.dumps(comments_pages if comments_pages is not None else [comments or []])
+                    return subprocess.CompletedProcess(command, 0, stdout, "")
+                if command[:3] == ["gh", "pr", "view"] and "body" in command:
+                    stdout = pr_body_json if pr_body_json is not None else json.dumps({"body": ""})
+                    return subprocess.CompletedProcess(command, pr_body_returncode, stdout, "pr body failed" if pr_body_returncode else "")
+                if command[:3] == ["gh", "issue", "view"] and "labels" in command:
+                    stdout = issue_labels_json if issue_labels_json is not None else json.dumps({"labels": [{"name": labels.MANAGED}]})
+                    return subprocess.CompletedProcess(command, issue_labels_returncode, stdout, "issue labels failed" if issue_labels_returncode else "")
+                if command[:2] == ["gh", "api"]:
+                    self.seen_timeline_paginate = "--paginate" in command and "--slurp" in command and "per_page=100" in command[2]
+                    stdout = json.dumps(timeline_pages if timeline_pages is not None else [timeline or []])
+                    return subprocess.CompletedProcess(command, 0, stdout, "")
+                return subprocess.CompletedProcess(command, 0, json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), "")
+
+        return FakeRunner()
 
     def ctx_with_host_env(self, extra: str) -> LoopContext:
         (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(

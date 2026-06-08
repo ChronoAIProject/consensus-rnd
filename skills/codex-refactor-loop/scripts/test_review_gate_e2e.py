@@ -220,6 +220,17 @@ class ReviewGateEndToEndTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout="true\n", stderr="")
             if args == ["pr", "view", "480", "--json", "labels,body"]:
                 return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args == ["api", "repos/owner/repo/issues/480/comments?per_page=100", "--paginate", "--slurp"]:
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
+            if args == [
+                "api",
+                "repos/owner/repo/issues/480/timeline?per_page=100",
+                "-H",
+                "Accept: application/vnd.github+json",
+                "--paginate",
+                "--slurp",
+            ]:
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
             if args == ["pr", "ready", "480"]:
                 return mock.Mock(returncode=0, stdout="Ready\n", stderr="")
             if args == ["pr", "merge", "480", "--squash", "--delete-branch"]:
