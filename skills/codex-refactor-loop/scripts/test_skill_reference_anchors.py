@@ -1786,14 +1786,25 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "`.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`",
             "exactly one matching `Closes #N`",
             "non-placeholder title/body",
-            "empty reservation commit",
-            "`early_pr_missing`",
-            "exactly one matching open managed PR",
+            "`dispatch_consensus_implementation` only moves the issue to implementing phase",
+            "spawns the implement worker; it does not commit, push, or open a PR",
+            "updates an existing matching open managed PR when exactly one exists",
+            "opens exactly one managed implementation PR and verifies it when zero matching PRs exist",
+            "duplicate/multiple PRs, head/base/link mismatch, unmanaged PRs",
             "`implementation_refresh_needed:stale_base`",
             "named helper `dispatch_consensus_implementation`",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, wakeup_runner)
+        for forbidden in (
+            "reservation",
+            "empty reservation commit",
+            "empty-reservation",
+            "early_pr_missing",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, wakeup_runner)
+        self.assertNotRegex(wakeup_runner, r"\breserve\b")
         for needle in (
             "structured fields read by wakeup-plan from this judge artifact only, not from solver artifacts or prompt-body free text",
             "scope_paths",
