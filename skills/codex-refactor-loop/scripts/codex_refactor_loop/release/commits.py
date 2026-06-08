@@ -3,18 +3,27 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
 from ..state import read_json, write_json
 from .gate import inject_host_env, repo_root_from_env
+from .versions import parse_semver_full, sort_semver
 
 
 RELEASE_COMMITS_RELATIVE_PATH = Path(".refactor-loop/state/release-commits.json")
+
+
+@dataclass(frozen=True)
+class ManifestTarget:
+    relative: str
+    field: str
 
 
 def run_git(repo_root: Path, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -70,28 +79,54 @@ def write_release_commits(
         fetch_tags=fetch_tags,
     )
     output_path = repo_root / RELEASE_COMMITS_RELATIVE_PATH
-    write_json(output_path, {"commits": commits})
+    latest_tag = latest_release_tag(repo_root)
+    latest_version = latest_tag.removeprefix("v") if latest_tag else None
+    write_json(output_path, {"commits": commits, "latest_release_version": latest_version})
     return output_path
 
 
 def latest_release_ref(repo_root: Path, target_ref: str | None = None) -> str | None:
-    release_commit = latest_release_commit_ref(repo_root, target_ref)
-    if release_commit:
-        return release_commit
-    described = run_git(repo_root, ["describe", "--tags", "--abbrev=0"])
-    if described.returncode == 0 and described.stdout.strip():
-        return described.stdout.strip()
-    version_tag = manifest_version_tag(repo_root)
-    if version_tag and git_ref_exists(repo_root, version_tag):
-        return version_tag
+    release_tag = latest_release_tag(repo_root)
+    if not release_tag:
+        return latest_release_subject_ref(repo_root, target_ref)
+    if target_ref and git_ref_is_ancestor(repo_root, release_tag, target_ref):
+        return release_tag
+    if target_ref:
+        return manifest_version_transition_ref(
+            repo_root,
+            target_ref=target_ref,
+            version=release_tag.removeprefix("v"),
+        )
+    if git_ref_exists(repo_root, release_tag):
+        return release_tag
     return None
 
 
-def latest_release_commit_ref(repo_root: Path, target_ref: str | None) -> str | None:
-    version_tag = manifest_version_tag(repo_root)
-    if not version_tag or not target_ref:
+def latest_release_tag(repo_root: Path) -> str | None:
+    result = run_git(repo_root, ["tag", "--list", "v*"])
+    if result.returncode != 0:
         return None
-    version = version_tag.removeprefix("v")
+    versions_by_tag: dict[str, list[str]] = {}
+    for raw_tag in result.stdout.splitlines():
+        tag = raw_tag.strip()
+        if not tag.startswith("v"):
+            continue
+        version = tag.removeprefix("v")
+        try:
+            parse_semver_full(version)
+        except ValueError:
+            continue
+        versions_by_tag.setdefault(version, []).append(tag)
+    if not versions_by_tag:
+        return None
+    latest_version = sort_semver(list(versions_by_tag))[-1]
+    return sorted(versions_by_tag[latest_version])[-1]
+
+
+def latest_release_subject_ref(repo_root: Path, target_ref: str | None) -> str | None:
+    version = current_mapped_manifest_version(repo_root)
+    if not version or not target_ref:
+        return None
     subject_re = re.compile(rf"^Release v{re.escape(version)}(?: \(#[1-9][0-9]*\))?$")
     result = run_git(repo_root, ["log", "--format=%H%x00%s", target_ref])
     if result.returncode != 0:
@@ -103,6 +138,33 @@ def latest_release_commit_ref(repo_root: Path, target_ref: str | None) -> str | 
         if subject_re.fullmatch(subject):
             return sha
     return None
+
+
+def manifest_version_transition_ref(repo_root: Path, *, target_ref: str, version: str) -> str:
+    targets = load_manifest_targets(repo_root)
+    target_version = mapped_manifest_version_at_ref(repo_root, targets, target_ref, strict=True)
+    if target_version != version:
+        raise RuntimeError(
+            f"target ref mapped manifest version {target_version} does not match latest release tag version {version}"
+        )
+    result = run_git(repo_root, ["rev-list", "--reverse", target_ref])
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"git rev-list {target_ref} failed"
+        raise RuntimeError(detail)
+    for line in result.stdout.splitlines():
+        commit = line.strip()
+        if not commit:
+            continue
+        commit_version = mapped_manifest_version_at_ref(repo_root, targets, commit, strict=False)
+        if commit_version != version:
+            continue
+        parent_versions = [
+            mapped_manifest_version_at_ref(repo_root, targets, parent, strict=False)
+            for parent in commit_parent_refs(repo_root, commit)
+        ]
+        if not parent_versions or any(parent_version != version for parent_version in parent_versions):
+            return commit
+    raise RuntimeError(f"no branch-reachable mapped manifest transition found for release version {version}")
 
 
 def refresh_origin_tags(repo_root: Path) -> None:
@@ -133,25 +195,96 @@ def resolve_review_ref(repo_root: Path, review_base_branch: str) -> str:
     raise RuntimeError(f"review base ref does not exist: {review_base_branch}")
 
 
-def manifest_version_tag(repo_root: Path) -> str | None:
+def load_manifest_targets(repo_root: Path) -> list[ManifestTarget]:
+    mapping = read_json(repo_root / ".version-bump.json", {})
+    files = mapping.get("files") if isinstance(mapping, dict) else None
+    if not isinstance(files, list) or not files:
+        raise RuntimeError(".version-bump.json: expected non-empty top-level files list")
+    targets: list[ManifestTarget] = []
+    for item in files:
+        if not isinstance(item, dict):
+            raise RuntimeError(".version-bump.json: files entries must be objects")
+        relative = item.get("path")
+        field = item.get("field")
+        if not isinstance(relative, str) or not isinstance(field, str):
+            raise RuntimeError(".version-bump.json: files entries require path and field")
+        targets.append(ManifestTarget(relative=relative, field=field))
+    return targets
+
+
+def current_mapped_manifest_version(repo_root: Path) -> str | None:
     mapping = read_json(repo_root / ".version-bump.json", {})
     files = mapping.get("files") if isinstance(mapping, dict) else None
     if not isinstance(files, list) or not files:
         return None
-    first = files[0]
-    if not isinstance(first, dict):
+    targets = load_manifest_targets(repo_root)
+    versions: list[str] = []
+    for target in targets:
+        data = read_json(repo_root / target.relative, None)
+        version = resolve_field(data, target.field)
+        if not isinstance(version, str) or not version:
+            return None
+        versions.append(version)
+    unique = set(versions)
+    if len(unique) != 1:
+        raise RuntimeError("mapped manifest versions are not synchronized")
+    return versions[0]
+
+
+def mapped_manifest_version_at_ref(
+    repo_root: Path,
+    targets: Sequence[ManifestTarget],
+    ref: str,
+    *,
+    strict: bool,
+) -> str | None:
+    versions: list[str] = []
+    for target in targets:
+        data = read_json_from_git(repo_root, ref, target.relative, strict=strict)
+        if data is None:
+            return None
+        version = resolve_field(data, target.field)
+        if not isinstance(version, str) or not version:
+            if strict:
+                raise RuntimeError(f"{ref}:{target.relative}: missing mapped manifest field {target.field}")
+            return None
+        versions.append(version)
+    unique = set(versions)
+    if len(unique) != 1:
+        raise RuntimeError(f"mapped manifest versions are not synchronized at {ref}")
+    return versions[0]
+
+
+def read_json_from_git(repo_root: Path, ref: str, relative: str, *, strict: bool) -> Any:
+    result = run_git(repo_root, ["show", f"{ref}:{relative}"])
+    if result.returncode != 0:
+        if strict:
+            detail = result.stderr.strip() or result.stdout.strip() or f"missing mapped manifest at {ref}:{relative}"
+            raise RuntimeError(detail)
         return None
-    relative = first.get("path")
-    field = first.get("field")
-    if not isinstance(relative, str) or not isinstance(field, str):
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        if strict:
+            raise RuntimeError(f"{ref}:{relative}: invalid JSON") from exc
         return None
-    data = read_json(repo_root / relative, None)
-    version = resolve_field(data, field)
-    return f"v{version}" if isinstance(version, str) and version else None
+
+
+def commit_parent_refs(repo_root: Path, commit: str) -> list[str]:
+    result = run_git(repo_root, ["rev-list", "--parents", "-n", "1", commit])
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"git rev-list --parents {commit} failed"
+        raise RuntimeError(detail)
+    parts = result.stdout.strip().split()
+    return parts[1:]
 
 
 def git_ref_exists(repo_root: Path, ref: str) -> bool:
     return run_git(repo_root, ["rev-parse", "--verify", "--quiet", ref]).returncode == 0
+
+
+def git_ref_is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> bool:
+    return run_git(repo_root, ["merge-base", "--is-ancestor", ancestor, descendant]).returncode == 0
 
 
 def resolve_field(data: Any, field: str) -> Any:

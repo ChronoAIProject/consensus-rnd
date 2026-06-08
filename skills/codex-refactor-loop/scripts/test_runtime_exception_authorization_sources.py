@@ -751,7 +751,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("`read-git` and `write-artifact` only", entry)
         self.assertIn("read local git only", entry)
         self.assertIn("atomically write `.refactor-loop/state/release-commits.json`", entry)
-        self.assertIn("fact_source: local git tags and refs", entry)
+        self.assertIn("mapped manifest version transition", entry)
+        self.assertIn("fact_source: local git tags, target branch refs, `.version-bump.json`, and mapped manifest version fields", entry)
         for verification in (
             "test_release_commits.py",
             "test_cli_command_router.py",
@@ -795,13 +796,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "matching coordinate policy when present",
             "mandatory `coordinate_policy.transition=beta_core_promotion` evidence for beta core promotion",
             "required checks green",
+            "controller-private detached release-publish transaction",
+            "git fetch origin <INTEGRATION_BRANCH>",
+            "git rev-parse origin/<INTEGRATION_BRANCH>",
             "python3 .github/scripts/bump_version.py --version <to_version>",
             "git add .version-bump.json <mapped manifests>",
             'git commit -m "Release v<to_version>"',
             "git rev-parse HEAD",
-            "git fetch origin HEAD",
-            "git rev-list --count HEAD..origin/HEAD",
-            "git push origin HEAD",
+            "git push origin HEAD:refs/heads/<INTEGRATION_BRANCH>",
             "gh release create v<to_version> --target <fresh release commit sha> --generate-notes [--prerelease]",
             ".refactor-loop/state/release-publish-result.json",
             "test_release_publisher.py",
@@ -815,12 +817,19 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, entry)
                 self.assertIn(required, self.skill)
+        self.assertIn("git worktree add --detach", entry)
+        self.assertIn("ReleaseCommitTransaction", self.skill)
+        self.assertIn(".worktrees/release-publish/<version>-<attempt>", self.skill)
 
         for forbidden in (
             "no public `consensus-rnd-cli release-publish`",
             "no public `consensus-rnd-cli publish-release`",
             "no workflow tag/release creation",
             "no `git tag`",
+            "no current-checkout first-run release commit/push",
+            "no `git fetch origin HEAD`",
+            "no `git rev-list --count HEAD..origin/HEAD`",
+            "no `git push origin HEAD`",
             "no force-push",
             "no `git merge`",
             "no `git rebase`",
@@ -839,7 +848,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("#322 是唯一 controller-owned release publication carveout", self.repo_rules)
         self.assertIn("active-controller owner 的 `ReleasePublisher`", self.repo_rules)
         self.assertIn("`ReleasePublishPreflight` 验证 `RELEASE_AUTO_ENABLE=true`", self.repo_rules)
-        self.assertIn("`git push origin HEAD`、通过 `ReleaseRequiredChecksProjection` 读取", self.repo_rules)
         self.assertIn("`gh api repos/<slug>/commits/<fresh release commit sha>/check-runs --paginate --slurp`", self.repo_rules)
         self.assertIn("确认该 exact fresh SHA required checks 全绿后才运行", self.repo_rules)
         self.assertIn("`gh release create v<to_version> --target <fresh release commit sha> --generate-notes [--prerelease]`", self.repo_rules)
@@ -861,9 +869,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "git show origin/rollup/<40hex>:<mapped manifest>",
             "suffix equals the resolved commit sha",
             "git rev-parse HEAD",
-            "git fetch origin HEAD",
-            "git rev-list --count HEAD..origin/HEAD",
-            "git push origin HEAD",
             "gh api repos/<slug>/commits/<exact release/reentry commit sha>/check-runs --paginate --slurp",
             "gh release create v<to_version> --target <exact release/reentry commit sha> --generate-notes [--prerelease]",
             "pending/red/missing/API-fail fail closed",
@@ -902,13 +907,13 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "release candidate/decision artifacts",
             "ReleasePublishPreflight",
             "bump mapped manifests",
-            "commit/push the release manifest commit",
+            "commit/push the release manifest commit through the detached origin-tip transaction",
             "origin/rollup/<40hex>",
             "suffix equals the resolved commit sha",
             "read exact-SHA Checks API",
             "only after that exact fresh SHA is green",
             ".refactor-loop/state/release-publish-result.json",
-            "release candidate/decision artifacts + mapped manifests + exact fresh SHA or read-only proven remote integration/rollup release SHA + Checks API projection",
+            "release candidate/decision artifacts + mapped manifests + exact detached transaction SHA or local already-bumped SHA or read-only proven remote integration/rollup release SHA + Checks API projection",
             "test_release_publisher.py",
             "test_release_pipeline_contract.py",
             "test_runtime_exception_authorization_sources.py",

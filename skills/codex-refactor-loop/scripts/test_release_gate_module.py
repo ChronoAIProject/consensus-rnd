@@ -452,9 +452,12 @@ class ReleaseGateModuleTests(unittest.TestCase):
 
             self.assertFalse(decision["ready"])
             self.assertIn("fresh_heartbeats", decision["blocked_reasons"])
-            with self.assertRaises(RuntimeError):
-                release_gate.dispatch_release(decision)
-            self.assertFalse((repo / ".refactor-loop/state/release-decision.json").exists())
+            release_gate.dispatch_release(decision)
+            blocked_decision = read_json(repo / ".refactor-loop/state/release-decision.json")
+            self.assertIsInstance(blocked_decision, dict)
+            assert isinstance(blocked_decision, dict)
+            self.assertFalse(blocked_decision["ready"])
+            self.assertIn("fresh_heartbeats", blocked_decision["blocked_reasons"])
             self.assertFalse((repo / ".refactor-loop/state/release-candidate.json").exists())
 
 

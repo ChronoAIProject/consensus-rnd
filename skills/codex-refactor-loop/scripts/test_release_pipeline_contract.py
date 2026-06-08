@@ -275,11 +275,13 @@ class ReleasePipelineContractTests(unittest.TestCase):
             "release_push_started_at = None if state.skip_bump_commit else self.now()",
             "since=release_push_started_at",
             "_ensure_fresh_release_commit_checks_green(release_target_ref, since=release_push_started_at)",
+            "ReleaseCommitTransaction",
+            "transaction.publish(",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.publisher)
 
-        push_index = self.publisher.index("self._safe_push()")
+        push_index = self.publisher.index("transaction.publish(")
         gate_index = self.publisher.index("self._ensure_fresh_release_commit_checks_green(release_target_ref")
         release_index = self.publisher.index('["gh", "release", "create"')
         result_write_index = self.publisher.index("write_json(self.result_path, payload)")
@@ -305,14 +307,13 @@ class ReleasePipelineContractTests(unittest.TestCase):
         self.assertNotIn("proof ticket", self.publisher.lower())
 
         inspect_index = self.publisher.index("state = self._inspect_publication_state(result)")
-        bump_index = self.publisher.index('["python3", ".github/scripts/bump_version.py"')
+        bump_index = self.publisher.index("transaction.publish(")
         skip_index = self.publisher.index("if not state.skip_bump_commit:")
-        push_index = self.publisher.index("self._safe_push()")
         gate_index = self.publisher.index("self._ensure_fresh_release_commit_checks_green(release_target_ref")
         release_index = self.publisher.index('["gh", "release", "create"')
         self.assertLess(inspect_index, skip_index)
         self.assertLess(skip_index, bump_index)
-        self.assertLess(push_index, gate_index)
+        self.assertLess(bump_index, gate_index)
         self.assertLess(gate_index, release_index)
 
     def snapshot_mapped_manifest_versions(self, repo: Path) -> dict[tuple[str, str], str]:

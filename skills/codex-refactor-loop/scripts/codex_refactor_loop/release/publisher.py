@@ -14,6 +14,7 @@ from typing import Any, Callable, Literal, Sequence
 from ..state import write_json
 from .gate import isoformat, load_host_env, resolve_field
 from .publish_preflight import PublishPreflightResult, ReleasePublishPreflight, load_manifest_targets
+from .publish_transaction import ReleaseCommitTransaction
 from .required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from .versions import parse_semver_full
 
@@ -49,7 +50,6 @@ class ReleasePublicationState:
     tag: str
     release_target_ref: str | None
     skip_bump_commit: bool
-    push_release_commit: bool
     reason: str
 
 
@@ -95,17 +95,20 @@ class ReleasePublisher:
         version = state.version
         tag = state.tag
         if not state.skip_bump_commit:
-            bump = self._run(["python3", ".github/scripts/bump_version.py", "--version", version])
-            self._ensure_success(bump, "bump_version")
             paths = [target["relative"] for target in load_manifest_targets(self.repo_root)]
-            add = self._run(["git", "add", ".version-bump.json", *paths])
-            self._ensure_success(add, "git add")
-            commit = self._run(["git", "commit", "-m", self._release_bump_subject(version)])
-            self._ensure_success(commit, "git commit")
-        release_target_ref = state.release_target_ref or self._current_head_sha()
+            transaction = ReleaseCommitTransaction(
+                self.repo_root,
+                runner=self.runner,
+                integration_branch=self._integration_branch(),
+            )
+            release_target_ref = transaction.publish(
+                version=version,
+                manifest_paths=[str(path) for path in paths],
+                subject=self._release_bump_subject(version),
+            ).target_ref
+        else:
+            release_target_ref = state.release_target_ref or self._current_head_sha()
         release_push_started_at = None if state.skip_bump_commit else self.now()
-        if state.push_release_commit:
-            self._safe_push()
         self._ensure_fresh_release_commit_checks_green(release_target_ref, since=release_push_started_at)
         release_command = ["gh", "release", "create", tag, "--target", release_target_ref, "--generate-notes"]
         if parse_semver_full(version).prerelease:
@@ -155,7 +158,6 @@ class ReleasePublisher:
                 tag=tag,
                 release_target_ref=None,
                 skip_bump_commit=True,
-                push_release_commit=True,
                 reason="preflight_already_bumped_reentry",
             )
         if result.allowed:
@@ -168,7 +170,6 @@ class ReleasePublisher:
                 tag=tag,
                 release_target_ref=None,
                 skip_bump_commit=False,
-                push_release_commit=True,
                 reason="preflight_allowed",
             )
         if not self._is_only_manifest_version_mismatch(result):
@@ -178,7 +179,6 @@ class ReleasePublisher:
                 tag=tag,
                 release_target_ref=None,
                 skip_bump_commit=False,
-                push_release_commit=True,
                 reason="preflight_denied",
             )
         if not version:
@@ -188,7 +188,6 @@ class ReleasePublisher:
                 tag=tag,
                 release_target_ref=None,
                 skip_bump_commit=False,
-                push_release_commit=True,
                 reason="missing_version",
             )
         remote_state = self._remote_already_bumped_reentry_state(version, tag)
@@ -203,7 +202,6 @@ class ReleasePublisher:
                 tag=tag,
                 release_target_ref=None,
                 skip_bump_commit=False,
-                push_release_commit=True,
                 reason=reason,
             )
         expected_subject = self._release_bump_subject(version)
@@ -215,7 +213,6 @@ class ReleasePublisher:
                 tag=tag,
                 release_target_ref=None,
                 skip_bump_commit=False,
-                push_release_commit=True,
                 reason=reason,
             )
         return ReleasePublicationState(
@@ -224,7 +221,6 @@ class ReleasePublisher:
             tag=tag,
             release_target_ref=None,
             skip_bump_commit=True,
-            push_release_commit=True,
             reason="already_bumped_reentry",
         )
 
@@ -268,7 +264,6 @@ class ReleasePublisher:
             tag=tag,
             release_target_ref=proof.sha,
             skip_bump_commit=True,
-            push_release_commit=False,
             reason="remote_already_bumped_reentry",
         )
 
@@ -355,20 +350,6 @@ class ReleasePublisher:
         if not sha:
             raise RuntimeError("git rev-parse HEAD returned an empty release target")
         return sha
-
-    def _safe_push(self) -> None:
-        fetch = self._run(["git", "fetch", "origin", "HEAD"])
-        self._ensure_success(fetch, "git fetch")
-        behind = self._run(["git", "rev-list", "--count", "HEAD..origin/HEAD"])
-        self._ensure_success(behind, "git rev-list")
-        try:
-            behind_count = int((behind.stdout or "0").strip() or "0")
-        except ValueError:
-            behind_count = 0
-        if behind_count > 0:
-            raise RuntimeError(f"safe push refused: local release commit is behind origin/HEAD by {behind_count}")
-        push = self._run(["git", "push", "origin", "HEAD"])
-        self._ensure_success(push, "git push")
 
     def _ensure_fresh_release_commit_checks_green(self, release_target_ref: str, *, since: datetime | None) -> None:
         repo_slug = self._repo_slug()

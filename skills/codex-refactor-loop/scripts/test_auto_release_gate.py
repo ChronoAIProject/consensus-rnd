@@ -970,6 +970,49 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertEqual(candidate["to_version"], decision["to_version"])
             self.assertEqual((repo / "package.json").read_text(encoding="utf-8"), before)
 
+    def test_dispatch_recomputes_and_clears_stale_candidate_when_no_commits(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_opt_in(repo)
+            write_green_signals(repo)
+            stale_decision = {
+                "from_version": "1.0.0-beta.9",
+                "to_version": "1.0.0-beta.10",
+                "bump_type": "patch",
+                "ready": True,
+            }
+            write_json(repo / ".refactor-loop/state/release-decision.json", stale_decision)
+            write_json(
+                repo / ".refactor-loop/state/release-candidate.json",
+                {
+                    "from_version": "1.0.0-beta.9",
+                    "to_version": "1.0.0-beta.10",
+                    "ready": True,
+                    "decision_digest": "stale",
+                },
+            )
+            write_json(repo / ".refactor-loop/state/release-commits.json", {"commits": [], "latest_release_version": "1.0.0-beta.10"})
+            env = {**os.environ, "REPO_ROOT": str(repo), "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--dispatch", "--min-recent-merges", "0"],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("stale release candidate cleared", result.stdout)
+            decision = read_json(repo / ".refactor-loop/state/release-decision.json")
+            self.assertIsInstance(decision, dict)
+            assert isinstance(decision, dict)
+            self.assertFalse(decision["ready"])
+            self.assertEqual(decision["from_version"], read_json(repo / "package.json")["version"])
+            self.assertIn("no_commits_since_last_release", decision["blocked_reasons"])
+            self.assertFalse((repo / ".refactor-loop/state/release-candidate.json").exists())
+
     def test_dispatch_from_beta_base_writes_coordinate_policy_candidate(self) -> None:
         cases = (
             ("fix: fixture", "", "patch", "1.0.0-beta.4", "same_stage_prerelease"),
