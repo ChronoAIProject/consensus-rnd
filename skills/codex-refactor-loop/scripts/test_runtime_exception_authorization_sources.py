@@ -1033,6 +1033,9 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(required, self.skill)
 
         for forbidden in (
+            "early managed PR",
+            "missing early PR",
+            "pre-opened managed PR",
             "reservation",
             "empty reservation commit",
             "empty-reservation",
@@ -1041,6 +1044,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, entry)
                 self.assertNotIn(forbidden, skill_entry)
+        self.assertNotRegex(entry, r"\bearly[- ]PR\b")
+        self.assertNotRegex(skill_entry, r"\bearly[- ]PR\b")
         self.assertNotRegex(entry, r"\breserve\b")
         self.assertNotRegex(skill_entry, r"\breserve\b")
 

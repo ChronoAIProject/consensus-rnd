@@ -604,7 +604,7 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | `META_RESOLVED:re-cluster` | Close current PR/issue path and queue re-split. |
 | `META_RESOLVED:drop` | Close as no-op/wontfix with explanation. |
 | `META_RESOLVED:escalate-human:<reason>` | Only then call `apply_human_label_or_skip` for `crnd:human:maintainer-decision`, passing the full marker source; the helper fails closed without that marker and does not treat local maintainer-directive captures as skip authority. |
-| `IMPLEMENT_DONE:ok` | Controller verifies worker-authored `.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt` and `.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`, commits/pushes to exactly one matching early managed PR, then dispatches Consensus-rnd Phase review-gate reviewers. Missing or invalid PR artifacts, missing early PR, duplicate PRs, or head/base/link mismatch fail closed. |
+| `IMPLEMENT_DONE:ok` | Controller verifies worker-authored `.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt` and `.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`; after real scoped diff validation, host checks, commit, integration-base restore, and safe-push of the canonical head, `publish_implementation_output` updates exactly one matching open managed implementation PR or opens and verifies exactly one managed implementation PR when zero matching PRs exist, then dispatches Consensus-rnd Phase review-gate reviewers. Missing or invalid PR artifacts, duplicate/multiple PRs, conflict PRs, head/base/link mismatch, unmanaged PRs, or stale-base clean output fail closed/status-only. |
 | `IMPLEMENT_DONE:blocked` | Route to recovery or Consensus-rnd Phase design-consensus depending on reason. |
 | Latest complete Consensus-rnd Phase review-gate reviewer round resolves to `MERGE` or `MERGE_WITH_COMMENTS` | Merge path; surface comments for `MERGE_WITH_COMMENTS`. |
 | Latest complete Consensus-rnd Phase review-gate reviewer round resolves to `WAIT_EXPLICIT_APPROVAL` | Surface comments and wait; do not merge or dispatch fix. |
@@ -1062,7 +1062,7 @@ Consensus-rnd Phase implementation guardrails:
 2. Each work unit gets an isolated worktree and branch.
 3. Prompt includes scope paths, old pattern, new principle, verification hints, hard rules, language rule, and sentinel rule.
 4. Implement codex must not commit, push, create PRs, merge, or close issues.
-5. `IMPLEMENT_DONE:ok` means the controller may inspect diff, run host checks, commit, push to the pre-opened managed PR, and advance.
+5. `IMPLEMENT_DONE:ok` means the controller may inspect diff, run host checks, commit, safe-push the canonical head, then have `publish_implementation_output` open or update exactly one managed implementation PR; duplicate/multiple/mismatch/unmanaged PRs fail closed.
 
 Consensus-rnd Phase verification guardrails:
 
@@ -1501,7 +1501,7 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 | META_JUDGE_DONE:converge:rS | r(S+1) 三 solver unless router-owned stalled predicate dispatches round-S reflector; legacy r(S+1) payload remains compatible |
 | legacy META_JUDGE_DONE:escalate:stalled | reflector only as read-only compatibility and only if the stalled predicate holds |
 | META_RESOLVED:re-design | phase9-router queues marker.round + 1 三 solver with new framing |
-| IMPLEMENT_DONE:ok | controller commit/push to early managed PR + Consensus-rnd Phase review-gate reviewer × 3 |
+| IMPLEMENT_DONE:ok | controller commit/safe-push + `publish_implementation_output` opens or updates exactly one managed implementation PR + Consensus-rnd Phase review-gate reviewer × 3 |
 | REVIEW_DONE × 3 + any reject | fix codex r+1 |
 | FIX_DONE | reviewer r+1 |
 | TEST_ADD_DONE | controller commit/push 等 CI |
