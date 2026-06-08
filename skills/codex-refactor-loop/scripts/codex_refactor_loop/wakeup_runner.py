@@ -17,6 +17,8 @@ from .active_controller import require_active_controller, write_active_controlle
 from . import labels
 from .context import LoopContext, LoopContextError
 from .controller_actions import ControllerActions
+from .cross_instance_stand_down import check_cross_instance_admission
+from .github_actor import GitHubAuthenticatedActor
 from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok
 from .heartbeat import DaemonHeartbeatLease
@@ -112,6 +114,23 @@ REMOTE_CI_FIX_ATTEMPT_CAP = 2
 REMOTE_CI_FIX_DONE_RE = re.compile(r"^REMOTE_CI_FIX_DONE:([^:]+):(ok|infra|blocked)$")
 SAFE_CI_CHECK_TOKEN_RE = re.compile(r"[^A-Za-z0-9._-]+")
 NON_BLOCKING_VALIDATION_REASONS = frozenset({"publish_implementation_empty_scoped_diff"})
+STAND_DOWN_MANAGED_WRITE_ACTIONS = frozenset(
+    {
+        "safe_push",
+        "dispatch_consensus_implementation",
+        "publish_implementation_output",
+        "publish_worker_output_from_action",
+        "publish_review_fix_output_from_action",
+        "dispatch_reviewers",
+        "dispatch_remote_ci_fix",
+        "dispatch_pr_rebase_resolve",
+        "commit_push_resolved_pr_rebase",
+        "close_managed_item_from_drop_marker",
+        "review_gate",
+        "apply_issue_decomposition_plan",
+        "apply_default_issue_intake_claim",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -326,6 +345,9 @@ class WakeupRunner:
             return self._blocked(action, error)
         if self.dry_run:
             return self._record(RunnerResult(action_id, "dry-run"), action)
+        stand_down_reason = self._cross_instance_stand_down_reason(action)
+        if stand_down_reason:
+            return self._record(RunnerResult(action_id, "skipped", stand_down_reason), action)
         if action.get("capability") == "release-rollup-body":
             self._prepare_release_rollup_body_prompt(action)
         if action.get("capability") == "implementation-pr-artifact-repair":
@@ -1156,6 +1178,53 @@ class WakeupRunner:
         self._append_pending_event(f"WAKEUP_RUNNER_UNAPPLIED:{controller_action}:{action.get('action_id')}")
         return 0
 
+    def _cross_instance_stand_down_reason(self, action: Mapping[str, Any]) -> str:
+        controller_action = str(action.get("controller_action") or "")
+        if controller_action not in STAND_DOWN_MANAGED_WRITE_ACTIONS:
+            return ""
+        target = self._github_target(action)
+        if target is None:
+            return ""
+        kind, number = target
+        normalized_kind = "pr" if kind == "PR" else kind.lower()
+        actor = getattr(self.actions, "github_actor", None) or GitHubAuthenticatedActor(
+            self.ctx,
+            runner=lambda command, cwd: self.command_runner(command),
+        )
+        try:
+            admission = actor.require_admission(f"wakeup-runner:{controller_action}")
+        except RuntimeError as exc:
+            return f"cross_instance_stand_down:{normalized_kind}:{number}:unavailable:{_single_line(str(exc))}"
+        if hasattr(self.actions, "cross_instance_admission"):
+            result = self.actions.cross_instance_admission(
+                normalized_kind,
+                number,
+                admission.login,
+                datetime.now(timezone.utc),
+            )
+        else:
+            result = check_cross_instance_admission(
+                self.ctx,
+                normalized_kind,
+                number,
+                admission.login,
+                datetime.now(timezone.utc),
+                runner=lambda command, cwd: self.command_runner(command),
+            )
+        if result.status == "allowed":
+            return ""
+        line = (
+            f"CROSS_INSTANCE_STAND_DOWN:{controller_action}:{normalized_kind}:{number}:"
+            f"current={admission.login}:other={result.other_login}:source={result.source}:created_at={result.created_at}"
+        )
+        if result.reason:
+            line = f"{line}:reason={_single_line(result.reason)}"
+        self._append_pending_event(line)
+        return (
+            f"cross_instance_stand_down:{normalized_kind}:{number}:"
+            f"{result.status}:{result.source}:{result.other_login or 'unknown'}:{_single_line(result.reason)}"
+        )
+
     def _dispatch_release_candidate(self, action: Mapping[str, Any]) -> int:
         previous_env = os.environ.copy()
         try:
@@ -1353,6 +1422,16 @@ class WakeupRunner:
         worktree = self._review_fix_worktree(target)
         if worktree is None:
             return 3
+        head_ref = self._pr_head_ref_from_json(target)
+        if not head_ref:
+            return 3
+        precommit_admission = self.actions._require_branch_push_admission_or_return(
+            "remote-ci-fix-output",
+            head_ref,
+            worktree,
+        )
+        if precommit_admission is not None:
+            return precommit_admission
         status = self.command_runner(["git", "-C", str(worktree), "status", "--porcelain"])
         if status.returncode != 0:
             self._append_pending_event(f"WAKEUP_RUNNER_REMOTE_CI_FIX_STATUS_FAILED:{target}")
@@ -1367,9 +1446,6 @@ class WakeupRunner:
         if commit.returncode != 0:
             self._append_pending_event(f"WAKEUP_RUNNER_REMOTE_CI_FIX_COMMIT_FAILED:{target}")
             return 2
-        head_ref = self._pr_head_ref_from_json(target)
-        if not head_ref:
-            return 3
         return self.actions.safe_push(branch=head_ref, worktree=worktree)
 
     def _review_fix_worktree(self, pr_number: int) -> Path | None:
@@ -1409,6 +1485,16 @@ class WakeupRunner:
         worktree = self._review_fix_worktree(target)
         if worktree is None:
             return 3
+        head_ref = self._pr_head_ref_from_json(target)
+        if not head_ref:
+            return 3
+        precommit_admission = self.actions._require_branch_push_admission_or_return(
+            "review-fix-output",
+            head_ref,
+            worktree,
+        )
+        if precommit_admission is not None:
+            return precommit_admission
         status = self.command_runner(["git", "-C", str(worktree), "status", "--porcelain"])
         if status.returncode != 0:
             self._append_pending_event(f"WAKEUP_RUNNER_REVIEW_FIX_STATUS_FAILED:{target}")
@@ -1423,9 +1509,6 @@ class WakeupRunner:
         if commit.returncode != 0:
             self._append_pending_event(f"WAKEUP_RUNNER_REVIEW_FIX_COMMIT_FAILED:{target}")
             return 2
-        head_ref = self._pr_head_ref_from_json(target)
-        if not head_ref:
-            return 3
         return self.actions.safe_push(branch=head_ref, worktree=worktree)
 
     def _worktree_for_branch(self, branch: str) -> Path | None:
@@ -2072,6 +2155,10 @@ def _forbidden_action_field_paths(value: Any, prefix: str = "") -> list[str]:
 def _log_tick_status(daemon: str, action: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"[{ts}] {daemon}: tick {action}", flush=True)
+
+
+def _single_line(value: str) -> str:
+    return " ".join(str(value).split())[:240]
 
 
 if __name__ == "__main__":

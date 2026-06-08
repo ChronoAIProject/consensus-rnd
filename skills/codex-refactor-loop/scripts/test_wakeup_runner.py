@@ -21,6 +21,8 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest
 from codex_refactor_loop import labels
+from codex_refactor_loop.cross_instance_stand_down import CrossInstanceAdmission
+from codex_refactor_loop.github_actor import GitHubActorAdmission
 from codex_refactor_loop.release.gate import canonical_digest, isoformat
 from codex_refactor_loop.wakeup_runner import (
     WakeupRunner,
@@ -170,10 +172,20 @@ class FakeActions:
         self.publish_code = publish_code
         self.close_code = close_code
         self.calls: list[tuple[str, object]] = []
+        self.github_actor = self
+
+    def require_admission(self, action: str) -> GitHubActorAdmission:
+        return GitHubActorAdmission("current-user", "owner/repo", "write")
+
+    def cross_instance_admission(self, kind: str, target: str | int, current_login: str, now: datetime) -> CrossInstanceAdmission:
+        return CrossInstanceAdmission("allowed", "test-fake")
 
     def safe_push(self, remote: str = "origin", branch: str = "", worktree: str | Path | None = None) -> int:
         self.calls.append(("safe_push", {"remote": remote, "branch": branch, "worktree": str(worktree or "")}))
         return self.safe_push_code
+
+    def _require_branch_push_admission_or_return(self, action: str, branch: str, worktree: Path, *, current_login: str = "") -> int | None:
+        return None
 
     def publish_worker_output_from_action(self, action: dict) -> int:
         self.calls.append(("publish_worker_output_from_action", dict(action)))
@@ -345,6 +357,38 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual("applied", result[0].status)
         self.assertEqual([("apply_default_issue_intake_claim", 77)], actions.calls)
 
+    def test_apply_action_skips_managed_write_on_cross_instance_stand_down(self) -> None:
+        action = {
+            "kind": "review-dispatch",
+            "action_id": "dispatch-reviewers:pr:77",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["active_controller_owner", "live_open_target", "clean_exit_source_marker"],
+            "source_artifact": ".refactor-loop/logs/review-ready.log",
+            "source_marker": "REVIEW_DONE:77:architect:approve",
+            "target_kind": "PR",
+            "target_number": 77,
+            "target": {"kind": "PR", "number": 77},
+            "controller_action": "dispatch_reviewers",
+            "no_generic_command": True,
+            "no_lifecycle_authority": True,
+        }
+        (self.repo / ".refactor-loop/logs/review-ready.log").write_text("REVIEW_DONE:77:architect:approve\nEXIT=0\n", encoding="utf-8")
+        actions = FakeActions()
+        actions.cross_instance_admission = lambda kind, target, current_login, now: CrossInstanceAdmission(
+            "stand_down",
+            "fresh_other_instance_comment:other-user",
+            other_login="other-user",
+            source="comment",
+            created_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        )
+
+        result = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
+
+        self.assertEqual("skipped", result[0].status)
+        self.assertIn("cross_instance_stand_down:pr:77", result[0].reason)
+        self.assertEqual([], actions.calls)
+        self.assertIn("CROSS_INSTANCE_STAND_DOWN:dispatch_reviewers:pr:77", (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8"))
+
     def test_runner_blocks_high_risk_action_before_helper_dispatch(self) -> None:
         action = self.release_dispatch_action(
             risk_tier="high",
@@ -470,6 +514,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         def command_runner(command):
             if command[:2] == ["gh", "api"]:
                 endpoint = str(command[2]) if len(command) > 2 else ""
+                if endpoint == "user":
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"login": "current-user"}), "")
+                if endpoint.startswith("repos/owner/repo/collaborators/") and endpoint.endswith("/permission"):
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"permission": "write"}), "")
+                if endpoint.endswith("/timeline"):
+                    return subprocess.CompletedProcess(command, 0, "[]", "")
                 if endpoint == "repos/owner/repo/pulls/77":
                     if gh_state is None:
                         return subprocess.CompletedProcess(command, 1, "", "not found")
@@ -516,6 +566,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
             if command[:3] == ["gh", "issue", "view"] and "comments" in command:
                 return subprocess.CompletedProcess(command, 0, json.dumps({"comments": issue_comments or []}), "")
+            if command[:3] == ["gh", "pr", "view"] and "comments" in command:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"comments": []}), "")
             if command[:3] == ["gh", "issue", "view"] or command[:3] == ["gh", "pr", "view"]:
                 if "labels,body" in command:
                     live_labels = gh_labels if gh_labels is not None else [labels.MANAGED]

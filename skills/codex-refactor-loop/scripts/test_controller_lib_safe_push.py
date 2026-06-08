@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,7 @@ sys.path.insert(0, str(REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts")
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
+from codex_refactor_loop.github_actor import GitHubActorAdmission
 
 
 def git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -104,6 +106,40 @@ class SafePushHelperTests(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def _actions(self) -> ControllerActions:
+        env = {
+            "REPO_ROOT": str(self.local),
+            "CONSENSUS_RND_HOST_ENV": ".refactor-loop/host.env",
+            "ACTIVE_CONTROLLER_DEVICE_ID": "device-a",
+        }
+        host_env = self.local / ".refactor-loop" / "host.env"
+        host_env.parent.mkdir(parents=True, exist_ok=True)
+        host_env.write_text(
+            f"export REPO_ROOT={self.local}\n"
+            "export GH_REPO_SLUG=owner/repo\n"
+            "export INTEGRATION_BRANCH=main\n"
+            "export REVIEW_BASE_BRANCH=main\n"
+            "export ACTIVE_CONTROLLER_DEVICE_ID=device-a\n",
+            encoding="utf-8",
+        )
+
+        class Actor:
+            def require_admission(self, action: str) -> GitHubActorAdmission:
+                return GitHubActorAdmission("current-user", "owner/repo", "write")
+
+        return ControllerActions(LoopContext.load(env=env, cwd=self.local), github_actor=Actor())
+
+    def _owner_patch(self):
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="safe-push",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+        return mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision)
+
     def test_safe_push_succeeds_when_remote_up_to_date(self) -> None:
         (self.local / "a.txt").write_text("a", encoding="utf-8")
         git(self.local, "add", ".")
@@ -181,6 +217,56 @@ class SafePushHelperTests(unittest.TestCase):
         result = self._run_helper("safe_push origin")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("cannot determine branch", result.stderr)
+
+    def test_safe_push_blocks_missing_provenance_for_managed_branch(self) -> None:
+        git(self.local, "checkout", "-b", "refactor/iter77-worker")
+        actions = self._actions()
+
+        with self._owner_patch(), mock.patch.object(actions, "gh", return_value=mock.Mock(returncode=0, stdout="[]", stderr="")):
+            result = actions.safe_push("origin", "refactor/iter77-worker", self.local)
+
+        self.assertEqual(2, result)
+        events = self.local / ".refactor-loop" / ".controller-pending-events.log"
+        self.assertIn("PUSH_OWNERSHIP_BLOCKED:safe-push:refactor/iter77-worker:missing-provenance", events.read_text(encoding="utf-8"))
+
+    def test_safe_push_allows_matching_local_provenance(self) -> None:
+        git(self.local, "checkout", "-b", "refactor/iter77-worker")
+        (self.local / "managed.txt").write_text("managed\n", encoding="utf-8")
+        git(self.local, "add", ".")
+        git(self.local, "commit", "-m", "managed change")
+        actions = self._actions()
+        actions._write_branch_provenance(branch="refactor/iter77-worker", worktree=self.local, issue="77", base_sha="base")
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
+            return mock.Mock(returncode=1, stdout="", stderr="unexpected")
+
+        with self._owner_patch(), mock.patch.object(actions, "gh", side_effect=fake_gh):
+            result = actions.safe_push("origin", "refactor/iter77-worker", self.local)
+
+        self.assertEqual(0, result)
+
+    def test_safe_push_blocks_open_pr_author_mismatch(self) -> None:
+        git(self.local, "checkout", "-b", "refactor/iter77-worker")
+        (self.local / "managed.txt").write_text("managed\n", encoding="utf-8")
+        git(self.local, "add", ".")
+        git(self.local, "commit", "-m", "managed change")
+        actions = self._actions()
+        actions._write_branch_provenance(branch="refactor/iter77-worker", worktree=self.local, issue="77", base_sha="base")
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                payload = [{"headRefName": "refactor/iter77-worker", "author": {"login": "other-user"}}]
+                return mock.Mock(returncode=0, stdout=json.dumps(payload), stderr="")
+            return mock.Mock(returncode=1, stdout="", stderr="unexpected")
+
+        with self._owner_patch(), mock.patch.object(actions, "gh", side_effect=fake_gh):
+            result = actions.safe_push("origin", "refactor/iter77-worker", self.local)
+
+        self.assertEqual(2, result)
+        events = self.local / ".refactor-loop" / ".controller-pending-events.log"
+        self.assertIn("branch_pr_author_mismatch:current=current-user:author=other-user", events.read_text(encoding="utf-8"))
 
     def test_safe_sync_main_skips_and_records_event_for_local_ahead(self) -> None:
         (self.local / "local.txt").write_text("local\n", encoding="utf-8")
