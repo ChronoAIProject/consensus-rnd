@@ -614,8 +614,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.dispatch:
             decision = gate.decide_release(stability, args.min_interval_hours)
             print_summary(decision)
-            if not decision.get("ready") and "no_commits_since_last_release" not in decision.get("blocked_reasons", []):
-                return 0
             gate.dispatch_release(decision)
             if not decision.get("ready"):
                 print("auto-release dispatch not ready; stale release candidate cleared")
