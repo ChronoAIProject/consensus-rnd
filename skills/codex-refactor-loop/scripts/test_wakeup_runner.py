@@ -294,11 +294,11 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         runner = WakeupRunner(self.ctx)
         with mock.patch("codex_refactor_loop.wakeup_runner.subprocess.run", side_effect=fake_run):
             runner._run_command(["gh", "api", "repos/owner/repo/pulls/77"])
-            runner._run_command(["gh", "pr", "view", "77", "--json", "mergeable,isDraft"])
+            runner._run_command(["gh", "pr", "view", "77", "--json", "mergeable,isDraft,changedFiles"])
             runner._run_command(["gh", "issue", "view", "53", "--json", "state"])
 
         self.assertEqual(calls[0], ["gh", "api", "repos/owner/repo/pulls/77"])
-        self.assertEqual(calls[1], ["gh", "pr", "view", "77", "--repo", "owner/repo", "--json", "mergeable,isDraft"])
+        self.assertEqual(calls[1], ["gh", "pr", "view", "77", "--repo", "owner/repo", "--json", "mergeable,isDraft,changedFiles"])
         self.assertEqual(calls[2], ["gh", "issue", "view", "53", "--repo", "owner/repo", "--json", "state"])
         for command in calls:
             self.assertNotEqual(command[:2], ["gh", "--repo"])
@@ -534,8 +534,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     )
                 if ".headRefOid" in command:
                     return subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", "")
-                if "mergeable,isDraft" in command:
-                    return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False}), "")
+                if "mergeable,isDraft,changedFiles" in command:
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False, "changedFiles": 1}), "")
                 if gh_state is None:
                     return subprocess.CompletedProcess(command, 1, "", "not found")
                 return subprocess.CompletedProcess(command, 0, gh_state + "\n", "")
@@ -948,7 +948,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "host_checks_green",
                 "single_linked_managed_issue",
                 "worker_authored_pr_artifacts",
-                "matching_open_managed_pr",
+                "no_conflicting_open_implementation_pr",
             ],
             "source_artifact": ".refactor-loop/logs/implement-issue77.log",
             "source_marker": marker,
@@ -1675,7 +1675,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "matching_open_managed_pr",
+                "no_conflicting_open_implementation_pr",
             ],
         )
         later = self.spawn_action(action_id="spawn:after-blocked-lifecycle")
@@ -1793,7 +1793,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "matching_open_managed_pr",
+                "no_conflicting_open_implementation_pr",
             ],
         )
         spawns = [
@@ -1877,7 +1877,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "matching_open_managed_pr",
+                "no_conflicting_open_implementation_pr",
             ],
         )
         close = self.close_action(action_id="close-managed-item:53:after-blocked-publish")
@@ -2117,8 +2117,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, json.dumps({"headRefName": "refactor/iter77-worker"}), "")
                 if ".headRefOid" in command:
                     return subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", "")
-                if "mergeable,isDraft" in command:
-                    return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False}), "")
+                if "mergeable,isDraft,changedFiles" in command:
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False, "changedFiles": 1}), "")
             if command == ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"]:
                 return subprocess.CompletedProcess(command, 0, f"worktree {repo_root}\nbranch refs/heads/auto-refact-dev\n\n", "")
             return subprocess.CompletedProcess(command, 0, "", "")
@@ -2181,8 +2181,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, json.dumps({"headRefName": branch}), "")
                 if ".headRefOid" in command:
                     return subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", "")
-                if "mergeable,isDraft" in command:
-                    return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False}), "")
+                if "mergeable,isDraft,changedFiles" in command:
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False, "changedFiles": 1}), "")
             if command == ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"]:
                 return subprocess.CompletedProcess(
                     command,
@@ -3228,7 +3228,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                         "clean_scoped_diff",
                         "single_linked_managed_issue",
                         "worker_authored_pr_artifacts",
-                        "matching_open_managed_pr",
+                        "no_conflicting_open_implementation_pr",
                     ],
                 ),
                 "publish_implementation_missing_precondition:host_checks_green",
@@ -3775,7 +3775,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_implementation_output")
 
-    def test_publish_implementation_output_blocks_missing_matching_pr_before_helper(self) -> None:
+    def test_publish_implementation_output_allows_missing_matching_pr_before_helper(self) -> None:
         actions = FakeActions()
 
         def command_runner(command):
@@ -3807,9 +3807,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         results = runner.run_once()
 
-        self.assertEqual(results[0].status, "blocked")
-        self.assertEqual(results[0].reason, "publish_implementation_matching_pr_missing")
-        self.assertEqual(actions.calls, [])
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual([call[0] for call in actions.calls], ["publish_implementation_output"])
 
     def test_dispatch_reviewers_routes_to_named_helper_after_pr_target_validation(self) -> None:
         actions = FakeActions()

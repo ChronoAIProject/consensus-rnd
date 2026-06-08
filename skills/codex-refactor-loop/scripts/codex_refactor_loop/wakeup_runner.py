@@ -857,7 +857,7 @@ class WakeupRunner:
             "host_checks_green",
             "single_linked_managed_issue",
             "worker_authored_pr_artifacts",
-            "matching_open_managed_pr",
+            "no_conflicting_open_implementation_pr",
         ):
             if required not in preconditions:
                 return f"publish_implementation_missing_precondition:{required}"
@@ -1018,7 +1018,7 @@ class WakeupRunner:
         if not isinstance(payload, list):
             return "publish_implementation_matching_pr_invalid_json"
         if len(payload) == 0:
-            return "publish_implementation_matching_pr_missing"
+            return None
         if len(payload) > 1:
             return "publish_implementation_multiple_matching_open_pr"
         pr = payload[0]
@@ -1614,7 +1614,7 @@ class WakeupRunner:
         return None
 
     def _review_gate_mergeability_error(self, pr_number: int) -> str | None:
-        result = self.command_runner(["gh", "pr", "view", str(pr_number), "--json", "mergeable,isDraft"])
+        result = self.command_runner(["gh", "pr", "view", str(pr_number), "--json", "mergeable,isDraft,changedFiles"])
         if result.returncode != 0:
             return "mergeability_unavailable"
         try:
@@ -1625,6 +1625,11 @@ class WakeupRunner:
             return "mergeability_invalid_json"
         if payload.get("mergeable") != "MERGEABLE":
             return "non_mergeable_pr"
+        changed_files = payload.get("changedFiles")
+        if not isinstance(changed_files, int) or changed_files < 0:
+            return "changed_files_unavailable"
+        if changed_files == 0:
+            return "empty_diff_pr"
         return None
 
     def _next_fix_round(self, pr_number: int) -> int:

@@ -983,6 +983,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
     def test_wakeup_runner_396_preserves_closed_projection_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "wakeup-runner-396")
+        skill_entry = self.skill[
+            self.skill.index("## Named runtime exception - wakeup-runner(per #396)") :
+            self.skill.index('<a id="named-runtime-exception--runtime-retentionper-437"></a>')
+        ]
 
         for required in (
             "#396",
@@ -1000,9 +1004,11 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "OPEN/live GitHub state",
             "release #322 preflight",
             "helper-specific precondition",
-            "empty reservation commit",
-            "`early_pr_missing` fresh redispatch",
-            "exactly one matching open managed PR",
+            "`dispatch_consensus_implementation` only moves the issue to implementing phase",
+            "spawns the implement worker; it does not commit, push, or open a PR",
+            "updates an existing matching open managed PR when exactly one exists",
+            "opens exactly one managed implementation PR and verifies it when zero matching PRs exist",
+            "duplicate/multiple PRs, head/base/link mismatch, unmanaged PRs",
             "stale-base clean output fails closed/status-only",
             "spawn codex",
             "allowlisted `release-rollup-body` generation that only writes `.refactor-loop/runs/release-rollup-pr-body.md`",
@@ -1025,6 +1031,23 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, entry)
                 self.assertIn(required, self.skill)
+
+        for forbidden in (
+            "early managed PR",
+            "missing early PR",
+            "pre-opened managed PR",
+            "reservation",
+            "empty reservation commit",
+            "empty-reservation",
+            "early_pr_missing",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, entry)
+                self.assertNotIn(forbidden, skill_entry)
+        self.assertNotRegex(entry, r"\bearly[- ]PR\b")
+        self.assertNotRegex(skill_entry, r"\bearly[- ]PR\b")
+        self.assertNotRegex(entry, r"\breserve\b")
+        self.assertNotRegex(skill_entry, r"\breserve\b")
 
         self.assertIn("action `head_sha` cannot substitute for reviewer-head authority", entry)
         self.assertIn("all required reviewer heads equal live PR head", entry)

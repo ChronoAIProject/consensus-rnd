@@ -2754,7 +2754,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("canonical_implementation_identity", action["preconditions"])
         self.assertIn("fresh_integration_base", action["preconditions"])
         self.assertIn("worker_authored_pr_artifacts", action["preconditions"])
-        self.assertIn("matching_open_managed_pr", action["preconditions"])
+        self.assertIn("no_conflicting_open_implementation_pr", action["preconditions"])
         self.assertEqual(action["target_pr_number"], 320)
         self.assertNotIn("verified_pr_head", action["preconditions"])
 
@@ -2783,7 +2783,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
         self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
 
-    def test_publish_implementation_marker_without_matching_pr_is_status_only(self) -> None:
+    def test_publish_implementation_marker_without_matching_pr_remains_executable(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
         self.write_implementation_pr_artifacts()
         (self.logs / "implement-issue20.log").write_text(
@@ -2795,10 +2795,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue20"))
         self.assertEqual(action["controller_action"], "publish_implementation_output")
-        self.assertTrue(action["status_only"])
-        self.assertEqual(action["suppressed_reason"], "matching_pr_missing")
-        self.assertNotIn("runner_authority", action)
-        self.assertNotIn("no_generic_command", action)
+        self.assertNotIn("status_only", action)
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertIn("no_conflicting_open_implementation_pr", action["preconditions"])
+        self.assertNotIn("target_pr_number", action)
+        self.assertNotIn("suppressed_reason", action)
 
     def test_noop_implementation_done_empty_scoped_diff_is_status_only_not_hard_gate(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
@@ -3236,7 +3237,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(publish["head_ref"], "refactor/iter20-issue-20")
         self.assertEqual(Path(publish["worktree"]).resolve(), (self.repo / ".worktrees/iter20-issue-20").resolve())
         self.assertEqual(publish["runner_authority"], "wakeup-runner-396")
-        self.assertIn("matching_open_managed_pr", publish["preconditions"])
+        self.assertIn("no_conflicting_open_implementation_pr", publish["preconditions"])
         self.assertEqual(publish["target_pr_number"], 320)
         self.assertTrue(log.exists())
         self.assertFalse(
@@ -5222,8 +5223,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "close_managed_item_from_drop_marker",
             "implementation_worktree_missing",
             "implementation_head_ref_missing",
-            "matching_open_managed_pr",
-            "matching_pr_missing",
+            "no_conflicting_open_implementation_pr",
+            "multiple_matching_open_pr",
             "status_only",
         ):
             with self.subTest(token=token):

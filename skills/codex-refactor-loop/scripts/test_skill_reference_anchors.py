@@ -1786,14 +1786,29 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "`.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`",
             "exactly one matching `Closes #N`",
             "non-placeholder title/body",
-            "empty reservation commit",
-            "`early_pr_missing`",
-            "exactly one matching open managed PR",
+            "`dispatch_consensus_implementation` only moves the issue to implementing phase",
+            "spawns the implement worker; it does not commit, push, or open a PR",
+            "updates an existing matching open managed PR when exactly one exists",
+            "opens exactly one managed implementation PR and verifies it when zero matching PRs exist",
+            "duplicate/multiple PRs, head/base/link mismatch, unmanaged PRs",
             "`implementation_refresh_needed:stale_base`",
             "named helper `dispatch_consensus_implementation`",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, wakeup_runner)
+        for forbidden in (
+            "early managed PR",
+            "missing early PR",
+            "pre-opened managed PR",
+            "reservation",
+            "empty reservation commit",
+            "empty-reservation",
+            "early_pr_missing",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, wakeup_runner)
+        self.assertNotRegex(wakeup_runner, r"\bearly[- ]PR\b")
+        self.assertNotRegex(wakeup_runner, r"\breserve\b")
         for needle in (
             "structured fields read by wakeup-plan from this judge artifact only, not from solver artifacts or prompt-body free text",
             "scope_paths",
@@ -1804,6 +1819,38 @@ class WakeupRunnerContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, meta_judge)
+
+    def test_implementation_publish_runbook_forbids_legacy_early_pr_contract_tokens(self) -> None:
+        no_gap_policy = self.skill[
+            self.skill.index('### Controller 每 wakeup 必派"下一步"(no gap policy)') :
+            self.skill.index("### Controller 严禁自升 escalate")
+        ]
+        sections = (
+            section_after_heading(self.skill, "Phase Routing"),
+            section_after_heading(self.skill, "Phase Guardrails"),
+            no_gap_policy,
+        )
+        combined = "\n".join(sections)
+        for required in (
+            "`publish_implementation_output` updates exactly one matching open managed implementation PR or opens and verifies exactly one managed implementation PR when zero matching PRs exist",
+            "`publish_implementation_output` open or update exactly one managed implementation PR",
+            "`publish_implementation_output` opens or updates exactly one managed implementation PR",
+            "duplicate/multiple/mismatch/unmanaged PRs fail closed",
+            "conflict PRs, head/base/link mismatch, unmanaged PRs",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, combined)
+        for forbidden in (
+            "early managed PR",
+            "missing early PR",
+            "pre-opened managed PR",
+            "early_pr_missing",
+            "reservation",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, combined)
+        self.assertNotRegex(combined, r"\bearly[- ]PR\b")
+        self.assertNotRegex(combined, r"\breserve\b")
 
     def test_batching_heuristics_lock_consensus_implementation_scope_serialization(self) -> None:
         batching = section_after_anchor(self.skill, "batching-heuristics")

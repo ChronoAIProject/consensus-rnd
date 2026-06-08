@@ -3999,20 +3999,14 @@ def _stale_publish_implementation_reason(
         return artifact_reason
     match_error = _matching_open_pr_error(action, target, gh_items=gh_items, head_ref=head_ref)
     if match_error:
-        if match_error == "matching_pr_missing" and _retryable_create_pr_secondary_limit(repo_root, action):
-            preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])
-            if "retry_after_create_pull_request_secondary_limit" not in preconditions:
-                preconditions.append("retry_after_create_pull_request_secondary_limit")
-            action["preconditions"] = preconditions
-        else:
-            return match_error
+        return match_error
     preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])
     for required in (
         "canonical_implementation_identity",
         "fresh_integration_base",
         "single_linked_managed_issue",
         "worker_authored_pr_artifacts",
-        "matching_open_managed_pr",
+        "no_conflicting_open_implementation_pr",
         "host_checks_green",
         "clean_scoped_diff",
     ):
@@ -4157,7 +4151,7 @@ def _matching_open_pr_error(
         return "single_linked_managed_issue_missing"
     matches = [item for item in gh_items if item.kind == "PR" and item.head_ref == head_ref]
     if not matches:
-        return "matching_pr_missing"
+        return None
     if len(matches) > 1:
         return "multiple_matching_open_pr"
     pr = matches[0]

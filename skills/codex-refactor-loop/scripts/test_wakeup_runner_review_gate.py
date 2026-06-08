@@ -100,6 +100,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         required_checks: tuple[str, ...] = ("ci",),
         mergeable: str = "MERGEABLE",
         is_draft: bool = False,
+        changed_files: int = 1,
     ) -> object:
         def command_runner(command):
             repo_root = self.ctx.repo_root
@@ -109,8 +110,13 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, live_head + "\n", "")
             if command[:3] == ["gh", "pr", "view"] and "headRefName" in command and "--jq" not in command:
                 return subprocess.CompletedProcess(command, 0, json.dumps({"headRefName": "refactor/pr12"}), "")
-            if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft" in command:
-                return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": mergeable, "isDraft": is_draft}), "")
+            if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft,changedFiles" in command:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"mergeable": mergeable, "isDraft": is_draft, "changedFiles": changed_files}),
+                    "",
+                )
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/12":
                 return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": live_head}}), "")
             if command[:3] == ["gh", "pr", "view"] and "baseRefName,headRefOid,mergeStateStatus" in command:
@@ -174,6 +180,18 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
 
         self.assertEqual(result.status, "applied")
         self.assertEqual(self.actions.merged, ["12"])
+        self.assertEqual(self.supervisor.calls, 0)
+
+    def test_approved_zero_file_pr_waits_without_merge(self) -> None:
+        self.write_review("architect", "approve")
+        self.write_review("tests", "approve")
+        self.write_review("quality", "comment")
+
+        result = self.run_action(changed_files=0)
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:empty_diff_pr")
+        self.assertEqual(self.actions.merged, [])
         self.assertEqual(self.supervisor.calls, 0)
 
     def test_reject_dispatches_fix_not_merge(self) -> None:
@@ -435,7 +453,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
     def test_review_gate_source_does_not_treat_draft_as_mergeability_blocker(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
         method = source[source.index("    def _review_gate_mergeability_error") : source.index("    def _next_fix_round")]
-        self.assertIn('"mergeable,isDraft"', method)
+        self.assertIn('"mergeable,isDraft,changedFiles"', method)
         self.assertNotIn("pr_draft", method)
 
 

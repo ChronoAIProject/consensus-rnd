@@ -262,8 +262,8 @@ class HeadlessDogfoodFixture:
                 )
             if "--jq" in args and ".headRefOid" in args:
                 return subprocess.CompletedProcess(args, 0, str(pr.get("headRefOid") or ""), "")
-            if "--json" in args and "mergeable,isDraft" in args:
-                return subprocess.CompletedProcess(args, 0, json.dumps({"mergeable": pr.get("mergeable"), "isDraft": pr.get("isDraft")}), "")
+            if "--json" in args and "mergeable,isDraft,changedFiles" in args:
+                return subprocess.CompletedProcess(args, 0, json.dumps({"mergeable": pr.get("mergeable"), "isDraft": pr.get("isDraft"), "changedFiles": pr.get("changedFiles", 1)}), "")
         return subprocess.CompletedProcess(args, 97, "", f"unexpected gh command: {args}")
 
     def _fake_gh_api(self, args: list[str]) -> subprocess.CompletedProcess[str]:
