@@ -580,7 +580,7 @@ def print_summary(decision: dict[str, Any]) -> None:
         print("blocked_reasons=" + ",".join(decision["blocked_reasons"]))
 
 
-def decide_release_artifact(repo_root: Path, *, min_recent_merges: int = 1, min_interval_hours: int = 2) -> dict[str, Any]:
+def decide_release_artifact(repo_root: Path, *, min_recent_merges: int = 1, min_interval_hours: int = 24) -> dict[str, Any]:
     gate = AutoReleaseGate(repo_root)
     stability = gate.compute_stability(min_recent_merges=min_recent_merges)
     return gate.decide_release(stability, min_interval_hours)
@@ -595,7 +595,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--dispatch", action="store_true", help="write decision and release-candidate artifacts only")
     parser.add_argument("--score-only", action="store_true", help="compute stability score only")
     parser.add_argument("--min-recent-merges", type=int, default=int(os.environ.get("RELEASE_AUTO_MIN_MERGES", "1")))
-    parser.add_argument("--min-interval-hours", type=int, default=int(os.environ.get("RELEASE_AUTO_MIN_INTERVAL_HOURS", "2")))
+    parser.add_argument("--min-interval-hours", type=int, default=int(os.environ.get("RELEASE_AUTO_MIN_INTERVAL_HOURS", "24")))
     args = parser.parse_args(argv)
 
     try:

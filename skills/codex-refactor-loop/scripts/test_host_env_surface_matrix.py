@@ -164,6 +164,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             "RUNTIME_RETENTION_ENABLE": ("false", "same-inode pending-events compaction"),
             "AUDIT_FALLBACK_ENABLE": ("false", "disable audit fallback spawn actions"),
             "DEFAULT_ISSUE_INTAKE_ENABLE": ("true", "disable the #623 claim projection"),
+            "RELEASE_AUTO_MIN_INTERVAL_HOURS": ("24", "hours since last release decision"),
             "CODEX_FLOOR": ("5", "hard min `2`"),
             "ACTIVE_CONTROLLER_DEVICE_ID": ("", "single-device local-owner noop"),
             "ACTIVE_CONTROLLER_TTL_SECONDS": ("1800", "expired lease may be acquired by another device"),
