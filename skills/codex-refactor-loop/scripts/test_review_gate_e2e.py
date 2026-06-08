@@ -127,8 +127,8 @@ class ReviewGateEndToEndTests(unittest.TestCase):
                     json.dumps({"baseRefName": "canonical-integration", "headRefOid": HEAD_SHA, "mergeStateStatus": "DIRTY"}),
                     "",
                 )
-            if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft" in command:
-                return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": is_draft}), "")
+            if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft,changedFiles" in command:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": is_draft, "changedFiles": 1}), "")
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/480":
                 pull_attempts += 1
                 if transient_pull_failure and pull_attempts == 2:
@@ -201,6 +201,8 @@ class ReviewGateEndToEndTests(unittest.TestCase):
             gh_calls.append(args)
             if args[:5] == ["pr", "view", "480", "--json", "body"]:
                 return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["pr", "view", "480", "--json", "changedFiles"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"changedFiles": 1}), stderr="")
             if args[:5] == ["pr", "view", "480", "--json", "isDraft"]:
                 return mock.Mock(returncode=0, stdout="true\n", stderr="")
             if args == ["pr", "view", "480", "--json", "labels,body"]:
@@ -263,8 +265,8 @@ class ReviewGateEndToEndTests(unittest.TestCase):
                 json.dumps({"baseRefName": "canonical-integration", "headRefOid": HEAD_SHA, "mergeStateStatus": "DIRTY"}),
                 "",
             )
-        if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft" in command:
-            return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": is_draft}), "")
+        if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft,changedFiles" in command:
+            return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": is_draft, "changedFiles": 1}), "")
         if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/480":
             return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": HEAD_SHA}}), "")
         if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/branches/canonical-integration/protection/required_status_checks":
@@ -309,8 +311,8 @@ class ReviewGateEndToEndTests(unittest.TestCase):
             if command == ["gh", "api", f"repos/owner/repo/commits/{HEAD_SHA}/check-runs", "--paginate", "--slurp"]:
                 payload = {"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
-            if command == ["gh", "pr", "view", "480", "--repo", "owner/repo", "--json", "mergeable,isDraft"]:
-                return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False}), "")
+            if command == ["gh", "pr", "view", "480", "--repo", "owner/repo", "--json", "mergeable,isDraft,changedFiles"]:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False, "changedFiles": 1}), "")
             return subprocess.CompletedProcess(command, 1, "", f"unexpected command: {command!r}")
 
         runner = WakeupRunner(
@@ -333,7 +335,7 @@ class ReviewGateEndToEndTests(unittest.TestCase):
         self.assertIn(["gh", "api", "repos/owner/repo/pulls/480"], calls)
         self.assertIn(["gh", "api", "repos/owner/repo/branches/canonical-integration/protection/required_status_checks"], calls)
         self.assertIn(["gh", "api", f"repos/owner/repo/commits/{HEAD_SHA}/check-runs", "--paginate", "--slurp"], calls)
-        self.assertIn(["gh", "pr", "view", "480", "--repo", "owner/repo", "--json", "mergeable,isDraft"], calls)
+        self.assertIn(["gh", "pr", "view", "480", "--repo", "owner/repo", "--json", "mergeable,isDraft,changedFiles"], calls)
         for command in calls:
             self.assertNotEqual(command[:2], ["gh", "--repo"])
 

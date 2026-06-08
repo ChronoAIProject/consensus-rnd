@@ -260,6 +260,10 @@ if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json body"* ]]; then
   printf '%s\\n' {json.dumps(body)}
   exit 0
 fi
+if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json changedFiles"* ]]; then
+  printf '%s\\n' '{{"changedFiles":1}}'
+  exit 0
+fi
 if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json isDraft"* ]]; then
   printf '%s\\n' {json.dumps(is_draft)}
   exit 0
