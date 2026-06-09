@@ -1515,6 +1515,29 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def write_review_evidence(
+        self,
+        *,
+        role: str,
+        verdict: str,
+        pr_number: int = 480,
+        head_sha: str = "a" * 40,
+        round_number: int = 1,
+        exit_text: str = "EXIT=0",
+    ) -> None:
+        (self.repo / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".refactor-loop" / "runs" / f"review-pr{pr_number}-{role}-r{round_number}.md").write_text(
+            f"---\nhead_sha: {head_sha}\nverdict: {verdict}\n---\nREVIEW_DONE:{pr_number}:{role}:{verdict}\n",
+            encoding="utf-8",
+        )
+        log_lines = [f"head_sha: {head_sha}", f"REVIEW_DONE:{pr_number}:{role}:{verdict}"]
+        if exit_text:
+            log_lines.append(exit_text)
+        (self.logs / f"review-pr{pr_number}-{role}-r{round_number}.log").write_text(
+            "\n".join(log_lines) + "\n",
+            encoding="utf-8",
+        )
+
     def write_issue_decomposition_artifacts(self, *, issue: int = 403, round_no: int = 6) -> tuple[str, str]:
         runs = self.repo / ".refactor-loop" / "runs"
         runs.mkdir(parents=True, exist_ok=True)
@@ -4060,15 +4083,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
     def test_reviewing_pr_with_fresh_pending_reviewer_log_does_not_redispatch(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve")):
-            (self.repo / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
-            (self.repo / ".refactor-loop" / "runs" / f"review-pr480-{role}-r1.md").write_text(
-                f"---\nhead_sha: {'a' * 40}\nverdict: {verdict}\n---\nREVIEW_DONE:480:{role}:{verdict}\n",
-                encoding="utf-8",
-            )
-            (self.logs / f"review-pr480-{role}-r1.log").write_text(
-                f"head_sha: {'a' * 40}\nREVIEW_DONE:480:{role}:{verdict}\nEXIT=0\n",
-                encoding="utf-8",
-            )
+            self.write_review_evidence(role=role, verdict=verdict)
         (self.logs / "review-pr480-quality-r1.log").write_text(
             f"head_sha: {'a' * 40}\nREVIEW_DONE:480:quality:comment\n",
             encoding="utf-8",
@@ -4080,15 +4095,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
     def test_reviewing_pr_with_terminal_failed_reviewer_log_redispatches_only_that_role(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve")):
-            (self.repo / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
-            (self.repo / ".refactor-loop" / "runs" / f"review-pr480-{role}-r1.md").write_text(
-                f"---\nhead_sha: {'a' * 40}\nverdict: {verdict}\n---\nREVIEW_DONE:480:{role}:{verdict}\n",
-                encoding="utf-8",
-            )
-            (self.logs / f"review-pr480-{role}-r1.log").write_text(
-                f"head_sha: {'a' * 40}\nREVIEW_DONE:480:{role}:{verdict}\nEXIT=0\n",
-                encoding="utf-8",
-            )
+            self.write_review_evidence(role=role, verdict=verdict)
         (self.logs / "review-pr480-quality-r1.log").write_text(
             f"head_sha: {'a' * 40}\nREVIEW_DONE:480:quality:comment\nEXIT=1\n",
             encoding="utf-8",
@@ -4100,17 +4107,26 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["stale_review_roles"], ["quality"])
         self.assertNotIn("status_only", action)
 
+    def test_reviewing_pr_with_stale_pending_reviewer_log_redispatches_only_that_role(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "approve")):
+            self.write_review_evidence(role=role, verdict=verdict)
+        stale_log = self.logs / "review-pr480-quality-r1.log"
+        stale_log.write_text(
+            f"head_sha: {'a' * 40}\nREVIEW_DONE:480:quality:comment\n",
+            encoding="utf-8",
+        )
+        old_mtime = time.time() - 120
+        os.utime(stale_log, (old_mtime, old_mtime))
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["stale_review_roles"], ["quality"])
+        self.assertNotIn("status_only", action)
+
     def test_reviewing_pr_with_complete_same_head_round_suppresses_duplicate_redispatch(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
-            (self.repo / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
-            (self.repo / ".refactor-loop" / "runs" / f"review-pr480-{role}-r1.md").write_text(
-                f"---\nhead_sha: {'a' * 40}\nverdict: {verdict}\n---\nREVIEW_DONE:480:{role}:{verdict}\n",
-                encoding="utf-8",
-            )
-            (self.logs / f"review-pr480-{role}-r1.log").write_text(
-                f"head_sha: {'a' * 40}\nREVIEW_DONE:480:{role}:{verdict}\nEXIT=0\n",
-                encoding="utf-8",
-            )
+            self.write_review_evidence(role=role, verdict=verdict)
 
         plan = self.run_plan(fixture="open_pr_480")
 
