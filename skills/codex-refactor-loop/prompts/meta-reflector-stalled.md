@@ -8,7 +8,7 @@ You resolve a stalled Consensus-rnd Phase review-gate/Consensus-rnd Phase design
 
 Before considering any re-design or human escalation route, inspect the Consensus-rnd Phase design-consensus stalled evidence.
 
-If the evidence shows convergence round `N >= 3`, unchanged solver text/verdict direction across 3+ rounds, no maintainer input, and no distinct actionable framing, you must emit:
+If the evidence shows convergence round `N >= 3`, router-normalized no-progress signatures matching across 3+ rounds, no maintainer input, and no distinct actionable framing, you must emit:
 
 `META_RESOLVED:drop:no-actionable-framing-after-N-rounds`
 
@@ -25,7 +25,7 @@ Before emitting `META_RESOLVED:escalate-human:<reason>` or `META_RESOLVED:re-des
 1. Has the maintainer already authorized this topic in the current session with self-contained GitHub maintainer evidence?
 2. Is the same authorization mirrored under `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-*`?
 3. Is the apparent blocker only an architect/quality reviewer asking for a Consensus-rnd Phase design-consensus artifact, or a reviewer conflict with maintainer prior session directive?
-4. Does the Consensus-rnd Phase design-consensus evidence show no actionable framing after 3+ unchanged solver rounds? Evidence means the solver text/verdict direction is identical across 3+ convergence rounds, there is no maintainer input, and no distinct solvable framing remains. If yes, you must emit `META_RESOLVED:drop:no-actionable-framing-after-N-rounds`, where `N` is the observed convergence round.
+4. Does the Consensus-rnd Phase design-consensus evidence show no actionable framing after 3+ router-normalized no-progress rounds? Evidence means the router supplied matching no-progress signatures across 3+ convergence rounds, such as source-location/no-current-target/unreadable-source evidence, there is no maintainer input, and no distinct solvable framing remains. If yes, you must emit `META_RESOLVED:drop:no-actionable-framing-after-N-rounds`, where `N` is the observed convergence round.
 
 If answer 4 is yes, do not emit `META_RESOLVED:escalate-human` or `META_RESOLVED:re-design`.
 
