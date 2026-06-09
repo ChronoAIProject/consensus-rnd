@@ -20,6 +20,23 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from codex_refactor_loop.processes import TIMEOUT_EXIT_CODE, ProcessSupervisor, launch_spawn_codex_supervisor, prompt_file_from_text
 
 
+class _FakeProcess:
+    pid = 12345
+
+    def __init__(self, returncode: int | None = None) -> None:
+        self.returncode = returncode
+        self.wait_calls = 0
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def wait(self) -> int:
+        self.wait_calls += 1
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+
 class SpawnSupervisorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_root = Path(tempfile.mkdtemp(prefix="spawn-supervisor-test-"))
@@ -69,30 +86,72 @@ class SpawnSupervisorTests(unittest.TestCase):
         self.assertIn("SPAWN: still running", rotated[0].read_text(encoding="utf-8"))
 
     def test_silent_process_runs_past_old_log_idle_window_until_natural_exit(self) -> None:
-        marker = self.tmp_root / "silent.done"
-        code = (
-            "import pathlib, sys, time\n"
-            "sys.stdout.write('started\\n'); sys.stdout.flush()\n"
-            "time.sleep(1.2)\n"
-            f"pathlib.Path({str(marker)!r}).write_text('done', encoding='utf-8')\n"
-            "sys.exit(0)\n"
-        )
+        proc = _FakeProcess()
+        now = 0.0
 
-        started_at = time.monotonic()
-        exit_code = ProcessSupervisor(poll_interval=0.05).supervise(
-            [sys.executable, "-c", code],
-            stdin=self.prompt,
-            log=self.log,
-            stall=5,
-        )
+        def clock() -> float:
+            return now
 
-        self.assertGreaterEqual(time.monotonic() - started_at, 1.0)
+        def sleeper(_interval: float) -> None:
+            nonlocal now
+            now += 20.0
+            proc.returncode = 0
+
+        def fake_popen(*_args: object, **kwargs: object) -> _FakeProcess:
+            kwargs["stdout"].write(b"started\n")
+            return proc
+
+        with (
+            mock.patch("codex_refactor_loop.processes.subprocess.Popen", side_effect=fake_popen),
+            mock.patch("codex_refactor_loop.processes.kill_process_group") as kill_process_group,
+        ):
+            exit_code = ProcessSupervisor(poll_interval=0.05, clock=clock, sleeper=sleeper).supervise(
+                [sys.executable, "-c", "unused"],
+                stdin=self.prompt,
+                log=self.log,
+                stall=60,
+            )
+
         self.assertEqual(0, exit_code)
-        self.assertEqual("done", marker.read_text(encoding="utf-8"))
+        self.assertEqual(20.0, now)
+        self.assertEqual(1, proc.wait_calls)
+        kill_process_group.assert_not_called()
         text = self.log.read_text(encoding="utf-8")
+        self.assertIn("started", text)
         self.assertNotIn("TIMEOUT_KILL_AFTER=", text)
         self.assertNotIn("STALL_KILL_AFTER=", text)
         self.assertIn("EXIT=0", text)
+
+    def test_natural_exit_at_timeout_boundary_returns_real_exit_code(self) -> None:
+        proc = _FakeProcess()
+        now = 0.0
+
+        def clock() -> float:
+            return now
+
+        def sleeper(_interval: float) -> None:
+            nonlocal now
+            now = 1.01
+            proc.returncode = 23
+
+        with (
+            mock.patch("codex_refactor_loop.processes.subprocess.Popen", return_value=proc),
+            mock.patch("codex_refactor_loop.processes.kill_process_group") as kill_process_group,
+        ):
+            exit_code = ProcessSupervisor(poll_interval=0.2, clock=clock, sleeper=sleeper).supervise(
+                [sys.executable, "-c", "unused"],
+                stdin=self.prompt,
+                log=self.log,
+                stall=1,
+            )
+
+        self.assertEqual(23, exit_code)
+        self.assertEqual(1, proc.wait_calls)
+        kill_process_group.assert_not_called()
+        text = self.log.read_text(encoding="utf-8")
+        self.assertIn("EXIT=23", text)
+        self.assertNotIn("TIMEOUT_KILL_AFTER=", text)
+        self.assertNotIn("STALL_KILL_AFTER=", text)
 
     def test_natural_nonzero_exit_returns_real_exit_code(self) -> None:
         exit_code = ProcessSupervisor(poll_interval=0.01).supervise(

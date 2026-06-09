@@ -69,6 +69,8 @@ class ProcessSupervisor:
             try:
                 while proc.poll() is None:
                     self.sleeper(self.poll_interval)
+                    if proc.poll() is not None:
+                        break
                     if self.clock() - start >= stall:
                         _append(log, f"TIMEOUT_KILL_AFTER={stall}s\nTIMEOUT_KILL_AT={_utc_now()}\n")
                         kill_process_group(proc.pid)
