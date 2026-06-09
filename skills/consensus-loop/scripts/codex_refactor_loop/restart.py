@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from typing import Any, Callable, Protocol, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from .context import LoopContext, LoopContextError
@@ -78,6 +78,17 @@ class DaemonTarget:
     heartbeat_file: Path
     fingerprint_file: Path
     died_file: Path
+
+
+@dataclass(frozen=True)
+class DaemonHeartbeatStatus:
+    state: str
+    age_seconds: int | None
+    reason: str
+
+    @property
+    def fresh(self) -> bool:
+        return self.state == "fresh"
 
 
 @dataclass(frozen=True)
@@ -287,14 +298,28 @@ def read_daemon_pid(target: DaemonTarget) -> int | None:
 
 
 def read_heartbeat_age_seconds(target: DaemonTarget, *, now: int | None = None) -> int | None:
+    return read_heartbeat_status(target, RestartConfig(), now=now).age_seconds
+
+
+def read_heartbeat_status(
+    target: DaemonTarget,
+    config: RestartConfig,
+    *,
+    now: int | None = None,
+) -> DaemonHeartbeatStatus:
+    current_time = int(time.time()) if now is None else now
     try:
         raw = target.heartbeat_file.read_text(encoding="utf-8").strip()
     except OSError:
-        return None
+        return DaemonHeartbeatStatus("missing", None, "heartbeat-missing")
     if not raw.isdigit():
-        return None
-    age = (int(time.time()) if now is None else now) - int(raw)
-    return age if age >= 0 else None
+        return DaemonHeartbeatStatus("malformed", None, "heartbeat-malformed")
+    age = current_time - int(raw)
+    if age < 0:
+        return DaemonHeartbeatStatus("malformed", None, "heartbeat-future")
+    if age >= config.heartbeat_fresh_seconds:
+        return DaemonHeartbeatStatus("stale", age, f"heartbeat-stale:{age}s")
+    return DaemonHeartbeatStatus("fresh", age, f"heartbeat-fresh:{age}s")
 
 
 def read_stored_launch_fingerprint(target: DaemonTarget) -> DaemonLaunchFingerprint | None:
@@ -306,8 +331,7 @@ def expected_launch_fingerprint(ctx: LoopContext, target: DaemonTarget) -> Daemo
 
 
 def heartbeat_is_fresh(target: DaemonTarget, config: RestartConfig, *, now: int | None = None) -> bool:
-    age = read_heartbeat_age_seconds(target, now=now)
-    return age is not None and age < config.heartbeat_fresh_seconds
+    return read_heartbeat_status(target, config, now=now).fresh
 
 
 class RestartDaemonRuntime(Protocol):
@@ -463,6 +487,8 @@ class RestartDaemons:
                 "RESTART_DAEMON_NAME": name,
                 "RESTART_DAEMON_HEARTBEAT_FILE": str(hb_file),
                 "RESTART_DAEMON_HEARTBEAT_INTERVAL": str(self.config.heartbeat_interval),
+                "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": str(self.config.heartbeat_fresh_seconds),
+                "RESTART_DAEMONS_STOP_GRACE_SECONDS": str(self.config.stop_grace_seconds),
                 "PYTHONPATH": f"{self.ctx.skill_root / 'scripts'}{os.pathsep}{env.get('PYTHONPATH', '')}",
             }
         )
@@ -610,54 +636,182 @@ def _truthy(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-WRAPPER_CODE = r'''
-import os
-import signal
-import subprocess
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
+WRAPPER_CODE = "from codex_refactor_loop.restart import _run_restart_wrapper; import sys; raise SystemExit(_run_restart_wrapper(sys.argv[1:]))"
 
-name, repo_root, pid_file, died_file, *command = sys.argv[1:]
-pid_path = Path(pid_file)
-died_path = Path(died_file)
-child = None
 
-def cleanup(exit_code):
-    global child
-    if child is not None and child.poll() is None:
+class RestartWrapperChild(Protocol):
+    def poll(self) -> int | None:
+        ...
+
+    def terminate(self) -> None:
+        ...
+
+    def wait(self, timeout: float | None = None) -> int | None:
+        ...
+
+    def kill(self) -> None:
+        ...
+
+
+def _run_restart_wrapper(
+    argv: Sequence[str],
+    *,
+    env: dict[str, str] | None = None,
+    popen: Callable[[Sequence[str]], RestartWrapperChild] | None = None,
+    sleeper: Callable[[float], None] | None = None,
+    clock: Callable[[], float] | None = None,
+    getpid: Callable[[], int] | None = None,
+    max_supervision_cycles: int | None = None,
+) -> int:
+    if len(argv) < 5:
+        raise RuntimeError("restart wrapper requires name, repo_root, pid_file, died_file, and command")
+    source_env = os.environ if env is None else env
+    runtime = _RestartWrapperRuntime(
+        name=argv[0],
+        repo_root=Path(argv[1]),
+        pid_file=Path(argv[2]),
+        died_file=Path(argv[3]),
+        command=tuple(argv[4:]),
+        heartbeat_file=Path(source_env.get("RESTART_DAEMON_HEARTBEAT_FILE", "")),
+        heartbeat_fresh_seconds=_positive_int(source_env.get("RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS"), 90),
+        heartbeat_interval=_positive_int(source_env.get("RESTART_DAEMON_HEARTBEAT_INTERVAL"), 30),
+        stop_grace_seconds=_positive_int(source_env.get("RESTART_DAEMONS_STOP_GRACE_SECONDS"), 5),
+        popen=popen or (lambda command: subprocess.Popen(list(command))),
+        sleeper=sleeper or time.sleep,
+        clock=clock or time.time,
+        getpid=getpid or os.getpid,
+    )
+    return runtime.run(max_supervision_cycles=max_supervision_cycles)
+
+
+class _RestartWrapperRuntime:
+    def __init__(
+        self,
+        *,
+        name: str,
+        repo_root: Path,
+        pid_file: Path,
+        died_file: Path,
+        command: tuple[str, ...],
+        heartbeat_file: Path,
+        heartbeat_fresh_seconds: int,
+        heartbeat_interval: int,
+        stop_grace_seconds: int,
+        popen: Callable[[Sequence[str]], RestartWrapperChild],
+        sleeper: Callable[[float], None],
+        clock: Callable[[], float],
+        getpid: Callable[[], int],
+    ) -> None:
+        self.name = name
+        self.repo_root = repo_root
+        self.pid_file = pid_file
+        self.died_file = died_file
+        self.command = command
+        self.heartbeat_file = heartbeat_file
+        self.heartbeat_fresh_seconds = heartbeat_fresh_seconds
+        self.heartbeat_interval = heartbeat_interval
+        self.stop_grace_seconds = stop_grace_seconds
+        self.popen = popen
+        self.sleeper = sleeper
+        self.clock = clock
+        self.getpid = getpid
+        self.child: RestartWrapperChild | None = None
+        self._startup_missing_heartbeat_grace_used = False
+
+    def run(self, *, max_supervision_cycles: int | None) -> int:
+        self.pid_file.parent.mkdir(parents=True, exist_ok=True)
+        self.pid_file.write_text(f"{self.getpid()}\n", encoding="utf-8")
+        previous_cwd = Path.cwd()
+        os.chdir(self.repo_root)
         try:
-            child.terminate()
-            child.wait(timeout=5)
-        except Exception:
+            self._supervise(max_supervision_cycles=max_supervision_cycles)
+        except KeyboardInterrupt:
+            self._cleanup(130)
+            return 130
+        except SystemExit:
+            self._cleanup(143)
+            raise
+        finally:
+            if max_supervision_cycles is None:
+                self._cleanup(0)
+            os.chdir(previous_cwd)
+        return 0
+
+    def _supervise(self, *, max_supervision_cycles: int | None) -> None:
+        poll_interval = max(1.0, min(float(self.heartbeat_interval), float(self.heartbeat_fresh_seconds) / 2.0))
+        self.child = self.popen(self.command)
+        cycles = 0
+        while max_supervision_cycles is None or cycles < max_supervision_cycles:
+            cycles += 1
+            exit_code = self.child.poll()
+            if exit_code is not None:
+                self._log(f"child exited exit={exit_code}; restarting same command")
+                self.child = self.popen(self.command)
+                continue
+            failure = self._heartbeat_failure_reason()
+            if failure is not None:
+                if failure == "heartbeat-missing" and not self._startup_missing_heartbeat_grace_used:
+                    self._startup_missing_heartbeat_grace_used = True
+                    self.sleeper(poll_interval)
+                    continue
+                self._log(f"{failure}; terminating child and restarting same command")
+                self._terminate_child()
+                self.child = self.popen(self.command)
+                self._startup_missing_heartbeat_grace_used = False
+                continue
+            self.sleeper(poll_interval)
+
+    def _heartbeat_failure_reason(self) -> str | None:
+        status = read_heartbeat_status(
+            DaemonTarget(
+                name=self.name,
+                command=self.command,
+                pid_file=self.pid_file,
+                heartbeat_file=self.heartbeat_file,
+                fingerprint_file=self.pid_file.with_suffix(".fingerprint.json"),
+                died_file=self.died_file,
+            ),
+            RestartConfig(heartbeat_fresh_seconds=self.heartbeat_fresh_seconds),
+            now=int(self.clock()),
+        )
+        return None if status.fresh else status.reason
+
+    def _terminate_child(self) -> None:
+        if self.child is None or self.child.poll() is not None:
+            return
+        try:
+            self.child.terminate()
+            self.child.wait(timeout=self.stop_grace_seconds)
+        except Exception as terminate_exc:
+            self._log(f"child terminate failed reason={terminate_exc!r}; attempting kill")
             try:
-                child.kill()
-            except Exception:
-                pass
+                self.child.kill()
+                self.child.wait(timeout=1)
+            except Exception as kill_exc:
+                self._log(f"child kill failed reason={kill_exc!r}; aborting wrapper restart")
+                raise RuntimeError(f"{self.name} child termination failed after kill: {kill_exc!r}") from kill_exc
+
+    def _cleanup(self, exit_code: int) -> None:
+        self._terminate_child()
+        try:
+            if self.pid_file.read_text(encoding="utf-8").strip() == str(self.getpid()):
+                self.pid_file.unlink()
+        except OSError:
+            pass
+        self._log(f"wrapper exited (exit={exit_code})")
+
+    def _log(self, reason: str) -> None:
+        self.died_file.parent.mkdir(parents=True, exist_ok=True)
+        with self.died_file.open("a", encoding="utf-8") as handle:
+            handle.write(f"daemon {self.name} {reason} at {_utc_log_ts()}\n")
+
+
+def _positive_int(raw: str | None, default: int) -> int:
     try:
-        if pid_path.read_text(encoding="utf-8").strip() == str(os.getpid()):
-            pid_path.unlink()
-    except Exception:
-        pass
-    died_path.parent.mkdir(parents=True, exist_ok=True)
-    with died_path.open("a", encoding="utf-8") as handle:
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        handle.write(f"daemon {name} wrapper exited at {ts} (exit={exit_code})\n")
-
-def terminate(_signum, _frame):
-    cleanup(143)
-    raise SystemExit(143)
-
-signal.signal(signal.SIGTERM, terminate)
-signal.signal(signal.SIGINT, terminate)
-pid_path.parent.mkdir(parents=True, exist_ok=True)
-pid_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
-os.chdir(repo_root)
-child = subprocess.Popen(command)
-exit_code = child.wait()
-cleanup(exit_code)
-raise SystemExit(exit_code)
-'''
+        parsed = int(raw or "")
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
 
 
 def pid_alive(pid: int) -> bool:
@@ -785,6 +939,10 @@ def _reap_child_if_exited(pid: int) -> bool:
     except ChildProcessError:
         return False
     return waited == pid
+
+
+def _utc_log_ts() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

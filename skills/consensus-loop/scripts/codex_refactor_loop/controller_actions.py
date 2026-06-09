@@ -11,13 +11,12 @@ import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from string import Template
 from typing import Any, Mapping, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
 from .banners import BannerRequest, build_status_banner, gh_comment_command
-from .context import LoopContext, normalize_host_work_language
+from .context import LoopContext
 from .cross_instance_stand_down import CrossInstanceAdmission, check_cross_instance_admission
 from .default_issue_intake import DefaultIssueIntakeClaim, DefaultIssueIntakeResult
 from .gh_invoke import build_gh_argv
@@ -33,7 +32,7 @@ from .implementation_pr_artifacts import (
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log
 from .issue_decomposition import issue_decomposition_plan_file_digest, load_issue_decomposition_plan
 from .managed_work_snapshot import invalidate_open_managed_work_snapshot
-from .prompt_contracts import inline_prompt_contracts
+from .prompt_rendering import render_prompt_text
 from .processes import launch_spawn_codex_supervisor
 from .release.publisher import ReleasePublisher
 from .release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
@@ -2223,31 +2222,14 @@ class ControllerActions:
         return None
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
-        values = dict(os.environ)
-        values["HOST_WORK_LANGUAGE"] = normalize_host_work_language(
-            raw=self.ctx.host_env.get("HOST_WORK_LANGUAGE") or values.get("HOST_WORK_LANGUAGE"),
-            env=values,
-        )
-        if env:
-            values.update(env)
-            values["HOST_WORK_LANGUAGE"] = normalize_host_work_language(env=values)
-        aliases = {
-            "work_unit_id": values.get("WORK_UNIT_ID") or values.get("CLUSTER_ID") or "",
-            "cluster_id": values.get("CLUSTER_ID", ""),
-            "iteration": values.get("ITERATION", ""),
-            "worktree_path": values.get("WORKTREE_PATH", ""),
-            "branch": values.get("BRANCH", ""),
-            "old_pattern": values.get("OLD_PATTERN", ""),
-            "new_principle": values.get("NEW_PRINCIPLE", ""),
-            "scope_paths": values.get("SCOPE_PATHS", ""),
-            "verification_hints": values.get("VERIFICATION_HINTS", ""),
-        }
         template_path = self._resolve_template_input(input_path)
         template = template_path.read_text(encoding="utf-8")
-        for key, value in aliases.items():
-            template = template.replace("{{" + key + "}}", value)
-        rendered = inline_prompt_contracts(Template(template).safe_substitute(values), skill_root=self.ctx.skill_root)
-        rendered = rendered.replace("${HOST_WORK_LANGUAGE}", values.get("HOST_WORK_LANGUAGE") or "en")
+        rendered = render_prompt_text(
+            template,
+            skill_root=self.ctx.skill_root,
+            values=env,
+            host_env=self.ctx.host_env,
+        )
         Path(output_path).write_text(rendered, encoding="utf-8")
 
     def _review_fix_pr_facts(self, pr_number: str, existing: Mapping[str, str]) -> dict[str, str]:
