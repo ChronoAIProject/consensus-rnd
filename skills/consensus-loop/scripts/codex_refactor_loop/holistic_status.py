@@ -331,7 +331,14 @@ def _daemon_summary(ctx: LoopContext) -> tuple[str, ...]:
         report = collect_daemon_status(repo_root=ctx.repo_root, skill_root=ctx.skill_root)
     except Exception:
         return ()
-    return tuple(f"{daemon.name}: {daemon.status}" for daemon in report.daemons)
+    items: list[str] = []
+    for daemon in report.daemons:
+        suffix = ""
+        if daemon.status == "stale":
+            age = daemon.heartbeat_age_seconds if daemon.heartbeat_age_seconds is not None else "?"
+            suffix = f" reason={daemon.stale_reason or 'stale'} age={age}s"
+        items.append(f"{daemon.name}: {daemon.status}{suffix}")
+    return tuple(items)
 
 
 def _patrol_summary(path: Path) -> tuple[str, ...]:
