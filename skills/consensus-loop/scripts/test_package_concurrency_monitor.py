@@ -542,15 +542,269 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
                 self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
                 self.assertIn(expected_reason, alert)
 
+    def test_zero_codex_target_log_clean_marker_in_window_is_completed_marker_transient(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        task_id = "phase9-issue160-r1-minimal"
+        self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
+        self.append_pending_harness_intent(task_id, ts="2026-05-26T07:29:00Z")
+        self._write_clean_terminal_marker_log(
+            task_id,
+            "SOLVER_DONE:minimal:ready",
+            mtime=now.timestamp() - 30,
+        )
+
+        self._run_zero_codex_tick(now=now)
+
+        self.assertFalse((self.refactor_loop / ".concurrency-alert.log").exists())
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("ZERO_CODEX_CLASSIFICATION:daemon-self-drive-transient", events)
+        payload = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
+        classification = payload["zero_codex_classification"]
+        self.assertEqual(classification["classification"], "daemon-self-drive-transient")
+        self.assertEqual(classification["reason"], "completed-marker-awaiting-consumption")
+        self.assertIn("completed-target-log", ",".join(classification["evidence"]))
+
+    def test_zero_codex_target_log_clean_marker_out_of_window_is_p0(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        task_id = "phase9-issue160-r1-minimal"
+        self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
+        self.append_pending_harness_intent(task_id, ts="2026-05-26T07:29:00Z")
+        window = self.monitor.daemon_self_drive_consumption_window_seconds()
+        self._write_clean_terminal_marker_log(
+            task_id,
+            "SOLVER_DONE:minimal:ready",
+            mtime=now.timestamp() - window - 1,
+        )
+
+        self._run_zero_codex_tick(now=now)
+
+        alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+        self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
+        self.assertIn("stale-completed-marker", alert)
+
+    def test_zero_codex_target_log_no_marker_remains_p0(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        task_id = "phase9-issue160-r1-minimal"
+        self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
+        self.append_pending_harness_intent(task_id, ts="2026-05-26T07:29:00Z")
+        self._write_target_log(task_id)
+
+        self._run_zero_codex_tick(now=now)
+
+        alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+        self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
+        self.assertIn("suppressed-intent:target-log", alert)
+
+    def test_zero_codex_completed_marker_heartbeat_stale_is_p0(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        task_id = "phase9-issue160-r1-minimal"
+        self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=concurrency.HEARTBEAT_STALE_SECONDS)
+        self.append_pending_harness_intent(task_id, ts="2026-05-26T07:29:00Z")
+        self._write_clean_terminal_marker_log(
+            task_id,
+            "SOLVER_DONE:minimal:ready",
+            mtime=now.timestamp() - 30,
+        )
+
+        self._run_zero_codex_tick(now=now)
+
+        alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+        self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
+        self.assertIn("stale-heartbeat:phase9_router_daemon", alert)
+        self.assertNotIn("completed-marker-awaiting-consumption", alert)
+
+    def test_zero_codex_phase9_ledger_target_log_clean_marker_in_window_is_completed_marker_transient(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        task_id = "phase9-issue160-r1-minimal"
+        self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
+        self.append_phase9_ledger_intent(task_id, ts="2026-05-26T07:29:00Z")
+        self._write_clean_terminal_marker_log(
+            task_id,
+            "SOLVER_DONE:minimal:ready",
+            mtime=now.timestamp() - 30,
+        )
+
+        self._run_zero_codex_tick(now=now)
+
+        self.assertFalse((self.refactor_loop / ".concurrency-alert.log").exists())
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("ZERO_CODEX_CLASSIFICATION:daemon-self-drive-transient", events)
+        payload = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
+        classification = payload["zero_codex_classification"]
+        self.assertEqual(classification["reason"], "completed-marker-awaiting-consumption")
+        self.assertIn("completed-target-log", ",".join(classification["evidence"]))
+
+    def test_zero_codex_target_log_missing_exit_with_visible_marker_gets_one_flush_transient(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        task_id = "phase9-issue160-r1-minimal"
+        self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
+        self.append_pending_harness_intent(task_id, ts="2026-05-26T07:29:00Z")
+        self._write_marker_log_without_exit(
+            task_id,
+            "SOLVER_DONE:minimal:ready",
+            mtime=now.timestamp() - 30,
+        )
+
+        self._run_zero_codex_tick(now=now)
+
+        self.assertFalse((self.refactor_loop / ".concurrency-alert.log").exists())
+        payload = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
+        classification = payload["zero_codex_classification"]
+        self.assertEqual(classification["classification"], "daemon-self-drive-transient")
+        self.assertEqual(classification["reason"], "target-log-awaiting-terminal-flush")
+        self.assertIn("target-log-flush", ",".join(classification["evidence"]))
+
+        self._run_zero_codex_tick(now=now)
+
+        alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+        self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
+        self.assertIn("suppressed-intent:target-log", alert)
+
+        for case, state_zero_streak, age, expected_reason in (
+            ("second-zero-streak", 1, 30, "suppressed-intent:target-log"),
+            ("aged-mtime", 0, concurrency.HEARTBEAT_STALE_SECONDS + 1, "suppressed-intent:target-log"),
+        ):
+            with self.subTest(case=case):
+                (self.refactor_loop / ".concurrency-alert.log").unlink(missing_ok=True)
+                (self.refactor_loop / ".controller-pending-events.log").unlink(missing_ok=True)
+                (self.refactor_loop / "state" / "statusline-snapshot.json").unlink(missing_ok=True)
+                self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
+                self.append_pending_harness_intent(task_id, ts="2026-05-26T07:29:00Z")
+                self._write_marker_log_without_exit(
+                    task_id,
+                    "SOLVER_DONE:minimal:ready",
+                    mtime=now.timestamp() - age,
+                )
+                self.monitor.save_state({"zero_streak": state_zero_streak})
+
+                self._run_zero_codex_tick(now=now)
+
+                alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+                self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
+                self.assertIn(expected_reason, alert)
+
+    def test_zero_codex_target_log_missing_exit_requires_strict_visible_marker(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        for case, marker in (
+            ("wrong-role", "SOLVER_DONE:delete:ready"),
+            ("malformed", "REVIEW_DONE:bad"),
+        ):
+            with self.subTest(case=case):
+                (self.refactor_loop / ".concurrency-alert.log").unlink(missing_ok=True)
+                (self.refactor_loop / ".controller-pending-events.log").unlink(missing_ok=True)
+                (self.refactor_loop / "state" / "statusline-snapshot.json").unlink(missing_ok=True)
+                self.monitor.save_state({"zero_streak": 0})
+                task_id = "phase9-issue160-r1-minimal"
+                self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
+                self.append_pending_harness_intent(task_id, ts="2026-05-26T07:29:00Z")
+                self._write_marker_log_without_exit(
+                    task_id,
+                    marker,
+                    mtime=now.timestamp() - 30,
+                )
+
+                self._run_zero_codex_tick(now=now)
+
+                alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+                self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
+                self.assertIn("suppressed-intent:target-log", alert)
+                self.assertNotIn("target-log-awaiting-terminal-flush", alert)
+
+    def test_zero_codex_target_log_nonzero_exit_with_visible_marker_is_p0(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        task_id = "phase9-issue160-r1-minimal"
+        self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
+        self.append_pending_harness_intent(task_id, ts="2026-05-26T07:29:00Z")
+        self._write_marker_log_with_exit(
+            task_id,
+            "SOLVER_DONE:minimal:ready",
+            exit_code=1,
+            mtime=now.timestamp() - 30,
+        )
+
+        self._run_zero_codex_tick(now=now)
+
+        alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+        self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
+        self.assertIn("suppressed-intent:target-log", alert)
+        self.assertNotIn("target-log-awaiting-terminal-flush", alert)
+
+    def test_zero_codex_pending_flush_transient_does_not_mask_ledger_hard_failure(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        task_id = "phase9-issue160-r1-minimal"
+        self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
+        self.append_pending_harness_intent(task_id, ts="2026-05-26T07:29:00Z")
+        self._write_marker_log_without_exit(
+            task_id,
+            "SOLVER_DONE:minimal:ready",
+            mtime=now.timestamp() - 30,
+        )
+        (self.refactor_loop / "phase9-router-ledger.jsonl").write_text("{bad json\n", encoding="utf-8")
+
+        self._run_zero_codex_tick(now=now)
+
+        alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+        self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
+        self.assertIn("malformed-phase9-ledger", alert)
+        self.assertNotIn("target-log-awaiting-terminal-flush", alert)
+
+    def test_zero_codex_pending_completed_marker_does_not_mask_ledger_hard_failure(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        task_id = "phase9-issue160-r1-minimal"
+        self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
+        self.append_pending_harness_intent(task_id, ts="2026-05-26T07:29:00Z")
+        self._write_clean_terminal_marker_log(
+            task_id,
+            "SOLVER_DONE:minimal:ready",
+            mtime=now.timestamp() - 30,
+        )
+        (self.refactor_loop / "phase9-router-ledger.jsonl").write_text("{bad json\n", encoding="utf-8")
+
+        self._run_zero_codex_tick(now=now)
+
+        alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+        self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
+        self.assertIn("malformed-phase9-ledger", alert)
+        self.assertNotIn("completed-marker-awaiting-consumption", alert)
+
     def _append_terminal_block(self, task_id: str, reason: str) -> None:
         pending = self.refactor_loop / ".controller-pending-events.log"
         with pending.open("a", encoding="utf-8") as handle:
             handle.write(f"2026-05-26T07:29:10Z WAKEUP_RUNNER_BLOCKED:harness-spawn-intent:test:{task_id}:{reason}\n")
 
+    def _run_zero_codex_tick(self, *, now: datetime) -> None:
+        with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+            with mock.patch.object(
+                self.monitor,
+                "list_auto_loop_issues",
+                return_value=[{"number": 160, "kind": "issue", "phase": labels.PHASE_DESIGN_SOLVING, "human": labels.HUMAN_AUTO}],
+            ):
+                with mock.patch.object(concurrency, "time") as fake_time:
+                    fake_time.time.return_value = now.timestamp()
+                    self.monitor.tick()
+
     def _write_target_log(self, task_id: str) -> None:
         log_path = self.refactor_loop / "logs" / f"{task_id}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text("reserved\n", encoding="utf-8")
+
+    def _write_clean_terminal_marker_log(self, task_id: str, marker: str, *, mtime: float) -> None:
+        log_path = self.refactor_loop / "logs" / f"{task_id}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(f"worker output\n{marker}\nEXIT=0\n", encoding="utf-8")
+        os.utime(log_path, (mtime, mtime))
+
+    def _write_marker_log_without_exit(self, task_id: str, marker: str, *, mtime: float) -> None:
+        log_path = self.refactor_loop / "logs" / f"{task_id}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(f"worker output\n{marker}\n", encoding="utf-8")
+        os.utime(log_path, (mtime, mtime))
+
+    def _write_marker_log_with_exit(self, task_id: str, marker: str, *, exit_code: int, mtime: float) -> None:
+        log_path = self.refactor_loop / "logs" / f"{task_id}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(f"worker output\n{marker}\nEXIT={exit_code}\n", encoding="utf-8")
+        os.utime(log_path, (mtime, mtime))
 
     def _write_spawn_claim(self, task_id: str) -> None:
         lock_dir = self.refactor_loop / "locks" / "spawn-tasks"

@@ -114,7 +114,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "must first read the concurrency monitor/status zero-codex classification",
             "may defer to the next daemon tick only when the monitor reports `daemon-self-drive-transient`",
             "fresh `phase9_router_daemon` and `wakeup_runner_daemon` heartbeats plus fresh item-matching unsuppressed dispatch intent evidence",
-            "missing, stale, malformed, read-error, terminal-blocked, target-log-suppressed, or spawn-claim-suppressed evidence remains same-turn P0",
+            "monitor-proven `completed-marker-awaiting-consumption` target-log evidence only under fresh heartbeat and consumption-window gates",
+            "target-log-suppressed without fresh completed-marker evidence, or spawn-claim-suppressed evidence remains same-turn P0",
             "maintainer-blocked exception above remains independent",
         )
         for needle in required:
