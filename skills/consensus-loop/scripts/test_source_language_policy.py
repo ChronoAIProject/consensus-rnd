@@ -45,21 +45,14 @@ class SemanticAllowance:
 
 
 SEMANTIC_ALLOWANCES: tuple[SemanticAllowance, ...] = (
-    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/banners.py", "ROLE_NEXT_STEPS", "explicit-zh-runtime-rendering", "explicit zh branch for HOST_WORK_LANGUAGE=zh status banners"),
-    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/banners.py", "build_status_banner", "explicit-zh-runtime-rendering", "explicit zh branch for HOST_WORK_LANGUAGE=zh status banners"),
-    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "DEBUG_SUMMARY", "named-read-compat-regex", "debug summary literal recognized by the validator and zh renderer"),
     SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "AUTHORITY_PATH_RE", "named-read-compat-regex", "validator regex recognizes legacy zh authority labels in existing GitHub bodies"),
     SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "INLINE_ARTIFACT_DETAILS_RE", "named-read-compat-regex", "validator regex recognizes explicit zh inline artifact summaries"),
-    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "_body_copy", "explicit-zh-runtime-rendering", "explicit zh branch for HOST_WORK_LANGUAGE=zh GitHub body rendering"),
-    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "_kind_label", "explicit-zh-runtime-rendering", "explicit zh branch for HOST_WORK_LANGUAGE=zh kind labels"),
-    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/monitors/comment.py", "CommentMonitor.post_banner.banner_body", "explicit-zh-runtime-rendering", "explicit zh branch for HOST_WORK_LANGUAGE=zh comment-monitor banner"),
-    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/peek.py", "PeekStatusLens.render", "read-only-status-projection", "status lens reads existing Chinese label/status metadata"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/runtime_copy.py", "COPY_CATALOG", "explicit-zh-runtime-rendering", "explicit zh runtime copy catalog for host work language"),
     SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "CANONICAL_BODY", "project-rules-contract-anchor", "managed CLAUDE.md fixed-point contract text"),
     SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "OLD_CANONICAL_BODY", "project-rules-contract-anchor", "legacy managed fixed-point text used for read compatibility"),
     SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/closed_label_reconciler.py", "comment", "historical-self-doc-comment", "existing #238 self-documentation comment retained as historical source"),
     SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/closed_phase_labels.py", "comment", "historical-self-doc-comment", "existing #238 self-documentation comment retained as historical source"),
     SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/checks/degradation.py", "DOC_FORBIDDEN_CONTEXT", "documentation-static-checker", "static checker recognizes forbidden-context terms in docs"),
-    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/controller_actions.py", "ControllerActions._commit_publish_implementation_diff", "explicit-zh-runtime-rendering", "explicit zh branch for HOST_WORK_LANGUAGE=zh controller commit subject"),
 )
 
 
@@ -319,6 +312,32 @@ class SourceLanguagePolicyTests(unittest.TestCase):
         )
 
         self.assertIn(expected, source_files(REPO_ROOT))
+
+    def test_renderer_owned_chinese_copy_lives_only_in_runtime_catalog(self) -> None:
+        findings = [
+            finding
+            for finding in comment_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", REPO_ROOT)
+            + string_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", REPO_ROOT)
+            + comment_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/banners.py", REPO_ROOT)
+            + string_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/banners.py", REPO_ROOT)
+            + comment_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/monitors/comment.py", REPO_ROOT)
+            + string_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/monitors/comment.py", REPO_ROOT)
+            + comment_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/peek.py", REPO_ROOT)
+            + string_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/peek.py", REPO_ROOT)
+            + comment_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/controller_actions.py", REPO_ROOT)
+            + string_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/controller_actions.py", REPO_ROOT)
+            if has_han(finding.text)
+        ]
+        unallowlisted = [finding for finding in findings if not is_allowlisted(finding)]
+
+        self.assertEqual([], unallowlisted)
+        self.assertTrue(
+            all(
+                finding.relative_path.endswith("runtime_copy.py")
+                or finding.relative_path.endswith("github_body.py")
+                for finding in findings
+            )
+        )
 
     def test_scan_python_source_language_is_clean(self) -> None:
         findings = scan_python_source_language(REPO_ROOT)

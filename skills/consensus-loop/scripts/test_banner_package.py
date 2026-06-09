@@ -33,16 +33,17 @@ class BannerPackageTests(unittest.TestCase):
         return BannerRequest(**values)
 
     def test_build_status_banner_preserves_status_tokens_without_machine_workdir(self) -> None:
-        body = banners.build_status_banner(self.request())
+        with mock.patch.dict(os.environ, {}, clear=True):
+            body = banners.build_status_banner(self.request())
 
-        self.assertTrue(body.startswith("## 📊 Status card - implement dispatched\n"))
+        self.assertTrue(body.startswith("## 📊 Status card — implement dispatched\n"))
         for required in (
             "| Stage | **dispatched codex(role=`implement`)** |",
             "| codex log | `implement-160.log` |",
             "| total wall-clock timeout | 180s(~3 min) |",
             "| Context | phase9 issue160 parity |",
             "IMPLEMENT_DONE:<cluster>:<status>",
-            "| **Human input needed** | **No** (automatic progress) |",
+            "| **Human intervention needed** | **❌ No** (automatic progression) |",
             "🤖 controller status banner",
             "⟦AI:AUTO-LOOP⟧",
         ):
@@ -53,23 +54,25 @@ class BannerPackageTests(unittest.TestCase):
                 self.assertNotIn(forbidden, body)
 
     def test_build_status_banner_uses_none_for_empty_detail_and_all_legacy_roles(self) -> None:
-        for role, marker in {
-            "test-add": "TEST_ADD_DONE:...",
-            "fix": "FIX_DONE:...",
-            "reviewer": "reject=0 + approve>=1 -> merge",
-            "implement": "IMPLEMENT_DONE:<cluster>:<status>",
-            "solver": "SOLVER_DONE:...",
-            "judge": "META_JUDGE_DONE:...",
-            "reflector": "META_RESOLVED:<kind>",
-            "audit": "AUDIT_DONE:...:<N>",
-        }.items():
-            with self.subTest(role=role):
-                body = banners.build_status_banner(self.request(role=role, detail=""))
-                self.assertIn("| Context | (none) |", body)
-                self.assertIn(marker, body)
+        with mock.patch.dict(os.environ, {}, clear=True):
+            for role, marker in {
+                "test-add": "TEST_ADD_DONE:...",
+                "fix": "FIX_DONE:...",
+                "reviewer": "reject=0 + approve>=1 -> merge",
+                "implement": "IMPLEMENT_DONE:<cluster>:<status>",
+                "solver": "SOLVER_DONE:...",
+                "judge": "META_JUDGE_DONE:...",
+                "reflector": "META_RESOLVED:<kind>",
+                "audit": "AUDIT_DONE:...:<N>",
+            }.items():
+                with self.subTest(role=role):
+                    body = banners.build_status_banner(self.request(role=role, detail=""))
+                    self.assertIn("| Context | (none) |", body)
+                    self.assertIn(marker, body)
 
     def test_explicit_zh_status_banner_preserves_existing_copy(self) -> None:
-        body = banners.build_status_banner(self.request(), language="zh")
+        with mock.patch.dict(os.environ, {"HOST_WORK_LANGUAGE": "zh"}, clear=True):
+            body = banners.build_status_banner(self.request())
 
         self.assertTrue(body.startswith("## 📊 状态卡片 — implement 派出\n"))
         self.assertIn("| 阶段 | **派出 codex(role=`implement`)** |", body)
@@ -86,12 +89,21 @@ class BannerPackageTests(unittest.TestCase):
 
     def test_source_preserves_authorization_and_forbidden_lifecycle_tokens(self) -> None:
         source = PACKAGE_BANNERS.read_text(encoding="utf-8")
+        copy_source = (REPO_ROOT / "skills" / "consensus-loop" / "scripts" / "codex_refactor_loop" / "runtime_copy.py").read_text(
+            encoding="utf-8"
+        )
         for required in (
             "observability-comment-writers",
             "skills/consensus-loop/authorizations/runtime-exceptions.md#observability-comment-writers-53",
             "ROLE_NEXT_STEPS",
+            "copy_for(\"banner_role_next_steps\"",
             "controller status banner",
             "⟦AI:AUTO-LOOP⟧",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, source)
+
+        for required in (
             "TEST_ADD_DONE",
             "FIX_DONE",
             "IMPLEMENT_DONE",
@@ -101,7 +113,7 @@ class BannerPackageTests(unittest.TestCase):
             "AUDIT_DONE",
         ):
             with self.subTest(required=required):
-                self.assertIn(required, source)
+                self.assertIn(required, copy_source)
 
         for forbidden in (
             "gh issue close",
@@ -132,8 +144,7 @@ class BannerPackageTests(unittest.TestCase):
 
     def test_module_import_has_no_repo_root_side_effect(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertIn("implement", banners.ROLE_NEXT_STEPS["en"])
-            self.assertIn("implement", banners.ROLE_NEXT_STEPS["zh"])
+            self.assertIn("implement", banners.ROLE_NEXT_STEPS)
 
     def test_banner_module_has_no_public_posting_entrypoint_or_env_fallback(self) -> None:
         source = PACKAGE_BANNERS.read_text(encoding="utf-8")

@@ -14,11 +14,12 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
-from ..context import LoopContext, LoopContextError, normalize_host_work_language
+from ..context import LoopContext, LoopContextError
 from ..github_actor import GitHubAuthenticatedActor
 from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from ..managed_work_snapshot import load_open_managed_work_snapshot
+from ..runtime_copy import copy_for, current_work_language
 from ..secondary_mutation_backoff import record_content_creation_backoff
 
 
@@ -186,32 +187,16 @@ class CommentMonitor:
 
     def post_banner(self, number: str, author: str, comment_id: str, body: str) -> None:
         excerpt = (body.splitlines()[0] if body.splitlines() else "")[:80]
-        language = normalize_host_work_language(raw=self.ctx.host_env.get("HOST_WORK_LANGUAGE", ""))
-        if language == "zh":
-            banner_body = f"""## 📊 状态 — 已收到 maintainer 评论(daemon 识别)
+        copy = copy_for("comment_monitor_banner", language=current_work_language(env=self.ctx.host_env))
+        banner_body = f"""{copy['heading']}
 
-| 维度 | 值 |
+{copy['table_head']}
 |---|---|
-| 触发评论 | id={comment_id} author={author} |
-| 评论摘要 | {excerpt} |
-| daemon 反应 | 👀 eyes react 已加 |
-| 下一步 | controller 下次 wakeup(≤25 min)读 daemon log → 派 fresh codex round(maintainer-reply-resets-the-round)→ 更新本卡片 |
-| **是否需要人介入** | ❌ 否(自动响应中) |
-
-🤖 comment-monitor daemon
-
-{AI_SENTINEL}
-"""
-        else:
-            banner_body = f"""## 📊 Status - maintainer comment received (daemon recognized)
-
-| Dimension | Value |
-|---|---|
-| Triggering comment | id={comment_id} author={author} |
-| Comment excerpt | {excerpt} |
-| Daemon reaction | eyes reaction added |
-| Next step | controller reads daemon log on next wakeup (<=25 min), dispatches a fresh codex round (maintainer-reply-resets-the-round), then updates this card |
-| **Human input needed** | No (automatic response in progress) |
+| {copy['trigger_label']} | id={comment_id} author={author} |
+| {copy['summary_label']} | {excerpt} |
+| {copy['reaction_label']} | {copy['reaction_value']} |
+| {copy['next_label']} | {copy['next_value']} |
+| {copy['human_label']} | {copy['human_value']} |
 
 🤖 comment-monitor daemon
 

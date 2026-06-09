@@ -172,6 +172,8 @@ class GitHubBodySourceRegressionTests(unittest.TestCase):
                 self.assertNotIn(forbidden, src)
         self.assertIn("read-only helper", src)
         self.assertIn("must not write files", src)
+        self.assertIn("copy_for(\"github_body\"", src)
+        self.assertNotIn("### 详细说明", src)
 
     def test_validator_contract_uses_self_contained_authority_literals(self) -> None:
         src = (SCRIPT_DIR / "codex_refactor_loop" / "github_body.py").read_text(encoding="utf-8")

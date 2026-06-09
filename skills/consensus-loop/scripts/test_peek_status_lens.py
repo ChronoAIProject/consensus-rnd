@@ -270,9 +270,11 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         represented_parent: bool = False,
         missing_link_pr: bool = False,
         closed_label_fixtures: bool = False,
+        host_work_language: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.pop("CONSENSUS_RND_HOST_ENV", None)
+        env.pop("HOST_WORK_LANGUAGE", None)
         env.update(
             {
                 "REPO_ROOT": str(self.root),
@@ -297,6 +299,8 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
             env["PEEK_TEST_MISSING_LINK_PR"] = "1"
         if closed_label_fixtures:
             env["PEEK_TEST_CLOSED_LABEL_FIXTURES"] = "1"
+        if host_work_language is not None:
+            env["HOST_WORK_LANGUAGE"] = host_work_language
         self.write_managed_work_snapshot(
             pr=pr,
             milestone_fixtures=milestone_fixtures,
@@ -622,10 +626,6 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertEqual(alert.read_text(encoding="utf-8"), "[2026-05-27T00:00:00Z] skill-degradation-alert returncode=1\n")
 
     def test_peek_does_not_render_review_gate_merge_decisions(self) -> None:
-        # Refactor (iter203/issue-203): Old pattern: controller decisions were
-        # split across peek, wakeup-plan, phase9-router, and concurrency. New
-        # principle: peek is observability-only; review-gate policy stays in
-        # existing wakeup-plan completed markers and controller truth tables.
         pr = 123
         (self.logs / f"review-pr{pr}-architect-r1.log").write_text(
             f"REVIEW_DONE:{pr}:architect:approve\nEXIT=0\n",
@@ -744,9 +744,10 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
 
     def test_peek_activity_timeline_is_status_lens_only(self) -> None:
         text = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")
+        copy_text = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "runtime_copy.py").read_text(encoding="utf-8")
 
         self.assertIn("_activity_timeline", text)
-        self.assertIn("Activity timeline (read-only facts)", text)
+        self.assertIn("Activity timeline (read-only facts)", copy_text)
         self.assertIn("_phase9_ledger_facts", text)
         self.assertIn("_pending_event_facts", text)
         self.assertNotIn("routing authorization", text)
@@ -756,13 +757,19 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         result = self.run_peek(milestone_fixtures=True)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("▍Milestone (优先) issues:", result.stdout)
+        self.assertIn("▍Milestone (priority) issues:", result.stdout)
         self.assertIn("issue #20", result.stdout)
         self.assertIn("PR #30", result.stdout)
-        milestone_index = result.stdout.index("▍Milestone (优先) issues:")
+        milestone_index = result.stdout.index("▍Milestone (priority) issues:")
         ordinary_index = result.stdout.index("▍Open auto-loop issues:")
         self.assertLess(milestone_index, ordinary_index)
         self.assertLess(result.stdout.index("issue #20"), result.stdout.index("#10 labels="))
+
+    def test_peek_zh_work_language_preserves_milestone_heading(self) -> None:
+        result = self.run_peek(milestone_fixtures=True, host_work_language="zh")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("▍Milestone (优先) issues:", result.stdout)
 
     def test_peek_keeps_projection_backed_linkage_mismatch_lens(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")
