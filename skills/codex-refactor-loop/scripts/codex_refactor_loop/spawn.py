@@ -31,7 +31,7 @@ def build_codex_args(*, cd: str, model: str, add_dirs: Sequence[str]) -> list[st
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run codex with log-liveness supervision")
+    parser = argparse.ArgumentParser(description="Run codex with process-exit-or-timeout supervision")
     parser.add_argument("--cd", required=True)
     prompt = parser.add_mutually_exclusive_group(required=True)
     prompt.add_argument("--prompt")
@@ -51,7 +51,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f"prompt file not found: {prompt_path}\n")
         return 2
     if args.stall <= 0:
-        sys.stderr.write(f"codex stall window must be a positive integer number of seconds: {args.stall}\n")
+        sys.stderr.write(f"codex timeout must be a positive integer number of seconds: {args.stall}\n")
         return 2
     command = build_codex_args(cd=args.cd, model=args.model, add_dirs=args.add_dir)
     try:
@@ -70,7 +70,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f"SPAWN_CLAIM_HELD:task={claim.task_id} lock={claim.lock_path}\n")
         return 0
     child_env = accounting_env(os.environ, skill_root=Path(__file__).resolve().parents[2], repo_root=usage_repo, source=f"codex:{task_id}", force_source=True)
-    banner = f"SPAWN: prompt={prompt_path} log={log_path} cd={args.cd} stall={args.stall}s"
+    banner = f"SPAWN: prompt={prompt_path} log={log_path} cd={args.cd} timeout={args.stall}s"
     if args.model:
         banner += f" model={args.model}"
     try:

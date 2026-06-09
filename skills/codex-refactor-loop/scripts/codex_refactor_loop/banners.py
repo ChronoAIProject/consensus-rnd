@@ -50,7 +50,7 @@ def build_status_banner(request: BannerRequest) -> str:
 |---|---|
 | 阶段 | **派出 codex(role=`{role}`)** |
 | codex log | `{log_name}` |
-| no-output stall window | {request.stall}s(~{request.stall // 60} min 无输出窗口) |
+| total timeout | {request.stall}s(~{request.stall // 60} min 总时限) |
 | 上下文 | {request.detail or "(none)"} |
 | 下一步自动会做 | {next_step} |
 | **是否需要人介入** | **❌ 否**(自动推进) |
