@@ -1,70 +1,70 @@
-# 任务：补测试覆盖重构引入的未覆盖代码 — ${CLUSTER_ID}
+# Task: add test coverage for refactor-introduced uncovered code — ${CLUSTER_ID}
 
 Artifact profile: marker-only-work-unit
 
 <!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
-worktree: `${WORKTREE_PATH}`，分支 `${BRANCH}`。
+worktree: `${WORKTREE_PATH}`, branch `${BRANCH}`.
 
 ## Required reading
 
-1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 全部强制条款（含 "Codex CLI 调用规范"、"测试与质量门禁"）。
-2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-N.md` 中 `${CLUSTER_ID}` 一节
+1. All mandatory clauses in `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`, including "Codex CLI invocation rules" and "test and quality gates".
+2. The `${CLUSTER_ID}` section in `$REPO_ROOT/.refactor-loop/runs/audit-iter-N.md`.
 3. `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md`
-4. **未覆盖行报告**：以下文件:行号 是 codecov 标记为 patch miss/partial 的位置：
+4. **Uncovered line report**: the following file:line entries are codecov patch miss/partial locations:
 
 ```
 ${UNCOVERED_LINES}
 ```
 
-5. Host 测试策略(可为空):测试文件位置 `${HOST_TEST_FILE_GLOBS}`；测试命名规则 `${HOST_TEST_NAMING_RULE}`；测试注释规则 `${HOST_COMMENT_RULE}`；代码围栏语言 `${HOST_CODE_FENCE_LANG}`。为空时只从现有测试、`$PROJECT_RULES`、`$TEST_CMD`、实际 diff 推断；无法安全定位测试文件时打印 `TEST_BLOCKED: <reason>` 并停止。
+5. Host test policy, which may be empty: test file locations `${HOST_TEST_FILE_GLOBS}`; test naming rule `${HOST_TEST_NAMING_RULE}`; test comment rule `${HOST_COMMENT_RULE}`; code fence language `${HOST_CODE_FENCE_LANG}`. When empty, infer only from existing tests, `$PROJECT_RULES`, `$TEST_CMD`, and the actual diff. If a safe test file location cannot be found, print `TEST_BLOCKED: <reason>` and stop.
 
-## 目标
+## Goal
 
-把 patch coverage 提到 **≥ ${TARGET_THRESHOLD}%**（默认 80%），focus 在重构**引入或改动**的行为上。
+Raise patch coverage to **>= ${TARGET_THRESHOLD}%**, default 80%, focusing on behavior **introduced or modified** by the refactor.
 
 ## Hard constraints
 
-1. **作用域**：仅新增/扩展 host 测试文件。优先使用 `${HOST_TEST_FILE_GLOBS}`；为空则从现有测试树和本 PR 已触达代码的相邻测试推断。不改产线代码。如发现产线代码缺 testability hook（如未注入的 dependency、private state 无法被现有测试边界观察），打印 `TEST_BLOCKED: <reason>` 并停止 — 不要为了测试改产线。
+1. **Scope**: only add or extend host test files. Prefer `${HOST_TEST_FILE_GLOBS}`; when empty, infer from the existing test tree and tests adjacent to code touched by this PR. Do not modify production code. If production code lacks a testability hook, such as an uninjected dependency or private state that cannot be observed through existing test boundaries, print `TEST_BLOCKED: <reason>` and stop. Do not edit production code just to add tests.
 
-2. **覆盖目标 = 行为，不是行数**：每个未覆盖行的测试必须断言**业务语义**（如"调用过 host external client factory.CreateClient with 正确 name"、"head_index 超过阈值时 compaction 触发"、"compiled delegate 在异常路径下不被 TargetInvocationException 包装"），不是机械"call this method to bump coverage"。
+2. **Coverage target = behavior, not line count**: each test for an uncovered line must assert **business semantics**, such as "called host external client factory.CreateClient with the correct name", "compaction triggers when head_index crosses the threshold", or "compiled delegate is not wrapped by TargetInvocationException on an exception path". Do not mechanically "call this method to bump coverage".
 
-3. **测试栈**：host 项目的测试框架（仓库现有）；遵循 `${HOST_TEST_NAMING_RULE}`（为空则照同目录现有测试命名）和 `$PROJECT_RULES` / `$CI_GUARDS` 中的稳定性约束（禁 `sleep/delay`、确定性 awaiter）。
+3. **Test stack**: use the host project's existing test framework. Follow `${HOST_TEST_NAMING_RULE}`, or same-directory existing test naming when empty, plus stability constraints from `$PROJECT_RULES` / `$CI_GUARDS`, such as no `sleep/delay` and deterministic awaiters.
 
-4. **不引入新依赖**：如需 mock/test double 框架，用仓库已有的测试替身框架。
+4. **No new dependencies**: if mock/test double support is needed, use the repository's existing test double framework.
 
-5. **不补整个文件覆盖**：只覆盖 codecov 标的 miss/partial 行。其它历史未覆盖行不动（那是另一 cluster 的范围）。
+5. **Do not cover the whole file**: cover only codecov miss/partial lines. Leave other historical uncovered lines alone; they belong to another cluster.
 
-6. **代码注释**：每个新测试单元按 `${HOST_COMMENT_RULE}` 添加简短 test-add 说明；为空则匹配目标测试文件已有注释语法。说明内容为：
+6. **Code comments**: for each new test unit, add a brief test-add note according to `${HOST_COMMENT_RULE}`; when empty, match the target test file's existing comment syntax. The note content is:
    `${HOST_COMMENT_RULE}` `Test-add (test-coverage/${CLUSTER_ID}): Covers refactor-introduced behavior in <file>:<line range>. Cluster intent: <one-line summary from implement.md>.`
 
 ## Workflow
 
-1. 读 cluster spec + implement.md + uncovered lines 列表 + 当前测试文件风格。
-2. 为每个未覆盖文件:行号决定测试归属：
-   - 已有符合 `${HOST_TEST_NAMING_RULE}` 或现有命名惯例的对应测试文件 → 在该文件**追加**测试方法（不改已有 test）
-   - 无对应测试文件 → 按 `${HOST_TEST_FILE_GLOBS}` / `${HOST_TEST_NAMING_RULE}` 或现有测试树惯例新建测试文件；无法安全推断则 `TEST_BLOCKED`
-3. 打印 `PLAN:` 列出每个 uncovered 行 → 对应新 test 方法名。
-4. 实施测试。
-5. 跑：
+1. Read the cluster spec, implement.md, uncovered lines list, and current test file style.
+2. Decide test ownership for each uncovered file:line:
+   - If a corresponding test file exists according to `${HOST_TEST_NAMING_RULE}` or current naming conventions, **append** a test method to that file without modifying existing tests.
+   - If no corresponding test file exists, create one according to `${HOST_TEST_FILE_GLOBS}` / `${HOST_TEST_NAMING_RULE}` or the existing test tree convention; if safe inference is impossible, print `TEST_BLOCKED`.
+3. Print a `PLAN:` listing each uncovered line and the corresponding new test method name.
+4. Implement tests.
+5. Run:
    ```
    bash -lc "$TEST_CMD"
    ```
-   必须全部通过。
-6. 本地 codecov 验证（如果工具可用）：
+   All tests must pass.
+6. Local codecov verification, if the tool is available:
    ```
    bash -lc "$TEST_CMD"
      --settings <coverlet.runsettings if exists> 2>&1 | tail -5
    ```
-7. 若 `$CI_GUARDS` 非空,跑 `bash "$REPO_ROOT/$CI_GUARDS"` —— 必须通过（禁 `sleep/delay` 等）；为空则记录 guards skipped。
+7. If `$CI_GUARDS` is non-empty, run `bash "$REPO_ROOT/$CI_GUARDS"`; it must pass and must enforce constraints such as no `sleep/delay`. If empty, record guards skipped.
 8. `git add -A && git status`。
-9. **不 commit**。
-10. 摘要写入 `$REPO_ROOT/.refactor-loop/runs/test-add-${CLUSTER_ID}.md`：
-    - 新增/修改测试文件 + 行数
-    - 每个 uncovered 行 → 哪个 test 覆盖（mapping table）
-    - 是否所有 uncovered 行都被覆盖；如有未能覆盖的，写明 `TEST_BLOCKED` 原因
-    - 跑过的测试命令 + 结果
-11. 末尾打印 `TEST_ADD_DONE:${CLUSTER_ID}:<status>` 其中 status ∈ {ok, partial, blocked}。
+9. **Do not commit**.
+10. Write the summary to `$REPO_ROOT/.refactor-loop/runs/test-add-${CLUSTER_ID}.md`:
+    - Added/modified test files plus line counts
+    - Mapping table from each uncovered line to its covering test
+    - Whether every uncovered line was covered; if any could not be covered, state the `TEST_BLOCKED` reason
+    - Test commands run plus results
+11. At the end, print `TEST_ADD_DONE:${CLUSTER_ID}:<status>` where status is one of {ok, partial, blocked}.
 
 ## Marker emission allowlist(强制)
 
@@ -78,13 +78,13 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## Hard boundaries
 
-- worktree 外**唯一可写**：`$REPO_ROOT/.refactor-loop/runs/test-add-${CLUSTER_ID}.md`
-- 禁止 commit/push/checkout/install。
-- **禁止改产线代码** —— 测试加不上去就 `TEST_BLOCKED`，让 controller 决定。
-- 禁止 disable / skip 现有测试。
-- 禁止把已有测试改宽松以让覆盖率"达标"。
-- 禁止 `sleep/delay` 测试节奏。
-- 禁止"mock everything"式测试（每个测试至少有一条真业务断言；纯 mock 验证调用次数的测试不算覆盖）。
+- The **only writable path outside the worktree** is `$REPO_ROOT/.refactor-loop/runs/test-add-${CLUSTER_ID}.md`.
+- Do not commit, push, checkout, or install.
+- **Do not modify production code**. If tests cannot be added, print `TEST_BLOCKED` and let the controller decide.
+- Do not disable or skip existing tests.
+- Do not loosen existing tests to make coverage "pass".
+- Do not use `sleep/delay` for test pacing.
+- Do not write "mock everything" tests; every test needs at least one real business assertion. Pure mock call-count verification does not count as coverage.
 
 ## Codex tool boundary (mandatory)
 

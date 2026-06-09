@@ -116,7 +116,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - **You do NOT touch files outside the PR's diff unless emitting `SCOPE_EXTEND` first.**
 - **You do NOT modify other cluster's PRs** (only this PR's HEAD branch).
 - **False-positive demands must have proof** in the fix artifact at `${FIX_OUTPUT_PATH}` — don't dismiss without evidence.
-- **Fix artifact 写入路径强制 `${FIX_OUTPUT_PATH}`**(典型 `.refactor-loop/runs/fix-pr<N>-round-<R>-report.md`)— **禁止**写到 repo root `FIX_REPORT.md`(会污染 worktree + rebase conflict)。若 `${FIX_OUTPUT_PATH}` 空(env var 漏传),emit `FIX_BLOCKED:env-missing:FIX_OUTPUT_PATH` 不要瞎写默认路径。
+- **Fix artifact path is mandatory `${FIX_OUTPUT_PATH}`**, typically `.refactor-loop/runs/fix-pr<N>-round-<R>-report.md`; **do not** write repo-root `FIX_REPORT.md`, which pollutes the worktree and creates rebase conflicts. If `${FIX_OUTPUT_PATH}` is empty because an env var was not passed, emit `FIX_BLOCKED:env-missing:FIX_OUTPUT_PATH` instead of guessing a default path.
 - **A demand citing `$PROJECT_RULES` verbatim is presumed valid** — burden of proof is on you to show it's a misreading.
 
 ## Anti-patterns (forbidden — emit FIX_BLOCKED instead of doing these)

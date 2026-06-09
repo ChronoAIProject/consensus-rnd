@@ -14,7 +14,7 @@ You are **one of N independent reviewers**; you do not see other reviewers' verd
 2. Each touched production file according to `$SOURCE_GLOBS` and the actual diff → look for matching tests using `${HOST_TEST_FILE_GLOBS}` and `${HOST_TEST_NAMING_RULE}`. If either is empty, infer only from existing repo test conventions.
 3. Implement summary if present: `${IMPLEMENT_SUMMARY_PATH}`.
 4. `$REPO_ROOT/$CI_GUARDS` — for the polling allowlist + stability rules.
-5. `$REPO_ROOT/host 配置的 allowlist` or `$PROJECT_RULES` / `$CI_GUARDS` equivalent — current allowed unstable/polling test exceptions, if any.
+5. `$REPO_ROOT/<host-configured allowlist>` or `$PROJECT_RULES` / `$CI_GUARDS` equivalent — current allowed unstable/polling test exceptions, if any.
 6. Host schema policy `${HOST_PROTO_POLICY}` when non-empty; otherwise infer schema/test exemptions only from `$PROJECT_RULES` and the actual diff.
 
 ## Your checklist (tests angle only)

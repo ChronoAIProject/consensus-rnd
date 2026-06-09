@@ -24,6 +24,28 @@ HAN_START = "\u4e00"
 HAN_END = "\u9fff"
 SENTINEL = "⟦AI:AUTO-LOOP⟧"
 
+TOUCHED_PROMPTS_WITH_ENGLISH_SOURCE_INSTRUCTIONS = (
+    "_github-post-rules.md",
+    "audit.md",
+    "design-issue-body.md",
+    "design-issue-reply.md",
+    "implement.md",
+    "implementation-pr-artifact-repair.md",
+    "meta-judge.md",
+    "meta-reflector-repository-stalled.md",
+    "remote-ci-fix.md",
+    "review-fix.md",
+    "reviewer-architect.md",
+    "reviewer-quality.md",
+    "reviewer-tests.md",
+    "solver-delete.md",
+    "solver-minimal.md",
+    "solver-structural.md",
+    "test-add.md",
+    "triage-external-issue.md",
+    "verify.md",
+)
+
 PROMPTS_EXPECTED_TO_REFERENCE_WORK_LANGUAGE = (
     "_github-post-rules.md",
     "design-issue-body.md",
@@ -39,6 +61,14 @@ PROMPTS_EXPECTED_TO_REFERENCE_WORK_LANGUAGE = (
     "solver-minimal.md",
     "solver-structural.md",
     "triage-external-issue.md",
+)
+
+MARKER_ONLY_PROMPTS_RENDERED_UNDER_DEFAULT_EN = (
+    "audit.md",
+    "implement.md",
+    "remote-ci-fix.md",
+    "test-add.md",
+    "verify.md",
 )
 
 
@@ -83,10 +113,12 @@ def active_prompt_findings(text: str) -> list[tuple[int, str]]:
 
 
 class PromptLanguageContractTests(unittest.TestCase):
-    def test_shared_github_post_rules_active_instruction_prose_is_english_source(self) -> None:
-        body = (PROMPTS_DIR / "_github-post-rules.md").read_text(encoding="utf-8")
+    def test_touched_prompt_active_instruction_prose_is_english_source(self) -> None:
+        for name in TOUCHED_PROMPTS_WITH_ENGLISH_SOURCE_INSTRUCTIONS:
+            with self.subTest(prompt=name):
+                body = (PROMPTS_DIR / name).read_text(encoding="utf-8")
 
-        self.assertEqual([], active_prompt_findings(body))
+                self.assertEqual([], active_prompt_findings(body))
 
     def test_work_language_is_the_only_github_facing_prose_driver(self) -> None:
         for name in PROMPTS_EXPECTED_TO_REFERENCE_WORK_LANGUAGE:
@@ -101,16 +133,17 @@ class PromptLanguageContractTests(unittest.TestCase):
                 self.assertNotIn("_en", body)
                 self.assertNotIn("_zh", body)
 
-    def test_default_rendered_phase9_solver_prompt_has_no_chinese_instruction_bias(self) -> None:
+    def test_default_rendered_marker_only_prompts_have_no_chinese_instruction_bias(self) -> None:
         tmp = Path(tempfile.mkdtemp(prefix="prompt-language-contract-"))
         try:
             with mock.patch.dict("os.environ", {}, clear=True):
                 ctx = LoopContext.load(repo_root=tmp, skill_root=SKILL_ROOT, env={"REPO_ROOT": str(tmp)})
-                output = tmp / "solver-minimal.md"
-                ControllerActions(ctx).render_template(str(PROMPTS_DIR / "solver-minimal.md"), str(output), env={})
-            rendered = output.read_text(encoding="utf-8")
-            self.assertIn("Follow en", rendered)
-            self.assertEqual([], active_prompt_findings(rendered))
+                for name in MARKER_ONLY_PROMPTS_RENDERED_UNDER_DEFAULT_EN:
+                    with self.subTest(prompt=name):
+                        output = tmp / name
+                        ControllerActions(ctx).render_template(str(PROMPTS_DIR / name), str(output), env={})
+                        rendered = output.read_text(encoding="utf-8")
+                        self.assertEqual([], active_prompt_findings(rendered))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

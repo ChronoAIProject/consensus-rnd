@@ -2742,7 +2742,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         prompt = Path(launch.call_args.kwargs["prompt"])
         self.assertEqual(prompt.name, f"remote-ci-fix-pr77-contract-tests-{'a' * 12}-a1.md")
         self.assertIn("PR: `77`", prompt.read_text(encoding="utf-8"))
-        self.assertIn("failed check: `contract-tests`", prompt.read_text(encoding="utf-8").replace("失败 check", "failed check"))
+        self.assertIn("failing check: `contract-tests`", prompt.read_text(encoding="utf-8"))
         attempts = json.loads((self.repo / ".refactor-loop/state/remote-ci-fix-attempts.json").read_text(encoding="utf-8"))
         self.assertEqual(attempts[f"pr77:{'a' * 40}:contract-tests"], 1)
         self.assertEqual(actions.calls, [])

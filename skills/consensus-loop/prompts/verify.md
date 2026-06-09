@@ -1,47 +1,47 @@
-# 任务：验证 ${WORK_UNIT_ID} 的实施改动
+# Task: verify implementation changes for ${WORK_UNIT_ID}
 
 Artifact profile: marker-only-work-unit
 
 <!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
-你以无人值守模式在 worktree `${WORKTREE_PATH}` 中工作。前一个 codex 已完成实施，改动在工作树未提交。
-当前 audit-backed work unit 的兼容 cluster alias 是 `${CLUSTER_ID}`；既有实施摘要、artifact 文件名和 marker 仍使用该 alias。
+You are working unattended in worktree `${WORKTREE_PATH}`. The previous codex completed implementation, and the changes are uncommitted in the worktree.
+The compatibility cluster alias for this audit-backed work unit is `${CLUSTER_ID}`; existing implementation summaries, artifact filenames, and markers still use that alias.
 
 ## Required reading
 
-1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 全部强制条款。
-2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md` 的 "${CLUSTER_ID}" 一节。
-3. `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md` 实施摘要。
-4. `git diff HEAD` —— 完整改动 diff。
+1. All mandatory clauses in `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`.
+2. The "${CLUSTER_ID}" section in `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md`.
+3. The implementation summary at `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md`.
+4. `git diff HEAD` for the complete change diff.
 
-## 验证维度
+## Verification dimensions
 
-按以下顺序，全部通过才能给 pass：
+Check in this order; all must pass to return pass:
 
-### 1. 改动与设计原则一致
+### 1. Changes match the design principle
 
-- 检查 `${HOST_REFACTOR_COMMENT_POLICY}`。missing/empty/default/`none` 归一化为 `none`；`self-doc-comment` 是 explicit downstream compatibility opt-in；其它值 invalid, fail-closed → 标 rework; do not guess.
-- `self-doc-comment`：检查每个被重构的关键类/方法是否按 `${HOST_COMMENT_RULE}` 或目标文件现有注释风格带有 Refactor self-documentation，包含 Old pattern + New principle 且源码注释 English-only。缺失任何一处且无合理 not-applicable 说明 → 标记缺陷。
-- missing/empty/default/`none`：missing Refactor self-documentation is not a defect and must not trigger rework. 新增 `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster` refactor-history source comments → 标记缺陷；外部 artifact/实施摘要必须说明 rationale，包括 `refactor self-doc: not applicable (HOST_REFACTOR_COMMENT_POLICY=none)` 或等价理由。
-- 检查改动是否真正消除了 `old_pattern` 描述的违反（用 `rg` 抽样确认 anti-pattern 不再出现在 scope_paths 内）。
+- Check `${HOST_REFACTOR_COMMENT_POLICY}`. Missing/empty/default/`none` normalizes to `none`; `self-doc-comment` is an explicit downstream compatibility opt-in; any other value is invalid and fail-closed -> mark rework; do not guess.
+- `self-doc-comment`: check whether every refactored key class/method has Refactor self-documentation according to `${HOST_COMMENT_RULE}` or the target file's existing comment style, includes Old pattern + New principle, and uses English-only source comments. Any missing block without a reasonable not-applicable explanation is a defect.
+- missing/empty/default/`none`: missing Refactor self-documentation is not a defect and must not trigger rework. New `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster` refactor-history source comments are defects; the external artifact/implementation summary must explain the rationale, including `refactor self-doc: not applicable (HOST_REFACTOR_COMMENT_POLICY=none)` or an equivalent reason.
+- Check that the changes actually removed the violation described by `old_pattern`, using `rg` samples to confirm the anti-pattern no longer appears in `scope_paths`.
 
-### 2. 作用域诚实
+### 2. Scope honesty
 
-- `git diff --name-only HEAD` 必须全部落在 audit 的 `scope_paths` 列表内，或在实施摘要中有 `SCOPE_EXTEND:` 记录并给出合理理由。
-- 越界改动 → 缺陷。
+- Every file from `git diff --name-only HEAD` must fall inside the audit `scope_paths` list, or the implementation summary must include a `SCOPE_EXTEND:` record with a reasonable reason.
+- Out-of-scope changes are defects.
 
-### 3. 测试完备
+### 3. Test completeness
 
-- `verification_hints` 指定的所有测试命令必须能跑且通过。
-- 对每个被触及模块，确认 implement 同步推进了相关 fast / hermetic / behavior-first 测试，或实施摘要说明已有等价覆盖且本次不需要新增。测试应使用 owner-local fact source、mock/fake/stub 外部进程与网络，并断言行为或 contract；只复述实现字面、依赖 ambient host state、或不触发被测行为的测试 → 标记缺陷。
-- 测试代码不得包含 `sleep/delay` 作为断言节奏。
-- 不得新增或保留 suite-level host-wide process-table guard 作为 daemon leak / duplicate 的 truth source；特别是 `ps -eo pid=,command=` 扫描当前机器进程。daemon leak / duplicate 覆盖必须在 helper-local fact source 或对应 helper 行为测试内。
-- 不得出现 `$PROJECT_RULES` / `$CI_GUARDS` 定义的禁用测试逃逸标记，除非实施摘要明确说明且有规则依据。
-- 关键路径测试覆盖率不得下降。
+- Every test command specified by `verification_hints` must run and pass.
+- For every touched module, confirm implementation also advanced relevant fast / hermetic / behavior-first tests, or that the implementation summary explains equivalent existing coverage and why no new test is needed. Tests should use owner-local fact sources, mock/fake/stub external processes and networks, and assert behavior or contract. Tests that restate implementation text, depend on ambient host state, or do not trigger the tested behavior are defects.
+- Test code must not contain `sleep/delay` as assertion pacing.
+- Do not add or keep suite-level host-wide process-table guards as the truth source for daemon leak / duplicate; especially do not scan current-machine processes with `ps -eo pid=,command=`. Daemon leak / duplicate coverage must live in the helper-local fact source or corresponding helper behavior test.
+- `$PROJECT_RULES` / `$CI_GUARDS` forbidden test escape markers must not appear unless the implementation summary explains them and provides a rule basis.
+- Critical-path test coverage must not decrease.
 
-### 4. CI 守卫
+### 4. CI guards
 
-按顺序运行（任意失败 → rework）：
+Run in order; any failure means rework:
 
 ```bash
 if [ -n "${CI_GUARDS:-}" ]; then
@@ -54,19 +54,19 @@ fi
 ${CLUSTER_SPECIFIC_GUARDS}
 ```
 
-如果项目编译失败 → rework。
+If the project fails to compile, mark rework.
 
-### 5. 没有新增依赖
+### 5. No new dependencies
 
-- 根据 `$PROJECT_RULES`、`$BUILD_CMD`、实际 diff 文件和 `${HOST_PROTO_POLICY}` 检查新增依赖、build manifest、schema/protocol 文件。若有新增依赖或 schema/protocol 变更，必须在实施摘要中有合理说明；否则缺陷。
+- Check for new dependencies, build manifests, and schema/protocol files according to `$PROJECT_RULES`, `$BUILD_CMD`, the actual diff files, and `${HOST_PROTO_POLICY}`. New dependencies or schema/protocol changes must have a reasonable explanation in the implementation summary; otherwise they are defects.
 
-### 6. 外部仓库零改动
+### 6. Zero external-repository changes
 
-- 检查 diff 是否引用 $EXTERNAL_REPOS / 其它外部仓库源；若引用必须仅是消费已发布契约，不得依赖未发布改动。
+- Check whether the diff references $EXTERNAL_REPOS or other external repository sources; any reference must only consume a published contract and must not depend on unpublished changes.
 
-## 输出契约
+## Output contract
 
-写入 `$REPO_ROOT/.refactor-loop/runs/verify-${CLUSTER_ID}.md`：
+Write `$REPO_ROOT/.refactor-loop/runs/verify-${CLUSTER_ID}.md`:
 
 ```markdown
 ---
@@ -88,17 +88,17 @@ verified_at: <ISO8601>
 - [x|FAIL] 无外部仓库改动
 
 ## Findings
-<每个 FAIL 项的具体证据：文件:行号 / 测试名 / 守卫输出>
+<Concrete evidence for each FAIL item: file:line / test name / guard output>
 
 ## Rework instructions (if verdict == rework)
-<给 implement 阶段的明确返工指令，可直接拼接到 implement prompt>
+<Clear rework instructions for the implement phase, ready to append to the implement prompt>
 ```
 
-末尾打印 `VERIFY_DONE:${CLUSTER_ID}:<verdict>` 其中 verdict ∈ {pass, rework, abort}。
+At the end, print `VERIFY_DONE:${CLUSTER_ID}:<verdict>` where verdict is one of {pass, rework, abort}.
 
-- `pass` —— controller 会合并。
-- `rework` —— controller 会回炉实施。
-- `abort` —— 设计层面问题，不要再尝试同一 cluster；controller 会丢到 failed 列表并通知人类。
+- `pass`: the controller will merge.
+- `rework`: the controller will send it back for implementation.
+- `abort`: there is a design-level problem; do not retry the same cluster. The controller will put it in the failed list and notify a human.
 
 ## Marker emission allowlist(强制)
 
@@ -111,9 +111,9 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## Hard boundaries
 
-- 你**只读 + 跑命令**；禁止修改 worktree 内任何文件。
-- 禁止 `git commit` / `git push` / `git checkout`。
-- 验证宽松度倾向严格而非宽松：怀疑 → 标 rework，不要妥协给 pass。
+- You are **read-only plus command execution**; do not modify any file in the worktree.
+- Do not run `git commit`, `git push`, or `git checkout`.
+- Verification bias is strict, not lenient: when in doubt, mark rework instead of compromising to pass.
 
 ## Codex tool boundary (mandatory)
 

@@ -6,72 +6,72 @@
 
 ---
 
-## 1. 一段话说清楚
+## 1. One-paragraph summary
 
 ${PROBLEM_STATEMENT}
 
 ---
 
-## 2. 具体示例
+## 2. Concrete example
 
-下面是当前代码里的真实问题模式。标 `← problem` 的行就是触发违反的位置。
+The following snippet shows the current code pattern. The line marked `← problem` is the violating location.
 
 ```${HOST_CODE_FENCE_LANG}
 ${PROBLEM_EXAMPLE_CODE}
 ```
 
-**文件**: `${PROBLEM_EXAMPLE_FILE_PATH}`
+**File**: `${PROBLEM_EXAMPLE_FILE_PATH}`
 
 ---
 
-## 3. 为什么需要人来设计
+## 3. Why this needs human design
 
 ${WHY_NEEDS_DESIGN}
 
 ---
 
-## 4. 需要你的回答
+## 4. Answer needed
 
-加 `crnd:triage:resume-requested` 标签前请回答以下问题。Implement codex 会**原样**读取你的最新评论作为设计输入，所以请具体。
+Before adding the `crnd:triage:resume-requested` label, please answer the questions below. The implement codex will read your latest comment **verbatim** as design input, so keep it specific.
 
-- [ ] **模式选择**：${DESIGN_QUESTION}
-- [ ] **Schema 影响**：若 `${HOST_PROTO_POLICY}` 非空,按该 host schema/protocol 策略回答。如需新增 typed field 或 schema/protocol 变更,按 host 约定列出；无变更请明确说明。
-- [ ] **向后兼容**：现有持久态如何处理？（reserved identifier / compatibility alias / schema migration / 可接受的重置）
-- [ ] **Scope 拆分**：保留单 cluster 还是拆 N 个 PR？拆则给出 cluster id 草案。
-- [ ] **测试面**：除了下方 cluster spec 里 `verification_hints` 之外，**必须**被测试的行为？
-- [ ] **越界禁地**：implement codex **不应**碰的地方？
-
----
-
-## 5. Auto-loop 行为（机制说明，**不影响你回答的内容**）
-
-- Controller 在此 issue 是仅剩工作时大约每 1 小时轮询一次。
-- Issue 打开后**首次**新评论触发 PushNotification 通知 operator；后续评论不重复推送（防打扰）。
-- 加 `crnd:triage:resume-requested` 标签 → controller 把你的最新评论作为 `## Design decision (from issue #${ISSUE_NUMBER})` 段拼到新 implement codex prompt 前面 dispatch。Implement 在独立 worktree 跑，开 PR 回到 `auto-refact-dev`，PR 一开自动关闭本 issue。
-- 不加 `crnd:triage:resume-requested` 标签直接关闭 → 判定"设计被拒绝；cluster 永久搁置"，controller 在 GitHub / run artifact 记录 `design-rejected:closed`。
+- [ ] **Pattern choice**: ${DESIGN_QUESTION}
+- [ ] **Schema impact**: if `${HOST_PROTO_POLICY}` is non-empty, answer according to that host schema/protocol policy. If a typed field or schema/protocol change is needed, list it according to the host convention; otherwise state that there is no change.
+- [ ] **Backward compatibility**: how should existing durable state be handled? (reserved identifier / compatibility alias / schema migration / acceptable reset)
+- [ ] **Scope split**: keep this as one cluster or split it into N PRs? If split, propose cluster ids.
+- [ ] **Test surface**: beyond the `verification_hints` in the cluster spec below, which behaviors **must** be tested?
+- [ ] **No-go areas**: what should the implement codex **not** touch?
 
 ---
 
-## 6. 技术参考（可折叠）
+## 5. Auto-loop behavior (mechanism note, **does not affect your answer**)
+
+- When this issue is the only remaining work, the controller polls it roughly once per hour.
+- The **first** new comment after the issue opens triggers a PushNotification to the operator; later comments do not send repeated notifications.
+- Adding the `crnd:triage:resume-requested` label makes the controller prepend your latest comment as `## Design decision (from issue #${ISSUE_NUMBER})` to a new implement codex prompt. Implementation runs in an isolated worktree, opens a PR back to `auto-refact-dev`, and the PR opening automatically closes this issue.
+- Closing without adding `crnd:triage:resume-requested` is treated as "design rejected; cluster permanently parked"; the controller records `design-rejected:closed` in GitHub and the run artifact.
+
+---
+
+## 6. Technical reference (collapsed)
 
 <details>
-<summary>展开完整 cluster YAML / 证据 / audit 修复边界</summary>
+<summary>Expand full cluster YAML / evidence / audit fix boundary</summary>
 
 ### Cluster spec (from `.refactor-loop/runs/audit-iter-${ITERATION}.md`)
 
 ${CLUSTER_YAML}
 
-### 证据
+### Evidence
 
 ${CLUSTER_EVIDENCE}
 
-### audit 初步提议
+### Initial audit proposal
 
 ${CLUSTER_FIX_BOUNDARY}
 
 </details>
 
-cc: @<maintainer-handle-from-$MAINTAINER_WHITELIST>（auto-loop 运维者）
+cc: @<maintainer-handle-from-$MAINTAINER_WHITELIST> (auto-loop operator)
 
 ---
 

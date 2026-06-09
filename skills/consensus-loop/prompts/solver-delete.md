@@ -34,7 +34,7 @@ Refactor (iter364/issue364):
    - If issue body/comments cite files absent from the current checkout, look for a read-only source locator in that source: `git show <ref>:<path>`, raw URL, `gh api`, or a host-provided path from the explicit host-owned file named by `CONSENSUS_RND_HOST_ENV`. Use it only to read source; must not fetch/checkout/switch/merge/rebase/reset; must not create source worktree/add-dir. If the locator is missing or invalid and the current checkout cannot verify the cited source, emit `SOLVER_DONE:delete:escalate:no-plan:source-location-missing-or-invalid` instead of a generic no-plan.
    - `audit-iter-${ITERATION}.md if present` is an audit-backed source only when the current `WORK_UNIT_SOURCE_REF` / `source_ref` points to it; do not fabricate audit artifacts.
    - For issue-driven / Path A greenfield work, `WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)` with `WORK_UNIT_SOURCE_REF=gh-issue-<N>` means absence of existing local code to delete is neutral evidence: classify as genuinely needed/no current deletion dependency and abstain when deletion/collapse is not justified.
-3. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` "删除优先" clause; "Deletion-first" principle. `$REPO_ROOT/AGENTS.md` is supporting input when present.
+3. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` "Deletion-first" clause and principle. `$REPO_ROOT/AGENTS.md` is supporting input when present.
 4. If deletion requires changing PROJECT_RULES/AGENTS.md, L0/L1/L2 clauses, Tier boundaries, SPEC/conformance/trusted_base wording, or architecture vocabulary, treat that change as part of the deletion plan rather than a reason to escalate.
 5. Call sites of the violating code:
    ```bash

@@ -17,7 +17,7 @@ from codex_refactor_loop.cli import COMMANDS
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 
 DENIAL_OR_CONTROLLER_OWNER_RE = re.compile(
-    r"禁止|不可调|不得|不能|不要|Forbidden|forbidden|Do NOT|do not|must not|"
+    r"禁止|不可调|不得|不能|不要|Forbidden|forbidden|Do NOT|Do not|do not|must not|"
     r"not allowed|marker/artifact-only|lifecycle[^.\n]*label[^.\n]*controller|"
     r"controller[^.\n]*(owns|owner|拥有|归|创 PR)"
 )

@@ -1881,8 +1881,8 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "No suite-level host-wide process-table daemon guard",
             "daemon leak / duplicate coverage belongs in the responsible helper's local fact source",
             "must not scan the current machine with `ps -eo pid=,command=`",
-            "不得新增 suite-level host-wide process-table guard",
-            "不得新增或保留 suite-level host-wide process-table guard",
+            "do not add suite-level host-wide process-table guards",
+            "Do not add or keep suite-level host-wide process-table guards",
             "helper-local fact source",
         ):
             with self.subTest(needle=needle):
@@ -1891,8 +1891,8 @@ class WakeupRunnerContractTests(unittest.TestCase):
 
     def test_implement_prompt_pr_artifact_writes_are_allowed_by_red_line(self) -> None:
         implement = read(SKILL_ROOT / "prompts" / "implement.md")
-        flow = implement[implement.index("## 流程") : implement.index("## Marker emission allowlist")]
-        red_line = implement[implement.index("## 红线") : implement.index("## 附录")]
+        flow = implement[implement.index("## Workflow") : implement.index("## Marker emission allowlist")]
+        red_line = implement[implement.index("## Hard boundaries") : implement.index("## Appendix")]
         for artifact in (
             "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt",
             "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md",

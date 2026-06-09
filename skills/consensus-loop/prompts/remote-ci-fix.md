@@ -1,53 +1,53 @@
-# 任务：修复 PR 远端 CI 失败 ${CHECK_NAME}
+# Task: fix remote CI failure for PR check ${CHECK_NAME}
 
 Artifact profile: marker-only-work-unit
 
-worktree: `${WORKTREE_PATH}`，分支 `${BRANCH}` （通常是 trunk）。
-PR: `${PR_NUMBER}`，失败 check: `${CHECK_NAME}`，run url: `${RUN_URL}`。
+worktree: `${WORKTREE_PATH}`, branch `${BRANCH}` (usually trunk).
+PR: `${PR_NUMBER}`, failing check: `${CHECK_NAME}`, run url: `${RUN_URL}`.
 
 ## Required reading
 
 1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`
-2. 失败日志：`${FAILURE_LOG_PATH}` —— 完整 stderr/stdout 的最后 200-1000 行
-3. 最近 commits（可能引入失败的）：通过 `git log --oneline -10 origin/${BASE_BRANCH}..HEAD` 查看
-4. 失败 check 对应的本地 job 脚本（如有，位于 `.github/workflows/`）
+2. Failure log: `${FAILURE_LOG_PATH}` with the last 200-1000 lines of complete stderr/stdout.
+3. Recent commits that may have introduced the failure: inspect with `git log --oneline -10 origin/${BASE_BRANCH}..HEAD`.
+4. Local job script for the failing check, if any, under `.github/workflows/`.
 
-## 工作流
+## Workflow
 
-1. **诊断**：
-   - 读失败日志，识别根因 token（首个错误行、第一条 assertion fail、第一条 build error）
-   - `git blame` / `git log -S <token>` 找哪个 commit 引入了变化
-   - 用 `git diff <last-known-good>..HEAD -- <suspect-paths>` 看具体改动
-   - 打印 `DIAGNOSIS: <root cause one-liner> | <suspect commit shas>`
+1. **Diagnosis**:
+   - Read the failure log and identify the root-cause token: first error line, first assertion failure, or first build error.
+   - Use `git blame` / `git log -S <token>` to find which commit introduced the change.
+   - Use `git diff <last-known-good>..HEAD -- <suspect-paths>` to inspect the concrete changes.
+   - Print `DIAGNOSIS: <root cause one-liner> | <suspect commit shas>`.
 
-2. **本地复现**：
-   - 找对应的本地命令（如 `$TEST_CMD`）
-   - 在 worktree 内跑确认能复现远端失败
-   - **如本地不能复现** → 这是 infra/env 问题（如缺 docker service），打印 `LOCAL_REPRO: failed | reason: <env gap>` 并停止；不要盲改代码
-   - **如本地复现** → 继续
+2. **Local reproduction**:
+   - Find the corresponding local command, such as `$TEST_CMD`.
+   - Run it in the worktree to confirm the remote failure reproduces.
+   - **If it does not reproduce locally**, this is an infra/env issue such as a missing docker service; print `LOCAL_REPRO: failed | reason: <env gap>` and stop. Do not edit code blindly.
+   - **If it reproduces locally**, continue.
 
-3. **修复**：
-   - 按 PROJECT_RULES 原则修复，**不破坏已合并 cluster 的成果**
-   - 改动**最小化**：只动失败 test 直接相关的代码 + test
-   - 如失败是 test 写错（不是产线 bug），改 test；如失败是产线 bug，改产线
-   - 加 `// Fix (remote-ci/${CHECK_NAME}):` 注释说明根因
+3. **Fix**:
+   - Fix according to PROJECT_RULES and **do not break already merged cluster results**.
+   - Keep changes **minimal**: touch only code plus tests directly related to the failing test.
+   - If the test is wrong and production is not buggy, fix the test; if production is buggy, fix production.
+   - Add a `// Fix (remote-ci/${CHECK_NAME}):` comment explaining the root cause.
 
-4. **本地验证**：
-   - 重跑失败 test：必须 pass
-   - 若 `$CI_GUARDS` 非空,跑 `bash "$CI_GUARDS"` + `bash "$CI_GUARDS"`：必须 pass；为空则记录 guards skipped
-   - 如果失败是某个特定 guard 出来的，重跑那个 guard
+4. **Local verification**:
+   - Rerun the failing test; it must pass.
+   - If `$CI_GUARDS` is non-empty, run `bash "$CI_GUARDS"` twice; both runs must pass. If empty, record guards skipped.
+   - If the failure came from a specific guard, rerun that guard.
 
-5. **暂存**：
+5. **Stage**:
    - `git add -A && git status`
-   - **不 commit**（controller 处理）
+   - **Do not commit**; the controller handles that.
 
-6. 摘要写入 `$REPO_ROOT/.refactor-loop/runs/remote-ci-fix-${CHECK_NAME}-${SHA_SHORT}.md`：
-   - 根因分析
-   - 改动文件列表
-   - 本地复现/验证命令
-   - 任何 deviation
+6. Write the summary to `$REPO_ROOT/.refactor-loop/runs/remote-ci-fix-${CHECK_NAME}-${SHA_SHORT}.md`:
+   - Root cause analysis
+   - Changed file list
+   - Local reproduction/verification commands
+   - Any deviation
 
-7. 末尾打印 `REMOTE_CI_FIX_DONE:${CHECK_NAME}:<status>` 其中 status ∈ {ok, infra, blocked}。
+7. At the end, print `REMOTE_CI_FIX_DONE:${CHECK_NAME}:<status>` where status is one of {ok, infra, blocked}.
 
 ## Marker emission allowlist(强制)
 
@@ -60,12 +60,12 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## Hard boundaries
 
-- worktree 外**唯一可写**：`$REPO_ROOT/.refactor-loop/runs/remote-ci-fix-${CHECK_NAME}-${SHA_SHORT}.md`
-- 禁止 commit/push/checkout/install
-- 禁止 disable 测试或加 `[Skip]` 让 CI 绿
-- 禁止改 worktree 外的其它 cluster 工作
-- 禁止 hypothetical 修复——必须本地复现后再改
-- 禁止扩 scope 到失败 test 直接相关之外的代码
+- The **only writable path outside the worktree** is `$REPO_ROOT/.refactor-loop/runs/remote-ci-fix-${CHECK_NAME}-${SHA_SHORT}.md`.
+- Do not commit, push, checkout, or install.
+- Do not disable tests or add `[Skip]` to make CI green.
+- Do not modify other cluster work outside the worktree.
+- Do not make hypothetical fixes; reproduce locally before editing.
+- Do not expand scope beyond code directly related to the failing test.
 
 ## Codex tool boundary (mandatory)
 
