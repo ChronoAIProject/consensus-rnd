@@ -94,6 +94,38 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             intents.append(json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1]))
         return intents
 
+    def append_phase9_harness_spawn_intent(
+        self,
+        task_id: str,
+        *,
+        ts: str = "2026-05-26T07:29:00Z",
+        intent_id: str | None = None,
+        log: str | None = None,
+        source: str = "phase9-router",
+    ) -> dict[str, object]:
+        intent = {
+            "intent_id": intent_id or f"phase9-router:{task_id}",
+            "source": source,
+            "route": "solver_triplet_to_judge",
+            "task_id": task_id,
+            "priority": "p1",
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "cd": str(self.repo),
+            "prompt": f".refactor-loop/prompts/phase9/{task_id}.md",
+            "log": log or f".refactor-loop/logs/{task_id}.log",
+            "stall": 5400,
+            "reason": f"issue #{task_id.split('-r', 1)[0].removeprefix('phase9-issue')} dispatch",
+            "queued_at": ts,
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
+        }
+        pending = self.refactor_loop / ".controller-pending-events.log"
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        with pending.open("a", encoding="utf-8") as handle:
+            handle.write(f"{ts} HARNESS_SPAWN_INTENT {json.dumps(intent, sort_keys=True)}\n")
+        return intent
+
     def design_issue_item(self, issue: int) -> dict:
         return {
             "number": issue,
@@ -752,6 +784,100 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("HARD_GATE:dispatch_required=1:actual=1 expected=1 queue=0", events)
         self.assertNotIn("WAIT:single-active-audit", events)
+
+    def test_tick_fresh_phase9_intent_reduces_queue_empty_hard_gate_pressure(self) -> None:
+        items = [
+            self.design_issue_item(330),
+            self.design_issue_item(331),
+            self.design_issue_item(332),
+        ]
+        self.append_phase9_harness_spawn_intent("phase9-issue330-r4-minimal")
+
+        with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=items):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=1):
+                with mock.patch.object(self.module.time, "time", return_value=1_779_780_600):
+                    self.monitor.tick()
+
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(
+            "HARD_GATE:dispatch_required=1:actual=1 expected=3 queue=0 transient_supply=1 uncovered_deficit=1",
+            events,
+        )
+        self.assertNotIn("HARD_GATE:dispatch_required=2:actual=1 expected=3 queue=0", events)
+
+    def test_tick_fresh_phase9_intents_can_eliminate_queue_empty_hard_gate_pressure(self) -> None:
+        items = [
+            self.design_issue_item(330),
+            self.design_issue_item(331),
+            self.design_issue_item(332),
+        ]
+        self.append_phase9_harness_spawn_intent("phase9-issue330-r4-minimal")
+        self.append_phase9_harness_spawn_intent("phase9-issue331-r4-minimal")
+
+        with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=items):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=1):
+                with mock.patch.object(self.module.time, "time", return_value=1_779_780_600):
+                    self.monitor.tick()
+
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertNotIn("HARD_GATE:dispatch_required=", events)
+
+    def test_hard_gate_transient_supply_rejects_stale_malformed_logged_claimed_and_terminal_blocked_intents(self) -> None:
+        cases = (
+            ("stale", lambda task_id: self.append_phase9_harness_spawn_intent(task_id, ts="2026-05-26T07:00:00Z")),
+            (
+                "malformed",
+                lambda _task_id: (
+                    self.refactor_loop / ".controller-pending-events.log"
+                ).write_text("2026-05-26T07:29:00Z HARNESS_SPAWN_INTENT {bad-json\n", encoding="utf-8"),
+            ),
+            (
+                "logged",
+                lambda task_id: (
+                    self.append_phase9_harness_spawn_intent(task_id),
+                    (self.refactor_loop / "logs" / f"{task_id}.log").write_text("already targeted\n", encoding="utf-8"),
+                ),
+            ),
+            (
+                "claimed",
+                lambda task_id: (
+                    self.append_phase9_harness_spawn_intent(task_id),
+                    (self.refactor_loop / "locks" / "spawn-tasks").mkdir(parents=True, exist_ok=True),
+                    (self.refactor_loop / "locks" / "spawn-tasks" / f"{task_id}.lock").write_text("claimed\n", encoding="utf-8"),
+                ),
+            ),
+            (
+                "terminal-blocked",
+                lambda task_id: (
+                    self.append_phase9_harness_spawn_intent(task_id, intent_id=f"phase9-router:333:4:minimal"),
+                    (self.refactor_loop / ".controller-pending-events.log").write_text(
+                        (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+                        + "WAKEUP_RUNNER_BLOCKED:harness-spawn-intent:phase9-router:333:4:minimal:target_not_open:CLOSED\n",
+                        encoding="utf-8",
+                    ),
+                ),
+            ),
+        )
+        for case, setup in cases:
+            with self.subTest(case=case):
+                (self.refactor_loop / ".controller-pending-events.log").unlink(missing_ok=True)
+                (self.refactor_loop / "phase9-router-ledger.jsonl").unlink(missing_ok=True)
+                task_id = "phase9-issue333-r4-minimal"
+                (self.refactor_loop / "logs").mkdir(parents=True, exist_ok=True)
+                (self.refactor_loop / "locks" / "spawn-tasks").mkdir(parents=True, exist_ok=True)
+                (self.refactor_loop / "logs" / f"{task_id}.log").unlink(missing_ok=True)
+                (self.refactor_loop / "locks" / "spawn-tasks" / f"{task_id}.lock").unlink(missing_ok=True)
+                setup(task_id)
+
+                supply = self.monitor.hard_gate_transient_supply(
+                    breakdown=[{"id": "#333", "kind": "issue", "phase": self.labels.PHASE_DESIGN_SOLVING, "expected": 1}],
+                    target=3,
+                    actual=1,
+                    queue_empty=True,
+                    now=1_779_780_600,
+                )
+
+                self.assertEqual(supply.supply, 0)
 
     def test_tick_terminal_implement_result_does_not_trigger_no_gap_expected_worker(self) -> None:
         items = [

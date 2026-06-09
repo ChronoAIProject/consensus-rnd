@@ -698,6 +698,7 @@ The floor is local because it prevents loop stalls.
 - `$CODEX_FLOOR` defaults to 5 and has a hard minimum of 2.
 - Use `FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))`.
 - Count only this repository's loop codexes: command line contains `consensus-rnd-cli spawn-codex` and the absolute `$REPO_ROOT`.
+- `actual` counts only live `spawn-codex` processes; fresh unconsumed harness spawn intents may reduce hard-gate dispatch pressure as bounded transient local supply and grant no process-spawn, GitHub, git, or lifecycle authority.
 - Exclude shell ` -c ` wrapper rows so each real codex counts once.
 <!-- Refactor (iter4/skill-count-cli-canonical): Old pattern: controller 手 ps | grep consensus-rnd-cli spawn-codex 重新实现 count_in_flight_codex 逻辑,容易跟 daemon 算法漂移。 New principle: 直接调 `python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only` 拿 canonical 整数,或 `--list-codex` 拿每条 supervisor cmdline。禁止 controller 临时 ps/awk pipeline。(2026-05-26 maintainer-directive 等价 Consensus-rnd Phase design-consensus 共识) -->
 - **Canonical CLI**(controller 强制使用,**禁止**手 `ps | grep`):
