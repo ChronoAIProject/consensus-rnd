@@ -21,6 +21,7 @@ from .restart import (
     pid_alive,
     read_daemon_pid,
     read_heartbeat_age_seconds,
+    read_heartbeat_status,
     read_stored_launch_fingerprint,
 )
 
@@ -35,6 +36,8 @@ class DaemonStatusProjection:
     fingerprint_current: bool
     duplicate_canonical_wrappers: int
     active_controller: str
+    heartbeat_status: str = ""
+    stale_reason: str = ""
     current_github_login: str = ""
     identity_authority: str = "display-only"
 
@@ -44,6 +47,8 @@ class DaemonStatusProjection:
             "status": self.status,
             "pid": self.pid,
             "heartbeat_age_seconds": self.heartbeat_age_seconds,
+            "heartbeat_status": self.heartbeat_status,
+            "stale_reason": self.stale_reason,
             "heartbeat_fresh": self.heartbeat_fresh,
             "fingerprint_current": self.fingerprint_current,
             "duplicate_canonical_wrappers": self.duplicate_canonical_wrappers,
@@ -100,8 +105,9 @@ def _project_target(
     active_status: dict[str, str],
 ) -> DaemonStatusProjection:
     pid = read_daemon_pid(target)
-    heartbeat_age = read_heartbeat_age_seconds(target)
-    heartbeat_fresh = heartbeat_is_fresh(target, config)
+    heartbeat = read_heartbeat_status(target, config)
+    heartbeat_age = heartbeat.age_seconds
+    heartbeat_fresh = heartbeat.fresh
     stored = read_stored_launch_fingerprint(target)
     expected = expected_launch_fingerprint(ctx, target)
     fingerprint_current = stored is not None and stored.matches(expected)
@@ -115,6 +121,14 @@ def _project_target(
     duplicate_count = max(0, len(live_wrappers) - 1)
     running = pid is not None and pid_alive(pid) and heartbeat_fresh and fingerprint_current and duplicate_count == 0
     status = _daemon_status(active_status["active_controller"], pid, running, heartbeat_fresh, fingerprint_current, duplicate_count)
+    stale_reason = _stale_reason(
+        status=status,
+        pid=pid,
+        heartbeat_reason=heartbeat.reason,
+        heartbeat_fresh=heartbeat_fresh,
+        fingerprint_current=fingerprint_current,
+        duplicate_count=duplicate_count,
+    )
     return DaemonStatusProjection(
         name=target.name,
         status=status,
@@ -124,6 +138,8 @@ def _project_target(
         fingerprint_current=fingerprint_current,
         duplicate_canonical_wrappers=duplicate_count,
         active_controller=active_status["active_controller"],
+        heartbeat_status=heartbeat.state,
+        stale_reason=stale_reason,
         current_github_login=active_status["current_github_login"],
         identity_authority=active_status["identity_authority"],
     )
@@ -147,6 +163,32 @@ def _daemon_status(
         return "stale"
     if not pid_alive(pid):
         return "dead"
+    return "stale"
+
+
+def _stale_reason(
+    *,
+    status: str,
+    pid: int | None,
+    heartbeat_reason: str,
+    heartbeat_fresh: bool,
+    fingerprint_current: bool,
+    duplicate_count: int,
+) -> str:
+    if status == "running":
+        return ""
+    if status == "not-owner":
+        return "not-owner"
+    if pid is None:
+        return "pid-missing"
+    if not pid_alive(pid):
+        return "pid-dead"
+    if not heartbeat_fresh:
+        return heartbeat_reason
+    if not fingerprint_current:
+        return "fingerprint-mismatch"
+    if duplicate_count:
+        return f"duplicate-wrappers:{duplicate_count}"
     return "stale"
 
 

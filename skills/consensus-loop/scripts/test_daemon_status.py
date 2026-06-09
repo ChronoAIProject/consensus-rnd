@@ -60,6 +60,36 @@ class DaemonStatusProjectionTests(unittest.TestCase):
         self.assertEqual("not-owner", payload["daemons"][0]["status"])
         self.assertEqual("octocat", payload["daemons"][0]["current_github_login"])
         self.assertEqual("display-only", payload["daemons"][0]["identity_authority"])
+        self.assertIn("heartbeat_status", payload["daemons"][0])
+        self.assertIn("stale_reason", payload["daemons"][0])
+
+    def test_stale_heartbeat_reason_and_age_are_read_only(self) -> None:
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+        heartbeat = self.tmp / ".refactor-loop" / "heartbeats" / "concurrency_monitor.ts"
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+        heartbeat.write_text("1000\n", encoding="utf-8")
+        pid = self.tmp / ".refactor-loop" / "locks" / "concurrency_monitor.pid"
+        pid.parent.mkdir(parents=True, exist_ok=True)
+        pid.write_text("123\n", encoding="utf-8")
+        (self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect") as collect_inventory:
+                collect_inventory.return_value = daemon_status.DaemonProcessInventory(())
+                with mock.patch("codex_refactor_loop.restart.time.time", return_value=1120):
+                    with mock.patch("codex_refactor_loop.daemon_status.pid_alive", return_value=True):
+                        report = daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        daemon = next(item for item in report.to_json()["daemons"] if item["name"] == "concurrency_monitor")
+        self.assertEqual("stale", daemon["status"])
+        self.assertEqual("stale", daemon["heartbeat_status"])
+        self.assertEqual(120, daemon["heartbeat_age_seconds"])
+        self.assertEqual("heartbeat-stale:120s", daemon["stale_reason"])
+        self.assertEqual("123\n", pid.read_text(encoding="utf-8"))
+        self.assertEqual("1000\n", heartbeat.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

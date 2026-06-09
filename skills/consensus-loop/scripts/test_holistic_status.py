@@ -7,6 +7,7 @@ import json
 import shutil
 import tempfile
 import unittest
+from dataclasses import dataclass
 from pathlib import Path
 from unittest import mock
 
@@ -23,9 +24,18 @@ from codex_refactor_loop.holistic_status import (
     REASON_NO_WORKER_CAPACITY,
     REASON_REPRESENTED_BY_PR,
     collect,
+    _daemon_summary,
     render_markdown,
     render_peek_summary,
 )
+
+
+@dataclass(frozen=True)
+class FakeDaemonProjection:
+    name: str
+    status: str
+    heartbeat_age_seconds: int | None
+    stale_reason: str
 
 
 class HolisticStatusProjectionTests(unittest.TestCase):
@@ -145,6 +155,20 @@ class HolisticStatusProjectionTests(unittest.TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, source)
+
+    def test_daemon_summary_exposes_stale_reason_and_age(self) -> None:
+        daemon = FakeDaemonProjection(
+            name="phase9_router_daemon",
+            status="stale",
+            heartbeat_age_seconds=125,
+            stale_reason="heartbeat-stale:125s",
+        )
+        report = mock.Mock(daemons=(daemon,))
+
+        with mock.patch("codex_refactor_loop.holistic_status.collect_daemon_status", return_value=report):
+            summary = _daemon_summary(self.ctx)
+
+        self.assertEqual(("phase9_router_daemon: stale reason=heartbeat-stale:125s age=125s",), summary)
 
 
 if __name__ == "__main__":
