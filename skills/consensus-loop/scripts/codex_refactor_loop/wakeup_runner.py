@@ -181,6 +181,8 @@ class ReviewEvidence:
     source: str
     valid: bool = True
     reason: str = ""
+    terminal_failed: bool = False
+    pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -189,6 +191,8 @@ class ReviewGateSnapshot:
     heads_by_role: dict[str, str]
     live_head_sha: str
     invalid: list[str]
+    pending: list[str]
+    terminal_failed_roles: list[str]
 
     @property
     def all_present(self) -> bool:
@@ -226,6 +230,8 @@ class ReviewGateSnapshot:
             "reviewed_head_sha": self.reviewed_head_sha,
             "live_head_sha": self.live_head_sha,
             "invalid": self.invalid,
+            "pending": self.pending,
+            "terminal_failed_roles": self.terminal_failed_roles,
         }
 
 
@@ -1538,6 +1544,8 @@ class WakeupRunner:
         if not isinstance(target, int):
             return {"decision": "WAIT_OR_REDISPATCH", "reason": "review_target_missing"}
         gate = self._review_gate(target)
+        if gate.get("pending"):
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": f"pending_reviewer_evidence:{gate['pending'][0]}", "gate": gate}
         if gate["invalid"]:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": f"invalid_reviewer_evidence:{gate['invalid'][0]}", "gate": gate}
         if not gate["all_present"]:
@@ -1567,6 +1575,8 @@ class WakeupRunner:
         evidences = self._latest_review_evidence_by_role(pr_number)
         verdicts = {role: evidence.verdict for role, evidence in evidences.items() if evidence.valid}
         invalid = [evidence.reason or f"invalid:{evidence.role}" for evidence in evidences.values() if not evidence.valid]
+        pending = [evidence.reason or f"pending:{evidence.role}" for evidence in evidences.values() if evidence.pending]
+        terminal_failed_roles = [evidence.role for evidence in evidences.values() if evidence.terminal_failed]
         heads = {role: evidence.head_sha for role, evidence in evidences.items() if evidence.valid and evidence.head_sha}
         live_head = self._pr_head_sha(pr_number)
         for role in REQUIRED_REVIEW_ROLES:
@@ -1582,6 +1592,8 @@ class WakeupRunner:
             heads_by_role=heads,
             live_head_sha=live_head,
             invalid=invalid,
+            pending=pending,
+            terminal_failed_roles=terminal_failed_roles,
         ).as_dict()
 
     def _latest_review_evidence_by_role(self, pr_number: int) -> dict[str, ReviewEvidence]:
@@ -1638,7 +1650,9 @@ class WakeupRunner:
         if marker_read.reason == "log_unreadable":
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"log_unreadable:{role}")
         if marker_read.reason == "missing_exit_zero":
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"missing_exit_zero:{role}")
+            if _reviewer_log_terminal_failed(companion_log):
+                return ReviewEvidence(role, round_number, "", "", str(path), False, f"terminal_failed:{role}", terminal_failed=True)
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"pending_exit_zero:{role}", pending=True)
         verdict_lines = re.findall(r"(?m)^verdict:\s*([A-Za-z][A-Za-z0-9_-]*)\s*$", text)
         if len(verdict_lines) != 1:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_verdict_count:{role}")
@@ -1658,7 +1672,9 @@ class WakeupRunner:
         if marker_read.reason == "log_unreadable":
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"log_unreadable:{role}")
         if marker_read.reason == "missing_exit_zero":
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"missing_exit_zero:{role}")
+            if _reviewer_log_terminal_failed(path):
+                return ReviewEvidence(role, round_number, "", "", str(path), False, f"terminal_failed:{role}", terminal_failed=True)
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"pending_exit_zero:{role}", pending=True)
         if marker_read.reason in {"duplicate_or_conflicting_log_marker", "duplicate_or_conflicting_artifact_marker"}:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker:{role}")
         match = REVIEW_DONE_RE.match(marker_read.marker)
@@ -2162,6 +2178,22 @@ def _log_tick_status(daemon: str, action: str) -> None:
 
 def _single_line(value: str) -> str:
     return " ".join(str(value).split())[:240]
+
+
+def _reviewer_log_terminal_failed(path: Path) -> bool:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    for line in reversed(lines):
+        text = line.strip()
+        if not text.startswith("EXIT="):
+            continue
+        try:
+            return int(text.removeprefix("EXIT=")) != 0
+        except ValueError:
+            return True
+    return False
 
 
 if __name__ == "__main__":

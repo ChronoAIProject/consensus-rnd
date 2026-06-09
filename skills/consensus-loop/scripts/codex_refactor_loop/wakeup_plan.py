@@ -193,6 +193,7 @@ CONSENSUS_JUDGE_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-
 DESIGN_CONSENSUS_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-(minimal|structural|delete|judge|reflector)\.log$")
 IMPLEMENT_PENDING_INTENT_PREFIX = "dispatch-consensus-implementation:"
 IMPLEMENT_TASK_PREFIX = "implement-"
+REVIEW_PENDING_SECONDS = 90
 
 
 @dataclass(frozen=True)
@@ -1976,6 +1977,22 @@ def _reviewer_log_has_exit_zero(path: Path) -> bool:
     return any(line.strip() == "EXIT=0" for line in lines)
 
 
+def _reviewer_log_terminal_failed(path: Path) -> bool:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    for line in reversed(lines):
+        text = line.strip()
+        if not text.startswith("EXIT="):
+            continue
+        try:
+            return int(text.removeprefix("EXIT=")) != 0
+        except ValueError:
+            return True
+    return False
+
+
 def _reviewer_log_has_valid_marker(path: Path, pr_number: int, role: str) -> bool:
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -2025,6 +2042,93 @@ def latest_reviewer_heads(repo_root: Path, pr_number: int) -> dict[str, str]:
     return {role: head_sha for role, (_round_number, head_sha) in by_role.items()}
 
 
+def latest_valid_reviewer_rounds(repo_root: Path, pr_number: int) -> dict[str, tuple[int, str]]:
+    by_role: dict[str, tuple[int, str]] = {}
+    artifact_keys: set[tuple[str, int]] = set()
+    runs_dir = repo_root / ".refactor-loop" / "runs"
+    logs_dir = repo_root / ".refactor-loop" / "logs"
+    prompts_dir = repo_root / ".refactor-loop" / "prompts"
+    for path in sorted(runs_dir.glob(f"review-pr{pr_number}-*-r*.md")):
+        match = REVIEW_ARTIFACT_RE.match(path.name)
+        if not match or int(match.group(1)) != pr_number:
+            continue
+        role = match.group(2)
+        round_number = int(match.group(3))
+        artifact_keys.add((role, round_number))
+        log_path = logs_dir / f"review-pr{pr_number}-{role}-r{round_number}.log"
+        if not _reviewer_log_has_exit_zero(log_path):
+            continue
+        head_sha = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompts_dir / path.name) or _reviewed_head_sha_from_file(log_path)
+        if head_sha and _reviewer_log_has_valid_marker(log_path, pr_number, role):
+            existing = by_role.get(role)
+            if existing is None or round_number >= existing[0]:
+                by_role[role] = (round_number, head_sha)
+    for path in sorted(logs_dir.glob(f"review-pr{pr_number}-*-r*.log")):
+        match = REVIEW_LOG_RE.match(path.name)
+        if not match or int(match.group(1)) != pr_number:
+            continue
+        role = match.group(2)
+        round_number = int(match.group(3))
+        if (role, round_number) in artifact_keys:
+            continue
+        if not _reviewer_log_has_exit_zero(path) or not _reviewer_log_has_valid_marker(path, pr_number, role):
+            continue
+        prompt_path = prompts_dir / path.with_suffix(".md").name
+        head_sha = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompt_path)
+        if head_sha:
+            existing = by_role.get(role)
+            if existing is None or round_number >= existing[0]:
+                by_role[role] = (round_number, head_sha)
+    return by_role
+
+
+def pending_or_fresh_review_evidence_exists(repo_root: Path, pr_number: int) -> bool:
+    now = time.time()
+    for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
+        match = REVIEW_LOG_RE.match(path.name)
+        if not match or int(match.group(1)) != pr_number:
+            continue
+        if _reviewer_log_has_exit_zero(path) or _reviewer_log_terminal_failed(path):
+            continue
+        if now - path.stat().st_mtime < REVIEW_PENDING_SECONDS:
+            return True
+    return False
+
+
+def dead_reviewer_roles(repo_root: Path, pr_number: int) -> set[str]:
+    dead: set[str] = set()
+    now = time.time()
+    for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
+        match = REVIEW_LOG_RE.match(path.name)
+        if not match or int(match.group(1)) != pr_number:
+            continue
+        role = match.group(2)
+        if _reviewer_log_terminal_failed(path):
+            dead.add(role)
+            continue
+        if not _reviewer_log_has_exit_zero(path) and now - path.stat().st_mtime >= REVIEW_PENDING_SECONDS:
+            dead.add(role)
+    return dead
+
+
+def reviewer_roles_with_evidence(repo_root: Path, pr_number: int) -> set[str]:
+    roles: set[str] = set()
+    for path in sorted((repo_root / ".refactor-loop" / "runs").glob(f"review-pr{pr_number}-*-r*.md")):
+        match = REVIEW_ARTIFACT_RE.match(path.name)
+        if match and int(match.group(1)) == pr_number:
+            roles.add(match.group(2))
+    for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
+        match = REVIEW_LOG_RE.match(path.name)
+        if match and int(match.group(1)) == pr_number:
+            roles.add(match.group(2))
+    return roles
+
+
+def valid_required_review_round_complete(repo_root: Path, pr_number: int, head_sha: str) -> bool:
+    rounds = latest_valid_reviewer_rounds(repo_root, pr_number)
+    return all(rounds.get(role, (0, ""))[1] == head_sha for role in REQUIRED_REVIEW_ROLES)
+
+
 def pending_review_spawn_exists(repo_root: Path, pr_number: int) -> bool:
     pending_path = repo_root / ".refactor-loop" / ".controller-pending-events.log"
     try:
@@ -2067,8 +2171,18 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem], 
             continue
         if not item.head_sha or pending_review_spawn_exists(repo_root, item.number):
             continue
+        if valid_required_review_round_complete(repo_root, item.number, item.head_sha):
+            continue
+        if pending_or_fresh_review_evidence_exists(repo_root, item.number):
+            continue
         heads = latest_reviewer_heads(repo_root, item.number)
-        stale_roles = [role for role in REQUIRED_REVIEW_ROLES if heads.get(role, "") != item.head_sha]
+        dead_roles = dead_reviewer_roles(repo_root, item.number)
+        evidence_roles = reviewer_roles_with_evidence(repo_root, item.number)
+        stale_roles = [
+            role
+            for role in REQUIRED_REVIEW_ROLES
+            if heads.get(role, "") != item.head_sha and (heads.get(role, "") or role in dead_roles or role in evidence_roles)
+        ]
         if not stale_roles:
             continue
         actions.append(

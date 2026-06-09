@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2898,6 +2899,103 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(tests_intent["log"], ".refactor-loop/logs/review-pr77-tests-r2.log")
         self.assertEqual(tests_intent["cd"], str(self.tmp.resolve()))
         self.assertTrue(Path(str(tests_intent["cd"])).is_absolute())
+
+    def test_dispatch_reviewers_does_not_advance_round_while_same_role_log_is_pending(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
+        (self.tmp / ".refactor-loop" / "prompts").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".refactor-loop" / "logs").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".refactor-loop" / "prompts" / "review-pr77-architect-r1.md").write_text(
+            f"head_sha: {'a' * 40}\n",
+            encoding="utf-8",
+        )
+        (self.tmp / ".refactor-loop" / "logs" / "review-pr77-architect-r1.log").write_text(
+            f"head_sha: {'a' * 40}\nREVIEW_DONE:77:architect:approve\n",
+            encoding="utf-8",
+        )
+        render_envs: list[dict[str, str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["pr", "view", "77", "--json", "title,baseRefName,headRefName,headRefOid"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"title": "Fix wakeup runner", "baseRefName": "dev", "headRefName": "refactor/issue735", "headRefOid": "a" * 40}),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_render(_template: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
+            assert env is not None
+            render_envs.append(dict(env))
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_text("review prompt\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
+                    self.assertEqual(
+                        0,
+                        self.actions.dispatch_reviewers(
+                            {
+                                "target_kind": "PR",
+                                "target_number": 77,
+                                "stale_review_roles": ["architect", "tests"],
+                            }
+                        ),
+                    )
+
+        self.assertEqual([".refactor-loop/runs/review-pr77-tests-r1.md"], [env["REVIEW_OUTPUT_PATH"] for env in render_envs])
+        pending = self.pending_events()
+        self.assertNotIn('"intent_id": "dispatch-reviewers:77:architect:r2"', pending)
+        self.assertIn('"intent_id": "dispatch-reviewers:77:tests:r1"', pending)
+
+    def test_dispatch_reviewers_advances_round_for_stale_same_role_log_without_exit(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
+        (self.tmp / ".refactor-loop" / "prompts").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".refactor-loop" / "logs").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".refactor-loop" / "prompts" / "review-pr77-quality-r1.md").write_text(
+            f"head_sha: {'a' * 40}\n",
+            encoding="utf-8",
+        )
+        stale_log = self.tmp / ".refactor-loop" / "logs" / "review-pr77-quality-r1.log"
+        stale_log.write_text(
+            f"head_sha: {'a' * 40}\nREVIEW_DONE:77:quality:comment\n",
+            encoding="utf-8",
+        )
+        old_mtime = time.time() - 120
+        os.utime(stale_log, (old_mtime, old_mtime))
+        render_envs: list[dict[str, str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["pr", "view", "77", "--json", "title,baseRefName,headRefName,headRefOid"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"title": "Fix wakeup runner", "baseRefName": "dev", "headRefName": "refactor/issue735", "headRefOid": "a" * 40}),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_render(_template: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
+            assert env is not None
+            render_envs.append(dict(env))
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_text("review prompt\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
+                    self.assertEqual(
+                        0,
+                        self.actions.dispatch_reviewers(
+                            {
+                                "target_kind": "PR",
+                                "target_number": 77,
+                                "stale_review_roles": ["quality"],
+                            }
+                        ),
+                    )
+
+        self.assertEqual([".refactor-loop/runs/review-pr77-quality-r2.md"], [env["REVIEW_OUTPUT_PATH"] for env in render_envs])
+        self.assertIn('"intent_id": "dispatch-reviewers:77:quality:r2"', self.pending_events())
 
     def test_dispatch_reviewers_fails_closed_when_pr_head_missing(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
