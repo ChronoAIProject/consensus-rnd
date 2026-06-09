@@ -29,12 +29,15 @@ from ..safe_progress_scheduler import (
     classify_dispatch_payload,
 )
 from ..state import read_json, write_json
+from ..task_spawn_claim import TaskSpawnClaimError, safe_task_id_from_task
 from ..update_check import parse_time
 from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work, is_draft_release_rollup_pr
 
 
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
 HEARTBEAT_STALE_SECONDS = 90
+DAEMON_SELF_DRIVE_HEARTBEATS = ("phase9_router_daemon", "wakeup_runner_daemon")
+TERMINAL_HARNESS_SPAWN_INTENT_BLOCKED_REASONS = ("target_not_open:CLOSED", "target_not_open:MERGED")
 PRIORITIES = ("p0", "p1", "p2")
 MUTABLE_DISPATCH_PREFIXES = ("implement-", "fix-pr", "remote-ci-fix", "test-add-", "verify-")
 MAIN_READONLY_DISPATCH_PREFIXES = ("audit-", "phase9-issue", "solver-", "meta-judge-", "review-pr", "reviewer-pr")
@@ -59,6 +62,25 @@ class Boundary:
 
     task_id: str
     evidence: str
+
+
+@dataclass(frozen=True)
+class DaemonSelfDriveClassification:
+    classification: str
+    fresh: bool
+    reason: str
+    heartbeat_threshold_seconds: int
+    consumption_window_seconds: int
+    heartbeat_ages: dict[str, int | None]
+    evidence: list[str]
+
+
+@dataclass(frozen=True)
+class Phase9DispatchTarget:
+    kind: str
+    number: int
+    round_no: int
+    role: str
 
 
 def utc_ts() -> str:
@@ -213,6 +235,7 @@ class ConcurrencyMonitor:
         open_pr_count: int,
         open_issue_count: int,
         daemons: dict[str, dict] | None = None,
+        zero_codex_classification: dict[str, object] | None = None,
         now: datetime | None = None,
     ) -> None:
         if now is None:
@@ -234,6 +257,8 @@ class ConcurrencyMonitor:
             "daemons_healthy": healthy,
             "daemons_total": len(daemons),
         }
+        if zero_codex_classification is not None:
+            payload["zero_codex_classification"] = zero_codex_classification
         payload.update(self.read_active_controller_projection())
         update_projection = self.read_update_projection(now=now)
         if update_projection:
@@ -427,6 +452,326 @@ class ConcurrencyMonitor:
         with self.pending_events.open("a", encoding="utf-8") as handle:
             handle.write(f"{ts} concurrency-alert {msg}\n")
 
+    def daemon_self_drive_consumption_window_seconds(self) -> int:
+        phase9_interval = self._positive_env_int("PHASE9_ROUTER_INTERVAL_SECONDS", 120)
+        wakeup_interval = self._positive_env_int("WAKEUP_RUNNER_INTERVAL_SECONDS", 120)
+        return max(2 * max(phase9_interval, wakeup_interval), 300)
+
+    def _positive_env_int(self, name: str, default: int) -> int:
+        value = os.environ.get(name) or self.ctx.host_env.get(name) or str(default)
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default
+
+    def classify_zero_codex_self_drive(
+        self,
+        *,
+        breakdown: list[dict],
+        now: float | None = None,
+    ) -> DaemonSelfDriveClassification:
+        if now is None:
+            now = time.time()
+        window = self.daemon_self_drive_consumption_window_seconds()
+        heartbeat_result = self._daemon_self_drive_heartbeat_diagnostic(now=now)
+        if heartbeat_result is not None:
+            reason, ages = heartbeat_result
+            return DaemonSelfDriveClassification("p0", False, reason, HEARTBEAT_STALE_SECONDS, window, ages, [])
+        active_targets = self._active_item_targets(breakdown)
+        if not active_targets:
+            return DaemonSelfDriveClassification("p0", False, "missing-active-item-target", HEARTBEAT_STALE_SECONDS, window, {}, [])
+        intent_result = self._fresh_unsuppressed_item_matching_intent(
+            active_targets=active_targets,
+            now=now,
+            window=window,
+        )
+        return DaemonSelfDriveClassification(
+            "daemon-self-drive-transient" if intent_result[0] else "p0",
+            bool(intent_result[0]),
+            intent_result[1],
+            HEARTBEAT_STALE_SECONDS,
+            window,
+            self._heartbeat_ages(now=now),
+            intent_result[2],
+        )
+
+    def _daemon_self_drive_heartbeat_diagnostic(self, *, now: float) -> tuple[str, dict[str, int | None]] | None:
+        heartbeats = self.read_daemon_heartbeats(now=now)
+        ages: dict[str, int | None] = {}
+        for daemon in DAEMON_SELF_DRIVE_HEARTBEATS:
+            heartbeat = heartbeats.get(daemon)
+            if heartbeat is None:
+                return f"missing-heartbeat:{daemon}", ages
+            age = heartbeat.get("age_seconds")
+            ages[daemon] = age if isinstance(age, int) else None
+            if heartbeat.get("stale") is True:
+                return f"stale-heartbeat:{daemon}", ages
+        return None
+
+    def _heartbeat_ages(self, *, now: float) -> dict[str, int | None]:
+        heartbeats = self.read_daemon_heartbeats(now=now)
+        ages: dict[str, int | None] = {}
+        for daemon in DAEMON_SELF_DRIVE_HEARTBEATS:
+            heartbeat = heartbeats.get(daemon)
+            age = heartbeat.get("age_seconds") if isinstance(heartbeat, dict) else None
+            ages[daemon] = age if isinstance(age, int) else None
+        return ages
+
+    def _active_item_targets(self, breakdown: list[dict]) -> set[tuple[str, int]]:
+        targets: set[tuple[str, int]] = set()
+        for item in breakdown:
+            raw_id = str(item.get("id") or "")
+            if not raw_id.startswith("#"):
+                continue
+            try:
+                number = int(raw_id[1:])
+            except ValueError:
+                continue
+            kind = str(item.get("kind") or "")
+            if kind == "issue":
+                targets.add(("issue", number))
+            elif kind == "pr":
+                targets.add(("pr", number))
+        return targets
+
+    def _fresh_unsuppressed_item_matching_intent(
+        self,
+        *,
+        active_targets: set[tuple[str, int]],
+        now: float,
+        window: int,
+    ) -> tuple[bool, str, list[str]]:
+        try:
+            pending_lines = self.pending_events.read_text(encoding="utf-8", errors="replace").splitlines()
+        except FileNotFoundError:
+            pending_lines = []
+        except OSError as exc:
+            return False, f"pending-events-read-error:{exc.__class__.__name__}", []
+        blocked_intents = self._terminal_blocked_harness_spawn_intent_ids(pending_lines)
+        blocked_targets = self._targets_for_terminal_blocked_harness_spawn_intents(pending_lines)
+        pending_result = self._pending_intent_evidence(
+            lines=pending_lines,
+            active_targets=active_targets,
+            now=now,
+            window=window,
+            blocked_intents=blocked_intents,
+        )
+        if pending_result[0] is False:
+            return pending_result
+        ledger_result = self._phase9_ledger_intent_evidence(
+            active_targets=active_targets,
+            now=now,
+            window=window,
+            blocked_intents=blocked_intents,
+            blocked_targets=blocked_targets,
+        )
+        if ledger_result[0] is False:
+            return ledger_result
+        evidence = [*pending_result[2], *ledger_result[2]]
+        if evidence:
+            return True, "fresh-item-matching-intent", evidence
+        return False, "missing-fresh-item-matching-intent", []
+
+    def _pending_intent_evidence(
+        self,
+        *,
+        lines: list[str],
+        active_targets: set[tuple[str, int]],
+        now: float,
+        window: int,
+        blocked_intents: set[str],
+    ) -> tuple[bool, str, list[str]]:
+        evidence: list[str] = []
+        for line in lines:
+            if " HARNESS_SPAWN_INTENT " not in line:
+                continue
+            ts, payload_text = line.split(" HARNESS_SPAWN_INTENT ", 1)
+            try:
+                payload = json.loads(payload_text)
+            except json.JSONDecodeError:
+                return False, "malformed-harness-spawn-intent", []
+            if not isinstance(payload, dict):
+                return False, "malformed-harness-spawn-intent", []
+            created_at = self._line_time(ts)
+            if created_at is None:
+                return False, "malformed-harness-spawn-intent-ts", []
+            if not self._intent_matches_active_target(payload, active_targets):
+                continue
+            suppressed = self._intent_suppression_reason(payload, blocked_intents=blocked_intents)
+            age = int(now - created_at)
+            if suppressed:
+                return False, f"suppressed-intent:{suppressed}", []
+            if age > window:
+                return False, f"stale-unconsumed-intent:{age}s", []
+            evidence.append(f"pending:{payload.get('intent_id') or payload.get('task_id')}:{age}s")
+        return True, "pending-ok", evidence
+
+    def _phase9_ledger_intent_evidence(
+        self,
+        *,
+        active_targets: set[tuple[str, int]],
+        now: float,
+        window: int,
+        blocked_intents: set[str],
+        blocked_targets: set[Phase9DispatchTarget],
+    ) -> tuple[bool, str, list[str]]:
+        ledger = self.ctx.paths.refactor_loop / "phase9-router-ledger.jsonl"
+        if not ledger.exists():
+            return True, "phase9-ledger-missing", []
+        try:
+            lines = ledger.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError as exc:
+            return False, f"phase9-ledger-read-error:{exc.__class__.__name__}", []
+        evidence: list[str] = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                return False, "malformed-phase9-ledger", []
+            if not isinstance(entry, dict):
+                return False, "malformed-phase9-ledger", []
+            if entry.get("dispatch_state") != "harness-intent":
+                continue
+            created_at = self._line_time(str(entry.get("dispatched_at") or ""))
+            if created_at is None:
+                return False, "malformed-phase9-ledger-ts", []
+            if not self._intent_matches_active_target(entry, active_targets):
+                continue
+            suppressed = self._phase9_ledger_suppression_reason(
+                entry,
+                blocked_intents=blocked_intents,
+                blocked_targets=blocked_targets,
+            )
+            age = int(now - created_at)
+            if suppressed:
+                return False, f"suppressed-intent:{suppressed}", []
+            if age > window:
+                return False, f"stale-unconsumed-intent:{age}s", []
+            evidence.append(f"phase9-ledger:{entry.get('key') or '?'}:{age}s")
+        return True, "phase9-ledger-ok", evidence
+
+    def _terminal_blocked_harness_spawn_intent_ids(self, lines: list[str]) -> set[str]:
+        ids: set[str] = set()
+        for intent_id in self._terminal_blocked_harness_spawn_intent_suffixes(lines):
+            ids.add(intent_id)
+            if not intent_id.startswith("harness-spawn-intent:"):
+                ids.add(f"harness-spawn-intent:{intent_id}")
+        return ids
+
+    def _terminal_blocked_harness_spawn_intent_suffixes(self, lines: list[str]) -> list[str]:
+        intent_ids: list[str] = []
+        prefix = "WAKEUP_RUNNER_BLOCKED:harness-spawn-intent:"
+        for line in lines:
+            if prefix not in line:
+                continue
+            tail = line.split(prefix, 1)[1].strip()
+            for reason in TERMINAL_HARNESS_SPAWN_INTENT_BLOCKED_REASONS:
+                suffix = f":{reason}"
+                if tail.endswith(suffix):
+                    intent_id = tail[: -len(suffix)]
+                    if intent_id:
+                        intent_ids.append(intent_id)
+                    break
+        return intent_ids
+
+    def _targets_for_terminal_blocked_harness_spawn_intents(self, lines: list[str]) -> set[Phase9DispatchTarget]:
+        targets: set[Phase9DispatchTarget] = set()
+        for intent_id in self._terminal_blocked_harness_spawn_intent_suffixes(lines):
+            targets.update(self._phase9_dispatch_targets_from_text(intent_id))
+        return targets
+
+    def _intent_suppression_reason(self, payload: dict[str, object], *, blocked_intents: set[str]) -> str:
+        intent_id = str(payload.get("intent_id") or "")
+        if intent_id in blocked_intents:
+            return "terminal-block"
+        if self._target_log_suppresses_intent(payload):
+            return "target-log"
+        task_id = self._task_id_for_suppression_payload(payload)
+        if task_id:
+            try:
+                lock = self.ctx.paths.refactor_loop / "locks" / "spawn-tasks" / f"{safe_task_id_from_task(task_id)}.lock"
+            except TaskSpawnClaimError:
+                return "malformed-task-id"
+            if lock.exists():
+                return "spawn-claim"
+        return ""
+
+    def _phase9_ledger_suppression_reason(
+        self,
+        payload: dict[str, object],
+        *,
+        blocked_intents: set[str],
+        blocked_targets: set[Phase9DispatchTarget],
+    ) -> str:
+        if self._ledger_targets(payload) & blocked_targets:
+            return "terminal-block"
+        return self._intent_suppression_reason(payload, blocked_intents=blocked_intents)
+
+    def _ledger_targets(self, payload: dict[str, object]) -> set[Phase9DispatchTarget]:
+        text = " ".join(str(payload.get(field) or "") for field in ("key", "log_path"))
+        return self._phase9_dispatch_targets_from_text(text)
+
+    def _task_id_for_suppression_payload(self, payload: dict[str, object]) -> str:
+        task_id = str(payload.get("task_id") or "")
+        if task_id:
+            return task_id
+        log_value = payload.get("log") or payload.get("log_path")
+        if not isinstance(log_value, str) or not log_value:
+            return ""
+        return Path(log_value).stem
+
+    def _phase9_dispatch_targets_from_text(self, text: str) -> set[Phase9DispatchTarget]:
+        targets: set[Phase9DispatchTarget] = set()
+        roles = "minimal|structural|delete|judge|reflector"
+        for match in re.finditer(rf"phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-({roles})", text):
+            targets.add(Phase9DispatchTarget("issue", int(match.group(1)), int(match.group(2)), match.group(3)))
+        for match in re.finditer(rf"(?<![0-9])([1-9][0-9]*)-([1-9][0-9]*)-({roles})(?![A-Za-z0-9_-])", text):
+            targets.add(Phase9DispatchTarget("issue", int(match.group(1)), int(match.group(2)), match.group(3)))
+        for match in re.finditer(rf"phase9-router:([1-9][0-9]*):([1-9][0-9]*):({roles})", text):
+            targets.add(Phase9DispatchTarget("issue", int(match.group(1)), int(match.group(2)), match.group(3)))
+        return targets
+
+    def _target_log_suppresses_intent(self, payload: dict[str, object]) -> bool:
+        log_value = payload.get("log") or payload.get("log_path")
+        if not isinstance(log_value, str) or not log_value:
+            return False
+        log_path = Path(log_value)
+        if not log_path.is_absolute():
+            log_path = self.repo_root / log_path
+        return log_path.exists()
+
+    def _intent_matches_active_target(self, payload: dict[str, object], active_targets: set[tuple[str, int]]) -> bool:
+        text = " ".join(
+            str(payload.get(field) or "")
+            for field in ("task_id", "intent_id", "route", "reason", "key", "marker", "log", "log_path", "prompt")
+        )
+        for kind, number in self._targets_from_text(text):
+            if (kind, number) in active_targets:
+                return True
+            if kind == "unknown" and (("issue", number) in active_targets or ("pr", number) in active_targets):
+                return True
+        return False
+
+    def _targets_from_text(self, text: str) -> set[tuple[str, int]]:
+        targets: set[tuple[str, int]] = set()
+        for match in re.finditer(r"(?:phase9-issue|solver-issue|meta-judge-issue|issue[#-]?|issue\s+#)([1-9][0-9]*)", text):
+            targets.add(("issue", int(match.group(1))))
+        for match in re.finditer(r"(?:review-pr|reviewer-pr|fix-pr|remote-ci-fix-pr|pr[#-]?|pr\s+#)([1-9][0-9]*)", text):
+            targets.add(("pr", int(match.group(1))))
+        for match in re.finditer(r"(?<![A-Za-z0-9])#([1-9][0-9]*)", text):
+            targets.add(("unknown", int(match.group(1))))
+        return targets
+
+    def _line_time(self, text: str) -> float | None:
+        token = text.strip().split(" ", 1)[0].strip("[]")
+        parsed = parse_time(token)
+        if parsed is None:
+            return None
+        return parsed.timestamp()
+
     def dispatch_queue_files(self) -> list[tuple[str, Path]]:
         files: list[tuple[str, Path]] = []
         for priority in PRIORITIES:
@@ -606,6 +951,38 @@ class ConcurrencyMonitor:
         log(f"actual={actual} expected={expected} floor={floor} zero_streak={zero_streak}")
 
         if expected > 0 and actual == 0:
+            self_drive = self.classify_zero_codex_self_drive(breakdown=breakdown)
+            classification_payload: dict[str, object] = {
+                "classification": self_drive.classification,
+                "reason": self_drive.reason,
+                "heartbeat_threshold_seconds": self_drive.heartbeat_threshold_seconds,
+                "consumption_window_seconds": self_drive.consumption_window_seconds,
+                "heartbeat_ages": self_drive.heartbeat_ages,
+                "evidence": self_drive.evidence,
+            }
+            if self_drive.fresh:
+                state["zero_streak"] = 0
+                event = (
+                    "ZERO_CODEX_CLASSIFICATION:daemon-self-drive-transient:"
+                    f"expected={expected}:reason={self_drive.reason}:evidence={','.join(self_drive.evidence)}"
+                )
+                self.write_pending_event(event)
+                log(
+                    "daemon-self-drive-transient: 0 codex but fresh daemon self-drive evidence exists;"
+                    f" expected={expected};heartbeats={self_drive.heartbeat_ages};evidence={self_drive.evidence}"
+                )
+                self.write_statusline_snapshot(
+                    actual=actual,
+                    expected=expected,
+                    p0_streak=0,
+                    last_p0_at=state.get("last_p0_at"),
+                    open_pr_count=open_pr_count,
+                    open_issue_count=open_issue_count,
+                    zero_codex_classification=classification_payload,
+                )
+                self.save_state(state)
+                return
+
             zero_streak += 1
             state["zero_streak"] = zero_streak
             p0_at = utc_ts()
@@ -617,6 +994,7 @@ class ConcurrencyMonitor:
                 "zero_streak": zero_streak,
                 "severity": "P0",
                 "rule": "no-gap-violation",
+                "zero_codex_classification": classification_payload,
             }
             self.write_alert(f"P0 no-gap-violation: 0 codex with {expected} active task(s)", detail)
             log(f"P0 ALERT: 0 codex but {expected} active task(s);streak={zero_streak};see {self.alert_log}")
@@ -635,6 +1013,7 @@ class ConcurrencyMonitor:
                 last_p0_at=p0_at,
                 open_pr_count=open_pr_count,
                 open_issue_count=open_issue_count,
+                zero_codex_classification=classification_payload,
             )
             self.save_state(state)
             return

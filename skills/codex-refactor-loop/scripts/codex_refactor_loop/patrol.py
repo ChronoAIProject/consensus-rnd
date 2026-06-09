@@ -381,7 +381,7 @@ def _terminal_failure_evidence(lines: Sequence[str], exit_index: int) -> tuple[s
     structured_failure = [
         line
         for line in window
-        if line.strip().startswith(("SPAWN_FAILED=", "STALL_KILL_AFTER="))
+        if line.strip().startswith(("SPAWN_FAILED=", "TIMEOUT_KILL_AFTER=", "STALL_KILL_AFTER="))
     ]
     if structured_failure:
         return tuple(structured_failure + [lines[exit_index]])

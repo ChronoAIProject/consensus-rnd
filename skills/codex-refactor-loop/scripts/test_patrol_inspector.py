@@ -247,7 +247,7 @@ class PatrolInspectorTests(unittest.TestCase):
         self.assertIsNotNone(supervisor.log)
         self.assertIsNotNone(supervisor.cwd)
         self.assertIsNotNone(supervisor.env)
-        self.assertEqual(900, supervisor.stall)
+        self.assertEqual(5400, supervisor.stall)
         self.assertEqual("patrol-analysis", supervisor.stdin.parent.name)
         self.assertEqual(".md", supervisor.stdin.suffix)
         self.assertEqual("logs", supervisor.log.parent.name)
@@ -490,7 +490,20 @@ class PatrolInspectorTests(unittest.TestCase):
         self.assertEqual(("SPAWN_FAILED=missing executable", "EXIT=127"), exception_signals[0].evidence)
         self.assertIn("EXIT=127", exception_signals[0].summary)
 
-    def test_stall_kill_terminal_envelope_creates_finding(self) -> None:
+    def test_timeout_kill_terminal_envelope_creates_finding(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
+            "progress update\nTIMEOUT_KILL_AFTER=600s\nEXIT=137\n",
+            encoding="utf-8",
+        )
+
+        signals = PatrolInspector(self.ctx, github_items=()).collect_candidate_signals()
+
+        exception_signals = [signal for signal in signals if signal.kind == "exception-log"]
+        self.assertEqual(1, len(exception_signals))
+        self.assertEqual(("TIMEOUT_KILL_AFTER=600s", "EXIT=137"), exception_signals[0].evidence)
+        self.assertIn("EXIT=137", exception_signals[0].summary)
+
+    def test_legacy_stall_kill_terminal_envelope_still_creates_finding(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "worker.log").write_text(
             "progress update\nSTALL_KILL_AFTER=600\nEXIT=137\n",
             encoding="utf-8",

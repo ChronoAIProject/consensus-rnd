@@ -53,9 +53,9 @@ ${SCOPE_PATHS}
 7. `git add -A && git status` 确认改动。
 8. **不要 commit**，把改动留在工作树。
 9. 摘要写入 `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md`：
-   - 修改文件列表（带行数）
-   - 测试结果
-   - deviation 记录
+   - `## Changed files`（带行数）
+   - `## Test results`
+   - `## Deviations`
    - `SCOPE_EXTEND` 记录
 10. 若 status 为 `ok`，同时写入 worker-authored PR artifacts：`$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt` 与 `$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`。title 必须是一行非占位标题,语言遵循 `HOST_WORK_LANGUAGE`，不得是 placeholder；body 必须包含且只包含一个 `Closes #N`，必须使用这三个固定 section 标题作为语言无关机器 marker(不要翻译)：`## Changed files`、`## Test results`、`## Deviations`。每个标题下的 prose/content 遵循 `HOST_WORK_LANGUAGE`，并以 sentinel 作为最终独立行。
 11. 末尾打印 `IMPLEMENT_DONE:${CLUSTER_ID}:<status>` 其中 status ∈ {ok, partial, blocked}。

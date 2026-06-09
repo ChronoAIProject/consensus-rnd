@@ -1767,7 +1767,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "cd": ".",
             "prompt": ".refactor-loop/prompts/phase9/phase9-issue330-r4-judge.md",
             "log": ".refactor-loop/logs/phase9-issue330-r4-judge.log",
-            "stall": 3600,
+            "stall": 5400,
             "reason": "test intent",
             "queued_at": "2026-05-31T00:00:00Z",
             "run_in_background_required": True,
@@ -3125,7 +3125,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             ("wrong-closes", lambda: body.write_text(valid_body.replace("Closes #20", "Closes #21"), encoding="utf-8"), "implementation_pr_body_closes_mismatch"),
             ("multiple-closes", lambda: body.write_text(valid_body.replace("Closes #20", "Closes #20\nCloses #21"), encoding="utf-8"), "implementation_pr_body_closes_mismatch"),
             ("missing-closes", lambda: body.write_text(valid_body.replace("Closes #20\n\n", ""), encoding="utf-8"), "implementation_pr_body_closes_mismatch"),
-            ("missing-section", lambda: body.write_text(valid_body.replace("## Deviations", "## deviation"), encoding="utf-8"), "implementation_pr_body_required_section_missing"),
+            ("missing-section", lambda: body.write_text(valid_body.replace("## Deviations", "## Notes"), encoding="utf-8"), "implementation_pr_body_required_section_missing"),
             ("placeholder-body", lambda: body.write_text("## issue #20 实现\n\n## Changed files\n\n- x\n\n## Test results\n\n- true\n\n## Deviations\n\n- none\n\nCloses #20\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "implementation_pr_body_placeholder"),
         )
         for name, mutate, reason in cases:
