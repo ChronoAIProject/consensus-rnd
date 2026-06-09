@@ -234,6 +234,21 @@ class ConcurrencyMonitor:
                 result[name] = {"age_seconds": None, "stale": True}
         return result
 
+    def stale_daemon_projection(self, daemons: dict[str, dict]) -> list[dict[str, object]]:
+        stale: list[dict[str, object]] = []
+        for name, heartbeat in sorted(daemons.items()):
+            if heartbeat.get("stale") is not True:
+                continue
+            age = heartbeat.get("age_seconds")
+            stale.append(
+                {
+                    "name": name,
+                    "age_seconds": age if isinstance(age, int) else None,
+                    "reason": "heartbeat-stale" if isinstance(age, int) else "heartbeat-malformed",
+                }
+            )
+        return stale
+
     def write_statusline_snapshot(
         self,
         *,
@@ -252,6 +267,7 @@ class ConcurrencyMonitor:
         if daemons is None:
             daemons = self.read_daemon_heartbeats(now=now.timestamp())
         healthy = sum(1 for daemon in daemons.values() if not daemon["stale"])
+        stale_daemons = self.stale_daemon_projection(daemons)
         payload = {
             "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "actual": actual,
@@ -265,6 +281,7 @@ class ConcurrencyMonitor:
             "daemons": daemons,
             "daemons_healthy": healthy,
             "daemons_total": len(daemons),
+            "stale_daemons": stale_daemons,
         }
         if zero_codex_classification is not None:
             payload["zero_codex_classification"] = zero_codex_classification

@@ -32,6 +32,7 @@ DIRECT_POST_PROMPTS = (
     "solver-delete.md",
     "meta-judge.md",
     "design-issue-reply.md",
+    "triage-external-issue.md",
 )
 
 
