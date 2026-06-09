@@ -1672,7 +1672,7 @@ class Phase9Router:
             "cd": str(self.ctx.repo_root.resolve()),
             "prompt": self._artifact_path(prompt),
             "log": self._artifact_path(log_path),
-            "stall": 3600,
+            "stall": 5400,
             "reason": reason,
             "queued_at": self._now(),
             "run_in_background_required": True,

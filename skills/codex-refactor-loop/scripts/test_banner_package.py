@@ -39,7 +39,7 @@ class BannerPackageTests(unittest.TestCase):
         for required in (
             "| 阶段 | **派出 codex(role=`implement`)** |",
             "| codex log | `implement-160.log` |",
-            "| no-output stall window | 180s(~3 min 无输出窗口) |",
+            "| total wall-clock timeout | 180s(~3 min) |",
             "| 上下文 | phase9 issue160 parity |",
             "IMPLEMENT_DONE:<cluster>:<status>",
             "| **是否需要人介入** | **❌ 否**(自动推进) |",

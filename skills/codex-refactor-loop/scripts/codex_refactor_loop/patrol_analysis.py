@@ -13,7 +13,8 @@ from .processes import ProcessSupervisor
 
 
 PATROL_ANALYSIS_PROMPT = "patrol-analysis.md"
-PATROL_ANALYSIS_STALL_SECONDS = 900
+# Compatibility name: this is a total wall-clock timeout, not a log-idle window.
+PATROL_ANALYSIS_STALL_SECONDS = 5400
 PATROL_ANALYSIS_CODEX_HOME = "patrol-analysis-codex-home"
 PATROL_ANALYSIS_CWD = "patrol-analysis-cwd"
 PATROL_ANALYSIS_ENV_ALLOWLIST = frozenset(
