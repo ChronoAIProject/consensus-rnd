@@ -636,6 +636,41 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "Host command strings must be executed via bash -lc, not as bare lines",
         )
 
+    def test_downstream_install_walkthrough_covers_greenfield_bootstrap(self) -> None:
+        walkthrough = section_between(
+            self.skill,
+            r"^## Downstream install walkthrough$",
+            r"^<a id=\"github-workflow-portability-checklist\"></a>$",
+        )
+        self.assertTrue(walkthrough)
+        required = (
+            "### Greenfield host bootstrap path",
+            "create a minimal repository skeleton that can build and test without consensus-loop",
+            "Run the host-owned build and test commands successfully in the main checkout",
+            "configure the host-owned `.config/consensus-rnd/host.env` from `host.env.example`",
+            "fresh isolated `$REPO_ROOT/.worktrees/<id>` checkout",
+            "ignored dependencies such as `node_modules/` are absent",
+            "npm ci --no-audit --no-fund && npm run build",
+            "npm ci --no-audit --no-fund && npm test",
+            "documentation-only bootstrap guidance",
+            "does not add a setup CLI, installer, Node-specific environment variable, runtime preinstall hook, README command matrix",
+            "issue-driven / Path A",
+        )
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, walkthrough)
+
+        forbidden = (
+            "setup CLI command",
+            "NODE_INSTALL_CMD",
+            "NPM_INSTALL_CMD",
+            "PREINSTALL_CMD",
+            "runtime preinstall hook enabled",
+        )
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, walkthrough)
+
     def test_implement_and_verify_prompts_lock_touched_module_test_ratchet(self) -> None:
         implement = read(SKILL_ROOT / "prompts" / "implement.md")
         verify = read(SKILL_ROOT / "prompts" / "verify.md")
