@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -72,6 +73,7 @@ SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
 BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}\\]*)")
 REVIEW_ROLES = ("architect", "tests", "quality")
+REVIEW_PENDING_SECONDS = 90
 PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT = 75
 MANAGED_PR_HEAD_RE = re.compile(r"^refactor/iter([1-9][0-9]*)-([A-Za-z0-9._-]+)$")
 REBASE_RESOLVE_DONE_RE = re.compile(r"^REBASE_RESOLVE_DONE:([1-9][0-9]*):([A-Za-z0-9._-]+)$")
@@ -1572,6 +1574,8 @@ class ControllerActions:
             roles = REVIEW_ROLES
         for role in roles:
             round_number = self._next_review_round(pr_target, role)
+            if self._review_round_is_pending(pr_target, role, round_number - 1):
+                continue
             if self._pending_review_spawn_exists(pr_target, role, round_number):
                 continue
             prompt = self.ctx.paths.prompts / f"review-pr{pr_target}-{role}-r{round_number}.md"
@@ -1609,6 +1613,25 @@ class ControllerActions:
                 if match:
                     rounds.append(int(match.group(1)))
         return (max(rounds) if rounds else 0) + 1
+
+    def _review_round_is_pending(self, pr_target: str, role: str, round_number: int) -> bool:
+        if round_number < 1:
+            return False
+        log_path = self.ctx.paths.logs / f"review-pr{pr_target}-{role}-r{round_number}.log"
+        if not log_path.exists():
+            return False
+        try:
+            if time.time() - log_path.stat().st_mtime >= REVIEW_PENDING_SECONDS:
+                return False
+        except OSError:
+            return False
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        if "EXIT=" in text:
+            return False
+        return (self.ctx.paths.prompts / f"review-pr{pr_target}-{role}-r{round_number}.md").exists()
 
     def _pending_review_spawn_exists(self, pr_target: str, role: str, round_number: int) -> bool:
         try:

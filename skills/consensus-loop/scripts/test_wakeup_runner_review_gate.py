@@ -450,8 +450,35 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         result = self.run_action()
 
         self.assertEqual(result.status, "blocked")
-        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:missing_exit_zero:quality")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:terminal_failed:quality")
         self.assertEqual(self.actions.merged, [])
+
+    def test_pending_reviewer_log_waits_then_valid_completion_merges_original_round(self) -> None:
+        self.write_review("architect", "approve")
+        self.write_review("tests", "comment")
+        (self.repo / ".refactor-loop/logs" / "review-pr12-quality-r1.log").write_text(
+            f"head_sha: {'a' * 40}\nREVIEW_DONE:12:quality:comment\n",
+            encoding="utf-8",
+        )
+
+        pending = self.run_action()
+        self.assertEqual(pending.status, "blocked")
+        self.assertEqual(pending.reason, "WAIT_OR_REDISPATCH:pending_reviewer_evidence:pending_exit_zero:quality")
+        self.assertEqual(self.actions.merged, [])
+
+        (self.repo / ".refactor-loop/runs" / "review-pr12-quality-r1.md").write_text(
+            f"---\nverdict: comment\n---\nhead_sha: {'a' * 40}\nREVIEW_DONE:12:quality:comment\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop/logs" / "review-pr12-quality-r1.log").write_text(
+            f"head_sha: {'a' * 40}\nREVIEW_DONE:12:quality:comment\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        completed = self.run_action()
+        self.assertEqual(completed.status, "applied")
+        self.assertEqual(self.actions.merged, ["12"])
+        self.assertEqual(self.supervisor.calls, 0)
 
     def test_review_gate_source_locks_latest_evidence_per_role(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
