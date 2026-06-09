@@ -5655,7 +5655,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_release_countdown_fail_soft_when_version_manifest_has_no_files_list(self) -> None:
         (self.repo / ".version-bump.json").write_text(json.dumps({"version": "0.0.0"}), encoding="utf-8")
 
-        plan = self.run_plan(fixture="default_milestones")
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "false"}):
+            plan, _stdout, stderr = self.run_plan_with_streams(fixture="default_milestones")
 
         actions = [action for action in plan["actions"] if action["kind"] == "release-countdown"]
         self.assertEqual(len(actions), 1)
@@ -5668,12 +5669,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(action["ready"])
         self.assertEqual(action["red_signals"], [])
         self.assertEqual(action["blocked_reasons"], [])
+        self.assertNotIn("release-countdown: release goal unavailable", stderr)
         self.assertIn("api milestones", (self.repo / "gh-query-labels.log").read_text(encoding="utf-8"))
 
     def test_release_countdown_fail_soft_when_version_manifest_is_absent_with_open_milestone(self) -> None:
         (self.repo / ".version-bump.json").unlink()
 
-        plan = self.run_plan(fixture="default_milestones")
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "false"}):
+            plan, _stdout, stderr = self.run_plan_with_streams(fixture="default_milestones")
 
         actions = [action for action in plan["actions"] if action["kind"] == "release-countdown"]
         self.assertEqual(len(actions), 1)
@@ -5683,6 +5686,40 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIsNone(action["goal"]["release"])
         self.assertTrue(action["status_only"])
         self.assertTrue(action["no_lifecycle_authority"])
+        self.assertFalse((self.repo / ".refactor-loop/state/release-decision.json").exists())
+        self.assertFalse((self.repo / ".refactor-loop/state/release-candidate.json").exists())
+        self.assertNotIn("release-countdown: release goal unavailable", stderr)
+
+    def test_release_countdown_keeps_release_enabled_diagnostic_when_version_manifest_is_absent(self) -> None:
+        (self.repo / ".version-bump.json").unlink()
+
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "true"}):
+            plan, _stdout, stderr = self.run_plan_with_streams(fixture="default_milestones")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "release-countdown"]
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsNone(action["goal"]["release"])
+        self.assertTrue(action["status_only"])
+        self.assertFalse(has_dispatchable_action(actions))
+        self.assertIn("release-countdown: release goal unavailable", stderr)
+        self.assertFalse((self.repo / ".refactor-loop/state/release-decision.json").exists())
+        self.assertFalse((self.repo / ".refactor-loop/state/release-candidate.json").exists())
+
+    def test_release_countdown_keeps_release_enabled_diagnostic_when_version_manifest_has_no_files_list(self) -> None:
+        (self.repo / ".version-bump.json").write_text(json.dumps({"version": "0.0.0"}), encoding="utf-8")
+
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "true"}):
+            plan, _stdout, stderr = self.run_plan_with_streams(fixture="default_milestones")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "release-countdown"]
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsNone(action["goal"]["release"])
+        self.assertFalse(action["ready"])
+        self.assertFalse(has_dispatchable_action(actions))
+        self.assertIn("release-countdown: release goal unavailable", stderr)
+        self.assertIn(".version-bump.json: expected top-level files list", stderr)
         self.assertFalse((self.repo / ".refactor-loop/state/release-decision.json").exists())
         self.assertFalse((self.repo / ".refactor-loop/state/release-candidate.json").exists())
 
