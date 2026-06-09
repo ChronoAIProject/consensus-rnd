@@ -232,6 +232,42 @@ class CommentMonitorTests(unittest.TestCase):
         self.assertEqual("comment-monitor-banner", backoff["contentCreation"]["operation"])
         self.assertEqual("secondary-content-creation-limit", backoff["contentCreation"]["reason"])
 
+    def test_post_banner_defaults_to_english_copy(self) -> None:
+        monitor = CommentMonitor(self.ctx, interval=1)
+        bodies: list[str] = []
+
+        def capture_body(args, *, check=True):
+            del check
+            body_file = Path(args[args.index("--body-file") + 1])
+            bodies.append(body_file.read_text(encoding="utf-8"))
+            return subprocess.CompletedProcess(args, 0, "https://github.test/comment\n", "")
+
+        with mock.patch.object(monitor, "gh", side_effect=capture_body):
+            monitor.post_banner("42", "maintainer", "99", "please check")
+
+        self.assertEqual(1, len(bodies))
+        self.assertIn("## 📊 Status — maintainer comment received (daemon recognized)", bodies[0])
+        self.assertIn("| Comment summary | please check |", bodies[0])
+        self.assertNotIn("已收到 maintainer 评论", bodies[0])
+
+    def test_post_banner_preserves_zh_copy_when_configured(self) -> None:
+        monitor = CommentMonitor(self.ctx, interval=1)
+        monitor.ctx.host_env["HOST_WORK_LANGUAGE"] = "zh"
+        bodies: list[str] = []
+
+        def capture_body(args, *, check=True):
+            del check
+            body_file = Path(args[args.index("--body-file") + 1])
+            bodies.append(body_file.read_text(encoding="utf-8"))
+            return subprocess.CompletedProcess(args, 0, "https://github.test/comment\n", "")
+
+        with mock.patch.object(monitor, "gh", side_effect=capture_body):
+            monitor.post_banner("42", "maintainer", "99", "please check")
+
+        self.assertEqual(1, len(bodies))
+        self.assertIn("## 📊 状态 — 已收到 maintainer 评论(daemon 识别)", bodies[0])
+        self.assertIn("| 评论摘要 | please check |", bodies[0])
+
     def test_updated_at_unchanged_skips_comments_rest_query(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
         state_path = self.tmp / ".refactor-loop" / "comment-monitor-state.json"

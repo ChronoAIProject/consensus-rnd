@@ -37,6 +37,7 @@ from .prompt_contracts import inline_prompt_contracts
 from .processes import launch_spawn_codex_supervisor
 from .release.publisher import ReleasePublisher
 from .release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
+from .runtime_copy import copy_for, current_work_language
 from .git import Git
 from .review_fix_dispatch import (
     ReviewFixDispatchSpec,
@@ -83,29 +84,6 @@ REBASE_RESOLVE_BLOCKED_RE = re.compile(
 )
 ROLLUP_HEAD_PREFIX = "rollup/"
 ROLLUP_BODY_SENTINEL = "⟦AI:RELEASE-ROLLUP⟧"
-
-
-def _utf8_hex(hex_text: str) -> str:
-    return bytes.fromhex(hex_text).decode("utf-8")
-
-
-ROLLUP_TITLE_PREFIX = _utf8_hex("e58f91e5b88320726f6c6c75703a20696e746567726174696f6e20616865616420")
-ROLLUP_BODY_HEADING = _utf8_hex("232320e58f91e5b88320726f6c6c7570")
-ROLLUP_TARGET_LABEL = _utf8_hex("2d20e79baee6a0873a2060")
-ROLLUP_AHEAD_LABEL = _utf8_hex("2d20e99b86e68890e58886e694afe9a286e58588207265766965772d626173653a2060")
-ROLLUP_RANGE_LABEL = _utf8_hex("2d20e88c83e59bb43a2060")
-ROLLUP_ISSUES_LABEL = _utf8_hex("2d20e6b689e58f8a2069737375653a20")
-ROLLUP_COMMIT_SUMMARY_HEADING = _utf8_hex("232320636f6d6d697420e69198e8a681")
-ROLLUP_COMMIT_SUMMARY_UNAVAILABLE = _utf8_hex(
-    "2d20e69cace59cb020636f6d6d697420e69198e8a681e4b88de58fafe794a83be4bba520476974487562205052206469666620e4b8bae58786e38082"
-)
-ROLLUP_MERGE_POLICY_HEADING = _utf8_hex("232320e59088e5b9b6e7ad96e795a5")
-ROLLUP_AUTO_MERGE_POLICY_LINE = _utf8_hex(
-    "2d20726571756972656420636865636b7320e585a8e7bbbfe5908ee794b120636f6e74726f6c6c657220e887aae58aa820737175617368206d657267653b2060524f4c4c55505f4155544f5f4d455247453d6d616e75616c6020e697b6e7ad89e5be85e4babae5b7a5207265766965772f6d65726765e38082"
-)
-ROLLUP_SINGLETON_POLICY_LINE = _utf8_hex(
-    "2d20e8afa520505220e698af2072656c6561736520726f6c6c75702073696e676c65746f6e3be5b7b2e69c89206f70656e20726f6c6c757020e697b620636f6e74726f6c6c657220e58faae69bb4e696b0206865616420e5928c20626f64792ce4b88de5bc80e696b0205052e38082"
-)
 
 
 class ControllerActions:
@@ -268,7 +246,7 @@ class ControllerActions:
         )
         if denied is not None:
             raise RuntimeError(f"post_status_banner: cross-instance admission denied rc={denied}")
-        body = build_status_banner(normalized)
+        body = build_status_banner(normalized, env=self.ctx.env_for_subprocess())
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
             handle.write(body)
             tmp = handle.name
@@ -831,10 +809,11 @@ class ControllerActions:
         }
 
     def _release_rollup_title(self, summary: Mapping[str, object]) -> str:
+        copy = copy_for("release_rollup", language=current_work_language(env=self.ctx.host_env))
         ahead = str(summary.get("ahead_count") or "?")
         integration_sha = str(summary.get("integration_sha") or "")
         short_sha = integration_sha[:12] if integration_sha else "unknown"
-        return f"{ROLLUP_TITLE_PREFIX}{ahead} commits ({short_sha})"
+        return f"{copy['title_prefix']}{ahead} commits ({short_sha})"
 
     def _write_release_rollup_body(self, body_file: str, event: Mapping[str, object]) -> None:
         summary = self._release_rollup_summary(event)
@@ -845,27 +824,28 @@ class ControllerActions:
         review_base_branch = str(summary.get("review_base_branch") or "")
         integration_sha = str(summary.get("integration_sha") or "")
         review_base_sha = str(summary.get("review_base_sha") or "")
+        copy = copy_for("release_rollup", language=current_work_language(env=self.ctx.host_env))
         body_lines = [
-            ROLLUP_BODY_HEADING,
+            copy["heading"],
             "",
-            f"{ROLLUP_TARGET_LABEL}{integration_branch}` -> `{review_base_branch}`",
-            f"{ROLLUP_AHEAD_LABEL}{ahead}` commits",
-            f"{ROLLUP_RANGE_LABEL}{review_base_sha[:12] or 'unknown'}..{integration_sha[:12] or 'unknown'}`",
+            f"{copy['target_label']}{integration_branch}` -> `{review_base_branch}`",
+            f"{copy['ahead_label']}{ahead}` commits",
+            f"{copy['range_label']}{review_base_sha[:12] or 'unknown'}..{integration_sha[:12] or 'unknown'}`",
         ]
         if issues:
-            body_lines.append(f"{ROLLUP_ISSUES_LABEL}{', '.join('#' + issue for issue in issues[:20])}")
-        body_lines.extend(["", ROLLUP_COMMIT_SUMMARY_HEADING, ""])
+            body_lines.append(f"{copy['issues_label']}{', '.join('#' + issue for issue in issues[:20])}")
+        body_lines.extend(["", copy["commit_summary_heading"], ""])
         if subjects:
             body_lines.extend(f"- {subject}" for subject in subjects[:25])
         else:
-            body_lines.append(ROLLUP_COMMIT_SUMMARY_UNAVAILABLE)
+            body_lines.append(copy["commit_summary_unavailable"])
         body_lines.extend(
             [
                 "",
-                ROLLUP_MERGE_POLICY_HEADING,
+                copy["merge_policy_heading"],
                 "",
-                ROLLUP_AUTO_MERGE_POLICY_LINE,
-                ROLLUP_SINGLETON_POLICY_LINE,
+                copy["auto_merge_policy_line"],
+                copy["singleton_policy_line"],
                 "",
                 ROLLUP_BODY_SENTINEL,
                 "⟦AI:AUTO-LOOP⟧",
@@ -1313,7 +1293,8 @@ class ControllerActions:
         if add.returncode != 0:
             sys.stderr.write("publish_implementation_output: publish_add_failed\n")
             return 2
-        commit = self._git_in(worktree, ["commit", "-m", f"实现 issue #{issue_target}"], check=False)
+        commit_copy = copy_for("implementation_commit", language=current_work_language(env=self.ctx.host_env))
+        commit = self._git_in(worktree, ["commit", "-m", commit_copy["message"].format(issue=issue_target)], check=False)
         if commit.returncode == 0:
             return 0
         if commit.stderr:

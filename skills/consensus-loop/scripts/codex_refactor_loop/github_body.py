@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import argparse
 import html
-import os
 import re
 import sys
 from pathlib import Path
 from typing import Sequence
 
-from .context import HostEnvLocator, HostWorkLanguage, LoopContextError, normalize_host_work_language, parse_host_env
+from .context import HostWorkLanguage, LoopContextError
+from .runtime_copy import all_copy_values, copy_for, current_work_language
 
 
 FINAL_SENTINEL = "⟦AI:AUTO-LOOP⟧"
@@ -27,11 +27,6 @@ AUTHORITY_PATH_RE = re.compile(
     r"\.refactor-loop/runs/[^\s)>\]`'\"]+\.md",
     re.I,
 )
-DEBUG_SUMMARY = "<summary>本机调试线索</summary>"
-DEBUG_SUMMARIES = {
-    "en": "<summary>Local debug clues</summary>",
-    "zh": DEBUG_SUMMARY,
-}
 INLINE_ARTIFACT_DETAILS_RE = re.compile(
     r"<details>\s*<summary>(?:Inline|内联) artifact [0-9]+: [^<]+</summary>\s*"
     r"```markdown\n(?P<artifact>.*?)\n```\s*</details>",
@@ -55,7 +50,7 @@ def render_github_body(
     """Render a self-contained GitHub body from local artifacts."""
 
     _validate_kind(kind)
-    language = _current_work_language()
+    language = current_work_language()
     if not title.strip():
         raise GitHubBodyError("title required")
     artifacts = [(Path(path), _read_artifact(Path(path))) for path in artifact_paths]
@@ -97,7 +92,7 @@ def render_github_body(
         lines.extend(
             [
                 "<details>",
-                DEBUG_SUMMARIES[language],
+                copy["debug_summary"],
                 "",
                 copy["debug_intro"],
                 "",
@@ -111,22 +106,6 @@ def render_github_body(
     body = "\n".join(lines) + "\n"
     validate_self_contained_github_body(body, authority_required=True, max_bytes=max_bytes)
     return body
-
-
-def _current_work_language() -> HostWorkLanguage:
-    env = dict(os.environ)
-    repo_root = Path(env.get("REPO_ROOT") or Path.cwd())
-    if HostEnvLocator.EXPLICIT_ENV in env:
-        location = HostEnvLocator.resolve(repo_root, env, Path.cwd())
-        if location is not None:
-            return normalize_host_work_language(env=parse_host_env(location.path))
-    try:
-        location = HostEnvLocator.resolve(repo_root, env, Path.cwd())
-    except LoopContextError:
-        location = None
-    if location is not None:
-        return normalize_host_work_language(env=parse_host_env(location.path))
-    return normalize_host_work_language()
 
 
 def validate_self_contained_github_body(
@@ -188,47 +167,11 @@ def _validate_kind(kind: str) -> None:
 
 
 def _body_copy(language: HostWorkLanguage) -> dict[str, str]:
-    return {
-        "en": {
-            "what_prefix": "What this is: ",
-            "conclusion": "Conclusion: the full authorization/consensus artifact is inline; the GitHub body is self-auditable.",
-            "next_step": "Next step: continue from the self-contained information in this body.",
-            "details_heading": "### Details",
-            "intro": "This content was rendered by read-only `render-github-body` from local artifacts; the authorization/consensus text is fully inline, and local paths are not the sole source.",
-            "artifact_summary": "Inline artifact",
-            "debug_intro": "These paths are for local debugging only, not authorization/consensus sources:",
-        },
-        "zh": {
-            "what_prefix": "这是什么:",
-            "conclusion": "结论:授权/共识 artifact 全文已内联,GitHub 正文本身可审计。",
-            "next_step": "下一步:按正文中的自包含信息继续处理。",
-            "details_heading": "### 详细说明",
-            "intro": "以下内容由只读 `render-github-body` 从本地 artifact 渲染;授权/共识正文已完整内联,本地路径不作为唯一来源。",
-            "artifact_summary": "内联 artifact",
-            "debug_intro": "这些路径仅供本机调试,不是授权/共识来源:",
-        },
-    }[language]
+    return dict(copy_for("github_body", language=language))
 
 
 def _kind_label(kind: str, language: HostWorkLanguage) -> str:
-    return {
-        "en": {
-            "pr": "PR description",
-            "design-issue": "design issue",
-            "consensus": "consensus",
-            "authorization": "authorization",
-            "escalation": "escalation",
-            "triage": "triage",
-        },
-        "zh": {
-            "pr": "PR 描述",
-            "design-issue": "design issue",
-            "consensus": "共识",
-            "authorization": "授权",
-            "escalation": "升级",
-            "triage": "triage",
-        },
-    }[language][kind]
+    return copy_for("github_body_kind", language=language)[kind]
 
 
 def _has_raw_inline_artifact_details(text: str) -> bool:
@@ -236,7 +179,7 @@ def _has_raw_inline_artifact_details(text: str) -> bool:
 
 
 def _mask_allowed_run_path_sections(text: str) -> str:
-    debug_pattern = "|".join(re.escape(summary) for summary in DEBUG_SUMMARIES.values())
+    debug_pattern = "|".join(re.escape(summary) for summary in all_copy_values("github_body", "debug_summary"))
     masked = re.sub(r"<details>\s*(?:" + debug_pattern + r").*?</details>", "", text, flags=re.S)
     masked = INLINE_ARTIFACT_DETAILS_RE.sub("", masked)
     return masked
