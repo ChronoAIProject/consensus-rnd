@@ -36,3 +36,5 @@ Required fields:
 ```
 
 Use `is_real_issue=false` when the signal is only prompt/fixture/prose noise or lacks a clear repository-owned failure. Still fill every string field with a concise explanation.
+
+Public-facing natural-language fields (`summary`, `root_cause`, `recommendation`, and `rationale`) follow `${HOST_WORK_LANGUAGE}`; do not add a mandatory parallel English section. Code identifiers, paths, schema fields, labels, and marker strings remain literal.
