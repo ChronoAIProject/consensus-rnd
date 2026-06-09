@@ -16,6 +16,11 @@ IMPLEMENTATION_PR_REQUIRED_SECTION_HEADINGS = (
     "## Test results",
     "## Deviations",
 )
+IMPLEMENTATION_PR_REQUIRED_SECTION_ACCEPTED_HEADINGS = (
+    ("changed files", frozenset(("changed files", "changed file"))),
+    ("test results", frozenset(("test results", "test result"))),
+    ("deviations", frozenset(("deviations", "deviation record", "deviation", "deviation records"))),
+)
 PLACEHOLDER_IMPLEMENT_TITLE_RE_TEMPLATE = r"(?i)^(?:implement(?:ed|ation)?\s+issue\s+#%s\b|issue\s+#%s\s+implement(?:ed|ation)?\b|\u5b9e\u73b0\s+issue\s+#%s\s*$)"
 PLACEHOLDER_IMPLEMENT_HEADING_RE_TEMPLATE = r"(?im)^##\s+(?:implement(?:ed|ation)?\s+issue\s+#%s|issue\s+#%s\s+(?:implement(?:ed|ation)?|\u5b9e\u73b0)|\u5b9e\u73b0\s+issue\s+#%s)\s*$"
 FINAL_SENTINEL = "\u27e6AI:AUTO-LOOP\u27e7"
@@ -155,8 +160,8 @@ def _validate_body(path: Path, issue_target: int) -> ImplementationPrArtifactVal
         return ImplementationPrArtifactValidation(path, path, reason="implementation_pr_body_github_body_invalid", detail=str(exc))
     if _closing_issue_numbers(text) != [issue_target]:
         return ImplementationPrArtifactValidation(path, path, reason="implementation_pr_body_closes_mismatch")
-    for section in IMPLEMENTATION_PR_REQUIRED_SECTION_HEADINGS:
-        if not _has_exact_heading(text, section):
+    for _concept, accepted_headings in IMPLEMENTATION_PR_REQUIRED_SECTION_ACCEPTED_HEADINGS:
+        if not _has_accepted_heading(text, accepted_headings):
             return ImplementationPrArtifactValidation(path, path, reason="implementation_pr_body_required_section_missing")
     issue_text = str(issue_target)
     if re.search(PLACEHOLDER_IMPLEMENT_HEADING_RE_TEMPLATE % (issue_text, issue_text, issue_text), text):
@@ -168,5 +173,15 @@ def _closing_issue_numbers(text: str) -> list[int]:
     return [int(match) for match in CLOSING_ISSUE_RE.findall(text)]
 
 
-def _has_exact_heading(text: str, heading: str) -> bool:
-    return any(line.strip() == heading for line in text.splitlines())
+def _has_accepted_heading(text: str, accepted_headings: frozenset[str]) -> bool:
+    for line in text.splitlines():
+        match = re.match(r"^\s*##\s+(.+)$", line)
+        if not match:
+            continue
+        if _normalize_section_heading(match.group(1)) in accepted_headings:
+            return True
+    return False
+
+
+def _normalize_section_heading(heading: str) -> str:
+    return re.sub(r"\s+", " ", heading.casefold().strip())
