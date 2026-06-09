@@ -43,22 +43,22 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 
 1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 全部条款（特别 cluster 引用的 rule_ids）。
 2. issue body（含 cluster YAML / evidence / fix boundary / human_brief）—— 用 `gh issue view ${ISSUE_NUMBER}` 拉。
-3. cluster 在 `.refactor-loop/runs/audit-iter-${ITERATION}.md` 的原文。
+3. 当前 work-unit 的 source snapshot / consensus 决策 artifact / cited source / repo 规则。优先读 issue source snapshot、judge/solver decision artifact、评论或 issue 引用的 source 文件、以及 repo 规则；只有当 `source_ref` / `WORK_UNIT_SOURCE_REF` 指向 audit artifact 时，才读取 `.refactor-loop/runs/audit-iter-${ITERATION}.md` 或对应 audit section。
 4. 评论中引用的具体文件 + 行号（**必须打开通读**，不只看 line refs）。
 5. SKILL.md 中的工作语言规则 —— 你的 GitHub reply follows `${HOST_WORK_LANGUAGE}`；可原样引用英文代码、错误、路径和条款。
 
 ## 流程
 
 1. **分类评论**（决定回复 shape）：
-   - **(a) 否决 audit framing**：reviewer 觉得 audit 错框了问题（如 "性能 vs 架构必有一方错"）→ 你必须用具体数字/代码论证：架构与性能哪些方面共存，哪些方面冲突，给量化成本。
+   - **(a) 否决 source framing**：reviewer 觉得 issue source、consensus decision、cited source、repo rule 或 audit-backed source 错框了问题（如 "性能 vs 架构必有一方错"）→ 你必须用具体数字/代码论证：架构与性能哪些方面共存，哪些方面冲突，给量化成本。
    - **(b) 要更多上下文**：reviewer 问 "为什么"、"在哪里有具体例子" → 你深入读代码，列文件 + 行号 + 真实代码片段。
-   - **(c) 提供设计决定**：reviewer 给了具体方案 → 你检查方案完整性（覆盖 audit 的 6 项 checklist？）；若完整，回评"理解你的决策；等加 `crnd:triage:resume-requested` label 即开实施"；若缺，列出缺项请补。
+   - **(c) 提供设计决定**：reviewer 给了具体方案 → 你检查方案完整性（是否覆盖当前 source snapshot / consensus decision / cited source / repo rules 要求；若 source_ref 是 audit artifact,还要覆盖对应 audit checklist）；若完整，回评"理解你的决策；等加 `crnd:triage:resume-requested` label 即开实施"；若缺，列出缺项请补。
    - **(d) 拒绝**：reviewer 倾向不修 → 总结他们的理由，**不要反驳**，提议 close issue + 加 `wontfix` label。
 
 2. **回复必须包含**（适用 (a)(b)(c)）：
    - **不空喊"我会研究"**：每段陈述必须有具体证据（文件:行号 / 测量数字 / 引用条款）
    - **不替 reviewer 决策**：列出 2-3 个合理 framing，每个的成本/收益，让 reviewer 选。也可以推荐你倾向的，但要说明 *为什么*
-   - **承认 audit 的局限**：如果 audit framing 有歧义或没覆盖 reviewer 的关切，明说"audit 这里没做好"。诚实优先
+   - **承认 source 的局限**：如果 issue source、consensus decision、cited source、repo rule 或 audit-backed framing 有歧义或没覆盖 reviewer 的关切，明说具体 source 哪里没做好。诚实优先。
    - **量化**：能用数字的不用形容词（"延迟 0.02%–0.4% 节流窗口" 优于 "可以忽略不计"）
    - **下一步动作明确**：结尾必须有 "我需要你回答：…" 或 "下次见到 `crnd:triage:resume-requested` label 我就 ..."。reviewer 不应在你回复后还要猜下一步
 

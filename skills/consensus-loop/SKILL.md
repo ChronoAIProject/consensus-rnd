@@ -1,6 +1,6 @@
 ---
 name: consensus-loop
-description: Use when the user wants an unattended Consensus R&D issue/PR resolution and work-unit loop driven by codex CLI in isolated git worktrees, with audit/refactor as a fallback compatibility issue producer, dynamic /loop wakeups, GitHub status, and per-work-unit merges.
+description: Use when the user wants an unattended multi-perspective consensus engine to resolve repo-owned GitHub issues/PRs end-to-end (design-consensus, implementation, review, merge, release) with Codex workers in isolated worktrees and GitHub-visible status; audit/refactor is only a fallback issue producer when no actionable managed work is open.
 ---
 > Refactor (iter319/issue-319): Old pattern: 物理拆 REFERENCE.md 后跨平台加载/维护退化.
 > New principle: 单文件 SKILL.md 用 Controller Contract Index + Detailed reference anchors 分层,禁止重新拆 REFERENCE.md 作为默认修复.
@@ -49,6 +49,8 @@ The default main path is open actionable catalog-managed GitHub issue/PR resolut
 `issue-driven / Path A` is the main-path issue entry surface: create or reuse a concrete GitHub issue, apply the catalog-derived design issue label bundle (`crnd:lifecycle:managed`, `crnd:phase:design-solving`, and `crnd:human:auto`), then let the controller sweep dispatch Consensus-rnd Phase design-consensus directly. Historical non-`crnd:*` issue-entry labels are unmanaged residue and must not be written, queried, normalized, or cleaned up by the loop.
 
 `audit` remains a stable compatibility producer value and fallback issue producer. It runs only after no open actionable managed issue/PR, queued dispatch, clean marker route, CI/no-gap route, maintainer-comment route, or higher-priority wakeup route exists. Audit produces or updates issues that feed back into the main path; it is not a co-equal entry mode or a parallel R&D lane. Issue-driven work uses the router-injected GitHub issue source snapshot as the work-unit source when no local audit artifact is provided; `gh issue view <N>` is fallback-only when that snapshot is unavailable. Concrete plans still require Consensus-rnd Phase design-consensus solver consensus and meta-judge consensus before implementation.
+
+Capability boundary: the loop supports bounded repo-owned work expressible as managed GitHub issues or PRs, including feature, bug, documentation, governance, and refactor work. It does not provide arbitrary GitHub administration: no Projects, milestones, assignee management, Discussions, label-taxonomy mutation outside the catalog, issue/PR body edits outside named helpers, tag/release operations outside the release allowlist, or custom lifecycle authority.
 
 Workflow stage display names are sourced from `scripts/codex_refactor_loop/workflow_stages.py`. The built-in registry remains the default compatibility vocabulary; public built-in stage display must use `Consensus-rnd Phase <stage>`. Legacy `phase9-router` and `phase9-issue...` strings are compatibility command and artifact dialects only.
 
@@ -2813,7 +2815,7 @@ Policy:the loop continues until Step 3 truth-table consensus, true stall reaches
 <a id="concurrency-floor-details"></a>
 ## Concurrency floor details
 
-### This is an INFINITE refactor loop — never idle on "iter done"
+### This is an infinite work-unit loop — never idle on "iter done"
 
 Policy. An iteration completing is NEVER a stop signal. The loop's only legitimate stops are:
 1. Audit returns 0 candidates (codebase has no flagged violations under current rules) — extremely rare.

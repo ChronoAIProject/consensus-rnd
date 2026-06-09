@@ -4,7 +4,7 @@
 
 当前 skills：
 
-- `consensus-loop` — Consensus R&D work-unit 循环的稳定 skill 入口，codex CLI 驱动，GitHub 为状态唯一显示面；audit/refactor 保留为兼容 intake。当用户想要对照 host 规则文档做全自主多角度共识研发时使用。
+- `consensus-loop` — Consensus R&D work-unit 循环的稳定 skill 入口，codex CLI 驱动，GitHub 为状态唯一显示面；用于无人值守解决 managed GitHub issue/PR 并持续推进 repository work；audit/refactor 仅在没有 actionable managed work 时作为 fallback intake。
 - `sshx` — 高风险决策、设计取舍或需要 worker-delegated inline consensus，但不需要 daemon/GitHub/git 编排时使用。
 
 当任务匹配某 skill 的触发条件时，先读对应 `skills/<name>/SKILL.md` 再行动。仓库结构与维护约定见 `CLAUDE.md`。
