@@ -52,7 +52,7 @@ ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "_kind_label", "GitHub body kind labels include the explicit zh branch for host work language"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/monitors/comment.py", "CommentMonitor.post_banner.banner_body", "maintainer-facing GitHub notification text is intentionally Chinese"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/peek.py", "PeekStatusLens.render", "status lens renders existing Chinese labels and user-facing state"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "CANONICAL_BODY", "project-rules fixed point text is intentionally Chinese host-facing policy"),
+    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "ZH_COMPATIBILITY_BODY", "project-rules fixed point text is the explicit zh compatibility payload"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "OLD_CANONICAL_BODY", "legacy project-rules fixed point text is intentionally Chinese host-facing policy"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/closed_label_reconciler.py", "comment", "#238 reconciliation refactor self-documents per review gate policy"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/closed_phase_labels.py", "comment", "#238 phase helper refactor self-documents per review gate policy"),
