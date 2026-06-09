@@ -20,7 +20,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Host config | Loop runtime facts come only from host-owned `host.env`; skill text remains host-agnostic. | Require non-empty `CONSENSUS_RND_HOST_ENV`, then `source "$CONSENSUS_RND_HOST_ENV"` before running actors; fail closed if the locator or required vars are absent. `.refactor-loop/` is skill-private runtime/cache/log state, not host production SSOT. | [host runtime details](#host-runtime-details) | `host.env.example`, controller-internal `ControllerActions` |
 | GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](#status-and-escalation-templates) | `ControllerActions.post_status_banner`, GitHub labels |
 | Active controller | 跨设备时 GitHub/已 push git 面只承载一个 `ActiveControllerLease`; local `.refactor-loop` is owner-machine cache/log only. Authenticated GitHub actor facts are read-only admission/preflight/display diagnostics after this owner gate, not a second write authority. | Owner may run controller write paths and restart-helper-managed write daemons from `restart.py::DAEMON_COMMANDS`; non-owner may peek/statusline or restart-daemons noop only. | [active controller lease](#named-runtime-exception--active-controller-leaseper-191) | `active_controller.py`, `github_actor.py`, `ACTIVE_CONTROLLER_*` |
-| Pure orchestration | Controller execution may be interactive or #396 `wakeup-runner`; all reasoning remains in codex workers / consensus gates. `phase9-router` handles only deterministic design-consensus routes; `wakeup-runner` consumes only `wakeup-plan` evidence-bound closed action projection and existing controller helpers. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `consensus-rnd-cli phase9-router` handle only its allowlisted deterministic routes and `consensus-rnd-cli wakeup-runner` mechanically apply only closed projection actions. | [controller contract details](#controller-contract-details) | `consensus-rnd-cli spawn-codex`, prompt files |
+| Pure orchestration | Controller execution may be interactive or #396 `wakeup-runner`; all reasoning remains in codex workers / consensus gates. `phase9-router` handles only deterministic design-consensus routes; `wakeup-runner` consumes only `wakeup-plan` evidence-bound closed action projection and existing controller helpers. | Never implement product/refactor code in the controller conversation. Ensure implementation, verification, fixing, review, and design-solving codex dispatch is covered by daemon-owned surfaces; direct controller spawn is only the stuck-gated fallback in [Daemon-first controller boundary](#daemon-first-controller-boundary). | [controller contract details](#controller-contract-details) | `consensus-rnd-cli spawn-codex`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](#sentinel-and-comment-filters) | prompts, `consensus-rnd-cli comment-monitor` |
 <!-- Refactor (iter1/issue-139): Old pattern: Wake-source 契约措辞自相矛盾:SKILL.md/REFERENCE.md 多处写三选一(Monitor / task-notification / ScheduleWakeup 任一即可),与 checklist step15 / ownership 的必维持 Monitor 冲突,新会话据此漏挂 Monitor bridge。
   New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。Durable anchors are the Wake source contract row, wake-source-rules anchor, test_skill_entrypoint_contract.py, and test_skill_reference_anchors.py; no SessionWakeSourceContract/helper/schema/daemon/Tier lifecycle expansion.
@@ -29,13 +29,13 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | First wakeup | Consensus-rnd Phase bootstrap is ordered and mandatory before any normal phase. | Run the Consensus-rnd Phase bootstrap checklist in this file, in order. | [daemon command bodies](#daemon-command-bodies) | scripts, `host.env` |
 | Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. Root `.refactor-loop/state.json` is not a contract surface. | Use GitHub labels/comments, clean `EXIT=0` logs, prompt artifacts, git topology, and named specialized state artifacts; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](#work-unit-contract), [specialized state artifacts](#specialized-state-artifacts) | `.refactor-loop/state/*.json`, daemon-owned state files |
 | Structured consumption | Steady-state controller/daemon paths consume only clean-exit status plus final allowlisted standalone marker/verdict lines, artifact frontmatter, CLI JSON/action fields, and artifact paths. Raw log prose is diagnostic-only. | Do not read, understand, quote, relay, or transcribe worker log prose, review reject prose, judge reasoning, or progress raw tails during normal routing. Raw logs are allowed only for `EXIT!=0`, stream disconnect/503, stuck/crash, missing/invalid structured artifact, router fallback, or worker self-post failure diagnostics. | [structured-consumption boundary](#structured-consumption-boundary), [phase routing details](#phase-routing-details) | `wakeup_plan.py`, `phase9/router.py`, `monitors/progress.py` |
-| Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](#phase-routing-details) | logs, prompts |
+| Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then confirm daemon-owned dispatch evidence for next work if actionable; direct spawn is stuck-gated only. | [phase routing details](#phase-routing-details) | logs, prompts |
 | Operational names | Parsed or cross-agent names are operational interfaces with owner-local fact sources. | Keep each parser/generator in its owner surface; do not add a production registry or whole-repo naming lint. | [operational names](#operational-names) | router/progress/concurrency/git/controller actions/labels/cli/stages |
 | Design consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge returns consensus/converge only; router-owned stalled predicate may route qualifying converge to reflector, with legacy stalled markers read-only compatible. | [design-consensus details](#design-consensus-details), [ConsensusGateProof](#consensus-gate-proof) | `solver-*.md`, `meta-judge.md`, `consensus_gate.py` |
 | Large issue decomposition | Direction consensus only authorizes controller-private `IssueDecompositionPlan` and child/parent body artifacts; plan apply needs the plan-level judge artifact structured fields, validated plan digest/proof, #191 owner, live parent open/tracking, and sentinel idempotency. | Active-controller owner may run the checked-in internal apply helper to create managed child design issues and comment on the parent; workers, daemons, public CLI, and generic `wakeup-plan` decompose/status projections do not create decomposition issues. | [large issue decomposition](#large-issue-decomposition) | `issue_decomposition.py`, `ControllerActions.apply_issue_decomposition_plan` |
 | Default issue intake claim | Open, non-PR, not-yet-managed issues use one default claim protocol. Durable public/protocol names are `DefaultIssueIntakeClaim`, `DEFAULT_ISSUE_INTAKE_ENABLE`, `apply_default_issue_intake_claim`, and `crnd:default-issue-intake-claim`; `unmanaged` is only an internal live predicate. | Active-controller owner may let #396 consume the closed projection and run the checked-in helper to write the earliest-wins claim or loser stop comment and apply the catalog design issue label bundle. | [default issue intake claim](#named-runtime-exception---default-issue-intake-claimper-623) | `default_issue_intake.py`, `wakeup_plan.py`, `wakeup_runner.py`, `ControllerActions.apply_default_issue_intake_claim` |
 <!-- Refactor (issue-304): Old: meta-judge owned a fresh stalled output. New: stalled is a router predicate continuation; legacy stalled markers are compatibility input only. -->
-| Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `consensus-rnd-cli spawn-codex` processes containing absolute `$REPO_ROOT`; top up before ScheduleWakeup. | [concurrency floor details](#concurrency-floor-details) | `consensus-rnd-cli concurrency`, `consensus-rnd-cli peek` |
+| Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `consensus-rnd-cli spawn-codex` processes containing absolute `$REPO_ROOT`; require daemon-owned dispatch evidence before ScheduleWakeup, with controller direct spawn only as stuck-gated fallback. | [concurrency floor details](#concurrency-floor-details) | `consensus-rnd-cli concurrency`, `consensus-rnd-cli peek` |
 | Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `crnd:human:maintainer-decision` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | controller-internal `ControllerActions`, GitHub labels |
 | Spawn | Mainline codex spawn uses harness background tasks, not detached nohup. | Use one background task per codex; if detached already happened, preserve work and rely on log sweep plus wake source. | [codex invocation details](#codex-invocation-details) | `consensus-rnd-cli spawn-codex` |
 | Hard rules | All worker prompts inherit controller-level hard rules. | Include scope, git, test, language, and no-scope-creep constraints in every spawned prompt. | [hard rules details](#hard-rules-details) | prompt templates |
@@ -44,9 +44,9 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 <a id="two-entry-modes"></a>
 ## Main path and fallback producer
 
-The default main path is open actionable catalog-managed GitHub issue/PR resolution. The controller dispatches the next-step actor for managed issues and PRs before starting any producer for new work.
+The default main path is open actionable catalog-managed GitHub issue/PR resolution. The controller ensures the next-step actor for managed issues and PRs is dispatched through daemon-owned surfaces before starting any producer for new work; direct controller spawn is only the stuck-gated fallback in [Daemon-first controller boundary](#daemon-first-controller-boundary).
 
-`issue-driven / Path A` is the main-path issue entry surface: create or reuse a concrete GitHub issue, apply the catalog-derived design issue label bundle (`crnd:lifecycle:managed`, `crnd:phase:design-solving`, and `crnd:human:auto`), then let the controller sweep dispatch Consensus-rnd Phase design-consensus directly. Historical non-`crnd:*` issue-entry labels are unmanaged residue and must not be written, queried, normalized, or cleaned up by the loop.
+`issue-driven / Path A` is the main-path issue entry surface: create or reuse a concrete GitHub issue, apply the catalog-derived design issue label bundle (`crnd:lifecycle:managed`, `crnd:phase:design-solving`, and `crnd:human:auto`), then let the daemon-owned router/runner/dispatch evidence surface cover Consensus-rnd Phase design-consensus. Historical non-`crnd:*` issue-entry labels are unmanaged residue and must not be written, queried, normalized, or cleaned up by the loop.
 
 `audit` remains a stable compatibility producer value and fallback issue producer. It runs only after no open actionable managed issue/PR, queued dispatch, clean marker route, CI/no-gap route, maintainer-comment route, or higher-priority wakeup route exists. Audit produces or updates issues that feed back into the main path; it is not a co-equal entry mode or a parallel R&D lane. Issue-driven work uses the router-injected GitHub issue source snapshot as the work-unit source when no local audit artifact is provided; `gh issue view <N>` is fallback-only when that snapshot is unavailable. Concrete plans still require Consensus-rnd Phase design-consensus solver consensus and meta-judge consensus before implementation.
 
@@ -240,7 +240,7 @@ Do not produce `summary.json` or `host-workflow-spec.example.json`. These artifa
 
 ### Keep existing daemons alive
 
-Install exactly one user-level scheduler. This skill does not write, load, unload, or delete cron entries or LaunchAgent plists; the host operator owns those OS-level actions. The scheduler entry's only loop action is to call the existing checked-in `consensus-rnd-cli restart-daemons` helper after setting a non-empty `CONSENSUS_RND_HOST_ENV` and running `source "$CONSENSUS_RND_HOST_ENV"`. That preserves values with spaces and keeps all loop runtime facts in the host-owned env file.
+Human host operator runbook: install exactly one user-level scheduler if the host wants OS-level daemon keepalive. This skill does not write, load, unload, or delete cron entries or LaunchAgent plists. Agents, skills, and controller sessions also must not write, edit, load, unload, bootstrap, delete, or install cron entries, LaunchAgent/LaunchDaemon plists, watchdog processes, or any OS-level auto-restart surface; the host operator owns those OS-level actions. The scheduler entry's only loop action is to call the existing checked-in `consensus-rnd-cli restart-daemons` helper after setting a non-empty `CONSENSUS_RND_HOST_ENV` and running `source "$CONSENSUS_RND_HOST_ENV"`. That preserves values with spaces and keeps all loop runtime facts in the host-owned env file.
 Existing scheduler entries must be updated to set `CONSENSUS_RND_HOST_ENV` to the host-owned file; `.refactor-loop/host.env` is not a runtime fallback. When `host.env` path or contents change, `restart-daemons` detects the changed `DaemonLaunchFingerprint` and reloads helper-managed daemons so they do not keep a stale environment.
 
 Cron example:
@@ -249,7 +249,7 @@ Cron example:
 */5 * * * * cd /abs/path/to/host-repo && bash -lc 'export CONSENSUS_RND_HOST_ENV=.config/consensus-rnd/host.env; source "$CONSENSUS_RND_HOST_ENV" && exec python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons' >> .refactor-loop/logs/restart-cron.log 2>&1
 ```
 
-launchd user LaunchAgent example. Replace `com.example.consensus-rnd.restart-daemons` with a host-owned label, write it manually to `~/Library/LaunchAgents/<label>.plist`, then run `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`; unload with `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`; delete by removing that plist after unload. Do not add a second watchdog or installer.
+launchd user LaunchAgent example for a human host operator only. Replace `com.example.consensus-rnd.restart-daemons` with a host-owned label, write it manually to `~/Library/LaunchAgents/<label>.plist`, then run `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`; unload with `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/<label>.plist`; delete by removing that plist after unload. Do not add a second watchdog or installer.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -470,6 +470,8 @@ Before starting or repairing any restart-helper-managed write daemon from `resta
 
 完整下游装机顺序见 [Downstream install walkthrough](#downstream-install-walkthrough);本段保留 cron/launchd-only helper invariant。
 
+Agents, skills, and controller sessions must not install, write, edit, load, unload, bootstrap, or delete cron entries, LaunchAgent/LaunchDaemon plists, watchdog processes, or any OS-level auto-restart surface. The cron/launchd examples in this SKILL are human-host-operator runbook examples only.
+
 Uninstall note: remove the cron line or unload/delete the launchd plist; do not replace it with a new watchdog daemon, installer script, or lifecycle actor.
 
 ## Named runtime exception — anti-stop restart helper(per #49)
@@ -484,6 +486,8 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 - **Source-regression**: `AntiStopRestartHelperContractTests` + `RestartDaemonsBehaviorTests.test_restart_helper_source_mentions_launch_fingerprint_contract` + `RuntimeRetentionSourceRegressionTests` 字面断言本段标题、narrow allowlist、no lifecycle authority、cron/launchd install、#49 mirror authorization path、helper singleton check + actor-owned heartbeat freshness check + helper-private launch fingerprint fact source、controller wakeup ordering、anti-regression forbidden tokens、fail-closed generated-file counters、no wrapper sidecar heartbeat writer、direct rm、no archive/index/new daemon。
 
 授权来源:`skills/consensus-loop/authorizations/runtime-exceptions.md#anti-stop-restart-helper-49`(Consensus-rnd Phase design-consensus r3 `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`)。
+
+Agent/skill/controller sessions may only call this helper through the checked-in CLI; they must not install, edit, load, unload, or delete the cron/launchd scheduler that may call it. OS scheduler setup/removal is human-host-operator-only.
 
 <a id="controller-tick-supervisor-553"></a>
 ## ControllerTickSupervisor(per #553)
@@ -512,10 +516,11 @@ These are local controller contract rules learned from dogfood incidents:
 3. Any new role prompt under `skills/consensus-loop/prompts/*.md` must be registered in `test_marker_emission_contract.py` prompt inventory, including both `PROMPT_ALLOWLISTS` and `PROMPT_ARTIFACT_PROFILES`.
 4. Review verdict authority for merge-readiness starts from `.refactor-loop/runs/review-pr<N>-<role>-r<R>.md` frontmatter `verdict: approve|comment|reject`; `REVIEW_DONE` is only clean worker completion/routing evidence read through `codex_refactor_loop.worker_markers`.
 5. To read daemon state, run `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json`; daemon repair/reload goes through `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons`; controller must not hand-kill daemon processes, probe process lists as liveness authority, or bypass the restart helper.
+6. Markerless or dead worker logs and spawn-claim locks are daemon-recovery surfaces: the controller must not archive/delete them or spawn replacement workers as routing recovery unless the mechanical daemon-stuck predicate in [Daemon-first controller boundary](#daemon-first-controller-boundary) is recorded first.
 
 ## Wakeup Skeleton
 
-Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Consensus-rnd Phase design-consensus router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and router-derived stalled continuation; legacy stalled judge markers are read-only compatibility input under the same gates; controller fallback sweep remains authoritative for every other marker.
+Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Consensus-rnd Phase design-consensus router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and router-derived stalled continuation; legacy stalled judge markers are read-only compatibility input under the same gates; the controller fallback sweep remains the diagnostic detection surface for every other marker. Detected actionable markers are satisfied through daemon-owned dispatch surfaces, and the controller may execute them directly only after the mechanical daemon-stuck predicate in [Daemon-first controller boundary](#daemon-first-controller-boundary) is recorded.
 
 <!-- Refactor (issue-277): Old: 并发 floor 把 audit fallback 当成无限可重复派发,会和 #205 单 active audit 规则冲突。New: floor 无通用豁免,`AUDIT_DONE:none:0` 仍不豁免;但同一 iteration ordinary audit fallback 只有一个 active slot,slot 占用且无其他合法 work 时输出 WAIT + blocked_deficit,不重复 audit。 -->
 
@@ -526,14 +531,14 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 1. Run `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` first and follow its prioritized `actions` / `recommendation` output.
 2. Run `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` as the status lens.
 3. Load host config with `test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV"`; if the locator is missing or malformed, fail closed and post a status explaining the blocked bootstrap.
-4. Arm or confirm the persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`; then read daemon status with `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json`;任 owner daemon `stale` / `dead` → 调 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` repair/reload;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
+4. Arm or confirm the persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`; then read daemon status with `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json`;任 owner daemon `stale` / `dead` → 调 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` repair/reload;无 daemon-side progress evidence >10 min 后只记录 mechanical daemon-stuck evidence 或写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
 5. Sweep GitHub comments and pending events, excluding sentinel comments, AI banner prefixes, and bot authors.
 6. Sweep all recent logs. A worker is complete only when `tail -5 <log>` contains `^EXIT=0`.
 7. Parse verdict markers only after `EXIT=0`; marker text in prompt echoes is not a completed verdict.
 8. Apply phase routing in the same turn; do not leave an actionable marker for the next wakeup.
 9. Post GitHub banner and sync labels for each state transition.
 10. Run controller wakeup step 1.5 for the concurrency floor before any `ScheduleWakeup`.
-11. Spawn the next codexes with harness background tasks if actionable work exists.
+11. Confirm daemon-owned dispatch evidence covers the next step when actionable work exists; directly spawn with harness background tasks only after the mechanical daemon-stuck predicate in [Daemon-first controller boundary](#daemon-first-controller-boundary) is recorded.
 12. Confirm the daemon-event Monitor bridge is still maintained; then confirm any in-flight background task notification or successfully registered ScheduleWakeup fallback that is being used for turn-level completion/fallback.
 13. Run `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` again after spawn, merge, banner, or close actions.
 
@@ -578,7 +583,7 @@ Consensus-rnd Phase bootstrap is mandatory and ordered for each controller sessi
 7. ensure labels for the exact phase/human taxonomy; bootstrap command loops live in [label bootstrap loops](#label-bootstrap-loops).
 8. ensure all restart-helper-managed daemons from `restart.py::DAEMON_COMMANDS` are alive as singletons. The current owner-local command surface includes `consensus-rnd-cli concurrency`, `consensus-rnd-cli progress-reporter`, `consensus-rnd-cli comment-monitor`, `consensus-rnd-cli dev-sync`, `consensus-rnd-cli phase9-router`, `consensus-rnd-cli closed-label-reconciler`, and `consensus-rnd-cli wakeup-runner`. The persistent daemon-event Monitor bridge is armed separately in step 9.
 9. arm persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`.
-10. dispatch producer: audit by default, or manual issue intake only when explicit GitHub labels select it.
+10. Confirm daemon-owned router/runner/queue dispatch evidence covers open actionable work before any producer fallback. Audit fallback is selected only through the wakeup-plan `AUDIT_FALLBACK_ENABLE` projection plus runner execution when no open actionable managed issue/PR, queued dispatch, clean marker route, CI/no-gap route, maintainer-comment route, or higher-priority wakeup route exists; controller direct producer spawn is only the recorded daemon-stuck fallback.
 11. Post a GitHub status card for Consensus-rnd Phase bootstrap completion or blocked state.
 12. confirm the daemon-event Monitor bridge is still active before ending; task-notification and ScheduleWakeup are only turn-level completion/fallback signals, not Monitor substitutes.
 
@@ -594,32 +599,32 @@ Consensus-rnd Phase bootstrap anti-patterns stay local because they are safety g
 
 Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tail of the log.
 
-| Finished marker | Same-wakeup controller action |
+| Finished marker | Same-wakeup daemon-owned dispatch evidence / stuck-gated controller fallback |
 |---|---|
-| `AUDIT_DONE` | Create design issues for `requires_design` units; dispatch direct implement work where allowed. |
-| `SOLVER_DONE` from minimal, structural, and delete for same issue/round | Spawn same issue/round meta-judge; this triplet route may be executed directly by `consensus-rnd-cli phase9-router`. |
-| `META_JUDGE_DONE:consensus:<framing>` | Post consensus card, move labels, dispatch implement codex. |
-| `META_JUDGE_DONE:converge:round-N` | Canonical clean rS judge payload is source round `round-S`; legacy adjacent `round-(S+1)` is accepted temporarily; before dispatching r(S+1), the router-owned stalled predicate may route qualifying r3+ no-progress converge to the stalled reflector and suppress next solvers; non-adjacent payload mismatch falls back; no hard round cap; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
-| legacy `META_JUDGE_DONE:escalate:stalled` | Read-only compatibility input only: dispatch meta-reflector only when the same judge-role/source-OPEN/stalled-predicate gates hold; no-framing evidence must be evaluated through the stalled reflector template and preferentially dropped; do not label human directly; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
-| `META_RESOLVED:retry-fix` | Dispatch fix with reflector constraints and bounded retry window. |
+| `AUDIT_DONE` | Create design issues for `requires_design` units; confirm daemon-owned dispatch evidence for direct implement work where allowed. |
+| `SOLVER_DONE` from minimal, structural, and delete for same issue/round | Confirm same issue/round meta-judge daemon-owned dispatch evidence; this triplet route may be queued by `consensus-rnd-cli phase9-router`. |
+| `META_JUDGE_DONE:consensus:<framing>` | Post consensus card, move labels, confirm implement codex dispatch evidence. |
+| `META_JUDGE_DONE:converge:round-N` | Canonical clean rS judge payload is source round `round-S`; legacy adjacent `round-(S+1)` is accepted temporarily; before r(S+1) dispatch evidence, the router-owned stalled predicate may route qualifying r3+ no-progress converge to the stalled reflector and suppress next solvers; non-adjacent payload mismatch falls back; no hard round cap; this route may be queued by `consensus-rnd-cli phase9-router`. |
+| legacy `META_JUDGE_DONE:escalate:stalled` | Read-only compatibility input only: meta-reflector dispatch evidence only when the same judge-role/source-OPEN/stalled-predicate gates hold; no-framing evidence must be evaluated through the stalled reflector template and preferentially dropped; do not label human directly; this route may be queued by `consensus-rnd-cli phase9-router`. |
+| `META_RESOLVED:retry-fix` | Confirm fix dispatch evidence with reflector constraints and bounded retry window. |
 | `META_RESOLVED:re-design` | `consensus-rnd-cli phase9-router` queues a fresh source-adjacent `marker.round + 1` minimal/structural/delete solver triplet with new framing; no wakeup-runner redispatch. |
 | `META_RESOLVED:re-cluster` | Close current PR/issue path and queue re-split. |
 | `META_RESOLVED:drop` | Close as no-op/wontfix with explanation. |
 | `META_RESOLVED:escalate-human:<reason>` | Only then call `apply_human_label_or_skip` for `crnd:human:maintainer-decision`, passing the full marker source; the helper fails closed without that marker and does not treat local maintainer-directive captures as skip authority. |
-| `IMPLEMENT_DONE:ok` | Controller verifies worker-authored `.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt` and `.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`; after real scoped diff validation, host checks, commit, integration-base restore, and safe-push of the canonical head, `publish_implementation_output` updates exactly one matching open managed implementation PR or opens and verifies exactly one managed implementation PR when zero matching PRs exist, then dispatches Consensus-rnd Phase review-gate reviewers. Missing or invalid PR artifacts, duplicate/multiple PRs, conflict PRs, head/base/link mismatch, unmanaged PRs, or stale-base clean output fail closed/status-only. |
+| `IMPLEMENT_DONE:ok` | Controller verifies worker-authored `.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt` and `.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`; after real scoped diff validation, host checks, commit, integration-base restore, and safe-push of the canonical head, `publish_implementation_output` updates exactly one matching open managed implementation PR or opens and verifies exactly one managed implementation PR when zero matching PRs exist, then confirms Consensus-rnd Phase review-gate reviewer dispatch evidence. Missing or invalid PR artifacts, duplicate/multiple PRs, conflict PRs, head/base/link mismatch, unmanaged PRs, or stale-base clean output fail closed/status-only. |
 | `IMPLEMENT_DONE:blocked` | Route to recovery or Consensus-rnd Phase design-consensus depending on reason. |
 | Latest complete Consensus-rnd Phase review-gate reviewer round resolves to `MERGE` or `MERGE_WITH_COMMENTS` | Merge path; surface comments for `MERGE_WITH_COMMENTS`. |
 | Latest complete Consensus-rnd Phase review-gate reviewer round resolves to `WAIT_EXPLICIT_APPROVAL` | Surface comments and wait; do not merge or dispatch fix. |
-| Latest complete Consensus-rnd Phase review-gate reviewer round resolves to `FIX` | Dispatch fix codex for next round using reject evidence as blocking input. |
-| Consensus-rnd Phase review-gate gate incomplete or invalid (`WAIT_OR_REDISPATCH`) | Wait or re-dispatch the missing/invalid reviewer; never merge. |
-| `FIX_DONE` | Dispatch reviewers again only after review-thread completion evidence gate passes for review-thread-driven fixes; otherwise status-only block. |
+| Latest complete Consensus-rnd Phase review-gate reviewer round resolves to `FIX` | Confirm fix codex dispatch evidence for next round using reject evidence as blocking input. |
+| Consensus-rnd Phase review-gate gate incomplete or invalid (`WAIT_OR_REDISPATCH`) | Wait or confirm daemon-owned re-dispatch evidence for the missing/invalid reviewer; never merge. |
+| `FIX_DONE` | Confirm reviewer dispatch evidence again only after review-thread completion evidence gate passes for review-thread-driven fixes; otherwise status-only block. |
 | `TEST_ADD_DONE` | Commit/push and resume CI watch. |
 
 No-gap policy:
 
 1. If an active phase issue/PR exists, at least one this-loop codex should be running unless every active item is truly waiting for maintainer.
 2. `0 codex + active task = bug` and must be treated as `no-gap-violation`.
-3. Controller 每 wakeup 必派下一步 when actionable; no `wakeup → sweep → 0 spawn → next wakeup` pattern.
+3. Controller 每 wakeup 必确认 daemon-owned dispatch evidence covers the next step when actionable; direct controller spawn is not the default path and is allowed only as a recorded mechanical daemon-stuck fallback. No `wakeup → sweep → 0 dispatch evidence → next wakeup` pattern.
 4. Controller 严禁自升 escalate. Only the marker routes above can reach a human-needed label.
 
 ## GitHub State Contract
@@ -681,6 +686,28 @@ Controller non-duties:
 - Do not hide status in local files only.
 - Do not create new runtime abstractions, event envelopes, state versions, or producer registries for this split, except the Consensus-rnd Phase design-consensus-authorized consensus-rnd-cli phase9-router private ledger plus existing-format pending-event append for narrow deterministic Consensus-rnd Phase design-consensus dispatch; do not introduce migrated work-unit schema, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority.
 
+<a id="daemon-first-controller-boundary"></a>
+## Daemon-first controller boundary(强制,per maintainer-directive 2026-06-09)
+
+Daemon-first is the controller contract: the interactive skill/controller session must not bypass `phase9-router`, `wakeup-runner`, the concurrency monitor dispatch-queue auto-topup, or other checked-in daemons to route, dispatch, revive, or recover issue/PR work while those daemons are healthy or repairable through `restart-daemons`.
+
+The mechanical daemon-stuck predicate is conjunctive. It holds only when all of these are true:
+
+1. The current-wakeup `consensus-rnd-cli daemon-status --json` reports an owner daemon required for the affected route as `stale` or `dead`, or the relevant daemon has emitted a fail-closed pending event naming the target.
+2. The controller has run `consensus-rnd-cli restart-daemons` in the same wakeup.
+3. After re-reading daemon-status, the same route still shows no daemon-side progress evidence within a bounded 10-minute recheck window, reusing the existing stale-controller 10min threshold and adding no new `host.env` knob.
+4. The target still has a live OPEN actionable issue/PR or a clean marker/fail-closed event.
+
+Anything less is not stuck. Stale-issue revival keeps its existing `STALE_REVIVAL_HOURS` semantics and stays daemon-projection-owned.
+
+Hard-gate/no-gap actor reassignment keeps gate outcomes mandatory and non-advisory, but the ordinary satisfier is daemon-owned evidence: queued `HARNESS_SPAWN_INTENT`, wakeup-runner applied action or ledger row, consumed dispatch-queue item, `WAIT:single-active-audit`, or monitor `daemon-self-drive-transient` classification. Controller direct spawn is a stuck-gated recovery fallback, not the ordinary floor implementation.
+
+Controller fallback sweep is diagnostic, not authoritative dispatch. It may identify missing daemon progress and trigger `restart-daemons`; it must not hand-clear markerless logs, hand-delete spawn-claim locks, hand-kill processes, or spawn replacement workers unless the mechanical daemon-stuck predicate is recorded first in a status/banner or pending event with daemon name, daemon status, restart attempt, and 10-minute window evidence.
+
+OS scheduler prohibition: agents, skills, and controller sessions must not install, write, edit, load, unload, bootstrap, or delete crontab entries, LaunchAgent/LaunchDaemon plists, watchdog processes, or any OS-level auto-restart surface. The cron/launchd snippets in this SKILL are human-host-operator runbook examples only.
+
+Controller daemon liveness duty is limited to: every wakeup read `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json`; when any owner daemon is `stale` or `dead`, call `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons`; then re-read status. No `ps`/`pgrep` liveness probing, no second watchdog, no manual wrapper spawn.
+
 ## Concurrency Floor
 
 The floor is local because it prevents loop stalls.
@@ -700,12 +727,12 @@ The floor is local because it prevents loop stalls.
 - 自 PR #<本>: `consensus-rnd-cli concurrency` 不仅 alert; actual < floor 且 dispatch-queue 非空时自动派发(per host 实证 "低于预期数就继续派发"). controller 写 queue 即可,无需自己 ps grep + spawn.
 - controller 每次 wakeup 的 step 1.5 checks the count and 必须在任何 `ScheduleWakeup` 之前执行.
 - If below floor, consume real work first: existing dispatch queue, then higher-priority actionable marker, then maintainer comment, CI red, no-gap violation, or Consensus-rnd Phase design-intake / Consensus-rnd Phase design-consensus actionable route. "Actionable marker" 限定为:log tail `EXIT=0` 后的完成 verdict (FIX_DONE / REVIEW_DONE / IMPLEMENT_DONE / SOLVER_DONE / META_JUDGE_DONE / TEST_ADD_DONE / AUDIT_DONE / VERIFY_DONE),或新 maintainer comment、CI red、no-gap violation。in-flight codex (没 EXIT=0) 不是 actionable marker——以"等 cascade / fix 完会派 reviewers"为由 defer floor top-up 是绕规则。
-- If `deficit>0`, there is no general exemption: dispatch existing/open actionable managed issue/PR work first, then legal fallback issue production through audit only when no higher-priority route exists. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `consensus-rnd-cli spawn-codex` 用 harness background task 启动。
+- If `deficit>0`, there is no general exemption: satisfy the floor first through daemon-owned dispatch evidence for existing/open actionable managed issue/PR work, then legal fallback issue production through audit only when no higher-priority route exists; controller direct spawn is allowed only when the mechanical daemon-stuck predicate is recorded. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `consensus-rnd-cli spawn-codex` 用 harness background task 启动。
 - `AUDIT_DONE:none:0` still does not exempt the concurrency floor; when no real queued/actionable open work exists and no same-iteration audit is active, emit `RECOMMEND:audit` and the hard gate line `HARD_GATE:dispatch_required=N`.
 - Ordinary audit fallback has one same-iteration active slot. If that slot is occupied and no other legal work exists, expose the remaining capacity as `WAIT:single-active-audit` with `dispatch_required=0`, `reason=single_active_audit_in_flight`, and `blocked_deficit=N`; do not duplicate same-iteration audit; no duplicate same-iteration audit.
 - "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由; the correct visible state for a positive deficit is hard-gate dispatch or the single active audit boundary WAIT, not low-floor exemption.
-- **Existing-issue priority(strict)**: Before ordinary audit fallback, dispatch the next-step actor for every open catalog-managed issue/PR carrying canonical `crnd:lifecycle:managed` and lacking in-flight codex coverage of its canonical phase label; when any such open item carries `crnd:milestone:current`, milestone-labeled next steps come before non-milestone existing-issue work and audit fallback. Concurrent audit against this rule must be killed (`pkill -f audit-iter-N`). Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/consensus-loop/authorizations/runtime-exceptions.md#maintainer-directive-existing-issue-priority-over-audit`.
-- **Stale-issue revival(3h)**: Open catalog-managed issue/PR carrying canonical `crnd:lifecycle:managed` with `updatedAt` older than 3h UTC MUST be re-dispatched on next wakeup; each re-dispatch posts a banner with `stale_hours=N`. Unlabeled-default route + 3h cutoff details live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/consensus-loop/authorizations/runtime-exceptions.md#maintainer-directive-stale-issue-3h-revival`.
+- **Existing-issue priority(strict)**: Before ordinary audit fallback, confirm daemon-owned dispatch evidence for the next-step actor for every open catalog-managed issue/PR carrying canonical `crnd:lifecycle:managed` and lacking in-flight codex coverage of its canonical phase label; when any such open item carries `crnd:milestone:current`, milestone-labeled next steps come before non-milestone existing-issue work and audit fallback. Controller direct spawn is not the default path and is allowed only when the mechanical daemon-stuck predicate is recorded. Concurrent audit conflicting with this rule is handled by daemon-side suppression/spawn-claim evidence and the `WAIT:single-active-audit` boundary; the controller must not hand-kill worker processes. Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/consensus-loop/authorizations/runtime-exceptions.md#maintainer-directive-existing-issue-priority-over-audit`.
+- **Stale-issue revival(3h)**: Open catalog-managed issue/PR carrying canonical `crnd:lifecycle:managed` with `updatedAt` older than 3h UTC MUST have daemon-owned re-dispatch evidence on next wakeup; controller manual re-dispatch is only the recorded daemon-stuck fallback, and each re-dispatch path posts a banner with `stale_hours=N`. Unlabeled-default route + 3h cutoff details live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/consensus-loop/authorizations/runtime-exceptions.md#maintainer-directive-stale-issue-3h-revival`.
 
 More detail is in [concurrency floor details](#concurrency-floor-details).
 
@@ -719,7 +746,7 @@ GitHub label `crnd:milestone:release-target` marks open catalog-managed issue/PR
 
 Release countdown is wakeup-plan-only and read-only. `consensus-rnd-cli wakeup-plan` may append a status-only, non-dispatchable `release-countdown` action when an open actionable managed issue/PR has `crnd:milestone:release-target`; this explicit-target path wins and does not query the GitHub milestones API. When no explicit release-target exists, the same wakeup-plan-only action may emit a default goal countdown: it reads GitHub open milestones, chooses the nearest open milestone by `due_on` ascending with no `due_on` sorted after dated milestones and then by milestone `number`, and falls back to `goal.milestone: null` when no open milestone exists. In both activation modes it uses the release-gate scoring source, `.version-bump.json`, and the existing release commits projection for the release goal. Its fields include `activation: "explicit-target" | "default-goal"`, `goal.milestone`, `goal.release`, `goal.release.passed_signals`, `goal.release.total_signals`, `goal.release.countdown_to_version`, `targets`, `from_version`, `to_version`, `stability_score`, `ready`, `red_signals`, `blocked_reasons`, `no_lifecycle_authority`, and `source: "release-gate"`. `host.env`, statusline snapshots, and local state are not a goal SSOT. It must not create a daemon, write state, update statusline, update peek, create a top-level duplicate object, write a release decision, mutate labels, tag, publish a release, or add lifecycle authority.
 
-Milestone active means at least one open catalog-managed issue/PR carries `crnd:milestone:current`. Before any non-milestone existing-issue work or ordinary audit fallback, controller MUST first dispatch the next-step actor for milestone-labeled issue/PRs that lack in-flight codex coverage for their current phase label. Non-milestone design/audit work is downgraded while milestone is active; do not kill already-running non-milestone codexes solely because milestone became active.
+Milestone active means at least one open catalog-managed issue/PR carries `crnd:milestone:current`. Before any non-milestone existing-issue work or ordinary audit fallback, controller MUST first confirm daemon-owned dispatch evidence for the next-step actor for milestone-labeled issue/PRs that lack in-flight codex coverage for their current phase label; direct controller spawn is a mechanical daemon-stuck fallback only. Non-milestone design/audit work is downgraded while milestone is active; do not kill already-running non-milestone codexes solely because milestone became active.
 
 Only these actions stay above milestone priority: bootstrap failure / missing wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation. Correctness still wins: no-gap violation means an active item has no required worker and must be repaired before discretionary prioritization.
 
@@ -966,9 +993,9 @@ Use this checklist literally on each wakeup:
 9. Post GitHub status before or with spawned work.
 10. Sync phase and human labels.
 11. Check open PR CI failures.
-12. Verify daemon singleton health.
-13. Enforce floor before sleep.
-14. Spawn next codexes with harness tracking.
+12. Verify daemon singleton health through `daemon-status --json`; if any owner daemon is `stale`/`dead`, run `restart-daemons` and re-read status.
+13. Enforce floor before sleep by confirming daemon-owned dispatch evidence covers the next step.
+14. Directly spawn next codexes with harness tracking only when the mechanical daemon-stuck predicate in [Daemon-first controller boundary](#daemon-first-controller-boundary) is recorded.
 15. Commit/push only when controller-owned lifecycle requires it.
 16. Confirm wake source, including maintaining the daemon-event Monitor bridge.
 17. Peek again after visible actions.
@@ -981,8 +1008,8 @@ Priority order when multiple actions are possible:
 3. Completed worker marker ready for same-wakeup route.
 4. CI red on open catalog-managed PR.
 5. No-gap violation.
-6. Milestone-labeled open catalog-managed issue/PR next-step dispatch.
-7. Non-milestone existing-issue next-step dispatch.
+6. Milestone-labeled open catalog-managed issue/PR next-step daemon-owned dispatch evidence.
+7. Non-milestone existing-issue next-step daemon-owned dispatch evidence.
 8. Floor deficit.
 9. Producer dispatch for next work unit.
 10. Ordinary audit fallback.
@@ -1283,6 +1310,8 @@ Forbidden: no source mutation, git operations, GitHub issue/PR/body/label lifecy
 
 ### Daemon 启动(强制 pattern — 必须注入 host.env)
 
+This command-body pattern is reference material for the checked-in `restart-daemons` helper and human host operator runbooks, not permission for an interactive controller session to manually `nohup` daemon wrappers. Controller liveness duty remains `daemon-status --json` → `restart-daemons` → re-read status.
+
 **禁止** 裸 `nohup python3 <daemon> &`(拿不到 host 配置)与 `nohup env $(grep ... host.env) <daemon> &`(`BUILD_CMD` 含空格时 `env` 会把后续 token 当命令崩)。**唯一正确**:用 `bash -c 'test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV" && exec'` 注入后再 exec:
 ```bash
 nohup bash -c 'test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV" && exec python3 <skill-root>/scripts/consensus-rnd-cli <operation> --daemon' \
@@ -1484,32 +1513,32 @@ gh issue view <N> --json comments --jq '
 **铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 个本 loop codex 在跑**。本 loop codex = `consensus-rnd-cli spawn-codex` 命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`。实际为 0 且 GitHub 有 active phase → **P0 bug**(no-gap-violation)。
 
 **Controller wakeup 第一动作**:`python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80`。如果活跃 codex == 0:
-1. **不允许** `ScheduleWakeup` 后 end-turn — 必须派下一步 codex 才允许 ScheduleWakeup
-2. **不允许**只看 marker 不 sweep:必须扫所有刚 finished marker(implement/judge/reviewer/fix/reflector)并按 marker→spawn-next 表派至少 1 codex
+1. **不允许** `ScheduleWakeup` 后 end-turn — 必须先确认 daemon-owned dispatch evidence 覆盖下一步;只有 mechanical daemon-stuck predicate 成立且已记录时才允许 controller 直接派下一步 codex
+2. **不允许**只看 marker 不 sweep:必须扫所有刚 finished marker(implement/judge/reviewer/fix/reflector)并按 marker→spawn-next 表确认至少 1 个 daemon-owned dispatch evidence 或 stuck-gated controller spawn
 3. 如果所有 active issue/PR 都真在等 maintainer(全是 `crnd:human:maintainer-decision` / `crnd:phase:blocked`),那 0 codex 才 OK — 但仍要在 status 报告中说明 "0 codex by design:N issue 全等人"
 
 **consensus-rnd-cli concurrency** P0 alert:`expected > 0 AND actual == 0` → IMMEDIATE(streak=1 即写 alert + pending event,不等 2 tick)。controller 看到 alert → 立即 wake 自查。
 
-**No observe-mode exemption(narrow, airtight)**: whenever the controller observes this-loop codex `actual == 0` with active phase issue/PR work (not all `crnd:human:maintainer-decision` / `crnd:phase:blocked`), it must first read the concurrency monitor/status zero-codex classification. The controller may defer to the next daemon tick only when the monitor reports `daemon-self-drive-transient`, which means the monitor has proven fresh `phase9_router_daemon` and `wakeup_runner_daemon` heartbeats plus fresh item-matching unsuppressed dispatch intent evidence under the monitor-owned thresholds. That status must name the daemons, heartbeat ages, intent evidence, and the next wakeup must re-check the classification. Any missing, stale, malformed, read-error, terminal-blocked, target-log-suppressed, or spawn-claim-suppressed evidence remains same-turn P0: immediately dispatch a real next codex and restore the floor. The controller still must not defer with unsupported reasons such as "router/wakeup_runner will take over", "floor will recover", "wait for the next tick", "cascade/fix will dispatch later", or "known backoff" unless the fresh monitor-proven classification is present. The maintainer-blocked exception above remains independent and must be explicitly reported in status.
+**No observe-mode exemption(narrow, airtight)**: whenever the controller observes this-loop codex `actual == 0` with active phase issue/PR work (not all `crnd:human:maintainer-decision` / `crnd:phase:blocked`), it must first read the concurrency monitor/status zero-codex classification. The controller may defer to the next daemon tick only when the monitor reports `daemon-self-drive-transient`, which means the monitor has proven fresh `phase9_router_daemon` and `wakeup_runner_daemon` heartbeats plus fresh item-matching unsuppressed dispatch intent evidence under the monitor-owned thresholds. That status must name the daemons, heartbeat ages, intent evidence, and the next wakeup must re-check the classification. Any missing, stale, malformed, read-error, terminal-blocked, target-log-suppressed, or spawn-claim-suppressed evidence remains same-turn P0: first run `daemon-status --json`, `restart-daemons`, and re-check; only when the mechanical daemon-stuck predicate in [Daemon-first controller boundary](#daemon-first-controller-boundary) holds may the controller directly dispatch a real next codex and restore the floor in the same turn. The controller still must not defer with unsupported reasons such as "router/wakeup_runner will take over", "floor will recover", "wait for the next tick", "cascade/fix will dispatch later", or "known backoff" unless the fresh monitor-proven classification is present. The maintainer-blocked exception above remains independent and must be explicitly reported in status.
 
 ### Controller 每 wakeup 必派"下一步"(no gap policy)
 
-Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 codex**(if any actionable),不留 gap 等下次 wakeup:
+Controller wakeup 处理 markers 后,**必须在同 turn 内确认下一步 daemon-owned dispatch evidence**(if any actionable),不留 gap 等下次 wakeup;controller 亲自派发不是默认路径,只允许在 mechanical daemon-stuck predicate 已记录时作为 fallback:
 
-| Marker 完成 | 立即派 |
+| Marker 完成 | 立即覆盖 |
 |---|---|
-| SOLVER_DONE × 3(同 issue 同 round)| 同 issue 同 round meta-judge |
-| META_JUDGE_DONE:consensus | implement codex |
-| META_JUDGE_DONE:converge:rS | r(S+1) 三 solver unless router-owned stalled predicate dispatches round-S reflector; legacy r(S+1) payload remains compatible |
-| legacy META_JUDGE_DONE:escalate:stalled | reflector only as read-only compatibility and only if the stalled predicate holds |
+| SOLVER_DONE × 3(同 issue 同 round)| 同 issue 同 round meta-judge daemon-owned dispatch evidence |
+| META_JUDGE_DONE:consensus | implement codex dispatch evidence |
+| META_JUDGE_DONE:converge:rS | r(S+1) 三 solver dispatch evidence unless router-owned stalled predicate dispatches round-S reflector; legacy r(S+1) payload remains compatible |
+| legacy META_JUDGE_DONE:escalate:stalled | reflector dispatch evidence only as read-only compatibility and only if the stalled predicate holds |
 | META_RESOLVED:re-design | phase9-router queues marker.round + 1 三 solver with new framing |
 | IMPLEMENT_DONE:ok | controller commit/safe-push + `publish_implementation_output` opens or updates exactly one managed implementation PR + Consensus-rnd Phase review-gate reviewer × 3 |
-| REVIEW_DONE × 3 + any reject | fix codex r+1 |
-| FIX_DONE | reviewer r+1 |
+| REVIEW_DONE × 3 + any reject | fix codex r+1 dispatch evidence |
+| FIX_DONE | reviewer r+1 dispatch evidence |
 | TEST_ADD_DONE | controller commit/push 等 CI |
-| AUDIT_DONE | bootstrap design issues + cluster-003 类直接 implement |
+| AUDIT_DONE | bootstrap design issues + cluster-003 类 implement dispatch evidence |
 
-派出后 ScheduleWakeup;**不允许** "wakeup → sweep → 0 派出 → 下 wakeup" pattern(空 wakeup)。
+有 dispatch evidence 后 ScheduleWakeup;**不允许** "wakeup → sweep → 0 dispatch evidence → 下 wakeup" pattern(空 wakeup)。
 
 ### Controller 严禁自升 escalate(强制 — 防偷懒标人)
 <!--
@@ -1521,6 +1550,8 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/round 多 / 触及 Tier 或哲学"等理由直接 label `crnd:human:maintainer-decision`。
 
 **判定铁律**:
+
+下表中的 "派/重派" 动作默认履行主体是 phase9-router / wakeup-runner / daemon-owned dispatch evidence; controller 亲自执行只允许在 [Daemon-first controller boundary](#daemon-first-controller-boundary) 的 mechanical daemon-stuck predicate 已记录后作为 fallback。
 
 | Judge marker | Controller 动作 | 不允许 |
 |---|---|---|
@@ -1552,7 +1583,7 @@ controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/rou
 - 不读取 `CODEX_FLOOR`,不判断 refill 候选,不写非零 floor-deficit 事件,不自动 spawn codex。floor 补给只属于 controller wakeup step 1.5。
 
 **Controller 每 wakeup 必读** `tail -20 .refactor-loop/.concurrency-alert.log`:
-- 看到 `P0 no-gap-violation: ...zero_streak=N` → 至少 N×60s 没 codex,**必须**先派 codex 才允许 ScheduleWakeup
+- 看到 `P0 no-gap-violation: ...zero_streak=N` → 至少 N×60s 没 codex,**必须**先确认 daemon-owned dispatch evidence 覆盖下一步,或在 mechanical daemon-stuck predicate 已记录后亲自派发,才允许 ScheduleWakeup
 - zero_streak >= 5(>= 5 分钟 0 codex)= 严重失保 — 同时把 PushNotification 给 user "controller 失保 N min"
 
 启动:
@@ -1697,8 +1728,8 @@ You are the **Controller**. You never edit production code yourself. You orchest
      #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
 1. **runtime dirs + integration 分支**:`mkdir -p .refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。Do not create or maintain root `.refactor-loop/state.json`.
 2. **建全套 labels**:跑「Label 系统」节的 catalog validation / GitHub drift plan, then controller-owned apply if authorized. **漏建 = 后续 phase transition 无 canonical label 可挂、comment-monitor 查 catalog-managed items 漏掉 PR**。
-3. **起并挂载全部 restart-helper-managed daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `restart.py::DAEMON_COMMANDS` owner-local command surface。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把这组 daemon 全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
-4. **派主路径或 fallback producer**:先扫 open actionable managed issue/PR 并派 next-step actor;只有没有 open actionable work / queued dispatch / clean marker route / CI-no-gap route / maintainer-comment route / higher-priority wakeup route 时,才派 Consensus-rnd Phase work-intake audit fallback(`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
+3. **通过 `restart-daemons` 规范化/修复全部 restart-helper-managed daemon**:`python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 是唯一启动/修复面,controller 不手动 `nohup` 起 daemon wrapper,也不直接套 `bash -c 'source host.env && exec'` 启动 `restart.py::DAEMON_COMMANDS` owner-local command surface。随后再读 `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把这组 daemon 全部规范化为可见健康面——它不是「以后某次 wakeup 才做的 liveness 检查」**。
+4. **确认主路径或 fallback producer 已由 daemon 自驱面覆盖**:先扫 open actionable managed issue/PR,并通过 phase9-router / wakeup-runner / dispatch queue 等 daemon 自驱面确认 next-step actor dispatch evidence;bootstrap 时 daemon 未起齐等价于 daemon-status `dead` / `stale`,必须同 wakeup 调 `restart-daemons` 后复读 daemon-status,再走同一 mechanical daemon-stuck predicate,不是单独 direct-spawn carve-out。只有没有 open actionable work / queued dispatch / clean marker route / CI-no-gap route / maintainer-comment route / higher-priority wakeup route 时,才通过 wakeup-plan / `AUDIT_FALLBACK_ENABLE` projection + wakeup-runner 确认 Consensus-rnd Phase work-intake audit fallback dispatch evidence + ScheduleWakeup 兜底 + end turn;controller 亲自 `spawn-codex` 仅可作为 recorded daemon-stuck fallback。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
 
@@ -1746,8 +1777,8 @@ Create top-level TaskCreate items: audit / dispatch / merge.
 <a id="phase-routing-details"></a>
 ## Consensus-rnd Phase work-intake — Fallback issue production
 
-The default main path is open actionable managed issue/PR resolution; the controller must dispatch those
-next-step actors before starting any new-work producer. Producer normalization is documented in
+The default main path is open actionable managed issue/PR resolution; the controller must ensure those
+next-step actors are dispatched through daemon-owned surfaces before starting any new-work producer. Producer normalization is documented in
 [work-unit contract](#work-unit-contract): accepts only `producer: audit` and `producer: manual-issue`.
 `audit` is the fallback raw artifact issue producer for this phase and runs only when no actionable managed
 issue/PR or higher-priority route exists. `manual-issue` enters through Consensus-rnd Phase design-intake
@@ -1755,7 +1786,7 @@ triage and must already be reshaped before Consensus-rnd Phase design-consensus.
 
 1. Copy `prompts/audit.md` (this skill's template) to `.refactor-loop/prompts/audit-iter-N.md`.
 2. Replace the literal `${ITERATION}` placeholders with N using a targeted replacement; leave runtime placeholders such as `$REPO_ROOT`, `${PROJECT_RULES:-CLAUDE.md}`, and `$SOURCE_GLOBS` intact for the audit codex runtime.
-3. Dispatch:
+3. Confirm daemon-owned dispatch. The following is the equivalent argv shape produced by the daemon-owned dispatch surface; controller manual execution is allowed only after the mechanical daemon-stuck predicate in [Daemon-first controller boundary](#daemon-first-controller-boundary) is recorded:
 
    ```bash
    <skill-root>/scripts/consensus-rnd-cli spawn-codex \
@@ -1765,7 +1796,7 @@ triage and must already be reshaped before Consensus-rnd Phase design-consensus.
      --stall 3600
    ```
 
-   Use Bash with `run_in_background: true`. `--stall` is a no-output stall window, not a total runtime ceiling; codex may run longer while it keeps producing output.
+   Harness background execution is owned by the runner/queue surface in the normal path. `--stall` is a no-output stall window, not a total runtime ceiling; codex may run longer while it keeps producing output.
 
 4. Schedule wakeup 1500–1800s as safety net (task notification is primary wake).
 5. **End turn.**
@@ -2135,6 +2166,7 @@ Ambiguous adoption metadata, failed adoption operation construction, or adoption
 ### Consensus-rnd Phase design-consensus router daemon command body
 Authorization source: `skills/consensus-loop/authorizations/runtime-exceptions.md#phase9-router-open-state-gate-229`.
 `consensus-rnd-cli phase9-router` 是单例 daemon,只读 `ManagedWorkSnapshot` open managed projection、clean-exit logs、私有 ledger,以及每条 direct route 在 prompt/intent/ledger side-effect 前的 source-OPEN gate GitHub issue read:`gh api repos/<slug>/issues/<N>`。`ManagedWorkSnapshot` is the skill-private read-only owner for open managed work discovery; it writes `.refactor-loop/state/managed-work-snapshot.json` under `.refactor-loop/locks/managed-work-snapshot.lock`, uses `MANAGED_WORK_SNAPSHOT_TTL_SECONDS=300` and `MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS=900`, reuses `github_budget.py`, and returns `loaded_ok=false` when cache is too stale or absent under low GraphQL headroom. Snapshot is not GitHub live state fact source, not host production SSOT, and not #191/#396/#238/#322 lifecycle permit; side-effect routes keep live GitHub revalidation. That REST issue read is allowed to consume issue state/title/body only for the source-OPEN gate and router-injected issue source snapshot; comments may be read with `gh api repos/<slug>/issues/<N>/comments?per_page=20` only for bounded recent comments in the same router-local prompt-source projection. The state-only mirror token for the same source-OPEN gate is `gh api repos/<slug>/issues/<N> --jq .state`. The router-injected issue source snapshots are router-local prompt context, not durable schema, host production SSOT, or lifecycle authority; this does not grant daemon process-spawn, durable schema, host production SSOT, or lifecycle authority. DesignConsensusIssueIntake 只可用 `ManagedWorkSnapshot` 发现 open managed `crnd:phase:design-solving` issue;snapshot unavailable 时 fail closed,不写 spawn intent、不写 dispatch ledger。非 OPEN 或 state 不可证明时 fail closed,不写 spawn intent、不写 dispatch ledger,只追加 existing-format `phase9-router-fallback` pending event,reason ∈ `phase9-source-not-open` / `phase9-source-state-unavailable`。Before DesignConsensusIssueIntake or converge-to-next-solvers queues solver intents, the terminal design-consensus gate suppresses solver dispatch when a clean consensus judge log exists (`META_JUDGE_DONE:consensus:*` from `phase9-issue<N>-r*-judge.log` or `meta-judge-issue<N>-r*.log`) or when the already-loaded/open issue labels or labels-only live read `gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'` show terminal design-consensus phase labels `crnd:phase:consensus-reached`, `crnd:phase:implementing`, `crnd:phase:merged`, or `crnd:phase:closed`; it appends existing-format `phase9-router-fallback` pending events with key prefix `phase9-terminal-eligibility:` and reason `phase9-already-consensus`, without writing spawn intent or dispatch ledger. solver-triplet-to-judge route 必须渲染完整 `prompts/meta-judge.md` template,绑定 issue/work-unit/producer/source-ref/round、三个 scoped solver paths 和 judge output path;manual issue provenance uses `WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)` and `WORK_UNIT_SOURCE_REF=gh-issue-<N>`. missing template 或 scope 校验失败 fail closed,不写 spawn intent、不写 dispatch ledger,只追加 `phase9-router-fallback`,reason ∈ `phase9-meta-judge-template-unavailable` / `phase9-meta-judge-scope-invalid`。启动:`nohup bash -c 'test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV" && exec python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
+The startup command body above is consumed through `restart-daemons` / human-host-operator runbooks; the interactive controller must not manually start this daemon wrapper.
 Verification: `test_phase9_router_open_state_gate.py`, `test_phase9_router_daemon.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, and `test_skill_reference_anchors.py`.
 One-shot:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --repo-root "$REPO_ROOT"`; dry-run:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --dry-run --repo-root "$REPO_ROOT"`; monitor:`tail -50 .refactor-loop/logs/phase9-router-daemon.log`。
 
@@ -2164,7 +2196,7 @@ HostWorkflowSpec is not a phase9 direct-spawn-intent authority: host `roles`, `d
 Input filename dialect allowlist:`phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log`,`solver-issue<N>-r<R>-<minimal|structural|delete>.log`,`meta-judge-issue<N>-r<R>.log`。issue/round 来自 filename identity,public marker payload remains role-local(`SOLVER_DONE:<role>:...`); must not introduce public marker aliases, migrated work-unit schema, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority. daemon-owned output logs remain `phase9-issue...`;legacy input logs 只作为读取兼容面。daemon startup / first wakeup 文本必须与 `restart.py::DAEMON_COMMANDS` 的 restart-helper-managed 面一致,包含 Consensus-rnd Phase design-consensus router; persistent daemon-event Monitor bridge 单独由 controller arm。
 Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no direct codex process spawn, no direct resolution, no git, no GitHub lifecycle mutation, no label, no lifecycle authority(no close/merge/release). Direct routes append `HARNESS_SPAWN_INTENT`; its `command` field is exactly `"spawn-codex"` as a closed semantic enum, not argv and not shell. The mirror token is `command: "spawn-codex"`; forbidden boundary includes daemon direct `nohup spawn-codex`. `argv`, `args`, `shell`, `cmd`, `commands`, `env`, `git`, `gh`, `executor`, `target_ref`, argv array, shell command, and generic command bus fields are forbidden; actual CLI binary and argv construction live only in the controller/harness consumption layer. Append-only `.refactor-loop/phase9-router-ledger.jsonl` records base dispatch fields `{key, marker, log_path, dispatched_at, dispatch_state}` where `dispatch_state="harness-intent"` means intent queued, not process launched; successful solver-triplet-to-judge rows may add row-level router-private provenance fields `{route, issue, round, target_actor, clean_exit_solver_logs, solver_input_prompts, judge_input_solver_logs, judge_prompt_path, judge_prompt_template_path, judge_prompt_scope, independence_check}`. Router recovery/idempotency reads only `key`; the detailed recovery pass is a router-private `Phase9ActorHealth` projection over structured log/marker/path/ledger/pending/in-flight/source/terminal facts. meta-judge decisions read solver logs, not ledger evidence. Clean markerless solver logs are preserved in place, then the router appends one existing-format fallback event with reason `phase9-solver-markerless-exhausted`; this evidence is terminal format failure and may not later reuse `actor_health_recovery`. The stale ledger bypass for truly missing/interrupted actors is conjunctive: the source issue is OPEN, the terminal gate is open, there is no valid actor marker, no target log, no equivalent legacy log, no pending `HARNESS_SPAWN_INTENT`, no live in-flight `spawn-codex --log <target>`, and the latest append-only ledger row is older than `STALE_REVIVAL_HOURS` (default 3h). If router-visible solver prompts explicitly reference same-round peer solver logs/prompts/run artifacts, the router fails closed before judge dispatch and appends an existing-format pending event with reason `phase9-triplet-evidence-invalid`; if full `prompts/meta-judge.md` rendering is unavailable or any solver/judge path falls outside same issue/round/role scope, the router fails closed before judge dispatch and appends an existing-format `phase9-router-fallback` event. Fallback events use prefix `phase9-router-fallback`. A solver-triplet-to-judge duplicate with `key` already in the ledger is silent; when the triplet is not ledgered but target log / equivalent legacy judge log / in-flight target suppresses dispatch, append one existing-format `phase9-router-fallback` event with key prefix `phase9-triplet-suppression:` and reason exactly one of `phase9-triplet-target-log-exists`, `phase9-triplet-equivalent-log-exists`, or `phase9-triplet-in-flight`. Terminal design-consensus suppression appends one existing-format `phase9-router-fallback` event with key prefix `phase9-terminal-eligibility:` and reason exactly `phase9-already-consensus`; restart recovery seeds `phase9-terminal-eligibility:` and `phase9-actor-health:` keys from pending events to keep duplicate fallback emission suppressed, including markerless exhausted events. The source-OPEN gate and issue source snapshot reads, state-only source-OPEN gate mirror token, and labels-only terminal gate must not use gh issue close, gh issue edit, gh label, gh pr merge, gh release, or any label/close/merge/release lifecycle flag. In-flight target logs or live `consensus-rnd-cli spawn-codex --log <target>` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. This is no public revive command, no new runtime exception, and no new lifecycle authority. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, SpawnIntentInbox, spawn-intents, ControllerOrchestrator, migrated work-unit schema, public marker aliases, or lifecycle authority.
 ### Daemon vs controller 分工
-dev sync stays with daemon; Consensus-rnd Phase design-consensus issue intake, triplet/converge/router-derived stalled continuation, legacy stalled compatibility, and reflector `META_RESOLVED:re-design` continuation may use **consensus-rnd-cli phase9-router** narrow allowlist with controller fallback sweep retained; wakeup-plan design-consensus completed-marker evidence is status-only and suppresses design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only, and runner never applies `dispatch_next_step_worker`; consensus/implement/review/fix/liveness/escalation stay with controller wakeups or named #396 helpers.
+dev sync stays with daemon; Consensus-rnd Phase design-consensus issue intake, triplet/converge/router-derived stalled continuation, legacy stalled compatibility, and reflector `META_RESOLVED:re-design` continuation may use **consensus-rnd-cli phase9-router** narrow allowlist; wakeup-plan design-consensus completed-marker evidence is status-only and suppresses design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only. consensus/implement/review/fix/escalation routes default to #396 helpers / daemon-owned closed action projection, with interactive controller takeover only after recorded mechanical daemon-stuck evidence in [Daemon-first controller boundary](#daemon-first-controller-boundary). liveness duty is limited to `daemon-status` + `restart-daemons` + status re-read; controller fallback sweep is diagnostic rather than authoritative dispatch.
 ### Controller 每 wakeup 责任(只 verify daemon)
 ```bash
 # Consensus-rnd Phase integration-sync 现在 controller 只读 daemon-maintained health/log surface
@@ -2216,7 +2248,7 @@ Runs **after Consensus-rnd Phase integration-sync sync** and **before** any new 
 maintainer applies the catalog-derived design-issue label bundle from
 `consensus-rnd-cli labels design-issue-labels`.
 
-Controller 下次 wakeup sweep reads `crnd:lifecycle:managed` and normalizes via `codex_refactor_loop.labels`,把它当 Consensus-rnd Phase design-consensus candidate,直接派 r1 三 solver + meta-judge。Solver prompt 自包含,会读 issue body 全文 + grep 相关代码自找 evidence。
+Controller 下次 wakeup sweep reads `crnd:lifecycle:managed` and normalizes via `codex_refactor_loop.labels`,把它当 Consensus-rnd Phase design-consensus candidate,并确认 daemon-owned dispatch evidence 覆盖 r1 三 solver + meta-judge;controller direct spawn only after recorded mechanical daemon-stuck predicate。Solver prompt 自包含,会读 issue body 全文 + grep 相关代码自找 evidence。
 
 **前提**:issue body 至少要描述 "what's broken + relevant file paths"。Body 越结构化(evidence / fix boundary / decision questions)solver 越准。
 
@@ -2254,6 +2286,8 @@ Runs when a cluster PR's remote CI is green (Consensus-rnd Phase ci-watch settle
 Optional (add when cluster touches the relevant area, audit's `rule_ids` decides): Perf (future), Security (future).
 
 ### Dispatch (parallel)
+
+This runbook describes the equivalent argv shape constructed by daemon-owned review dispatch surfaces (`wakeup-runner dispatch_reviewers` helper or harness consumption of its intent). Controller manual execution is only the fallback after the mechanical daemon-stuck predicate in [Daemon-first controller boundary](#daemon-first-controller-boundary) is recorded.
 
 For each cluster PR with `CI green AND mergeable AND not yet auto-reviewed`:
 
@@ -2294,7 +2328,7 @@ Policy: AI keeps iterating until the fixed Consensus-rnd Phase review-gate truth
 Loop:
 
 1. **Round entry** — derive the next fix round from review/fix artifacts. If `fix_round > max_fix_rounds`, escalate (see below).
-2. **Render and dispatch fix codex** in PR's own worktree. Before spawn, call `ControllerActions.render_review_fix_prompt(PR, N, env)` or an equivalent controller-internal render action; this binds `FIX_OUTPUT_PATH=.refactor-loop/runs/fix-pr${PR}-round-${N}-report.md` into the rendered prompt artifact:
+2. **Render fix prompt and confirm daemon-owned fix dispatch evidence** in PR's own worktree. Before any stuck-gated manual spawn, call `ControllerActions.render_review_fix_prompt(PR, N, env)` or an equivalent controller-internal render action; this binds `FIX_OUTPUT_PATH=.refactor-loop/runs/fix-pr${PR}-round-${N}-report.md` into the rendered prompt artifact. The command shape below is the harness argv consumed from daemon-owned intent, or controller fallback only after recorded mechanical daemon-stuck evidence:
    ```bash
    <skill-root>/scripts/consensus-rnd-cli spawn-codex \
      --cd "$PR_WORKTREE" --add-dir "$REPO_ROOT" \
@@ -2305,7 +2339,7 @@ Loop:
    <!-- Refactor (issue-267): Old: fix worker wrote root FIX_REPORT.md by convention. New: controller-rendered FIX_OUTPUT_PATH points to .refactor-loop/runs/. -->
    Fix codex reads all 3 reviewer outputs, applies in-scope fixes, validates locally, writes `${FIX_OUTPUT_PATH}` under `.refactor-loop/runs/`, emits `FIX_DONE:${PR}:round-${N}:applied-<N>:rejected-<M>:blocked-<K>` OR `FIX_BLOCKED:${PR}:round-${N}:<reason>:<short>`.
 3. **Controller commits + pushes** the fix codex's changes to the PR's HEAD branch (codex itself doesn't push, per hard rule 4). Commit message includes round number and applied/blocked counts.
-4. **Re-dispatch all 3 reviewers** against the new HEAD SHA (drop prior consensus).
+4. **Confirm daemon-owned re-dispatch evidence for all 3 reviewers** against the new HEAD SHA (drop prior consensus); controller manual reviewer re-dispatch is only stuck-gated fallback.
 5. **Re-evaluate**:
    - Unanimous approve → auto-merge (per table above).
    - Same reject reasons as previous round (no progress) → escalate.
@@ -2483,6 +2517,8 @@ A 4th **meta-judge** codex arbitrates (`prompts/meta-judge.md`).
 
 For each cluster needing Consensus-rnd Phase design-consensus:
 
+The command shapes below describe the equivalent argv constructed by daemon-owned dispatch surfaces (`phase9-router`, `wakeup-runner`, or harness consumption of `HARNESS_SPAWN_INTENT`). Controller manual execution of these shapes is only the stuck-gated fallback in [Daemon-first controller boundary](#daemon-first-controller-boundary).
+
 ```bash
 for role in minimal structural delete; do
   envsubst < <skill-root>/prompts/solver-${role}.md \
@@ -2495,7 +2531,7 @@ for role in minimal structural delete; do
 done
 ```
 
-All 3 solvers in parallel; each emits `SOLVER_DONE:<role>:<verdict>:<summary>`. When all 3 done, dispatch meta-judge:
+All 3 solvers in parallel; each emits `SOLVER_DONE:<role>:<verdict>:<summary>`. When all 3 are done, the router routes same-round meta-judge daemon-owned dispatch evidence:
 
 ```bash
 envsubst < <skill-root>/prompts/meta-judge.md \
@@ -2507,10 +2543,10 @@ envsubst < <skill-root>/prompts/meta-judge.md \
   --stall 3600
 ```
 
-This triplet dispatch is now the first Consensus-rnd Phase design-consensus daemon-first route: `consensus-rnd-cli phase9-router` may do it directly after clean-exit gating, placeholder exclusion, ledger de-dupe, and in-flight checks. Controller fallback sweep remains required.
+This triplet dispatch is now the first Consensus-rnd Phase design-consensus daemon-first route: `consensus-rnd-cli phase9-router` may queue `HARNESS_SPAWN_INTENT` after clean-exit gating, placeholder exclusion, ledger de-dupe, and in-flight checks. Controller fallback sweep remains diagnostic and may manually dispatch only after recorded mechanical daemon-stuck evidence.
 The daemon route renders the full `prompts/meta-judge.md` template with the same scoped solver triplet paths the controller would bind; missing template or cross-issue/cross-round scope evidence fails closed through `phase9-router-fallback`, not a stub prompt.
 
-Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强制)**:
+Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强制)**。下表中的 "派/重派/auto-dispatch" 默认由 router/runner daemon-owned dispatch evidence 履行;controller manual dispatch only after recorded mechanical daemon-stuck evidence:
 
 | Decision | Category | Controller 动作 |
 |---|---|---|
@@ -2814,33 +2850,33 @@ Policy. An iteration completing is NEVER a stop signal. The loop's only legitima
 2. Every cluster in the current batch failed verify twice — escalate operator.
 3. Operator explicitly tells the loop to stop.
 
-**Iteration boundary is automatic**: as soon as iter N's last cluster PR merges into `integration_branch` (NOT after rollup PR human review — rollup runs independently in parallel as a human gate), controller IMMEDIATELY dispatches `Consensus-rnd Phase work-intake audit` for iter N+1. The rollup PR (auto-refact-dev → review_base_branch) is a parallel human-review track, not a serial gate.
+**Iteration boundary is automatic**: as soon as iter N's last cluster PR merges into `integration_branch` (NOT after rollup PR human review — rollup runs independently in parallel as a human gate), controller immediately confirms daemon-owned dispatch evidence for `Consensus-rnd Phase work-intake audit` for iter N+1. The rollup PR (auto-refact-dev → review_base_branch) is a parallel human-review track, not a serial gate.
 
 Concretely, this means:
-- After PR #<pr> (a cluster PR in iterN) merged, controller does NOT wait for PR #<pr> (rollup) review — it immediately dispatches the iterN audit codex.
+- After PR #<pr> (a cluster PR in iterN) merged, controller does NOT wait for PR #<pr> (rollup) review — it immediately confirms daemon-owned dispatch evidence for the iterN audit codex.
 - iterN implement / verify / Consensus-rnd Phase review-gate review runs in parallel with iterN rollup PR being reviewed.
 - If iterN rollup PR gets rejected by human, iterN work stays on auto-refact-dev (which now contains iterN + iterN deltas); we re-do iterN rework on top and ship combined.
 
 ### Existing-issue priority route table(per 2026-05-28 maintainer-directive)
 
-Authorization: `skills/consensus-loop/authorizations/runtime-exceptions.md#maintainer-directive-existing-issue-priority-over-audit`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open catalog-managed issue/PR carrying canonical `crnd:lifecycle:managed` that lacks an in-flight codex covering its current canonical phase label. If any such open item carries `crnd:milestone:current`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
+Authorization: `skills/consensus-loop/authorizations/runtime-exceptions.md#maintainer-directive-existing-issue-priority-over-audit`. Before ordinary audit fallback, controller MUST first confirm daemon-owned dispatch evidence for the next-step actor for every open catalog-managed issue/PR carrying canonical `crnd:lifecycle:managed` that lacks an in-flight codex covering its current canonical phase label; direct controller spawn is not the default path and is allowed only when the mechanical daemon-stuck predicate is recorded. If any such open item carries `crnd:milestone:current`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
 
 Managed work identity is projected through `codex_refactor_loop.work_items.ManagedWorkProjection`: an open managed PR body with exactly one durable `Closes #N` link represents that parent issue. The represented parent issue is visible as `crnd:phase:pr-open` and has expected workers 0; worker expectation and review/fix routing belong to the child PR. Missing, duplicate, or ambiguous `Closes #N` links are diagnostics, not guessed lifecycle authority.
 
 - `crnd:phase:design-solving` with 0 codex → phase9-router DesignConsensusIssueIntake dispatches Consensus-rnd Phase design-consensus r1 solver triplet for that issue; wakeup-plan only projects status evidence until the router emits HARNESS_SPAWN_INTENT
-- `crnd:phase:reviewing` with 0 codex → dispatch the missing reviewer(s) for the latest head SHA
-- `crnd:phase:fixing` with 0 codex → dispatch fix codex for next round
-- `crnd:phase:implementing` with 0 codex + IMPLEMENT_DONE absent → re-dispatch implementer (or block reason banner)
+- `crnd:phase:reviewing` with 0 codex → confirm daemon-owned dispatch evidence for the missing reviewer(s) for the latest head SHA
+- `crnd:phase:fixing` with 0 codex → confirm daemon-owned dispatch evidence for fix codex next round
+- `crnd:phase:implementing` with 0 codex + IMPLEMENT_DONE absent → confirm daemon-owned re-dispatch evidence for implementer (or block reason banner)
 - PR review work is represented by the child PR; parent issue `crnd:phase:pr-open` is non-action, expected workers 0
-- `crnd:phase:consensus-reached` with 0 codex → dispatch implement codex
+- `crnd:phase:consensus-reached` with 0 codex → confirm daemon-owned dispatch evidence for implement codex
 
 Audit fallback (`audit-iter-N+1`) is valid **only after** every open catalog-managed issue/PR already has an in-flight codex matching its canonical phase label or has documented blocked-on-maintainer reason. Spawning fresh audit while existing design-solving / fixing work sits 0-codex is a no-gap violation, not a floor refill.
 
 ### Stale-issue revival(3h) details(per 2026-05-28 maintainer-directive)
 
-Authorization: `skills/consensus-loop/authorizations/runtime-exceptions.md#maintainer-directive-stale-issue-3h-revival`. Open catalog-managed issue/PR whose latest `updatedAt` (from `gh issue view --json updatedAt` / `gh pr view --json updatedAt`) is older than **3 hours UTC** MUST be re-dispatched to its next-step actor on the next wakeup, even if (a) the phase label looks current, or (b) an earlier round already produced markers, or (c) prior comments suggest "awaiting" something. The 3h cutoff is wall-clock; do not weaken it because in-flight tasks elsewhere are busy.
+Authorization: `skills/consensus-loop/authorizations/runtime-exceptions.md#maintainer-directive-stale-issue-3h-revival`. Open catalog-managed issue/PR whose latest `updatedAt` (from `gh issue view --json updatedAt` / `gh pr view --json updatedAt`) is older than **3 hours UTC** MUST have daemon-owned re-dispatch evidence for its next-step actor on the next wakeup, even if (a) the phase label looks current, or (b) an earlier round already produced markers, or (c) prior comments suggest "awaiting" something. The 3h cutoff is wall-clock; do not weaken it because in-flight tasks elsewhere are busy.
 
-Stale revival selects the actor by current phase label using the Existing-issue priority routes above; for unlabeled `crnd:lifecycle:managed` items the default revival is Consensus-rnd Phase design-consensus r1 solver triplet. Each re-dispatch posts a banner noting `stale_hours=N` from `updatedAt`.
+Stale revival selects the actor by current phase label using the Existing-issue priority routes above; for unlabeled `crnd:lifecycle:managed` items the default revival is Consensus-rnd Phase design-consensus r1 solver triplet. Each daemon-owned re-dispatch path posts a banner noting `stale_hours=N` from `updatedAt`; controller manual re-dispatch is only the stuck-gated fallback.
 
 Stale `updatedAt` is routing metadata only: it may trigger re-dispatch visibility, but it does not authorize GitHub comments, label edits, PR merges, issue closes, takeover, or any other issue/PR target write. Those writes remain gated solely by #191 `ActiveControllerLease` ownership through `require_active_controller(...)`.
 
@@ -2857,12 +2893,12 @@ Stale `updatedAt` is routing metadata only: it may trigger re-dispatch visibilit
 
 <!-- Refactor (issue-277): Old: Concurrency floor details used absolute audit fallback wording, allowing duplicate same-iteration audit as fake dispatch authority. New: keep no general exemption and `AUDIT_DONE:none:0` still not exempt, but represent occupied single audit slot as WAIT with blocked_deficit when no other legal work exists. -->
 
-**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外真实工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。controller 每次 wakeup 的 step 1.5 仍必须在任何 `ScheduleWakeup` 之前执行;同时 `consensus-rnd-cli concurrency` 现在会消费 [dispatch queue protocol](#dispatch-queue-protocol) 中的 queued work 自动补 floor,避免 controller 卡住时只 alert 不派。若没有 open actionable work, audit 仍是可用兜底;`AUDIT_DONE:none:0` still does not exempt a positive deficit; ordinary audit fallback has one same-iteration active slot, so an occupied slot with no other legal work is `WAIT:single-active-audit` plus `blocked_deficit`, not duplicate audit。
+**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时必须有 daemon-owned dispatch evidence 主动覆盖额外真实工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。controller 每次 wakeup 的 step 1.5 仍必须在任何 `ScheduleWakeup` 之前执行;同时 `consensus-rnd-cli concurrency` 现在会消费 [dispatch queue protocol](#dispatch-queue-protocol) 中的 queued work 自动补 floor,避免 controller 卡住时只 alert 不派。若没有 open actionable work, audit 仍是可用兜底;`AUDIT_DONE:none:0` still does not exempt a positive deficit; ordinary audit fallback has one same-iteration active slot, so an occupied slot with no other legal work is `WAIT:single-active-audit` plus `blocked_deficit`, not duplicate audit。Controller direct spawn is a stuck-gated fallback, not the ordinary floor implementation.
 
 | 活跃本仓库 codex 数 | 动作 |
 |---|---|
 | `>= $CODEX_FLOOR` | 不抢资源,保持现状 |
-| `< $CODEX_FLOOR`(floor 至少为 2) | 立即派 `$CODEX_FLOOR - 当前数` 个新 codex 填满 floor;优先级如下 |
+| `< $CODEX_FLOOR`(floor 至少为 2) | 立即确认 `$CODEX_FLOOR - 当前数` 个 next-step daemon-owned dispatch evidence 填满 floor;controller direct spawn only after recorded mechanical daemon-stuck predicate;优先级如下 |
 
 **填 floor 优先级**(从高到低):
 
@@ -2873,7 +2909,7 @@ Stale `updatedAt` is routing metadata only: it may trigger re-dispatch visibilit
 5. **Visible hard gate / blocked boundary** — when no real open work exists and no same-iteration audit is active, emit `RECOMMEND:audit` and `HARD_GATE:dispatch_required=N`; when the same-iteration audit slot is occupied, emit `WAIT:single-active-audit`, `dispatch_required=0`, and `blocked_deficit=N`; do not stop with a low-floor exemption.
 
 **反面禁止**:
-- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先填到 `$CODEX_FLOOR`(至少 2)才允许 ScheduleWakeup
+- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先确认 daemon-owned dispatch evidence 或 `WAIT:single-active-audit`/recorded daemon-stuck fallback 满足 floor hard-gate,才允许 ScheduleWakeup
 - ❌ "iter N 还没完"作为不派 pre-fixed-point audit 的理由 → audit 与 cluster impl 完全独立,无依赖
 - ❌ 重复派同 iter audit(已有 active `audit-iter-N` 还派)→ expose `WAIT:single-active-audit` + `blocked_deficit`,不要 duplicate same-iteration audit
 - ❌ latest controller-validated audit 已是 `AUDIT_DONE:none:0` 就不补 floor → 仍不豁免;无 active audit 且无 open actionable work 时继续 hard-gate dispatch audit
@@ -2884,7 +2920,7 @@ Stale `updatedAt` is routing metadata only: it may trigger re-dispatch visibilit
 codex 偶发 `ERROR: stream disconnected before completion` 且 exit 1,尤其同时派 `>=~15` 个 codex 压 API 时。这通常是 transient,不是 prompt 问题。
 
 **铁律**:
-- 读 log 只确认失败类型:若含 `ERROR: stream disconnected before completion` 且 `EXIT=1`,**重派同 prompt**(spawn 形态一致、同 worktree / prompt / stall 语义,新 log path 或清晰 retry 后缀)。
+- 读 log 只确认失败类型:若含 `ERROR: stream disconnected before completion` 且 `EXIT=1`,默认通过 wakeup-plan 投影 + runner/daemon-owned dispatch evidence **重派同 prompt**(spawn 形态一致、同 worktree / prompt / stall 语义,新 log path 或清晰 retry 后缀);controller 亲自重派只允许在 mechanical daemon-stuck predicate 已记录后。
 - 不要修改 prompt 来"修" stream-disconnect;prompt 未被完整执行,没有 evidence 证明语义有问题。
 - 控制单次派发批量:floor 5 是合理起点,按真实工作量伸缩;不要为凑并发大批齐发。
 
@@ -2904,20 +2940,20 @@ ACTIVE=$(python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only
 NEEDED=$(( FLOOR - ACTIVE ))
 [ "$NEEDED" -le 0 ] && return  # floor 已满(本仓库 codex 已 >= FLOOR)
 
-# 按优先级派 NEEDED 个 codex:
+# 按优先级确认 NEEDED 个 daemon-owned dispatch evidence;controller direct spawn only after recorded mechanical daemon-stuck predicate:
 # queue -> actionable marker / maintainer comment / CI red / no-gap / Consensus-rnd Phase design-intake/9 route
 # -> audit fallback, including after AUDIT_DONE:none:0 when no same-iteration audit is active
 # -> HARD_GATE:dispatch_required=N or WAIT:single-active-audit blocked_deficit=N until deficit is gone or no legal dispatch remains
 ```
 
 **反面禁止**:
-- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 应主动派真实 work 提升并发
+- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 应主动确认 daemon-owned dispatch evidence 覆盖真实 work 提升并发;controller direct spawn only after recorded mechanical daemon-stuck predicate
 - ❌ 多个 same-iteration audit 同时跑(`audit-iter-N` active 还派同 N)→ 资源浪费,重复 evidence;必须 expose `blocked_deficit`
 - ❌ "iter N 还没完"作为不派 pre-fixed-point audit 的理由 → audit 与 cluster impl 完全独立,无依赖
 - ❌ 重复派同 iter audit(已有 active `audit-iter-N` 还派)→ no duplicate same-iteration audit
 - ❌ 在 latest controller-validated `AUDIT_DONE:none:0` 后把 floor deficit 当成已豁免 → no general exemption;无 active audit 且无 open actionable work 时继续 `HARD_GATE:dispatch_required=N`
 
-结构性教训:曾出现 fix 期间并发只剩 1 个 codex,说明单靠 merge-driven iteration boundary 不足以维持无限循环吞吐。concurrency-driven trigger 是并行优化的必要规则:并发过低时应主动开启真实 work;maintainer directive `skills/consensus-loop/authorizations/runtime-exceptions.md#maintainer-directive-floor-no-exemption` removes the former audit-none floor exemption.
+结构性教训:曾出现 fix 期间并发只剩 1 个 codex,说明单靠 merge-driven iteration boundary 不足以维持无限循环吞吐。concurrency-driven trigger 是并行优化的必要规则:并发过低时应主动确认 daemon-owned dispatch evidence 覆盖真实 work;controller 直接派发仅为 stuck-gated fallback。maintainer directive `skills/consensus-loop/authorizations/runtime-exceptions.md#maintainer-directive-floor-no-exemption` removes the former audit-none floor exemption.
 
 ### Sync to remote in time (强制)
 
@@ -3167,8 +3203,10 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
   --stall 3600
 ```
 
-Controller 读 marker 后路由:
-- `retry-fix` → 派 fix r4 + 提高 max_fix_rounds 临时到 5(只本 PR)+ 同时 narrow reviewer 关注新 evidence only(不再 surface 旧 evidence)
+The meta-reflector spawn defaults to wakeup-plan closed action projection and wakeup-runner / daemon-owned dispatch surfaces; controller manual execution of the argv shape above is only the fallback after the mechanical daemon-stuck predicate in [Daemon-first controller boundary](#daemon-first-controller-boundary) is recorded.
+
+Controller 读 marker 后确保后续动作经 daemon-owned surfaces dispatch:
+- `retry-fix` → ensure fix r4 is dispatched through daemon-owned surfaces + 提高 max_fix_rounds 临时到 5(只本 PR)+ 同时 narrow reviewer 关注新 evidence only(不再 surface 旧 evidence); controller 亲自执行只允许在 [Daemon-first controller boundary](#daemon-first-controller-boundary) 的 mechanical daemon-stuck predicate 已记录后作为 fallback
 - `re-design` → 关 PR / 撤回 commits / re-Consensus-rnd Phase design-consensus with constraint = reject evidence pattern
 - `re-cluster` → 关 PR / audit re-split(产新 cluster 在 next iter)
 - `drop` → close PR + close issue with `wontfix` label + 转 phase merged-no-op
@@ -3185,7 +3223,7 @@ Controller 读 marker 后路由:
 <a id="ci-progress-and-reporting"></a>
 ## CI progress and reporting
 
-CI sweep contract: every controller wakeup checks open catalog-managed PR checks, immediately classifies red checks, dispatches fix/test-add for real or codecov failures, reports pre-existing failures, and routes repeated same-check failures through the meta-layer before human escalation.
+CI sweep contract: every controller wakeup checks open catalog-managed PR checks, immediately classifies red checks, confirms wakeup-plan projection + runner/daemon-owned dispatch evidence for fix/test-add on real or codecov failures, reports pre-existing failures, and routes repeated same-check failures through the meta-layer before human escalation. Controller manual fix/test-add dispatch is only the stuck-gated fallback in [Daemon-first controller boundary](#daemon-first-controller-boundary).
 
 ## Codex 进展实时上报 — 强制
 
@@ -3214,7 +3252,7 @@ grammars here.
 
 **问题**:codex 进程要让 maintainer 在 Claude Code UI 的 background tasks / shells panel 一眼可见。
 
-**规则**:**controller 主链路所有 codex spawn 优先用 Bash tool `run_in_background: true`**。Claude Code harness 跟踪该 background task,显示在 UI shells/tasks 面板 → maintainer 看到 "8 shells" 等计数。`nohup ... & disown` 会 detach 出 harness,maintainer 看不到即时 shells/task-notification;若意外发生,不要杀掉重派,必须确认 log 可 sweep 且本 turn 结束前有已注册 ScheduleWakeup 或其它在飞 task-notification。
+**规则**:**HARNESS_SPAWN_INTENT consumption or stuck-gated controller fallback 的 codex spawn 用 Bash tool `run_in_background: true`**。Claude Code harness 跟踪该 background task,显示在 UI shells/tasks 面板 → maintainer 看到 "8 shells" 等计数。`nohup ... & disown` 会 detach 出 harness,maintainer 看不到即时 shells/task-notification;若意外发生,不要杀掉重派,必须确认 log 可 sweep 且本 turn 结束前有已注册 ScheduleWakeup 或其它在飞 task-notification。
 
 ### 推荐调用 pattern
 
