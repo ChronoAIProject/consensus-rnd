@@ -600,7 +600,7 @@ def _revive_stale_redispatchable_implement_log(
 
     Automatic callers leave force=False: the log must be idle longer than
     stale_revival_seconds() (a live supervised codex cannot be silent past the
-    no-output stall window, so a >threshold-stale in_flight log is a dead worker).
+    total wall-clock timeout, so a >threshold-stale in_flight log is a dead worker).
     The manual trigger passes force=True to revive now without waiting, but then
     an in_flight log is cleared only when a live-process check proves no codex is
     running it, so a genuinely running worker is never cleared."""
@@ -2851,7 +2851,7 @@ def release_rollup_actions(repo_root: Path) -> list[dict[str, Any]]:
                     "cd": str(repo_root.resolve()),
                     "prompt": str((repo_root / RELEASE_ROLLUP_BODY_PROMPT).resolve()),
                     "log": str((repo_root / RELEASE_ROLLUP_BODY_LOG).resolve()),
-                    "stall": 1800,
+                    "stall": 5400,
                     "runner_authority": RUNNER_AUTHORITY,
                     "no_generic_command": True,
                     "no_lifecycle_authority": True,
@@ -3246,7 +3246,7 @@ def implementation_pr_artifact_repair_actions(actions: list[dict[str, Any]], rep
                 "cd": str(repo_root.resolve()),
                 "prompt": str((repo_root / prompt).resolve()),
                 "log": str((repo_root / log).resolve()),
-                "stall": 1800,
+                "stall": 5400,
                 "issue_number": target[1],
                 "cluster_id": cluster_id,
                 "title_file": str(action.get("title_file") or ""),

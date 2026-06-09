@@ -1096,7 +1096,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "cd": str(self.repo),
             "prompt": str(self.repo / ".refactor-loop/prompts/release-rollup-body.md"),
             "log": str(self.repo / ".refactor-loop/logs/release-rollup-body.log"),
-            "stall": 1800,
+            "stall": 5400,
         }
         action.update(overrides)
         return action
@@ -1136,7 +1136,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "cd": str(self.repo),
             "prompt": str(self.repo / ".refactor-loop/prompts/implementation-pr-artifacts-issue-77.md"),
             "log": str(self.repo / ".refactor-loop/logs/implementation-pr-artifacts-issue-77.log"),
-            "stall": 1800,
+            "stall": 5400,
         }
         action.update(overrides)
         return action

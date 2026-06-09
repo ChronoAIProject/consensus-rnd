@@ -1767,7 +1767,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "cd": ".",
             "prompt": ".refactor-loop/prompts/phase9/phase9-issue330-r4-judge.md",
             "log": ".refactor-loop/logs/phase9-issue330-r4-judge.log",
-            "stall": 3600,
+            "stall": 5400,
             "reason": "test intent",
             "queued_at": "2026-05-31T00:00:00Z",
             "run_in_background_required": True,

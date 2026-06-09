@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -16,7 +17,7 @@ from unittest import mock
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.processes import ProcessSupervisor, launch_spawn_codex_supervisor, prompt_file_from_text
+from codex_refactor_loop.processes import TIMEOUT_EXIT_CODE, ProcessSupervisor, launch_spawn_codex_supervisor, prompt_file_from_text
 
 
 class SpawnSupervisorTests(unittest.TestCase):
@@ -67,7 +68,46 @@ class SpawnSupervisorTests(unittest.TestCase):
         self.assertEqual(1, len(rotated))
         self.assertIn("SPAWN: still running", rotated[0].read_text(encoding="utf-8"))
 
-    def test_stall_writes_exit_137_and_kills_process_group(self) -> None:
+    def test_silent_process_runs_past_old_log_idle_window_until_natural_exit(self) -> None:
+        marker = self.tmp_root / "silent.done"
+        code = (
+            "import pathlib, sys, time\n"
+            "sys.stdout.write('started\\n'); sys.stdout.flush()\n"
+            "time.sleep(1.2)\n"
+            f"pathlib.Path({str(marker)!r}).write_text('done', encoding='utf-8')\n"
+            "sys.exit(0)\n"
+        )
+
+        started_at = time.monotonic()
+        exit_code = ProcessSupervisor(poll_interval=0.05).supervise(
+            [sys.executable, "-c", code],
+            stdin=self.prompt,
+            log=self.log,
+            stall=5,
+        )
+
+        self.assertGreaterEqual(time.monotonic() - started_at, 1.0)
+        self.assertEqual(0, exit_code)
+        self.assertEqual("done", marker.read_text(encoding="utf-8"))
+        text = self.log.read_text(encoding="utf-8")
+        self.assertNotIn("TIMEOUT_KILL_AFTER=", text)
+        self.assertNotIn("STALL_KILL_AFTER=", text)
+        self.assertIn("EXIT=0", text)
+
+    def test_natural_nonzero_exit_returns_real_exit_code(self) -> None:
+        exit_code = ProcessSupervisor(poll_interval=0.01).supervise(
+            [sys.executable, "-c", "import sys; sys.exit(23)"],
+            stdin=self.prompt,
+            log=self.log,
+            stall=5,
+        )
+
+        self.assertEqual(23, exit_code)
+        text = self.log.read_text(encoding="utf-8")
+        self.assertIn("EXIT=23", text)
+        self.assertNotIn("TIMEOUT_KILL_AFTER=", text)
+
+    def test_wall_clock_timeout_writes_exit_137_and_kills_process_group(self) -> None:
         marker = self.tmp_root / "child.pid"
         code = (
             "import os, subprocess, sys, time\n"
@@ -84,9 +124,11 @@ class SpawnSupervisorTests(unittest.TestCase):
             stall=1,
         )
 
-        self.assertEqual(137, exit_code)
+        self.assertEqual(TIMEOUT_EXIT_CODE, exit_code)
         text = self.log.read_text(encoding="utf-8")
-        self.assertIn("STALL_KILL_AFTER=1s", text)
+        self.assertIn("TIMEOUT_KILL_AFTER=1s", text)
+        self.assertIn("TIMEOUT_KILL_AT=", text)
+        self.assertNotIn("STALL_KILL_AFTER=", text)
         self.assertIn("EXIT=137", text)
         child_pid = int(marker.read_text(encoding="utf-8"))
         self.assert_process_dead(child_pid)
