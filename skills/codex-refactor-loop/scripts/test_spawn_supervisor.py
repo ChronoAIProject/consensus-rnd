@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -35,6 +34,29 @@ class _FakeProcess:
         if self.returncode is None:
             self.returncode = 0
         return self.returncode
+
+
+class FakeProcess:
+    def __init__(self, *, polls_before_exit: int = 1, exit_code: int = 0, pid: int = 12345) -> None:
+        self.pid = pid
+        self.polls_before_exit = polls_before_exit
+        self.exit_code = exit_code
+        self.poll_count = 0
+        self.wait_count = 0
+        self.waited = False
+
+    def poll(self) -> int | None:
+        if self.waited:
+            return self.exit_code
+        self.poll_count += 1
+        if self.poll_count > self.polls_before_exit:
+            return self.exit_code
+        return None
+
+    def wait(self) -> int:
+        self.wait_count += 1
+        self.waited = True
+        return self.exit_code
 
 
 class SpawnSupervisorTests(unittest.TestCase):
@@ -191,6 +213,32 @@ class SpawnSupervisorTests(unittest.TestCase):
         self.assertIn("EXIT=137", text)
         child_pid = int(marker.read_text(encoding="utf-8"))
         self.assert_process_dead(child_pid)
+
+    def test_total_timeout_writes_exit_137_and_kills_process_group(self) -> None:
+        fake_proc = FakeProcess(polls_before_exit=20, exit_code=-9)
+        ticks = iter([0.0, 0.5, 1.0])
+
+        with mock.patch("codex_refactor_loop.processes.subprocess.Popen", return_value=fake_proc):
+            with mock.patch("codex_refactor_loop.processes.kill_process_group") as kill:
+                exit_code = ProcessSupervisor(
+                    poll_interval=0.01,
+                    clock=lambda: next(ticks),
+                    sleeper=lambda _: None,
+                ).supervise(
+                    [sys.executable, "-c", "unused"],
+                    stdin=self.prompt,
+                    log=self.log,
+                    stall=1,
+                )
+
+        self.assertEqual(TIMEOUT_EXIT_CODE, exit_code)
+        kill.assert_called_once_with(fake_proc.pid)
+        text = self.log.read_text(encoding="utf-8")
+        self.assertIn("TIMEOUT_KILL_AFTER=1s", text)
+        self.assertIn("TIMEOUT_KILL_AT=", text)
+        self.assertNotIn("STALL_KILL_AFTER=", text)
+        self.assertIn("EXIT=137", text)
+        self.assertNotIn("STALL_KILL_", text)
 
     def test_launch_spawn_codex_supervisor_detaches_without_wait_or_poll(self) -> None:
         repo = self.tmp_root
