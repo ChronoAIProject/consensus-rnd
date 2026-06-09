@@ -24,6 +24,7 @@ from codex_refactor_loop.release.gate import isoformat
 from codex_refactor_loop.release.publish_preflight import PublishPreflightResult, canonical_digest
 from codex_refactor_loop.release.publisher import ReleasePublisher
 FIXTURE_RELEASE_CHECKS = ("contract-tests", "manifest-version-sync", "skill-degradation")
+LOCALIZED_ROLLUP_PREFIX = "".join(chr(codepoint) for codepoint in (0x53D1, 0x5E03))
 
 
 def write_json(path: Path, data: object) -> None:
@@ -53,6 +54,16 @@ def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
     (repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
+    write_json(
+        repo / ".refactor-loop/state/release-commits.json",
+        {
+            "commits": [
+                {"sha": "a" * 40, "subject": "Release v2.0.0-beta.3", "body": ""},
+                {"sha": "b" * 40, "subject": "fix: publish curated release notes (#704)", "body": "Refs #322"},
+            ],
+            "latest_release_version": "2.0.0-beta.3",
+        },
+    )
     (repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
     (repo / ".config/consensus-rnd/host.env").write_text(
         'export RELEASE_AUTO_ENABLE=true\n'
@@ -325,10 +336,24 @@ def write_ready_artifacts(
     write_json(repo / ".refactor-loop/state/release-candidate.json", candidate)
 
 
-def expected_success_commands(repo: Path, version: str = "2.0.0-beta.4", prerelease: bool = True) -> list[list[str]]:
-    release_command = ["gh", "release", "create", f"v{version}", "--target", "bumpcommit456", "--generate-notes"]
+def expected_release_command(repo: Path, version: str, target_ref: str, prerelease: bool = True) -> list[str]:
+    command = [
+        "gh",
+        "release",
+        "create",
+        f"v{version}",
+        "--target",
+        target_ref,
+        "--notes-file",
+        str(repo / ".refactor-loop/state/release-notes" / f"v{version}.md"),
+    ]
     if prerelease:
-        release_command.append("--prerelease")
+        command.append("--prerelease")
+    return command
+
+
+def expected_success_commands(repo: Path, version: str = "2.0.0-beta.4", prerelease: bool = True) -> list[list[str]]:
+    release_command = expected_release_command(repo, version, "bumpcommit456", prerelease=prerelease)
     worktree = repo / ".worktrees" / "release-publish" / f"{version}-1"
     return [
         ["git", "fetch", "origin", "auto-refact-dev"],
@@ -362,10 +387,8 @@ def expected_success_commands(repo: Path, version: str = "2.0.0-beta.4", prerele
     ]
 
 
-def expected_reentry_success_commands(version: str = "2.0.0-beta.4", prerelease: bool = True) -> list[list[str]]:
-    release_command = ["gh", "release", "create", f"v{version}", "--target", "bumpcommit456", "--generate-notes"]
-    if prerelease:
-        release_command.append("--prerelease")
+def expected_reentry_success_commands(repo: Path, version: str = "2.0.0-beta.4", prerelease: bool = True) -> list[list[str]]:
+    release_command = expected_release_command(repo, version, "bumpcommit456", prerelease=prerelease)
     return [
         ["git", "fetch", "origin", "auto-refact-dev"],
         ["git", "rev-parse", "origin/auto-refact-dev"],
@@ -378,10 +401,10 @@ def expected_reentry_success_commands(version: str = "2.0.0-beta.4", prerelease:
     ]
 
 
-def expected_local_preflight_reentry_success_commands(version: str = "2.0.0-beta.4", prerelease: bool = True) -> list[list[str]]:
-    release_command = ["gh", "release", "create", f"v{version}", "--target", "bumpcommit456", "--generate-notes"]
-    if prerelease:
-        release_command.append("--prerelease")
+def expected_local_preflight_reentry_success_commands(
+    repo: Path, version: str = "2.0.0-beta.4", prerelease: bool = True
+) -> list[list[str]]:
+    release_command = expected_release_command(repo, version, "bumpcommit456", prerelease=prerelease)
     return [
         ["git", "show", "-s", "--format=%s", "HEAD"],
         ["git", "rev-parse", "HEAD"],
@@ -390,10 +413,10 @@ def expected_local_preflight_reentry_success_commands(version: str = "2.0.0-beta
     ]
 
 
-def expected_real_preflight_reentry_success_commands(version: str = "2.0.0-beta.4", prerelease: bool = True) -> list[list[str]]:
-    release_command = ["gh", "release", "create", f"v{version}", "--target", "bumpcommit456", "--generate-notes"]
-    if prerelease:
-        release_command.append("--prerelease")
+def expected_real_preflight_reentry_success_commands(
+    repo: Path, version: str = "2.0.0-beta.4", prerelease: bool = True
+) -> list[list[str]]:
+    release_command = expected_release_command(repo, version, "bumpcommit456", prerelease=prerelease)
     return [
         ["git", "show", "-s", "--format=%s", "HEAD"],
         ["git", "fetch", "origin", "auto-refact-dev"],
@@ -406,10 +429,10 @@ def expected_real_preflight_reentry_success_commands(version: str = "2.0.0-beta.
     ]
 
 
-def expected_remote_reentry_success_commands(version: str = "2.0.0-beta.4", remote_sha: str = "remotecommit789", prerelease: bool = True) -> list[list[str]]:
-    release_command = ["gh", "release", "create", f"v{version}", "--target", remote_sha, "--generate-notes"]
-    if prerelease:
-        release_command.append("--prerelease")
+def expected_remote_reentry_success_commands(
+    repo: Path, version: str = "2.0.0-beta.4", remote_sha: str = "remotecommit789", prerelease: bool = True
+) -> list[list[str]]:
+    release_command = expected_release_command(repo, version, remote_sha, prerelease=prerelease)
     remote_ref = "origin/auto-refact-dev"
     return [
         ["git", "fetch", "origin", "auto-refact-dev"],
@@ -429,13 +452,12 @@ def expected_remote_reentry_success_commands(version: str = "2.0.0-beta.4", remo
 
 def expected_rollup_remote_reentry_success_commands(
     *,
+    repo: Path,
     version: str = "2.0.0-beta.4",
     rollup_sha: str,
     prerelease: bool = True,
 ) -> list[list[str]]:
-    release_command = ["gh", "release", "create", f"v{version}", "--target", rollup_sha, "--generate-notes"]
-    if prerelease:
-        release_command.append("--prerelease")
+    release_command = expected_release_command(repo, version, rollup_sha, prerelease=prerelease)
     remote_ref = "origin/auto-refact-dev"
     rollup_ref = f"origin/rollup/{rollup_sha}"
     return [
@@ -461,10 +483,8 @@ def expected_check_runs_command(sha: str) -> list[str]:
     return ["gh", "api", f"repos/owner/repo/commits/{sha}/check-runs", "--paginate", "--slurp"]
 
 
-def expected_violating_pre_bump_tag_command() -> list[str]:
-    return [
-        ["gh", "release", "create", "v2.0.0-beta.4", "--target", "abc123", "--generate-notes", "--prerelease"],
-    ][0]
+def expected_violating_pre_bump_tag_command(repo: Path) -> list[str]:
+    return expected_release_command(repo, "2.0.0-beta.4", "abc123")
 
 
 class ReleasePublisherTests(unittest.TestCase):
@@ -603,7 +623,7 @@ class ReleasePublisherTests(unittest.TestCase):
 
             self.assertTrue(result.published)
             self.assertEqual(result.target_ref, "bumpcommit456")
-            self.assertEqual(runner.commands, expected_reentry_success_commands())
+            self.assertEqual(runner.commands, expected_reentry_success_commands(repo))
             self.assertFalse(any(command[:2] == ["python3", ".github/scripts/bump_version.py"] for command in runner.commands))
             self.assertFalse(any(command[:2] == ["git", "add"] for command in runner.commands))
             self.assertFalse(any(command[:2] == ["git", "commit"] for command in runner.commands))
@@ -635,7 +655,7 @@ class ReleasePublisherTests(unittest.TestCase):
 
             self.assertTrue(result.published)
             self.assertEqual(result.target_ref, "remotecommit789")
-            self.assertEqual(runner.commands, expected_remote_reentry_success_commands())
+            self.assertEqual(runner.commands, expected_remote_reentry_success_commands(repo))
             self.assertFalse(any(command[:2] == ["python3", ".github/scripts/bump_version.py"] for command in runner.commands))
             self.assertFalse(any(command[:2] == ["git", "add"] for command in runner.commands))
             self.assertFalse(any(command[:2] == ["git", "commit"] for command in runner.commands))
@@ -652,7 +672,7 @@ class ReleasePublisherTests(unittest.TestCase):
             rollup_sha = "0ccc9eb90a3aa9437f79bbe8260738c7ad7c361e"
             runner = FakeRunner()
             runner.remote_sha = "713192baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            runner.remote_subject = "发布 rollup: integration ahead 2 commits (256e4b827b26) (#595)"
+            runner.remote_subject = f"{LOCALIZED_ROLLUP_PREFIX} rollup: integration ahead 2 commits (256e4b827b26) (#595)"
             runner.rollup_refs = {f"origin/rollup/{rollup_sha}": rollup_sha}
             runner.rollup_subjects = {f"origin/rollup/{rollup_sha}": "Release v2.0.0-beta.4"}
             runner.rollup_manifest_versions = {
@@ -674,7 +694,7 @@ class ReleasePublisherTests(unittest.TestCase):
 
             self.assertTrue(result.published)
             self.assertEqual(result.target_ref, rollup_sha)
-            self.assertEqual(runner.commands, expected_rollup_remote_reentry_success_commands(rollup_sha=rollup_sha))
+            self.assertEqual(runner.commands, expected_rollup_remote_reentry_success_commands(repo=repo, rollup_sha=rollup_sha))
             self.assertFalse(any(command[:2] == ["python3", ".github/scripts/bump_version.py"] for command in runner.commands))
             self.assertFalse(any(command[:2] == ["git", "add"] for command in runner.commands))
             self.assertFalse(any(command[:2] == ["git", "commit"] for command in runner.commands))
@@ -703,7 +723,7 @@ class ReleasePublisherTests(unittest.TestCase):
 
             self.assertTrue(result.published)
             self.assertEqual(result.target_ref, "bumpcommit456")
-            self.assertEqual(runner.commands, expected_real_preflight_reentry_success_commands())
+            self.assertEqual(runner.commands, expected_real_preflight_reentry_success_commands(repo))
             self.assertFalse(any(command[:2] == ["python3", ".github/scripts/bump_version.py"] for command in runner.commands))
             self.assertFalse(any(command[:2] == ["git", "add"] for command in runner.commands))
             self.assertFalse(any(command[:2] == ["git", "commit"] for command in runner.commands))
@@ -728,12 +748,12 @@ class ReleasePublisherTests(unittest.TestCase):
             self.assertTrue(result.published)
             self.assertEqual(result.target_ref, "bumpcommit456")
             check_command = expected_check_runs_command("bumpcommit456")
-            release_command = expected_reentry_success_commands()[-1]
+            release_command = expected_reentry_success_commands(repo)[-1]
             check_index = runner.commands.index(check_command)
             release_index = runner.commands.index(release_command)
             self.assertLess(check_index, release_index)
             self.assertEqual(release_command[4:6], ["--target", "bumpcommit456"])
-            self.assertEqual(runner.commands, expected_reentry_success_commands())
+            self.assertEqual(runner.commands, expected_reentry_success_commands(repo))
 
     def test_first_run_still_rejects_checks_older_than_push_started_at(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -796,7 +816,7 @@ class ReleasePublisherTests(unittest.TestCase):
                 result = retry.publish(target_ref="abc123")
 
             self.assertTrue(result.published)
-            self.assertEqual(green_runner.commands, expected_reentry_success_commands())
+            self.assertEqual(green_runner.commands, expected_reentry_success_commands(repo))
 
     def test_already_bumped_reentry_red_checks_fail_closed_without_release(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -901,25 +921,21 @@ class ReleasePublisherTests(unittest.TestCase):
             self.assertIn(["git", "push", "origin", "HEAD:refs/heads/auto-refact-dev"], runner.commands)
             self.assertEqual(
                 runner.commands[-1],
-                [
-                    "gh",
-                    "release",
-                    "create",
-                    "v2.0.0-beta.4",
-                    "--target",
-                    "bumpcommit456",
-                    "--generate-notes",
-                    "--prerelease",
-                ],
+                expected_release_command(repo, "2.0.0-beta.4", "bumpcommit456"),
             )
-            self.assertNotIn(expected_violating_pre_bump_tag_command(), runner.commands)
+            self.assertNotIn(expected_violating_pre_bump_tag_command(repo), runner.commands)
             payload = read_json(repo / ".refactor-loop/state/release-publish-result.json")
             self.assertIsInstance(payload, dict)
             assert isinstance(payload, dict)
             self.assertEqual(payload["tag"], "v2.0.0-beta.4")
             self.assertEqual(payload["target_ref"], "bumpcommit456")
+            self.assertEqual(payload["notes_path"], ".refactor-loop/state/release-notes/v2.0.0-beta.4.md")
             self.assertEqual(payload["candidate_digest"], "digest123")
             self.assertEqual(payload["release_url"], "https://github.test/release/v2.0.0")
+            notes_body = (repo / payload["notes_path"]).read_text(encoding="utf-8")
+            self.assertIn("fix: publish curated release notes (#704)", notes_body)
+            self.assertIn("- #322", notes_body)
+            self.assertNotIn("Release v2.0.0-beta.3", notes_body)
 
     def test_publisher_does_not_mark_ga_release_as_prerelease(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -988,7 +1004,7 @@ class ReleasePublisherTests(unittest.TestCase):
 
             self.assertEqual(len([command for command in runner.commands if command[:3] == ["git", "worktree", "add"]]), 3)
             self.assertNotIn(["git", "push", "origin", "HEAD"], runner.commands)
-            self.assertNotIn(expected_violating_pre_bump_tag_command(), runner.commands)
+            self.assertNotIn(expected_violating_pre_bump_tag_command(repo), runner.commands)
             self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
 
     def test_publisher_stops_on_command_failure_before_release_creation(self) -> None:
@@ -1018,7 +1034,7 @@ class ReleasePublisherTests(unittest.TestCase):
             expected_prefix = expected_success_commands(repo)[:9]
             self.assertEqual(runner.commands[:9], expected_prefix)
             self.assertEqual(runner.commands[-1], expected_success_commands(repo)[14])
-            self.assertNotIn(expected_violating_pre_bump_tag_command(), runner.commands)
+            self.assertNotIn(expected_violating_pre_bump_tag_command(repo), runner.commands)
             self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
 
 
