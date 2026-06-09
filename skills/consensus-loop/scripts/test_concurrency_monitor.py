@@ -1475,6 +1475,10 @@ class SnapshotDaemonHealthFieldTests(unittest.TestCase):
         result = self.monitor.read_daemon_heartbeats(now=1_000_000.0)
         self.assertTrue(result["comment-monitor"]["stale"])
         self.assertIsNone(result["comment-monitor"]["age_seconds"])
+        self.assertEqual(
+            [{"age_seconds": None, "name": "comment-monitor", "reason": "heartbeat-malformed"}],
+            self.monitor.stale_daemon_projection(result),
+        )
 
     def test_read_daemon_heartbeats_missing_dir_returns_empty(self) -> None:
         # Wipe heartbeats dir; ensure no crash and empty result.
@@ -1514,6 +1518,10 @@ class SnapshotDaemonHealthFieldTests(unittest.TestCase):
         self.assertIn("daemons", payload)
         self.assertTrue(payload["daemons"]["dev_sync_daemon"]["stale"])
         self.assertFalse(payload["daemons"]["concurrency_monitor"]["stale"])
+        self.assertEqual(
+            [{"age_seconds": 300, "name": "dev_sync_daemon", "reason": "heartbeat-stale"}],
+            payload["stale_daemons"],
+        )
 
     def test_snapshot_with_no_heartbeats_writes_empty_daemons(self) -> None:
         from datetime import datetime, timezone
@@ -1535,6 +1543,7 @@ class SnapshotDaemonHealthFieldTests(unittest.TestCase):
         self.assertEqual(payload["daemons"], {})
         self.assertEqual(payload["daemons_total"], 0)
         self.assertEqual(payload["daemons_healthy"], 0)
+        self.assertEqual(payload["stale_daemons"], [])
 
 
 if __name__ == "__main__":
