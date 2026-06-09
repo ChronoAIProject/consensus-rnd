@@ -1573,6 +1573,8 @@ class ControllerActions:
             roles = REVIEW_ROLES
         for role in roles:
             round_number = self._next_review_round(pr_target, role)
+            if self._review_round_is_pending(pr_target, role, round_number - 1):
+                continue
             if self._pending_review_spawn_exists(pr_target, role, round_number):
                 continue
             prompt = self.ctx.paths.prompts / f"review-pr{pr_target}-{role}-r{round_number}.md"
@@ -1610,6 +1612,20 @@ class ControllerActions:
                 if match:
                     rounds.append(int(match.group(1)))
         return (max(rounds) if rounds else 0) + 1
+
+    def _review_round_is_pending(self, pr_target: str, role: str, round_number: int) -> bool:
+        if round_number < 1:
+            return False
+        log_path = self.ctx.paths.logs / f"review-pr{pr_target}-{role}-r{round_number}.log"
+        if not log_path.exists():
+            return False
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        if "EXIT=" in text:
+            return False
+        return (self.ctx.paths.prompts / f"review-pr{pr_target}-{role}-r{round_number}.md").exists()
 
     def _pending_review_spawn_exists(self, pr_target: str, role: str, round_number: int) -> bool:
         try:
