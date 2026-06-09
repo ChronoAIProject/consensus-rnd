@@ -394,6 +394,36 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
             self.assertEqual(decision["to_version"], "1.0.0-beta.11")
             self.assertEqual(len(decision["commits"]), 3)
 
+    def test_release_commits_uses_older_reachable_tag_when_newest_tag_is_orphaned(self) -> None:
+        with init_repo(tag_release=False) as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_env(repo)
+            git_ok(repo, "tag", "v1.0.0")
+            first_sha = commit(repo, "fix: after reachable tag")
+            second_sha = commit(repo, "feat: selected range")
+            orphan_tree = git_ok(repo, "rev-parse", "HEAD^{tree}")
+            orphan_release = git_ok(
+                repo,
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit-tree",
+                orphan_tree,
+                "-m",
+                "Release v9.9.9",
+            )
+            git_ok(repo, "tag", "v9.9.9", orphan_release)
+            self.assertNotEqual(0, git(repo, "merge-base", "--is-ancestor", "v9.9.9", "HEAD").returncode)
+
+            output = commits.write_release_commits(repo, target_ref="HEAD", fetch_tags=False)
+
+            data = read_json(output)
+            self.assertIsInstance(data, dict)
+            assert isinstance(data, dict)
+            self.assertEqual([item["sha"] for item in data["commits"]], [first_sha, second_sha])
+            self.assertEqual(data["latest_release_version"], "1.0.0")
+
     def test_release_commits_cli_fails_closed_without_review_base_branch_env(self) -> None:
         with init_repo() as tmp:
             repo = Path(tmp) / "repo"

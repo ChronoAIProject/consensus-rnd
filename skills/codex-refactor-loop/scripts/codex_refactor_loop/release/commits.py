@@ -79,33 +79,64 @@ def write_release_commits(
         fetch_tags=fetch_tags,
     )
     output_path = repo_root / RELEASE_COMMITS_RELATIVE_PATH
-    latest_tag = latest_release_tag(repo_root)
-    latest_version = latest_tag.removeprefix("v") if latest_tag else None
+    latest_version = latest_release_version(repo_root, target_ref=target_ref or review_base_branch)
     write_json(output_path, {"commits": commits, "latest_release_version": latest_version})
     return output_path
 
 
 def latest_release_ref(repo_root: Path, target_ref: str | None = None) -> str | None:
-    release_tag = latest_release_tag(repo_root)
-    if not release_tag:
+    release_tags = release_tags_by_version(repo_root)
+    if not release_tags:
         return latest_release_subject_ref(repo_root, target_ref)
-    if target_ref and git_ref_is_ancestor(repo_root, release_tag, target_ref):
-        return release_tag
     if target_ref:
-        return manifest_version_transition_ref(
-            repo_root,
-            target_ref=target_ref,
-            version=release_tag.removeprefix("v"),
-        )
+        for release_tag in release_tags:
+            if git_ref_is_ancestor(repo_root, release_tag, target_ref):
+                return release_tag
+        for release_tag in release_tags:
+            try:
+                return manifest_version_transition_ref(
+                    repo_root,
+                    target_ref=target_ref,
+                    version=release_tag.removeprefix("v"),
+                )
+            except RuntimeError:
+                continue
+        return latest_release_subject_ref(repo_root, target_ref)
+    release_tag = release_tags[0]
     if git_ref_exists(repo_root, release_tag):
         return release_tag
     return None
 
 
 def latest_release_tag(repo_root: Path) -> str | None:
+    release_tags = release_tags_by_version(repo_root)
+    return release_tags[0] if release_tags else None
+
+
+def latest_release_version(repo_root: Path, target_ref: str | None = None) -> str | None:
+    release_ref = latest_release_ref(repo_root, target_ref=target_ref)
+    if release_ref is None:
+        return None
+    if release_ref.startswith("v"):
+        version = release_ref.removeprefix("v")
+        try:
+            parse_semver_full(version)
+            return version
+        except ValueError:
+            pass
+    subject = run_git(repo_root, ["show", "-s", "--format=%s", release_ref])
+    if subject.returncode != 0:
+        return None
+    match = re.match(r"^Release v([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)", subject.stdout.strip())
+    if not match:
+        return None
+    return match.group(1)
+
+
+def release_tags_by_version(repo_root: Path) -> list[str]:
     result = run_git(repo_root, ["tag", "--list", "v*"])
     if result.returncode != 0:
-        return None
+        return []
     versions_by_tag: dict[str, list[str]] = {}
     for raw_tag in result.stdout.splitlines():
         tag = raw_tag.strip()
@@ -118,9 +149,11 @@ def latest_release_tag(repo_root: Path) -> str | None:
             continue
         versions_by_tag.setdefault(version, []).append(tag)
     if not versions_by_tag:
-        return None
-    latest_version = sort_semver(list(versions_by_tag))[-1]
-    return sorted(versions_by_tag[latest_version])[-1]
+        return []
+    tags: list[str] = []
+    for version in reversed(sort_semver(list(versions_by_tag))):
+        tags.extend(sorted(versions_by_tag[version], reverse=True))
+    return tags
 
 
 def latest_release_subject_ref(repo_root: Path, target_ref: str | None) -> str | None:
@@ -349,6 +382,7 @@ __all__ = [
     "RELEASE_COMMITS_RELATIVE_PATH",
     "collect_release_commits",
     "latest_release_ref",
+    "latest_release_version",
     "main",
     "refresh_origin_tags",
     "resolve_review_ref",

@@ -13,6 +13,7 @@ from typing import Any, Callable, Literal, Sequence
 
 from ..state import write_json
 from .gate import isoformat, load_host_env, resolve_field
+from .notes import generate_release_notes_file
 from .publish_preflight import PublishPreflightResult, ReleasePublishPreflight, load_manifest_targets
 from .publish_transaction import ReleaseCommitTransaction
 from .required_checks import ReleaseRequiredChecksProjection, required_release_checks
@@ -36,6 +37,7 @@ class ReleasePublishResult:
     version: str
     release_url: str
     result_path: Path
+    notes_path: Path | None = None
 
 
 ReleasePublicationPhase = Literal["first_run", "already_bumped"]
@@ -110,7 +112,8 @@ class ReleasePublisher:
             release_target_ref = state.release_target_ref or self._current_head_sha()
         release_push_started_at = None if state.skip_bump_commit else self.now()
         self._ensure_fresh_release_commit_checks_green(release_target_ref, since=release_push_started_at)
-        release_command = ["gh", "release", "create", tag, "--target", release_target_ref, "--generate-notes"]
+        notes_path = generate_release_notes_file(self.repo_root, version=version, target_ref=release_target_ref)
+        release_command = ["gh", "release", "create", tag, "--target", release_target_ref, "--notes-file", str(notes_path)]
         if parse_semver_full(version).prerelease:
             release_command.append("--prerelease")
         release = self._run(release_command)
@@ -122,6 +125,7 @@ class ReleasePublisher:
             "version": version,
             "published_at": isoformat(self.now()),
             "release_url": release_url,
+            "notes_path": str(notes_path.relative_to(self.repo_root)),
             "candidate_digest": result.candidate_digest,
         }
         write_json(self.result_path, payload)
@@ -132,6 +136,7 @@ class ReleasePublisher:
             target_ref=release_target_ref,
             version=version,
             release_url=release_url,
+            notes_path=notes_path,
             result_path=self.result_path,
         )
 
@@ -337,6 +342,7 @@ class ReleasePublisher:
             target_ref=result.target_ref,
             version=result.version,
             release_url="",
+            notes_path=None,
             result_path=self.result_path,
         )
 
