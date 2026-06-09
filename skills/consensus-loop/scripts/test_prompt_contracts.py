@@ -56,8 +56,8 @@ class PromptContractsTests(unittest.TestCase):
                 body = (PROMPTS_DIR / name).read_text(encoding="utf-8")
                 rendered = inline_prompt_contracts(body, skill_root=SKILL_ROOT)
 
-                self.assertIn("zsh-safe 退出码变量", rendered)
-                self.assertIn("禁止**用 `status`", rendered)
+                self.assertIn("zsh-safe exit-code variables", rendered)
+                self.assertIn("**do not** use `status`", rendered)
                 self.assertIn("post_exit_code=$?", rendered)
                 self.assertNotIn("status=$?", rendered)
 

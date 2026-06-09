@@ -2,7 +2,7 @@
 
 <!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
-> Please reply according to `${HOST_WORK_LANGUAGE}`。Code identifier、file path、错误消息和条款引用可以保留原文。
+> Please reply according to `${HOST_WORK_LANGUAGE}`; do not add a mandatory parallel English section. Code identifiers, file paths, error messages, and rule quotes may remain verbatim.
 
 ---
 
@@ -75,10 +75,10 @@ cc: @<maintainer-handle-from-$MAINTAINER_WHITELIST>（auto-loop 运维者）
 
 ---
 
-## AI 内容标识符(强制)
+## AI content identifier (mandatory)
 
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
+Every AI-authored external artifact (GitHub issue/PR comment, PR body, commit message, `runs/*.md` artifact, or push notification) **must end with the sentinel as the final standalone line**:
 
     ⟦AI:AUTO-LOOP⟧
 
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
+Do not modify the sentinel characters; do not place them in code comments, paths, or branch names. No sentinel means generation failure and the controller rejects the post.

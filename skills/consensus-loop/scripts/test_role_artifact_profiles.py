@@ -535,9 +535,9 @@ class RoleArtifactProfileTests(unittest.TestCase):
     def test_github_post_rules_profile_source_regression(self) -> None:
         body = (PROMPTS_DIR / "_github-post-rules.md").read_text(encoding="utf-8")
         self.assertIn("Artifact profile: github-ai-post-body", body)
-        self.assertIn("## Body 结构(强制)", body)
-        self.assertIn("第一行 `## 🤖 ` 开头", body)
-        self.assertIn("raw artifact 必折叠", body)
+        self.assertIn("## Body Structure (Mandatory)", body)
+        self.assertIn("First line starts with `## 🤖 `", body)
+        self.assertIn("Raw artifacts must be collapsed", body)
 
     def test_phase8_reviewer_profile_matches_live_prompt_output_sections(self) -> None:
         for filename in ("reviewer-architect.md", "reviewer-tests.md", "reviewer-quality.md"):

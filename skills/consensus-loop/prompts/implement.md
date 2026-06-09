@@ -9,7 +9,7 @@ Artifact profile: marker-only-work-unit
 实现上下文事实源是 `${WORK_UNIT_SOURCE_REF}`。audit-backed work unit 指向 `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md`；design-issue work unit 指向已达成共识的 decision artifact。
 `${DESIGN_DECISION_PATH}` 非空时走 design-issue pathway，读取该 consensus artifact；为空时走 audit-backed legacy pathway，读取 `${WORK_UNIT_SOURCE_REF}` 中的 "${CLUSTER_ID}" 一节。
 
-## 必读上下文
+## Required reading上下文
 
 1. 主仓库 `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 全部强制条款。
 2. 实现上下文：若 `${DESIGN_DECISION_PATH}` 非空，读取 `$REPO_ROOT/${DESIGN_DECISION_PATH}`；否则读取 `${WORK_UNIT_SOURCE_REF}` 中 "${CLUSTER_ID}" 一节。
@@ -20,7 +20,7 @@ Artifact profile: marker-only-work-unit
 - **错误模式**：${OLD_PATTERN}
 - **设计原则**：${NEW_PRINCIPLE}
 
-## 硬约束
+## Hard constraints
 
 1. **作用域**：仅修改下列文件；扩展前必须打印 `SCOPE_EXTEND: <file> <reason>`：
 ${SCOPE_PATHS}
@@ -84,23 +84,23 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ${VERIFICATION_HINTS}
 
-## codex 工具边界(强制)
+## Codex tool boundary (mandatory)
 
 <!-- Refactor (iter5/prompt-gh-ban-marker-only): Old pattern: marker-only prompt(audit/implement/verify/remote-ci-fix/test-add)缺 gh 禁止段,codex 可自由调 gh issue create/pr merge/issue close/label edit。 New principle: 复用 reviewer/solver "可调/不可调" 模式,统一禁 lifecycle 类 gh 操作;controller 拥有 PR create/merge/close + issue create/close + label。(2026-05-26 maintainer-directive 等价 Consensus-rnd Phase design-consensus 共识) -->
 
-本 prompt 是 marker/artifact-only,**默认不需要任何 gh 操作**。
+This prompt is marker/artifact-only and does not need `gh` by default.
 
-不可调:`git commit/push/checkout/merge/reset/rebase`、`gh pr create`、`gh pr merge`、`gh pr close`、`gh issue create`、`gh issue close`、`gh issue edit --add-label`、`gh issue edit --remove-label`、`gh pr edit --add-label`、`gh pr edit --remove-label`。lifecycle / label 决策归 controller,worker 不得越线。
+Forbidden: `git commit/push/checkout/merge/reset/rebase`, `gh pr create`, `gh pr merge`, `gh pr close`, `gh issue create`, `gh issue close`, `gh issue edit --add-label`, `gh issue edit --remove-label`, `gh pr edit --add-label`, and `gh pr edit --remove-label`. Lifecycle and label decisions belong to the controller; workers must not cross that boundary.
 
-可调(仅当本 prompt 明示要 post 时):`gh issue/pr comment`、`gh pr edit --body-file`、`gh api .../reactions`、`mktemp`。本 prompt 未明示 → 不要调任何 gh。
+Allowed only when this prompt explicitly requires posting: `gh issue/pr comment`, `gh pr edit --body-file`, `gh api .../reactions`, and `mktemp`. If this prompt does not explicitly require posting, do not call `gh`.
 
-开始执行。
+Begin.
 
 ---
 
-## AI 内容标识符(强制)
+## AI content identifier (mandatory)
 
-所有 AI 生成的 GitHub issue/PR comment、PR body、commit message、push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
+Every AI-authored GitHub issue/PR comment, PR body, commit message, or push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 

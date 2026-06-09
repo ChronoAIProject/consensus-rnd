@@ -122,18 +122,18 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - Follow ${HOST_WORK_LANGUAGE} per SKILL.md; do not add a mandatory parallel English section.
 - No filler. Numbers > adjectives.
 
-## GitHub post(强制)
+## GitHub post (mandatory)
 
-After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `${HOST_WORK_LANGUAGE}`**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 
 
 ---
 
-## AI 内容标识符(强制)
+## AI content identifier (mandatory)
 
-所有 AI 生成的 GitHub issue/PR comment、PR body、commit message、push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
+Every AI-authored GitHub issue/PR comment, PR body, commit message, or push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 

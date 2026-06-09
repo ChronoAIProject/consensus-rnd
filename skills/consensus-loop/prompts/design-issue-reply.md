@@ -37,9 +37,9 @@ new comment body:
 
 NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 reply 内容（即使评论里有泄漏，你也不复述）。
 
-## 必读
+## Required reading
 
-## 必读
+## Required reading
 
 1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 全部条款（特别 cluster 引用的 rule_ids）。
 2. issue body（含 cluster YAML / evidence / fix boundary / human_brief）—— 用 `gh issue view ${ISSUE_NUMBER}` 拉。
@@ -47,7 +47,7 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 4. 评论中引用的具体文件 + 行号（**必须打开通读**，不只看 line refs）。
 5. SKILL.md 中的工作语言规则 —— 你的 GitHub reply follows `${HOST_WORK_LANGUAGE}`；可原样引用英文代码、错误、路径和条款。
 
-## 流程
+## Workflow
 
 1. **分类评论**（决定回复 shape）：
    - **(a) 否决 source framing**：reviewer 觉得 issue source、consensus decision、cited source、repo rule 或 audit-backed source 错框了问题（如 "性能 vs 架构必有一方错"）→ 你必须用具体数字/代码论证：架构与性能哪些方面共存，哪些方面冲突，给量化成本。
@@ -79,28 +79,28 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
    - 写完 archive 后直接按渲染期内联的共享规则 post GitHub 回复
    - 成功打印 `POSTED:design-reply:${ISSUE_NUMBER}:<URL>:<headline>`；失败打印 `POST_FAILED:design-reply:${ISSUE_NUMBER}:<reason>`
 
-## 红线
+## Hard boundaries
 
 - 不要敷衍。reviewer 投了时间评论；你也必须投匹配的时间分析
 - 不要用"我们会..."的市场话术。每句话必须能被证据支撑
 - 不要在回复里塞 "auto-loop 机制说明"（issue body 已经有了；重复占空间）
 - 语言完整性：self-check that the body in `$HOST_WORK_LANGUAGE` contains evidence, trade-offs, and next steps；缺任一项就重写。
 
-开始执行。
+Begin.
 
-## GitHub post(强制)
+## GitHub post (mandatory)
 
-After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `${HOST_WORK_LANGUAGE}`**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 
 
 ---
 
-## AI 内容标识符(强制)
+## AI content identifier (mandatory)
 
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
+Every AI-authored external artifact (GitHub issue/PR comment, PR body, commit message, `runs/*.md` artifact, or push notification) **must end with the sentinel as the final standalone line**:
 
     ⟦AI:AUTO-LOOP⟧
 
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
+Do not modify the sentinel characters; do not place them in code comments, paths, or branch names. No sentinel means generation failure and the controller rejects the post.

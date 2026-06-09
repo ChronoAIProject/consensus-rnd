@@ -194,9 +194,12 @@ class GitHubBodySourceRegressionTests(unittest.TestCase):
         skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
         for text in (rules, skill):
             with self.subTest(source=text[:20]):
-                self.assertIn("GitHub body 必须自包含", text) if text is rules else self.assertIn("must inline the cited artifact text", text)
-                self.assertIn("<details><summary>本机调试线索</summary>", text)
-                self.assertTrue("永远不是唯一授权来源" in text or "never as the only source" in text)
+                self.assertIn("GitHub bodies must be self-contained", text) if text is rules else self.assertIn("must inline the cited artifact text", text)
+                self.assertTrue(
+                    "<details><summary>Local debug context</summary>" in text
+                    or "<details><summary>本机调试线索</summary>" in text
+                )
+                self.assertTrue("must never be the sole authority source" in text or "never as the only source" in text)
         self.assertNotIn("See [implement summary](./.refactor-loop/runs/implement-<cluster-id>.md)", skill)
 
 
