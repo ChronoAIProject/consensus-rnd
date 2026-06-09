@@ -10,7 +10,7 @@
 
 | skill | 用途 | 运行形态 |
 |---|---|---|
-| `codex-refactor-loop` | 重型自治 loop:daemon 监督、Codex worker、GitHub 编排、review gate,以及 host opt-in 后的自动发版。 | 使用 checked-in scripts、`.refactor-loop/` state、GitHub、git 和 host 通过 `host.env` 注入的事实。 |
+| `consensus-loop` | 重型自治 loop:daemon 监督、Codex worker、GitHub 编排、review gate,以及 host opt-in 后的自动发版。 | 使用 checked-in scripts、`.refactor-loop/` state、GitHub、git 和 host 通过 `host.env` 注入的事实。 |
 | `sshx` | 轻量纯 prompt 共识方法论:高风险决策或实现方案需要隔离多角度判断,但不需要 daemon/GitHub/git 编排时使用。 | 纯 prompt contract:无 daemon、无 lifecycle authority、无 runtime control plane。 |
 
 ## 核心
@@ -25,7 +25,7 @@
 
 ## ⚠️ 风险提示
 
-`codex-refactor-loop` 是实验性自治研发系统。下游仓库必须显式 opt in,且 maintainer 理解以下风险后再启用:
+`consensus-loop` 是实验性自治研发系统。下游仓库必须显式 opt in,且 maintainer 理解以下风险后再启用:
 
 - **自治写操作**:启用后 loop 可无人值守运行。controller-owned 路径在相应 gate 与 allowlist 通过后,可执行 commit、push、open PR、merge PR、release publish,且没有逐动作人工确认。agent worker 只在隔离 worktree 产出实现 diff,不 commit/push。
 - **API/算力成本**:持续派发 Codex worker 加上 6 个 daemon 轮询 GitHub,会持续消耗 API quota、model token 和本机算力。
@@ -56,7 +56,7 @@
 
 ### 下游 host 设置
 
-`codex-refactor-loop` 的 host 安装顺序集中在英文 canonical README 的 "Downstream Host Setup" 和 skill 内的 walkthrough。按该 walkthrough 安装 skill、复制并填写 host-owned `host.env`、配置用户级 cron/launchd 和 Claude Code `statusLine`;本 companion 不复制命令矩阵。
+`consensus-loop` 的 host 安装顺序集中在英文 canonical README 的 "Downstream Host Setup" 和 skill 内的 walkthrough。按该 walkthrough 安装 skill、复制并填写 host-owned `host.env`、配置用户级 cron/launchd 和 Claude Code `statusLine`;本 companion 不复制命令矩阵。
 
 ## 架构
 
@@ -84,7 +84,7 @@ host 项目通过 `host.env` 注入运行时事实:仓库根、GitHub slug、rev
 
 ## 路线
 
-公开产品身份是 Consensus R&D。`codex-refactor-loop` 保留为重型自治 loop 入口,`sshx` 则把同一套共识哲学压缩成轻量纯 prompt 方法。后续工作应继续抽出 engine spine、把 host 主张参数化,并把 runtime authority 收窄到可机械验证的边界。
+公开产品身份是 Consensus R&D。`consensus-loop` 保留为重型自治 loop 入口,`sshx` 则把同一套共识哲学压缩成轻量纯 prompt 方法。后续工作应继续抽出 engine spine、把 host 主张参数化,并把 runtime authority 收窄到可机械验证的边界。
 
 ## License
 

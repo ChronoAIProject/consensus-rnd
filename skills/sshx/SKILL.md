@@ -5,7 +5,7 @@ description: Use when a high-risk or multi-angle decision needs worker-delegated
 
 # sshx
 
-`sshx` is a lightweight worker-delegated inline consensus skill. It applies the consensus engine philosophy to a single decision or implementation task by dispatching isolated worker perspectives without using `codex-refactor-loop` runtime surfaces.
+`sshx` is a lightweight worker-delegated inline consensus skill. It applies the consensus engine philosophy to a single decision or implementation task by dispatching isolated worker perspectives without using `consensus-loop` runtime surfaces.
 
 <!--
 Refactor (iter342/issue-342):
@@ -36,7 +36,7 @@ Do not use this skill for routine one-step answers where no separate perspective
 - `success_criteria`
 - `iteration_question`
 
-The user's current input is the only source for the goal. `sshx` must not discover or infer the goal from `codex-refactor-loop` milestones, release state, `host.env`, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface.
+The user's current input is the only source for the goal. `sshx` must not discover or infer the goal from `consensus-loop` milestones, release state, `host.env`, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface.
 
 `iteration_question` must ask what still differs from `GoalArtifact`, using the normalized goal, constraints, and success criteria as the fixed target. It must not broaden the task into a generic improvement search.
 
@@ -233,7 +233,7 @@ This skill is only a prompt contract. It must not add or depend on:
 - release authority;
 - a public marker family;
 - `.refactor-loop/host.env` as a production source of truth;
-- `codex-refactor-loop` internal prompts or scripts as an implementation dependency.
+- `consensus-loop` internal prompts or scripts as an implementation dependency.
 
 Allowed worker carriers are limited to `codex-cli` and `isolated-token-subagent`. Use them only as worker delegation capability, not as controller authority.
 

@@ -10,8 +10,8 @@ This repository is not an application runtime. Its deliverables are skills under
 
 | skill | What it is for | Runtime shape |
 |---|---|---|
-| `codex-refactor-loop` | Heavy autonomous Consensus R&D work-unit loop for issue/PR resolution, ongoing repository R&D, daemon supervision, Codex workers, GitHub orchestration, review gates, and automated release publication when the host opts in. Audit/refactor is a fallback issue producer when no actionable managed work is open. | Uses checked-in scripts, `.refactor-loop/` state, GitHub, git, and host-provided `host.env` facts. |
-| `sshx` | Lightweight worker-delegated inline consensus methodology (轻量 worker-delegated inline 共识方法论) for high-risk decisions or implementation plans that need isolated perspectives but do not need daemon, GitHub, or git orchestration. | WorkerMode dispatches isolated thinking and review workers; no daemon, no lifecycle authority, no runtime control plane, and not a duplicate alias for `codex-refactor-loop`. |
+| `consensus-loop` | Heavy autonomous Consensus R&D work-unit loop for issue/PR resolution, ongoing repository R&D, daemon supervision, Codex workers, GitHub orchestration, review gates, and automated release publication when the host opts in. Audit/refactor is a fallback issue producer when no actionable managed work is open. | Uses checked-in scripts, `.refactor-loop/` state, GitHub, git, and host-provided `host.env` facts. |
+| `sshx` | Lightweight worker-delegated inline consensus methodology (轻量 worker-delegated inline 共识方法论) for high-risk decisions or implementation plans that need isolated perspectives but do not need daemon, GitHub, or git orchestration. | WorkerMode dispatches isolated thinking and review workers; no daemon, no lifecycle authority, no runtime control plane, and not a duplicate alias for `consensus-loop`. |
 
 ## Core
 
@@ -25,7 +25,7 @@ The engine is not "run the same prompt several times and vote." It is biased, in
 
 ## Risks
 
-`codex-refactor-loop` is an experimental autonomous R&D system. Enable it only after the host repository explicitly opts in and the maintainers understand these risks:
+`consensus-loop` is an experimental autonomous R&D system. Enable it only after the host repository explicitly opts in and the maintainers understand these risks:
 
 - **Autonomous writes**: when enabled, the loop can run unattended. Controller-owned paths may commit, push, open PRs, merge PRs, and publish releases after their respective gates and allowlists pass, without per-action human confirmation. Agent workers only produce implementation diffs in isolated worktrees; they do not commit or push.
 - **API and compute cost**: continuous Codex worker dispatch plus six GitHub-polling daemons can continuously consume API quota, model tokens, and local compute.
@@ -58,7 +58,7 @@ Copy `skills/<name>/` into the agent's personal skills directory, such as Claude
 
 ### Downstream Host Setup
 
-The host installation sequence for `codex-refactor-loop` is centralized in the [`Downstream install walkthrough`](./skills/codex-refactor-loop/SKILL.md#downstream-install-walkthrough). Use that walkthrough to install the skill, copy and fill the host-owned `host.env`, configure user-level cron or launchd, and connect the Claude Code `statusLine`; this README does not duplicate the command matrix. Host GitHub workflow portability uses the folded [`GitHub workflow portability checklist`](./skills/codex-refactor-loop/SKILL.md#github-workflow-portability-checklist), not a standalone setup skill.
+The host installation sequence for `consensus-loop` is centralized in the [`Downstream install walkthrough`](./skills/consensus-loop/SKILL.md#downstream-install-walkthrough). Use that walkthrough to install the skill, copy and fill the host-owned `host.env`, configure user-level cron or launchd, and connect the Claude Code `statusLine`; this README does not duplicate the command matrix. Host GitHub workflow portability uses the folded [`GitHub workflow portability checklist`](./skills/consensus-loop/SKILL.md#github-workflow-portability-checklist), not a standalone setup skill.
 
 ## Architecture
 
@@ -86,7 +86,7 @@ Host projects inject runtime facts through `host.env`: repository root, GitHub s
 
 ## Roadmap
 
-The public product identity is Consensus R&D. Refactoring, issue-solving, and repository R&D are different entry surfaces for the same work-unit loop. `codex-refactor-loop` remains the stable heavy autonomous loop entrypoint, while `sshx` carries the same consensus philosophy as a lightweight worker-delegated inline method, not as a duplicate alias for the heavy loop. Future work should continue generalizing host/project assumptions and producer inputs while keeping runtime authority narrow enough to verify mechanically.
+The public product identity is Consensus R&D. Refactoring, issue-solving, and repository R&D are different entry surfaces for the same work-unit loop. `consensus-loop` remains the stable heavy autonomous loop entrypoint, while `sshx` carries the same consensus philosophy as a lightweight worker-delegated inline method, not as a duplicate alias for the heavy loop. Future work should continue generalizing host/project assumptions and producer inputs while keeping runtime authority narrow enough to verify mechanically.
 
 ## License
 
