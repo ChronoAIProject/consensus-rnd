@@ -154,6 +154,38 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertIn("optional-empty-or-noop", self.exports["GH_OWNER"]["section"])
         self.assertIn("optional-empty-or-noop", self.exports["GH_REPO_NAME"]["section"])
 
+    def test_build_and_test_examples_are_fresh_worktree_self_contained(self) -> None:
+        self.assertEqual("npm ci --no-audit --no-fund && npm run build", self.exports["BUILD_CMD"]["value"])
+        self.assertEqual("npm ci --no-audit --no-fund && npm test", self.exports["TEST_CMD"]["value"])
+
+        template = read(HOST_ENV_EXAMPLE)
+        skill = read(SKILL_MD)
+        for token in (
+            'bash -lc "$BUILD_CMD"',
+            'bash -lc "$TEST_CMD"',
+            "fresh `$REPO_ROOT/.worktrees/<id>`",
+            "ignored dependencies",
+            "dependency preparation",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, template)
+
+        for token in (
+            "Greenfield host bootstrap path",
+            "minimal repository skeleton",
+            "fresh isolated `$REPO_ROOT/.worktrees/<id>` checkout",
+            "npm ci --no-audit --no-fund && npm run build",
+            "npm ci --no-audit --no-fund && npm test",
+            "does not add a setup CLI, installer, Node-specific environment variable, runtime preinstall hook, README command matrix",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, skill)
+
+        combined = "\n".join((skill, template))
+        for forbidden in ("NODE_INSTALL_CMD", "NPM_INSTALL_CMD", "PREINSTALL_CMD"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, combined)
+
     def test_defaults_and_missing_behaviors_match(self) -> None:
         cases = {
             "RELEASE_AUTO_ENABLE": ("false", "false or empty exits 0 with noop reason"),
