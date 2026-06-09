@@ -1,6 +1,6 @@
 {
   "name": "consensus-rnd",
-  "version": "1.0.0-beta.13",
+  "version": "1.0.0-beta.14",
   "description": "通用共识式研发 skills 库：偏置独立的多角度共识构建引擎；repo-owned managed GitHub issue/PR 自治解决引擎，audit/refactor 仅 fallback producer",
   "license": "MIT",
   "author": "auric <loning.ma@aelf.io>",
