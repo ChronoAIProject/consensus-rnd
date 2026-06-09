@@ -61,8 +61,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
         top = "\n".join(self.skill.splitlines()[:120])
 
         self.assertIn("name: consensus-loop", body)
-        self.assertIn("issue/PR resolution and work-unit loop", body)
-        self.assertIn("audit/refactor as a fallback compatibility issue producer", body)
+        self.assertIn("repo-owned GitHub issues/PRs end-to-end", body)
+        self.assertIn("audit/refactor is only a fallback issue producer", body)
         self.assertIn("# Consensus R&D Work-Unit Loop", top)
         self.assertIn("## Main path and fallback producer", top)
         self.assertIn("open actionable catalog-managed GitHub issue/PR resolution", top)
