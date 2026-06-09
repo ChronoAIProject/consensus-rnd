@@ -40,6 +40,7 @@ from .pr_checks import PrMergeReadinessProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.gate import AutoReleaseGate
 from .release.commits import write_release_commits
+from .release.candidate_liveness import classify_release_candidate_liveness
 from .release.publish_preflight import ReleasePublishPreflight
 from .release.publisher import ReleasePublisher
 from .safe_progress_scheduler import MEDIUM_NON_SPAWN_LIMIT_PER_TICK, validate_runner_action
@@ -48,7 +49,6 @@ from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import (
     build_plan,
     consensus_implementation_suppressed_reason,
-    release_candidate_target_ref_invalid,
     zero_code_implementation_completion_proven,
 )
 from .worker_markers import read_worker_terminal_marker
@@ -687,10 +687,10 @@ class WakeupRunner:
         candidate = self.ctx.paths.state / "release-candidate.json"
         if candidate.exists():
             decision = read_json(self.ctx.paths.state / "release-decision.json", {})
-            if (
-                "release_candidate_target_ref_invalid" not in preconditions
-                or not release_candidate_target_ref_invalid(read_json(candidate, {}), decision)
-            ):
+            liveness = classify_release_candidate_liveness(self.ctx.repo_root, read_json(candidate, {}), decision)
+            if liveness.blocks_dispatch:
+                return "release_candidate_already_exists"
+            if not liveness.stale_reason or liveness.stale_reason not in preconditions:
                 return "release_candidate_already_exists"
         if not str(action.get("from_version") or "").strip() or not str(action.get("to_version") or "").strip():
             return "release_dispatch_version_missing"
@@ -1267,6 +1267,11 @@ class WakeupRunner:
             ):
                 self._append_pending_event("WAKEUP_RUNNER_RELEASE_DISPATCH_BLOCKED:version-mismatch")
                 return 3
+            stale_reason = self._current_release_dispatch_stale_reason(action)
+            if stale_reason:
+                self._append_pending_event(
+                    f"WAKEUP_RUNNER_RELEASE_DISPATCH_STALE_CANDIDATE:{action.get('action_id')}:{stale_reason}"
+                )
             gate.dispatch_release(decision)
             return 0
         finally:
@@ -1804,7 +1809,7 @@ class WakeupRunner:
                     continue
                 if self._release_dispatch_stale_ledger_reason(action):
                     self._append_pending_event(
-                        f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action_id}:target_ref_invalid"
+                        f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action_id}:{self._release_dispatch_stale_ledger_reason(action)}"
                     )
                     continue
                 stale_spawn_reason = self._applied_spawn_stale_reason(action)
@@ -1817,18 +1822,24 @@ class WakeupRunner:
         return False
 
     def _release_dispatch_stale_ledger_reason(self, action: Mapping[str, Any]) -> str:
+        return self._current_release_dispatch_stale_reason(action)
+
+    def _current_release_dispatch_stale_reason(self, action: Mapping[str, Any]) -> str:
         if action.get("kind") != "release-gate-dispatch":
             return ""
         if action.get("controller_action") != "dispatch_release_candidate":
             return ""
         preconditions = action.get("preconditions")
-        if not isinstance(preconditions, list) or "release_candidate_target_ref_invalid" not in preconditions:
+        if not isinstance(preconditions, list):
             return ""
         candidate = self.ctx.paths.state / "release-candidate.json"
         decision = read_json(self.ctx.paths.state / "release-decision.json", {})
-        if not release_candidate_target_ref_invalid(read_json(candidate, {}), decision):
+        liveness = classify_release_candidate_liveness(self.ctx.repo_root, read_json(candidate, {}), decision)
+        if liveness.blocks_dispatch or not liveness.stale_reason:
             return ""
-        return "target_ref_invalid"
+        if liveness.stale_reason not in preconditions:
+            return ""
+        return liveness.stale_reason
 
     @property
     def remote_ci_fix_attempts_path(self) -> Path:

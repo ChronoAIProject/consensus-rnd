@@ -42,8 +42,9 @@ from codex_refactor_loop.issue_decomposition import (
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.phase9.progress import issue_has_terminal_consensus_judge
 from codex_refactor_loop.pr_checks import PrMergeReadinessProjection
+from codex_refactor_loop.release.candidate_liveness import classify_release_candidate_liveness
 from codex_refactor_loop.release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
-from codex_refactor_loop.release.gate import canonical_digest, decide_release_artifact, parse_time
+from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
 from codex_refactor_loop.safe_progress_scheduler import (
     project_wakeup_actions,
@@ -3742,12 +3743,11 @@ def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) ->
     precondition_reasons: list[str] = []
     if candidate_path.exists():
         candidate = read_json(candidate_path, {})
-        if release_candidate_consumed_by_publish_result(repo_root, candidate):
-            precondition_reasons.append("release_candidate_already_published")
-        elif not release_candidate_target_ref_invalid(candidate, decision):
+        liveness = classify_release_candidate_liveness(repo_root, candidate, decision)
+        if liveness.blocks_dispatch:
             return []
-        else:
-            precondition_reasons.append("release_candidate_target_ref_invalid")
+        if liveness.stale_reason:
+            precondition_reasons.append(liveness.stale_reason)
     score = _release_countdown_score(repo_root, scorer=scorer)
     if not score.get("ready"):
         return []
@@ -3787,43 +3787,13 @@ def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) ->
 
 
 def release_candidate_target_ref_invalid(candidate: Any, decision: Any | None = None) -> bool:
-    if not isinstance(candidate, dict):
-        return False
-    if "target_ref" not in candidate:
-        return True
-    target_ref = candidate.get("target_ref")
-    if not isinstance(target_ref, str) or not target_ref.strip():
-        return True
-    generated_at = parse_time(candidate.get("generated_at"))
-    expires_at = parse_time(candidate.get("expires_at"))
-    now = datetime.now(timezone.utc)
-    if generated_at is not None and (now - generated_at).total_seconds() > 120 * 60:
-        return True
-    if expires_at is not None and expires_at <= now:
-        return True
-    if not isinstance(decision, dict) or not decision:
-        return False
-    if candidate.get("ready") is not True:
-        return True
-    for field in ("from_version", "to_version", "bump_type", "coordinate_policy"):
-        if candidate.get(field) != decision.get(field):
-            return True
-    expected_digest = candidate.get("decision_digest")
-    return not isinstance(expected_digest, str) or canonical_digest(decision) != expected_digest
+    liveness = classify_release_candidate_liveness(Path(), candidate, decision or {})
+    return liveness.stale_reason == "release_candidate_target_ref_invalid"
 
 
 def release_candidate_consumed_by_publish_result(repo_root: Path, candidate: Any) -> bool:
-    if not isinstance(candidate, dict):
-        return False
-    to_version = str(candidate.get("to_version") or "").strip()
-    if not to_version:
-        return False
-    result = read_json(repo_root / ".refactor-loop" / "state" / "release-publish-result.json", {})
-    if not isinstance(result, dict):
-        return False
-    version = str(result.get("version") or "").strip()
-    tag = str(result.get("tag") or "").strip()
-    return version == to_version or tag == f"v{to_version}"
+    liveness = classify_release_candidate_liveness(repo_root, candidate, {})
+    return liveness.stale_reason == "release_candidate_consumed_by_publish_result"
 
 
 def release_publish_actions(repo_root: Path) -> list[dict[str, Any]]:
@@ -3834,7 +3804,8 @@ def release_publish_actions(repo_root: Path) -> list[dict[str, Any]]:
     if release_candidate_consumed_by_publish_result(repo_root, candidate):
         return []
     decision = read_json(repo_root / ".refactor-loop" / "state" / "release-decision.json", {})
-    if release_candidate_target_ref_invalid(candidate, decision):
+    liveness = classify_release_candidate_liveness(repo_root, candidate, decision)
+    if not liveness.blocks_dispatch:
         return []
     target_ref = str(candidate.get("target_ref") or "").strip()
     to_version = str(candidate.get("to_version") or "").strip()

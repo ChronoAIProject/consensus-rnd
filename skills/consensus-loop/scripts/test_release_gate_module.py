@@ -21,6 +21,7 @@ sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop import restart
+from codex_refactor_loop.release.candidate_liveness import classify_release_candidate_liveness
 from codex_refactor_loop.release import gate
 
 
@@ -152,6 +153,30 @@ class ReleaseGateModuleTests(unittest.TestCase):
             self.assertNotIn("release.yml", candidate["next_step_hint"])
             self.assertFalse((repo / ".refactor-loop/.controller-pending-events.log").exists())
             self.assertFalse((repo / ".refactor-loop/dispatch-queue").exists())
+
+    def test_candidate_liveness_classifies_consumed_candidate_as_replaceable(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            decision = {
+                "from_version": "1.0.0-beta.1",
+                "to_version": "1.0.0-beta.2",
+                "bump_type": "patch",
+                "coordinate_policy": None,
+                "ready": True,
+            }
+            candidate = {
+                **decision,
+                "target_ref": "origin/review",
+                "generated_at": gate.isoformat(NOW),
+                "expires_at": gate.isoformat(NOW + timedelta(minutes=120)),
+                "decision_digest": gate.canonical_digest(decision),
+            }
+            write_json(repo / ".refactor-loop/state/release-publish-result.json", {"tag": "v1.0.0-beta.2"})
+
+            liveness = classify_release_candidate_liveness(repo, candidate, decision, now=NOW)
+
+            self.assertFalse(liveness.blocks_dispatch)
+            self.assertEqual(liveness.stale_reason, "release_candidate_consumed_by_publish_result")
 
     def test_dispatch_candidate_uses_review_base_target_ref_when_release_target_ref_is_unset(self) -> None:
         with copy_repo_fixture() as tmp:

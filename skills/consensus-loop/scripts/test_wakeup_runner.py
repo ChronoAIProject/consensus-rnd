@@ -2482,6 +2482,11 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertTrue(candidate["ready"])
         self.assertEqual(candidate["target_ref"], "origin/dev")
         self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(
+            f"WAKEUP_RUNNER_RELEASE_DISPATCH_STALE_CANDIDATE:{self.release_dispatch_action()['action_id']}:release_candidate_target_ref_invalid",
+            pending,
+        )
 
     def test_release_dispatch_recovers_existing_candidate_for_previous_decision(self) -> None:
         self.write_release_dispatch_fixtures()
@@ -2517,7 +2522,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                         "release_auto_opt_in",
                         "release_gate_ready",
                         "decision_artifact_only",
-                        "release_candidate_target_ref_invalid",
+                        "release_candidate_decision_mismatch",
                     ],
                 )
             ),
@@ -2529,6 +2534,60 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(candidate["target_ref"], "origin/dev")
         self.assertEqual(candidate["from_version"], "1.2.3-beta.4")
         self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
+
+    def test_release_dispatch_recovers_consumed_candidate(self) -> None:
+        self.write_release_dispatch_fixtures()
+        current_decision = release_decision("1.2.3-beta.4", "1.2.3-beta.5")
+        (self.repo / ".refactor-loop/state/release-decision.json").write_text(
+            json.dumps(current_decision),
+            encoding="utf-8",
+        )
+        existing = self.repo / ".refactor-loop/state/release-candidate.json"
+        existing.write_text(
+            json.dumps(
+                {
+                    "ready": True,
+                    "target_ref": "origin/dev",
+                    "from_version": "1.2.3-beta.4",
+                    "to_version": "1.2.3-beta.5",
+                    "bump_type": "patch",
+                    "coordinate_policy": None,
+                    "generated_at": isoformat(datetime.now(timezone.utc)),
+                    "expires_at": isoformat(datetime.now(timezone.utc) + timedelta(minutes=120)),
+                    "decision_digest": canonical_digest(current_decision),
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop/state/release-publish-result.json").write_text(
+            json.dumps({"version": "1.2.3-beta.5", "tag": "v1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+
+        results = self.run_result(
+            self.base_plan(
+                self.release_dispatch_action(
+                    preconditions=[
+                        "active_controller_owner",
+                        "release_auto_opt_in",
+                        "release_gate_ready",
+                        "decision_artifact_only",
+                        "release_candidate_consumed_by_publish_result",
+                    ],
+                )
+            ),
+            actions=FakeActions(),
+        )
+
+        self.assertEqual(results[0].status, "applied")
+        candidate = json.loads(existing.read_text(encoding="utf-8"))
+        self.assertEqual(candidate["from_version"], "1.2.3-beta.4")
+        self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(
+            f"WAKEUP_RUNNER_RELEASE_DISPATCH_STALE_CANDIDATE:{self.release_dispatch_action()['action_id']}:release_candidate_consumed_by_publish_result",
+            pending,
+        )
 
     def test_release_dispatch_recovers_stale_applied_ledger_with_empty_target_ref(self) -> None:
         self.write_release_dispatch_fixtures()
@@ -2560,7 +2619,55 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(candidate["target_ref"], "origin/dev")
         pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn(
-            f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action['action_id']}:target_ref_invalid",
+            f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action['action_id']}:release_candidate_target_ref_invalid",
+            pending,
+        )
+
+    def test_release_dispatch_recovers_stale_applied_ledger_with_consumed_candidate(self) -> None:
+        self.write_release_dispatch_fixtures()
+        current_decision = release_decision("1.2.3-beta.4", "1.2.3-beta.5")
+        (self.repo / ".refactor-loop/state/release-decision.json").write_text(json.dumps(current_decision), encoding="utf-8")
+        candidate = self.repo / ".refactor-loop/state/release-candidate.json"
+        candidate.write_text(
+            json.dumps(
+                {
+                    "ready": True,
+                    "target_ref": "origin/dev",
+                    "from_version": "1.2.3-beta.4",
+                    "to_version": "1.2.3-beta.5",
+                    "bump_type": "patch",
+                    "coordinate_policy": None,
+                    "generated_at": isoformat(datetime.now(timezone.utc)),
+                    "expires_at": isoformat(datetime.now(timezone.utc) + timedelta(minutes=120)),
+                    "decision_digest": canonical_digest(current_decision),
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop/state/release-publish-result.json").write_text(
+            json.dumps({"tag": "v1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+        action = self.release_dispatch_action(
+            preconditions=[
+                "active_controller_owner",
+                "release_auto_opt_in",
+                "release_gate_ready",
+                "decision_artifact_only",
+                "release_candidate_consumed_by_publish_result",
+            ],
+        )
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": ""}) + "\n",
+            encoding="utf-8",
+        )
+
+        results = self.run_result(self.base_plan(action), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "applied")
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(
+            f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action['action_id']}:release_candidate_consumed_by_publish_result",
             pending,
         )
 
@@ -2629,6 +2736,45 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                         "release_gate_ready",
                         "decision_artifact_only",
                         "release_candidate_target_ref_invalid",
+                    ],
+                )
+            ),
+            actions=FakeActions(),
+        )
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "release_candidate_already_exists")
+
+    def test_release_dispatch_rejects_forged_stale_precondition(self) -> None:
+        self.write_release_dispatch_fixtures()
+        current_decision = release_decision("1.2.3-beta.4", "1.2.3-beta.5")
+        existing = self.repo / ".refactor-loop/state/release-candidate.json"
+        existing.write_text(
+            json.dumps(
+                {
+                    "ready": True,
+                    "target_ref": "origin/dev",
+                    "from_version": "1.2.3-beta.4",
+                    "to_version": "1.2.3-beta.5",
+                    "bump_type": "patch",
+                    "coordinate_policy": None,
+                    "generated_at": isoformat(datetime.now(timezone.utc)),
+                    "expires_at": isoformat(datetime.now(timezone.utc) + timedelta(minutes=120)),
+                    "decision_digest": canonical_digest(current_decision),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        results = self.run_result(
+            self.base_plan(
+                self.release_dispatch_action(
+                    preconditions=[
+                        "active_controller_owner",
+                        "release_auto_opt_in",
+                        "release_gate_ready",
+                        "decision_artifact_only",
+                        "release_candidate_expired",
                     ],
                 )
             ),

@@ -17,6 +17,7 @@ from .. import labels as label_catalog
 from ..context import HostEnvLocator, parse_host_env
 from ..restart import restart_managed_daemon_names
 from ..state import read_json, write_json
+from .candidate_liveness import classify_release_candidate_liveness
 from .coordinates import plan_release_coordinate
 from .required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from .versions import SEMVER_RE, bump_semver, compare_semver, next_release_version, parse_semver
@@ -467,6 +468,17 @@ class AutoReleaseGate:
             if self.candidate_path.exists():
                 self.candidate_path.unlink()
             return
+        if self.candidate_path.exists():
+            liveness = classify_release_candidate_liveness(
+                self.repo_root,
+                read_json(self.candidate_path, {}),
+                decision,
+                now=self.now(),
+            )
+            if liveness.blocks_dispatch:
+                raise RuntimeError("release_candidate_already_exists")
+            print(f"RELEASE_GATE_DISPATCH_STALE_CANDIDATE:{liveness.stale_reason}")
+            self.candidate_path.unlink()
         write_json(self.candidate_path, self.release_candidate(decision))
 
     def release_candidate(self, decision: dict[str, Any]) -> dict[str, Any]:
