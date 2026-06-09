@@ -97,6 +97,7 @@ Artifact profile: marker-only-work-unit
 ## GitHub post
 
 遵循渲染期内联的共享规则。
+Public-facing natural-language prose follows `${HOST_WORK_LANGUAGE}`; do not add a mandatory parallel English section. Code identifiers, paths, schema fields, labels, and marker strings remain literal.
 
 {{GITHUB_POST_RULES_CONTRACT}}
 
