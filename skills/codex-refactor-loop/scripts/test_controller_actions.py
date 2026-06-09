@@ -436,9 +436,9 @@ class ControllerActionsTests(unittest.TestCase):
         body = runs / f"implementation-pr-{cluster}-body.md"
         title.write_text(f"完成 issue #{issue} 的发布契约\n", encoding="utf-8")
         body.write_text(
-            "## 修改文件\n\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/controller_actions.py\n\n"
-            "## 测试结果\n\n- python3 skills/codex-refactor-loop/scripts/test_controller_actions.py\n\n"
-            "## deviation 记录\n\n- none\n\n"
+            "## Changed files\n\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/controller_actions.py\n\n"
+            "## Test results\n\n- python3 skills/codex-refactor-loop/scripts/test_controller_actions.py\n\n"
+            "## Deviations\n\n- none\n\n"
             f"Closes #{issue}\n\n"
             "⟦AI:AUTO-LOOP⟧\n",
             encoding="utf-8",
@@ -2176,9 +2176,9 @@ class ControllerActionsTests(unittest.TestCase):
             ("wrong-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #78"), encoding="utf-8"), "implementation PR body must contain exactly one matching Closes link"),
             ("multiple-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #77\nCloses #78"), encoding="utf-8"), "implementation PR body must contain exactly one matching Closes link"),
             ("missing-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77\n\n", ""), encoding="utf-8"), "implementation PR body must contain exactly one matching Closes link"),
-            ("missing-section", {}, lambda: body.write_text(valid_body.replace("## 测试结果", "## test result"), encoding="utf-8"), "implementation PR body missing required section"),
-            ("placeholder-body", {}, lambda: body.write_text("## issue #77 实现\n\n## 修改文件\n\n- x\n\n## 测试结果\n\n- true\n\n## deviation 记录\n\n- none\n\nCloses #77\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "implementation PR body is placeholder"),
-            ("local-path-authority", {}, lambda: body.write_text(valid_body.replace("## 修改文件", "授权: `.refactor-loop/runs/source.md`\n\n## 修改文件"), encoding="utf-8"), "implementation PR body invalid: local .refactor-loop artifact path cannot be the only authority source"),
+            ("missing-section", {}, lambda: body.write_text(valid_body.replace("## Test results", "## test result"), encoding="utf-8"), "implementation PR body missing required section"),
+            ("placeholder-body", {}, lambda: body.write_text("## issue #77 实现\n\n## Changed files\n\n- x\n\n## Test results\n\n- true\n\n## Deviations\n\n- none\n\nCloses #77\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "implementation PR body is placeholder"),
+            ("local-path-authority", {}, lambda: body.write_text(valid_body.replace("## Changed files", "授权: `.refactor-loop/runs/source.md`\n\n## Changed files"), encoding="utf-8"), "implementation PR body invalid: local .refactor-loop artifact path cannot be the only authority source"),
         )
 
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:

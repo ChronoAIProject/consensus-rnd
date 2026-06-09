@@ -1682,9 +1682,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         body = runs / f"implementation-pr-{cluster}-body.md"
         title.write_text(f"完成 issue #{issue} 的发布契约\n", encoding="utf-8")
         body.write_text(
-            "## 修改文件\n\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py\n\n"
-            "## 测试结果\n\n- python3 skills/codex-refactor-loop/scripts/test_wakeup_plan.py\n\n"
-            "## deviation 记录\n\n- none\n\n"
+            "## Changed files\n\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py\n\n"
+            "## Test results\n\n- python3 skills/codex-refactor-loop/scripts/test_wakeup_plan.py\n\n"
+            "## Deviations\n\n- none\n\n"
             f"Closes #{issue}\n\n"
             "⟦AI:AUTO-LOOP⟧\n",
             encoding="utf-8",
@@ -2855,9 +2855,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         (self.repo / ".worktrees" / "iter581-issue-581").mkdir(parents=True)
         _title, body = self.write_implementation_pr_artifacts(issue=581, cluster="issue-581")
         body.write_text(
-            "## 修改文件\n\n- 0 LOC no source changes\n\n"
-            "## 测试结果\n\n- no-op verification only\n\n"
-            "## deviation 记录\n\n- none\n\n"
+            "## Changed files\n\n- 0 LOC no source changes\n\n"
+            "## Test results\n\n- no-op verification only\n\n"
+            "## Deviations\n\n- none\n\n"
             "Closes #581\n\n"
             "⟦AI:AUTO-LOOP⟧\n",
             encoding="utf-8",
@@ -3125,8 +3125,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             ("wrong-closes", lambda: body.write_text(valid_body.replace("Closes #20", "Closes #21"), encoding="utf-8"), "implementation_pr_body_closes_mismatch"),
             ("multiple-closes", lambda: body.write_text(valid_body.replace("Closes #20", "Closes #20\nCloses #21"), encoding="utf-8"), "implementation_pr_body_closes_mismatch"),
             ("missing-closes", lambda: body.write_text(valid_body.replace("Closes #20\n\n", ""), encoding="utf-8"), "implementation_pr_body_closes_mismatch"),
-            ("missing-section", lambda: body.write_text(valid_body.replace("## deviation 记录", "## deviation"), encoding="utf-8"), "implementation_pr_body_required_section_missing"),
-            ("placeholder-body", lambda: body.write_text("## issue #20 实现\n\n## 修改文件\n\n- x\n\n## 测试结果\n\n- true\n\n## deviation 记录\n\n- none\n\nCloses #20\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "implementation_pr_body_placeholder"),
+            ("missing-section", lambda: body.write_text(valid_body.replace("## Deviations", "## deviation"), encoding="utf-8"), "implementation_pr_body_required_section_missing"),
+            ("placeholder-body", lambda: body.write_text("## issue #20 实现\n\n## Changed files\n\n- x\n\n## Test results\n\n- true\n\n## Deviations\n\n- none\n\nCloses #20\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "implementation_pr_body_placeholder"),
         )
         for name, mutate, reason in cases:
             with self.subTest(name=name):

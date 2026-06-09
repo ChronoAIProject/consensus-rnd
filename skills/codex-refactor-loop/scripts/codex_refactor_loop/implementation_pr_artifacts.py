@@ -11,13 +11,13 @@ from .github_body import GitHubBodyError, validate_self_contained_github_body
 
 
 SAFE_IMPLEMENTATION_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-IMPLEMENTATION_PR_REQUIRED_SECTION_BYTES = (
-    b"## \xe4\xbf\xae\xe6\x94\xb9\xe6\x96\x87\xe4\xbb\xb6",
-    b"## \xe6\xb5\x8b\xe8\xaf\x95\xe7\xbb\x93\xe6\x9e\x9c",
-    b"## deviation \xe8\xae\xb0\xe5\xbd\x95",
+IMPLEMENTATION_PR_REQUIRED_SECTION_HEADINGS = (
+    "## Changed files",
+    "## Test results",
+    "## Deviations",
 )
-PLACEHOLDER_IMPLEMENT_TITLE_BYTES = b"\xe5\xae\x9e\xe7\x8e\xb0 issue #"
-PLACEHOLDER_IMPLEMENT_HEADING_RE = rb"(?im)^##\s+issue\s+#%s\s+\xe5\xae\x9e\xe7\x8e\xb0\s*$"
+PLACEHOLDER_IMPLEMENT_TITLE_RE_TEMPLATE = r"(?i)^(?:implement(?:ed|ation)?\s+issue\s+#%s\b|issue\s+#%s\s+implement(?:ed|ation)?\b|\u5b9e\u73b0\s+issue\s+#%s\s*$)"
+PLACEHOLDER_IMPLEMENT_HEADING_RE_TEMPLATE = r"(?im)^##\s+(?:implement(?:ed|ation)?\s+issue\s+#%s|issue\s+#%s\s+(?:implement(?:ed|ation)?|\u5b9e\u73b0)|\u5b9e\u73b0\s+issue\s+#%s)\s*$"
 FINAL_SENTINEL = "\u27e6AI:AUTO-LOOP\u27e7"
 CLOSING_ISSUE_RE = re.compile(r"(?im)\bCloses\s+#([1-9][0-9]*)\b")
 
@@ -134,10 +134,8 @@ def _validate_title(path: Path, issue_target: int) -> ImplementationPrArtifactVa
     if len(lines) != 1:
         return ImplementationPrArtifactValidation(path, path, reason="implementation_pr_title_artifact_invalid")
     title = lines[0]
-    title_bytes = title.encode("utf-8")
-    if title_bytes == PLACEHOLDER_IMPLEMENT_TITLE_BYTES + str(issue_target).encode("ascii") or title.lower().startswith(
-        f"implement issue #{issue_target}"
-    ):
+    issue_text = str(issue_target)
+    if re.search(PLACEHOLDER_IMPLEMENT_TITLE_RE_TEMPLATE % (issue_text, issue_text, issue_text), title):
         return ImplementationPrArtifactValidation(path, path, reason="implementation_pr_title_placeholder")
     if FINAL_SENTINEL in title or re.search(r"\bCloses\s+#", title, flags=re.IGNORECASE):
         return ImplementationPrArtifactValidation(path, path, reason="implementation_pr_title_contains_body_content")
@@ -157,14 +155,18 @@ def _validate_body(path: Path, issue_target: int) -> ImplementationPrArtifactVal
         return ImplementationPrArtifactValidation(path, path, reason="implementation_pr_body_github_body_invalid", detail=str(exc))
     if _closing_issue_numbers(text) != [issue_target]:
         return ImplementationPrArtifactValidation(path, path, reason="implementation_pr_body_closes_mismatch")
-    body_bytes = text.encode("utf-8")
-    for section in IMPLEMENTATION_PR_REQUIRED_SECTION_BYTES:
-        if section not in body_bytes:
+    for section in IMPLEMENTATION_PR_REQUIRED_SECTION_HEADINGS:
+        if not _has_exact_heading(text, section):
             return ImplementationPrArtifactValidation(path, path, reason="implementation_pr_body_required_section_missing")
-    if re.search(PLACEHOLDER_IMPLEMENT_HEADING_RE % str(issue_target).encode("ascii"), body_bytes):
+    issue_text = str(issue_target)
+    if re.search(PLACEHOLDER_IMPLEMENT_HEADING_RE_TEMPLATE % (issue_text, issue_text, issue_text), text):
         return ImplementationPrArtifactValidation(path, path, reason="implementation_pr_body_placeholder")
     return ImplementationPrArtifactValidation(path, path)
 
 
 def _closing_issue_numbers(text: str) -> list[int]:
     return [int(match) for match in CLOSING_ISSUE_RE.findall(text)]
+
+
+def _has_exact_heading(text: str, heading: str) -> bool:
+    return any(line.strip() == heading for line in text.splitlines())
