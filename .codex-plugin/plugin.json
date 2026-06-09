@@ -24,7 +24,7 @@
   "interface": {
     "displayName": "Consensus R&D",
     "shortDescription": "偏置独立的多角度共识构建引擎",
-    "longDescription": "把任意持续向仓库提交状态的活动当作研发：多 solver 先验对立、互不可见，meta-judge 仲裁收敛，验证侧同构。当前内置 codex-refactor-loop 是 Consensus R&D work-unit 循环的稳定入口；audit/refactor 保留为兼容 intake。",
+    "longDescription": "把任意持续向仓库提交状态的活动当作研发：多 solver 先验对立、互不可见，meta-judge 仲裁收敛，验证侧同构。当前内置 consensus-loop 是 Consensus R&D work-unit 循环的稳定入口；audit/refactor 保留为兼容 intake。",
     "developerName": "auric",
     "category": "Coding",
     "capabilities": [

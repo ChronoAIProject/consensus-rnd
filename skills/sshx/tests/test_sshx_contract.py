@@ -133,7 +133,7 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(field, text)
         self.assertIn("The user's current input is the only source for the goal", text)
         self.assertIn(
-            "must not discover or infer the goal from `codex-refactor-loop` milestones, release state, `host.env`, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface",
+            "must not discover or infer the goal from `consensus-loop` milestones, release state, `host.env`, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface",
             text,
         )
 
@@ -653,7 +653,7 @@ class SshxContractTests(unittest.TestCase):
             "release authority",
             "a public marker family",
             "`.refactor-loop/host.env` as a production source of truth",
-            "`codex-refactor-loop` internal prompts or scripts as an implementation dependency",
+            "`consensus-loop` internal prompts or scripts as an implementation dependency",
         ]:
             self.assertIn(forbidden_boundary, text)
         self.assertIn("It must not add or depend on", text)
