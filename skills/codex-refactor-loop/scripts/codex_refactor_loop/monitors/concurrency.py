@@ -201,9 +201,6 @@ class ConcurrencyMonitor:
         return max(0, int((now - marker_at) / 60))
 
     def read_daemon_heartbeats(self, now: float | None = None) -> dict[str, dict]:
-        return self.read_daemon_heartbeats_with_threshold(now=now, stale_seconds=HEARTBEAT_STALE_SECONDS)
-
-    def read_daemon_heartbeats_with_threshold(self, *, now: float | None = None, stale_seconds: int) -> dict[str, dict]:
         if now is None:
             now = time.time()
         result: dict[str, dict] = {}
@@ -215,7 +212,7 @@ class ConcurrencyMonitor:
                 raw = heartbeat.read_text(encoding="utf-8").strip()
                 ts = int(raw)
                 age = max(0, int(now - ts))
-                result[name] = {"age_seconds": age, "stale": age >= stale_seconds}
+                result[name] = {"age_seconds": age, "stale": age >= HEARTBEAT_STALE_SECONDS}
             except (OSError, ValueError):
                 result[name] = {"age_seconds": None, "stale": True}
         return result
@@ -447,11 +444,6 @@ class ConcurrencyMonitor:
         with self.pending_events.open("a", encoding="utf-8") as handle:
             handle.write(f"{ts} concurrency-alert {msg}\n")
 
-    def daemon_self_drive_heartbeat_threshold_seconds(self) -> int:
-        phase9_interval = self._positive_env_int("PHASE9_ROUTER_INTERVAL_SECONDS", 120)
-        wakeup_interval = self._positive_env_int("WAKEUP_RUNNER_INTERVAL_SECONDS", 120)
-        return max(HEARTBEAT_STALE_SECONDS, 2 * max(phase9_interval, wakeup_interval))
-
     def daemon_self_drive_consumption_window_seconds(self) -> int:
         phase9_interval = self._positive_env_int("PHASE9_ROUTER_INTERVAL_SECONDS", 120)
         wakeup_interval = self._positive_env_int("WAKEUP_RUNNER_INTERVAL_SECONDS", 120)
@@ -473,15 +465,14 @@ class ConcurrencyMonitor:
     ) -> DaemonSelfDriveClassification:
         if now is None:
             now = time.time()
-        heartbeat_threshold = self.daemon_self_drive_heartbeat_threshold_seconds()
         window = self.daemon_self_drive_consumption_window_seconds()
-        heartbeat_result = self._daemon_self_drive_heartbeat_diagnostic(now=now, threshold=heartbeat_threshold)
+        heartbeat_result = self._daemon_self_drive_heartbeat_diagnostic(now=now)
         if heartbeat_result is not None:
             reason, ages = heartbeat_result
-            return DaemonSelfDriveClassification("p0", False, reason, heartbeat_threshold, window, ages, [])
+            return DaemonSelfDriveClassification("p0", False, reason, HEARTBEAT_STALE_SECONDS, window, ages, [])
         active_targets = self._active_item_targets(breakdown)
         if not active_targets:
-            return DaemonSelfDriveClassification("p0", False, "missing-active-item-target", heartbeat_threshold, window, {}, [])
+            return DaemonSelfDriveClassification("p0", False, "missing-active-item-target", HEARTBEAT_STALE_SECONDS, window, {}, [])
         intent_result = self._fresh_unsuppressed_item_matching_intent(
             active_targets=active_targets,
             now=now,
@@ -491,14 +482,14 @@ class ConcurrencyMonitor:
             "daemon-self-drive-transient" if intent_result[0] else "p0",
             bool(intent_result[0]),
             intent_result[1],
-            heartbeat_threshold,
+            HEARTBEAT_STALE_SECONDS,
             window,
-            self._heartbeat_ages(now=now, threshold=heartbeat_threshold),
+            self._heartbeat_ages(now=now),
             intent_result[2],
         )
 
-    def _daemon_self_drive_heartbeat_diagnostic(self, *, now: float, threshold: int) -> tuple[str, dict[str, int | None]] | None:
-        heartbeats = self.read_daemon_heartbeats_with_threshold(now=now, stale_seconds=threshold)
+    def _daemon_self_drive_heartbeat_diagnostic(self, *, now: float) -> tuple[str, dict[str, int | None]] | None:
+        heartbeats = self.read_daemon_heartbeats(now=now)
         ages: dict[str, int | None] = {}
         for daemon in DAEMON_SELF_DRIVE_HEARTBEATS:
             heartbeat = heartbeats.get(daemon)
@@ -510,8 +501,8 @@ class ConcurrencyMonitor:
                 return f"stale-heartbeat:{daemon}", ages
         return None
 
-    def _heartbeat_ages(self, *, now: float, threshold: int) -> dict[str, int | None]:
-        heartbeats = self.read_daemon_heartbeats_with_threshold(now=now, stale_seconds=threshold)
+    def _heartbeat_ages(self, *, now: float) -> dict[str, int | None]:
+        heartbeats = self.read_daemon_heartbeats(now=now)
         ages: dict[str, int | None] = {}
         for daemon in DAEMON_SELF_DRIVE_HEARTBEATS:
             heartbeat = heartbeats.get(daemon)
@@ -559,7 +550,12 @@ class ConcurrencyMonitor:
         )
         if pending_result[0] is False:
             return pending_result
-        ledger_result = self._phase9_ledger_intent_evidence(active_targets=active_targets, now=now, window=window)
+        ledger_result = self._phase9_ledger_intent_evidence(
+            active_targets=active_targets,
+            now=now,
+            window=window,
+            blocked_intents=blocked_intents,
+        )
         if ledger_result[0] is False:
             return ledger_result
         evidence = [*pending_result[2], *ledger_result[2]]
@@ -607,6 +603,7 @@ class ConcurrencyMonitor:
         active_targets: set[tuple[str, int]],
         now: float,
         window: int,
+        blocked_intents: set[str],
     ) -> tuple[bool, str, list[str]]:
         ledger = self.ctx.paths.refactor_loop / "phase9-router-ledger.jsonl"
         if not ledger.exists():
@@ -632,9 +629,10 @@ class ConcurrencyMonitor:
                 return False, "malformed-phase9-ledger-ts", []
             if not self._intent_matches_active_target(entry, active_targets):
                 continue
+            suppressed = self._intent_suppression_reason(entry, blocked_intents=blocked_intents)
             age = int(now - created_at)
-            if self._target_log_suppresses_intent(entry):
-                return False, "suppressed-intent:target-log", []
+            if suppressed:
+                return False, f"suppressed-intent:{suppressed}", []
             if age > window:
                 return False, f"stale-unconsumed-intent:{age}s", []
             evidence.append(f"phase9-ledger:{entry.get('key') or '?'}:{age}s")
@@ -918,9 +916,6 @@ class ConcurrencyMonitor:
                     last_p0_at=state.get("last_p0_at"),
                     open_pr_count=open_pr_count,
                     open_issue_count=open_issue_count,
-                    daemons=self.read_daemon_heartbeats_with_threshold(
-                        stale_seconds=self_drive.heartbeat_threshold_seconds,
-                    ),
                     zero_codex_classification=classification_payload,
                 )
                 self.save_state(state)

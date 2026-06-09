@@ -100,6 +100,28 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
         with pending.open("a", encoding="utf-8") as handle:
             handle.write(f"{ts} HARNESS_SPAWN_INTENT {json.dumps(payload, sort_keys=True)}\n")
 
+    def append_phase9_ledger_intent(
+        self,
+        task_id: str,
+        *,
+        ts: str = "2026-05-26T07:29:00Z",
+        intent_id: str | None = None,
+    ) -> None:
+        payload = {
+            "dispatch_state": "harness-intent",
+            "dispatched_at": ts,
+            "intent_id": intent_id or f"harness-spawn-intent:test:{task_id}",
+            "task_id": task_id,
+            "key": f"ledger-{task_id}",
+            "route": "solver_triplet",
+            "log": f".refactor-loop/logs/{task_id}.log",
+            "reason": f"issue #{task_id.removeprefix('phase9-issue')} dispatch",
+        }
+        ledger = self.refactor_loop / "phase9-router-ledger.jsonl"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        with ledger.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
     def test_package_module_imports_without_repo_root_side_effect(self) -> None:
         self.env.stop()
         try:
@@ -275,6 +297,48 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
         self.assertEqual(payload["zero_codex_classification"]["classification"], "daemon-self-drive-transient")
         self.assertEqual(payload["p0_streak"], 0)
 
+    def test_daemon_self_drive_heartbeat_uses_canonical_freshness_for_status(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        task_id = "phase9-issue160-r1-minimal"
+        fixed_datetime = mock.Mock(wraps=datetime)
+        fixed_datetime.now.return_value = now
+        for age, canonical_stale, expected_classification in (
+            (89, False, "daemon-self-drive-transient"),
+            (90, True, "p0"),
+        ):
+            with self.subTest(age=age):
+                (self.refactor_loop / ".concurrency-alert.log").unlink(missing_ok=True)
+                (self.refactor_loop / ".controller-pending-events.log").unlink(missing_ok=True)
+                (self.refactor_loop / "state" / "statusline-snapshot.json").unlink(missing_ok=True)
+                self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=age)
+                self.append_pending_harness_intent(task_id, ts="2026-05-26T07:29:00Z")
+
+                canonical = self.monitor.read_daemon_heartbeats(now=now.timestamp())
+                classification = self.monitor.classify_zero_codex_self_drive(
+                    breakdown=[{"id": "#160", "kind": "issue", "phase": labels.PHASE_DESIGN_SOLVING, "expected": 1}],
+                    now=now.timestamp(),
+                )
+
+                self.assertEqual(canonical["phase9_router_daemon"]["stale"], canonical_stale)
+                self.assertEqual(classification.classification, expected_classification)
+                self.assertEqual(classification.heartbeat_threshold_seconds, concurrency.HEARTBEAT_STALE_SECONDS)
+
+                with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+                    with mock.patch.object(
+                        self.monitor,
+                        "list_auto_loop_issues",
+                        return_value=[{"number": 160, "kind": "issue", "phase": labels.PHASE_DESIGN_SOLVING, "human": labels.HUMAN_AUTO}],
+                    ):
+                        with mock.patch.object(concurrency, "time") as fake_time:
+                            with mock.patch.object(concurrency, "datetime", fixed_datetime):
+                                fake_time.time.return_value = now.timestamp()
+                                self.monitor.tick()
+
+                payload = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
+                self.assertEqual(payload["daemons"]["phase9_router_daemon"]["stale"], canonical_stale)
+                self.assertEqual(payload["daemons"]["wakeup_runner_daemon"]["stale"], canonical_stale)
+                self.assertEqual(payload["zero_codex_classification"]["classification"], expected_classification)
+
     def test_zero_codex_with_stale_daemon_heartbeat_fails_closed_to_p0(self) -> None:
         now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
         self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=500)
@@ -369,6 +433,50 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
                 (self.refactor_loop / "locks" / "spawn-tasks" / f"{task_id}.lock").unlink(missing_ok=True)
                 self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
                 self.append_pending_harness_intent(task_id, ts="2026-05-26T07:29:00Z")
+                setup(task_id)
+
+                with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+                    with mock.patch.object(
+                        self.monitor,
+                        "list_auto_loop_issues",
+                        return_value=[{"number": 160, "kind": "issue", "phase": labels.PHASE_DESIGN_SOLVING, "human": labels.HUMAN_AUTO}],
+                    ):
+                        with mock.patch.object(concurrency, "time") as fake_time:
+                            fake_time.time.return_value = now.timestamp()
+                            self.monitor.tick()
+
+                alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+                self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
+                self.assertIn(expected_reason, alert)
+
+    def test_zero_codex_suppressed_phase9_ledger_intent_fails_closed_to_p0(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        for case, setup, expected_reason in (
+            (
+                "terminal-block",
+                lambda task_id: self._append_terminal_block(task_id, "target_not_open:CLOSED"),
+                "suppressed-intent:terminal-block",
+            ),
+            (
+                "target-log",
+                lambda task_id: self._write_target_log(task_id),
+                "suppressed-intent:target-log",
+            ),
+            (
+                "spawn-claim",
+                lambda task_id: self._write_spawn_claim(task_id),
+                "suppressed-intent:spawn-claim",
+            ),
+        ):
+            with self.subTest(case=case):
+                (self.refactor_loop / ".concurrency-alert.log").unlink(missing_ok=True)
+                (self.refactor_loop / ".controller-pending-events.log").unlink(missing_ok=True)
+                (self.refactor_loop / "phase9-router-ledger.jsonl").unlink(missing_ok=True)
+                task_id = "phase9-issue160-r1-minimal"
+                (self.refactor_loop / "logs" / f"{task_id}.log").unlink(missing_ok=True)
+                (self.refactor_loop / "locks" / "spawn-tasks" / f"{task_id}.lock").unlink(missing_ok=True)
+                self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
+                self.append_phase9_ledger_intent(task_id, ts="2026-05-26T07:29:00Z")
                 setup(task_id)
 
                 with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
