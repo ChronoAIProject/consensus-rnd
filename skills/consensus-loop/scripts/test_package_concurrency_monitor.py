@@ -84,11 +84,12 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
         *,
         ts: str = "2026-05-26T07:25:00Z",
         intent_id: str | None = None,
+        source: str = "phase9-router",
     ) -> None:
         payload = {
             "intent_id": intent_id or f"harness-spawn-intent:test:{task_id}",
             "task_id": task_id,
-            "source": "test",
+            "source": source,
             "route": "test",
             "command": "spawn-codex",
             "controller_action": "spawn_codex_harness_background",
@@ -381,6 +382,44 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
                 alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
                 self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
                 self.assertIn(expected_reason, alert)
+
+    def test_hard_gate_transient_supply_counts_distinct_fresh_phase9_pending_targets(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        self.append_pending_harness_intent("phase9-issue160-r1-minimal", ts="2026-05-26T07:29:00Z")
+        self.append_pending_harness_intent("phase9-issue161-r1-minimal", ts="2026-05-26T07:29:00Z")
+        self.append_pending_harness_intent("phase9-issue162-r1-minimal", ts="2026-05-26T07:29:00Z", source="concurrency-monitor")
+
+        supply = self.monitor.hard_gate_transient_supply(
+            breakdown=[
+                {"id": "#160", "kind": "issue", "phase": labels.PHASE_DESIGN_SOLVING, "expected": 1},
+                {"id": "#161", "kind": "issue", "phase": labels.PHASE_DESIGN_SOLVING, "expected": 1},
+                {"id": "#162", "kind": "issue", "phase": labels.PHASE_DESIGN_SOLVING, "expected": 1},
+            ],
+            target=3,
+            actual=1,
+            queue_empty=True,
+            now=now.timestamp(),
+        )
+
+        self.assertEqual(supply.supply, 2)
+        self.assertEqual(len(supply.targets), 2)
+
+    def test_hard_gate_transient_supply_ignores_consumed_phase9_intent(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        task_id = "phase9-issue160-r1-minimal"
+        self.append_pending_harness_intent(task_id, ts="2026-05-26T07:29:00Z")
+        (self.refactor_loop / "logs" / f"{task_id}.log").write_text("already targeted\n", encoding="utf-8")
+
+        supply = self.monitor.hard_gate_transient_supply(
+            breakdown=[{"id": "#160", "kind": "issue", "phase": labels.PHASE_DESIGN_SOLVING, "expected": 1}],
+            target=3,
+            actual=1,
+            queue_empty=True,
+            now=now.timestamp(),
+        )
+
+        self.assertEqual(supply.supply, 0)
+        self.assertIsNone(supply.blocked_reason)
 
     def test_zero_codex_malformed_intent_fails_closed_to_p0(self) -> None:
         now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
