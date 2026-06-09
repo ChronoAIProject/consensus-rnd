@@ -268,7 +268,10 @@ class ControllerActions:
         )
         if denied is not None:
             raise RuntimeError(f"post_status_banner: cross-instance admission denied rc={denied}")
+        language = normalize_host_work_language(raw=self.ctx.host_env.get("HOST_WORK_LANGUAGE", ""))
         body = build_status_banner(normalized)
+        if language != "en":
+            body = build_status_banner(normalized, language=language)
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
             handle.write(body)
             tmp = handle.name
@@ -1313,7 +1316,9 @@ class ControllerActions:
         if add.returncode != 0:
             sys.stderr.write("publish_implementation_output: publish_add_failed\n")
             return 2
-        commit = self._git_in(worktree, ["commit", "-m", f"实现 issue #{issue_target}"], check=False)
+        language = normalize_host_work_language(raw=self.ctx.host_env.get("HOST_WORK_LANGUAGE", ""))
+        subject = f"实现 issue #{issue_target}" if language == "zh" else f"Implement issue #{issue_target}"
+        commit = self._git_in(worktree, ["commit", "-m", subject], check=False)
         if commit.returncode == 0:
             return 0
         if commit.stderr:

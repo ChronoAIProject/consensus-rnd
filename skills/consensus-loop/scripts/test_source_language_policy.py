@@ -33,31 +33,33 @@ class Finding:
     line: int
     reason: str
     text: str
+    category: str = "runtime-python"
 
 
 @dataclass(frozen=True)
-class AllowlistEntry:
+class SemanticAllowance:
     relative_path: str
     owner: str
+    category: str
     reason: str
 
 
-ALLOWLIST: tuple[AllowlistEntry, ...] = (
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/banners.py", "ROLE_NEXT_STEPS", "GitHub banner body is intentionally Chinese user-facing output"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/banners.py", "build_status_banner", "GitHub banner body is intentionally Chinese user-facing output"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "DEBUG_SUMMARY", "debug details summary is the explicit zh branch for host work language"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "AUTHORITY_PATH_RE", "validator regex recognizes Chinese authority labels in GitHub bodies"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "INLINE_ARTIFACT_DETAILS_RE", "validator regex recognizes zh inline artifact details"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "_body_copy", "GitHub body copy includes the explicit zh branch for host work language"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "_kind_label", "GitHub body kind labels include the explicit zh branch for host work language"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/monitors/comment.py", "CommentMonitor.post_banner.banner_body", "maintainer-facing GitHub notification text is intentionally Chinese"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/peek.py", "PeekStatusLens.render", "status lens renders existing Chinese labels and user-facing state"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "CANONICAL_BODY", "project-rules fixed point text is intentionally Chinese host-facing policy"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "OLD_CANONICAL_BODY", "legacy project-rules fixed point text is intentionally Chinese host-facing policy"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/closed_label_reconciler.py", "comment", "#238 reconciliation refactor self-documents per review gate policy"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/closed_phase_labels.py", "comment", "#238 phase helper refactor self-documents per review gate policy"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/checks/degradation.py", "DOC_FORBIDDEN_CONTEXT", "static checker recognizes Chinese forbidden-context terms in docs"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/controller_actions.py", "ControllerActions._commit_publish_implementation_diff", "controller-authored commit messages are intentionally Chinese working-state output"),
+SEMANTIC_ALLOWANCES: tuple[SemanticAllowance, ...] = (
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/banners.py", "ROLE_NEXT_STEPS", "explicit-zh-runtime-rendering", "explicit zh branch for HOST_WORK_LANGUAGE=zh status banners"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/banners.py", "build_status_banner", "explicit-zh-runtime-rendering", "explicit zh branch for HOST_WORK_LANGUAGE=zh status banners"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "DEBUG_SUMMARY", "named-read-compat-regex", "debug summary literal recognized by the validator and zh renderer"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "AUTHORITY_PATH_RE", "named-read-compat-regex", "validator regex recognizes legacy zh authority labels in existing GitHub bodies"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "INLINE_ARTIFACT_DETAILS_RE", "named-read-compat-regex", "validator regex recognizes explicit zh inline artifact summaries"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "_body_copy", "explicit-zh-runtime-rendering", "explicit zh branch for HOST_WORK_LANGUAGE=zh GitHub body rendering"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "_kind_label", "explicit-zh-runtime-rendering", "explicit zh branch for HOST_WORK_LANGUAGE=zh kind labels"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/monitors/comment.py", "CommentMonitor.post_banner.banner_body", "explicit-zh-runtime-rendering", "explicit zh branch for HOST_WORK_LANGUAGE=zh comment-monitor banner"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/peek.py", "PeekStatusLens.render", "read-only-status-projection", "status lens reads existing Chinese label/status metadata"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "CANONICAL_BODY", "project-rules-contract-anchor", "managed CLAUDE.md fixed-point contract text"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "OLD_CANONICAL_BODY", "project-rules-contract-anchor", "legacy managed fixed-point text used for read compatibility"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/closed_label_reconciler.py", "comment", "historical-self-doc-comment", "existing #238 self-documentation comment retained as historical source"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/closed_phase_labels.py", "comment", "historical-self-doc-comment", "existing #238 self-documentation comment retained as historical source"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/checks/degradation.py", "DOC_FORBIDDEN_CONTEXT", "documentation-static-checker", "static checker recognizes forbidden-context terms in docs"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/controller_actions.py", "ControllerActions._commit_publish_implementation_diff", "explicit-zh-runtime-rendering", "explicit zh branch for HOST_WORK_LANGUAGE=zh controller commit subject"),
 )
 
 
@@ -81,6 +83,13 @@ def source_files(repo_root: Path = REPO_ROOT) -> list[Path]:
             continue
         files.extend(root.rglob("*.py"))
     return sorted(files)
+
+
+def prompt_files(repo_root: Path = REPO_ROOT) -> list[Path]:
+    prompt_root = repo_root / "skills" / "consensus-loop" / "prompts"
+    if not prompt_root.exists():
+        return []
+    return sorted(prompt_root.glob("*.md"))
 
 
 def relative(path: Path, repo_root: Path = REPO_ROOT) -> str:
@@ -179,10 +188,11 @@ def comment_findings(path: Path, repo_root: Path = REPO_ROOT, *, forbid_refactor
             if token.type != tokenize.COMMENT:
                 continue
             text = token.string
+            category = python_comment_category(path, repo_root)
             if has_han(text):
-                findings.append(Finding(relative(path, repo_root), "comment", token.start[0], "han-comment", text.strip()))
+                findings.append(Finding(relative(path, repo_root), "comment", token.start[0], "han-comment", text.strip(), category))
             if forbid_refactor_history and has_refactor_history(text):
-                findings.append(Finding(relative(path, repo_root), "comment", token.start[0], "refactor-history-comment", text.strip()))
+                findings.append(Finding(relative(path, repo_root), "comment", token.start[0], "refactor-history-comment", text.strip(), category))
     return findings
 
 
@@ -200,10 +210,74 @@ def string_findings(path: Path, repo_root: Path = REPO_ROOT, *, forbid_refactor_
             reason = "han-docstring" if is_docstring_node(node, parent_map) else "han-string"
             if is_selected_string(node, parent_map) and reason != "han-docstring":
                 reason = "han-selected-string"
-            findings.append(Finding(relative(path, repo_root), owner, node.lineno, reason, text[:160]))
+            findings.append(Finding(relative(path, repo_root), owner, node.lineno, reason, text[:160], python_string_category(path, owner, repo_root)))
         if forbid_refactor_history and has_refactor_history(text):
-            findings.append(Finding(relative(path, repo_root), owner, node.lineno, "refactor-history-string", text[:160]))
+            findings.append(Finding(relative(path, repo_root), owner, node.lineno, "refactor-history-string", text[:160], "runtime-python-string"))
     return findings
+
+
+def python_comment_category(path: Path, repo_root: Path = REPO_ROOT) -> str:
+    rel = relative(path, repo_root)
+    for entry in SEMANTIC_ALLOWANCES:
+        if entry.relative_path == rel and entry.owner == "comment":
+            return entry.category
+    return "runtime-python-comment"
+
+
+def python_string_category(path: Path, owner: str, repo_root: Path = REPO_ROOT) -> str:
+    rel = relative(path, repo_root)
+    for entry in SEMANTIC_ALLOWANCES:
+        if entry.relative_path == rel and owner.startswith(entry.owner):
+            return entry.category
+    return "runtime-python-string"
+
+
+def prompt_line_findings(path: Path, repo_root: Path = REPO_ROOT) -> list[Finding]:
+    findings: list[Finding] = []
+    in_fence = False
+    in_html_comment = False
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if "<!--" in stripped:
+            in_html_comment = True
+        category = prompt_line_category(path, line, in_fence=in_fence, in_html_comment=in_html_comment)
+        if has_han(line) and category == "active-prompt-instruction":
+            findings.append(
+                Finding(
+                    relative(path, repo_root),
+                    "prompt-line",
+                    line_number,
+                    "han-active-prompt-instruction",
+                    line[:160],
+                    category,
+                )
+            )
+        if "-->" in stripped:
+            in_html_comment = False
+    return findings
+
+
+def prompt_line_category(path: Path, line: str, *, in_fence: bool, in_html_comment: bool) -> str:
+    del path
+    stripped = line.strip()
+    if in_fence:
+        return "prompt-fenced-example"
+    if in_html_comment:
+        return "prompt-historical-comment"
+    if not stripped:
+        return "blank"
+    if stripped == "⟦AI:AUTO-LOOP⟧":
+        return "sentinel-literal"
+    if "MarkerEmissionContract" in stripped or re.search(r"\b[A-Z_]+_DONE:", stripped):
+        return "protocol-literal"
+    if "${HOST_WORK_LANGUAGE}" in stripped or "$HOST_WORK_LANGUAGE" in stripped:
+        return "host-language-contract-anchor"
+    if "`" in stripped and any(token in stripped for token in ("CLAUDE.md", "AGENTS.md", "PROJECT_RULES", "HOST_", "gh ", ".refactor-loop", "SCOPE_EXTEND", "IMPLEMENT_DONE", "SOLVER_DONE", "META_JUDGE_DONE", "VERIFY_DONE", "TEST_ADD_DONE", "FIX_DONE")):
+        return "protocol-literal"
+    return "active-prompt-instruction"
 
 
 def scan_python_source_language(repo_root: Path = REPO_ROOT, *, refactor_comment_policy: str | None = None) -> list[Finding]:
@@ -216,10 +290,19 @@ def scan_python_source_language(repo_root: Path = REPO_ROOT, *, refactor_comment
     return [finding for finding in findings if not is_allowlisted(finding)]
 
 
+def scan_prompt_language(repo_root: Path = REPO_ROOT) -> list[Finding]:
+    findings: list[Finding] = []
+    for path in prompt_files(repo_root):
+        findings.extend(prompt_line_findings(path, repo_root))
+    return findings
+
+
 def is_allowlisted(finding: Finding) -> bool:
     return any(
-        entry.relative_path == finding.relative_path and finding.owner.startswith(entry.owner)
-        for entry in ALLOWLIST
+        entry.relative_path == finding.relative_path
+        and finding.owner.startswith(entry.owner)
+        and finding.category == entry.category
+        for entry in SEMANTIC_ALLOWANCES
     )
 
 
@@ -239,7 +322,12 @@ class SourceLanguagePolicyTests(unittest.TestCase):
 
     def test_scan_python_source_language_is_clean(self) -> None:
         findings = scan_python_source_language(REPO_ROOT)
-        details = "\n".join(f"{f.relative_path}:{f.line}:{f.owner}:{f.reason}:{f.text}" for f in findings[:50])
+        details = "\n".join(f"{f.relative_path}:{f.line}:{f.owner}:{f.category}:{f.reason}:{f.text}" for f in findings[:50])
+        self.assertEqual([], findings, details)
+
+    def test_active_prompt_instruction_bodies_are_han_free(self) -> None:
+        findings = scan_prompt_language(REPO_ROOT)
+        details = "\n".join(f"{f.relative_path}:{f.line}:{f.reason}:{f.text}" for f in findings[:80])
         self.assertEqual([], findings, details)
 
     def test_scanner_rejects_han_comments_docstrings_and_refactor_history(self) -> None:
@@ -311,12 +399,42 @@ class SourceLanguagePolicyTests(unittest.TestCase):
         for path in source_files():
             raw_findings.extend(comment_findings(path))
             raw_findings.extend(string_findings(path))
-        for entry in ALLOWLIST:
+        for entry in SEMANTIC_ALLOWANCES:
             with self.subTest(entry=entry):
                 self.assertTrue(
-                    any(f.relative_path == entry.relative_path and f.owner.startswith(entry.owner) for f in raw_findings),
+                    any(
+                        f.relative_path == entry.relative_path
+                        and f.owner.startswith(entry.owner)
+                        and f.category == entry.category
+                        for f in raw_findings
+                    ),
                     entry,
                 )
+
+    def test_prompt_scanner_rejects_active_han_but_ignores_protocol_examples(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            prompt_root = repo_root / "skills" / "consensus-loop" / "prompts"
+            prompt_root.mkdir(parents=True)
+            (prompt_root / "sample.md").write_text(
+                "# Title\n"
+                "Active instruction 中文\n"
+                "```\n"
+                "Example 中文\n"
+                "```\n"
+                "<!-- historical 中文 -->\n"
+                "Marker `IMPLEMENT_DONE:<cluster>:<status>` 中文\n"
+                "Final sentinel:\n"
+                "⟦AI:AUTO-LOOP⟧\n",
+                encoding="utf-8",
+            )
+
+            findings = scan_prompt_language(repo_root)
+
+        self.assertEqual(
+            [("skills/consensus-loop/prompts/sample.md", 2, "han-active-prompt-instruction")],
+            [(finding.relative_path, finding.line, finding.reason) for finding in findings],
+        )
 
 
 if __name__ == "__main__":

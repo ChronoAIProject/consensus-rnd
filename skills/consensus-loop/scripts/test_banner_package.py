@@ -35,14 +35,14 @@ class BannerPackageTests(unittest.TestCase):
     def test_build_status_banner_preserves_status_tokens_without_machine_workdir(self) -> None:
         body = banners.build_status_banner(self.request())
 
-        self.assertTrue(body.startswith("## 📊 状态卡片 — implement 派出\n"))
+        self.assertTrue(body.startswith("## 📊 Status card - implement dispatched\n"))
         for required in (
-            "| 阶段 | **派出 codex(role=`implement`)** |",
+            "| Stage | **dispatched codex(role=`implement`)** |",
             "| codex log | `implement-160.log` |",
             "| total wall-clock timeout | 180s(~3 min) |",
-            "| 上下文 | phase9 issue160 parity |",
+            "| Context | phase9 issue160 parity |",
             "IMPLEMENT_DONE:<cluster>:<status>",
-            "| **是否需要人介入** | **❌ 否**(自动推进) |",
+            "| **Human input needed** | **No** (automatic progress) |",
             "🤖 controller status banner",
             "⟦AI:AUTO-LOOP⟧",
         ):
@@ -65,8 +65,16 @@ class BannerPackageTests(unittest.TestCase):
         }.items():
             with self.subTest(role=role):
                 body = banners.build_status_banner(self.request(role=role, detail=""))
-                self.assertIn("| 上下文 | (none) |", body)
+                self.assertIn("| Context | (none) |", body)
                 self.assertIn(marker, body)
+
+    def test_explicit_zh_status_banner_preserves_existing_copy(self) -> None:
+        body = banners.build_status_banner(self.request(), language="zh")
+
+        self.assertTrue(body.startswith("## 📊 状态卡片 — implement 派出\n"))
+        self.assertIn("| 阶段 | **派出 codex(role=`implement`)** |", body)
+        self.assertIn("| 上下文 | phase9 issue160 parity |", body)
+        self.assertIn("| **是否需要人介入** | **❌ 否**(自动推进) |", body)
 
     def test_gh_comment_command_preserves_issue_pr_comment_allowlist_and_repo_slug(self) -> None:
         command = banners.gh_comment_command(self.request(kind="issue", target="161"), Path("/tmp/body.md"), "owner/repo")
@@ -124,7 +132,8 @@ class BannerPackageTests(unittest.TestCase):
 
     def test_module_import_has_no_repo_root_side_effect(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertIn("implement", banners.ROLE_NEXT_STEPS)
+            self.assertIn("implement", banners.ROLE_NEXT_STEPS["en"])
+            self.assertIn("implement", banners.ROLE_NEXT_STEPS["zh"])
 
     def test_banner_module_has_no_public_posting_entrypoint_or_env_fallback(self) -> None:
         source = PACKAGE_BANNERS.read_text(encoding="utf-8")

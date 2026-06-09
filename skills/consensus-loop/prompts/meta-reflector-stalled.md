@@ -43,7 +43,7 @@ Valid outputs:
 - `META_RESOLVED:drop:<reason>`
 - `META_RESOLVED:escalate-human:<reason>`
 
-## Marker emission allowlist(强制)
+## Marker emission allowlist (required)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 

@@ -2,83 +2,83 @@
 
 <!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
-> Please reply according to `${HOST_WORK_LANGUAGE}`。Code identifier、file path、错误消息和条款引用可以保留原文。
+> Please reply according to `${HOST_WORK_LANGUAGE}`. Code identifiers, file paths, error messages, and rule quotes may remain verbatim.
 
 ---
 
-## 1. 一段话说清楚
+## 1. One-Paragraph Explanation
 
 ${PROBLEM_STATEMENT}
 
 ---
 
-## 2. 具体示例
+## 2. Concrete Example
 
-下面是当前代码里的真实问题模式。标 `← problem` 的行就是触发违反的位置。
+Below is the real problem pattern in the current code. Lines marked `← problem` trigger the violation.
 
 ```${HOST_CODE_FENCE_LANG}
 ${PROBLEM_EXAMPLE_CODE}
 ```
 
-**文件**: `${PROBLEM_EXAMPLE_FILE_PATH}`
+**File**: `${PROBLEM_EXAMPLE_FILE_PATH}`
 
 ---
 
-## 3. 为什么需要人来设计
+## 3. Why Human Design Is Needed
 
 ${WHY_NEEDS_DESIGN}
 
 ---
 
-## 4. 需要你的回答
+## 4. Needed Answer
 
-加 `crnd:triage:resume-requested` 标签前请回答以下问题。Implement codex 会**原样**读取你的最新评论作为设计输入，所以请具体。
+Please answer the following before adding the `crnd:triage:resume-requested` label. Implement codex will read your latest comment **verbatim** as design input, so be specific.
 
-- [ ] **模式选择**：${DESIGN_QUESTION}
-- [ ] **Schema 影响**：若 `${HOST_PROTO_POLICY}` 非空,按该 host schema/protocol 策略回答。如需新增 typed field 或 schema/protocol 变更,按 host 约定列出；无变更请明确说明。
-- [ ] **向后兼容**：现有持久态如何处理？（reserved identifier / compatibility alias / schema migration / 可接受的重置）
-- [ ] **Scope 拆分**：保留单 cluster 还是拆 N 个 PR？拆则给出 cluster id 草案。
-- [ ] **测试面**：除了下方 cluster spec 里 `verification_hints` 之外，**必须**被测试的行为？
-- [ ] **越界禁地**：implement codex **不应**碰的地方？
-
----
-
-## 5. Auto-loop 行为（机制说明，**不影响你回答的内容**）
-
-- Controller 在此 issue 是仅剩工作时大约每 1 小时轮询一次。
-- Issue 打开后**首次**新评论触发 PushNotification 通知 operator；后续评论不重复推送（防打扰）。
-- 加 `crnd:triage:resume-requested` 标签 → controller 把你的最新评论作为 `## Design decision (from issue #${ISSUE_NUMBER})` 段拼到新 implement codex prompt 前面 dispatch。Implement 在独立 worktree 跑，开 PR 回到 `auto-refact-dev`，PR 一开自动关闭本 issue。
-- 不加 `crnd:triage:resume-requested` 标签直接关闭 → 判定"设计被拒绝；cluster 永久搁置"，controller 在 GitHub / run artifact 记录 `design-rejected:closed`。
+- [ ] **Pattern choice**: ${DESIGN_QUESTION}
+- [ ] **Schema impact**: if `${HOST_PROTO_POLICY}` is non-empty, answer according to that host schema/protocol policy. If new typed fields or schema/protocol changes are needed, list them according to host convention; if none, say so explicitly.
+- [ ] **Backward compatibility**: how should existing durable state be handled? reserved identifier / compatibility alias / schema migration / acceptable reset.
+- [ ] **Scope split**: keep one cluster or split into N PRs? If split, propose cluster ids.
+- [ ] **Test surface**: beyond `verification_hints` in the cluster spec below, what behavior **must** be tested?
+- [ ] **No-touch areas**: what should implement codex **not** touch?
 
 ---
 
-## 6. 技术参考（可折叠）
+## 5. Auto-Loop Behavior (mechanism note, **does not affect your answer**)
+
+- The controller polls about once per hour when this issue is the only remaining work.
+- The **first** new comment after issue creation triggers a PushNotification to the operator; later comments are not repeatedly pushed.
+- Adding `crnd:triage:resume-requested` makes the controller prepend your latest comment as `## Design decision (from issue #${ISSUE_NUMBER})` to a new implement codex prompt and dispatch it. Implement runs in an isolated worktree, opens a PR back to `auto-refact-dev`, and the issue closes automatically when the PR opens.
+- Closing without adding `crnd:triage:resume-requested` means the design was rejected and the cluster is permanently shelved; the controller records `design-rejected:closed` in GitHub / run artifacts.
+
+---
+
+## 6. Technical Reference (Folded)
 
 <details>
-<summary>展开完整 cluster YAML / 证据 / audit 修复边界</summary>
+<summary>Expand full cluster YAML / evidence / audit fix boundary</summary>
 
 ### Cluster spec (from `.refactor-loop/runs/audit-iter-${ITERATION}.md`)
 
 ${CLUSTER_YAML}
 
-### 证据
+### Evidence
 
 ${CLUSTER_EVIDENCE}
 
-### audit 初步提议
+### Initial Audit Proposal
 
 ${CLUSTER_FIX_BOUNDARY}
 
 </details>
 
-cc: @<maintainer-handle-from-$MAINTAINER_WHITELIST>（auto-loop 运维者）
+cc: @<maintainer-handle-from-$MAINTAINER_WHITELIST> (auto-loop operator)
 
 ---
 
-## AI 内容标识符(强制)
+## AI Content Identifier (Required)
 
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
+All AI-generated external content (GitHub issue/PR comments, PR bodies, commit messages, `runs/*.md` artifacts, push notifications) **must end with the sentinel as a standalone line**:
 
     ⟦AI:AUTO-LOOP⟧
 
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
+Do not modify the characters; do not place them in code comments, paths, or branch names. Missing sentinel = generation failure; the controller rejects the post.

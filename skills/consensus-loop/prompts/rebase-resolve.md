@@ -30,7 +30,7 @@ End with exactly one marker:
 - `REBASE_RESOLVE_DONE:${PR_NUMBER}:<status>`
 - `REBASE_RESOLVE_BLOCKED:${PR_NUMBER}:<conflict|human-decision|build-broken|other>:<short>`
 
-## Marker emission allowlist(强制)
+## Marker emission allowlist (required)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
@@ -49,7 +49,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
     ⟦AI:AUTO-LOOP⟧
 
-## codex tool boundary(强制)
+## codex tool boundary (required)
 
 This prompt is marker/artifact-only and does not require GitHub posting.
 

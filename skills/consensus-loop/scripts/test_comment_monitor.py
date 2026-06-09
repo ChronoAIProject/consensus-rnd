@@ -232,6 +232,48 @@ class CommentMonitorTests(unittest.TestCase):
         self.assertEqual("comment-monitor-banner", backoff["contentCreation"]["operation"])
         self.assertEqual("secondary-content-creation-limit", backoff["contentCreation"]["reason"])
 
+    def test_post_banner_defaults_to_english_body(self) -> None:
+        monitor = CommentMonitor(self.ctx, interval=1)
+        bodies: list[str] = []
+
+        def capture_body(args, *, check=True):
+            del check
+            body_path = Path(args[args.index("--body-file") + 1])
+            bodies.append(body_path.read_text(encoding="utf-8"))
+            return subprocess.CompletedProcess(args, 0, "https://github.test/comment\n", "")
+
+        with mock.patch.object(monitor, "gh", side_effect=capture_body):
+            monitor.post_banner("42", "maintainer", "99", "please check\nmore")
+
+        self.assertEqual(1, len(bodies))
+        self.assertIn("## 📊 Status - maintainer comment received (daemon recognized)", bodies[0])
+        self.assertIn("| **Human input needed** | No (automatic response in progress) |", bodies[0])
+        self.assertNotIn("已收到", bodies[0])
+
+    def test_post_banner_preserves_zh_when_host_language_is_zh(self) -> None:
+        host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
+        host_env.write_text(
+            f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n'
+            'export MAINTAINER_WHITELIST="maintainer"\nexport HOST_WORK_LANGUAGE="zh"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        monitor = CommentMonitor(ctx, interval=1)
+        bodies: list[str] = []
+
+        def capture_body(args, *, check=True):
+            del check
+            body_path = Path(args[args.index("--body-file") + 1])
+            bodies.append(body_path.read_text(encoding="utf-8"))
+            return subprocess.CompletedProcess(args, 0, "https://github.test/comment\n", "")
+
+        with mock.patch.object(monitor, "gh", side_effect=capture_body):
+            monitor.post_banner("42", "maintainer", "99", "please check")
+
+        self.assertEqual(1, len(bodies))
+        self.assertIn("## 📊 状态 — 已收到 maintainer 评论(daemon 识别)", bodies[0])
+        self.assertIn("| **是否需要人介入** | ❌ 否(自动响应中) |", bodies[0])
+
     def test_updated_at_unchanged_skips_comments_rest_query(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
         state_path = self.tmp / ".refactor-loop" / "comment-monitor-state.json"

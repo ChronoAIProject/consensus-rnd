@@ -1510,7 +1510,7 @@ class ControllerActionsTests(unittest.TestCase):
         )
 
         self.assertEqual("", self.run_git(worktree, ["status", "--porcelain"]).stdout)
-        self.assertEqual("实现 issue #77", self.run_git(worktree, ["log", "-1", "--format=%s"]).stdout.strip())
+        self.assertEqual("Implement issue #77", self.run_git(worktree, ["log", "-1", "--format=%s"]).stdout.strip())
 
     def test_publish_implementation_diff_accepts_already_committed_changes_without_second_commit(self) -> None:
         worktree = self.publish_implementation_git_worktree()
@@ -1585,7 +1585,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "fetch", "origin"]:
@@ -1807,7 +1807,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected subprocess call: {args!r}")
@@ -1880,7 +1880,7 @@ class ControllerActionsTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout=" M implementation.txt\n", stderr="")
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 return mock.Mock(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected subprocess call: {args!r}")
 
@@ -2012,7 +2012,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected subprocess call: {args!r}")
@@ -2081,7 +2081,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "fetch", "origin"]:
@@ -2167,7 +2167,7 @@ class ControllerActionsTests(unittest.TestCase):
         cases = (
             ("outside-title-path", {"title_file": str(outside)}, None, "implementation PR title artifact outside runs"),
             ("outside-body-path", {"body_file": str(outside_body)}, None, "implementation PR body artifact outside runs"),
-            ("placeholder-title", {}, lambda: title.write_text("实现 issue #77\n", encoding="utf-8"), "implementation PR title is placeholder"),
+            ("placeholder-title", {}, lambda: title.write_text("Implement issue #77\n", encoding="utf-8"), "implementation PR title is placeholder"),
             ("english-placeholder-title", {}, lambda: title.write_text("implement issue #77\n", encoding="utf-8"), "implementation PR title is placeholder"),
             ("multiline-title", {}, lambda: title.write_text("完成 issue #77\n第二行\n", encoding="utf-8"), "implementation PR title must be exactly one non-empty line"),
             ("body-content-title", {}, lambda: title.write_text("Closes #77\n", encoding="utf-8"), "implementation PR title contains body-only content"),
@@ -2267,7 +2267,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "fetch", "origin"]:
@@ -2351,7 +2351,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "fetch", "origin"]:

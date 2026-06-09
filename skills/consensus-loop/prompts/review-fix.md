@@ -97,7 +97,7 @@ End your output with EXACTLY one of:
 - `FIX_DONE:${PR_NUMBER}:round-${FIX_ROUND}:applied-<N>:rejected-<M>:blocked-<K>` — successful round, controller will commit + re-dispatch reviewers.
 - `FIX_BLOCKED:${PR_NUMBER}:round-${FIX_ROUND}:<conflict|human-decision|build-broken|other>:<short>` — controller routes to reflector/meta-layer.
 
-## Marker emission allowlist(强制)
+## Marker emission allowlist (required)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
@@ -116,7 +116,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - **You do NOT touch files outside the PR's diff unless emitting `SCOPE_EXTEND` first.**
 - **You do NOT modify other cluster's PRs** (only this PR's HEAD branch).
 - **False-positive demands must have proof** in the fix artifact at `${FIX_OUTPUT_PATH}` — don't dismiss without evidence.
-- **Fix artifact 写入路径强制 `${FIX_OUTPUT_PATH}`**(典型 `.refactor-loop/runs/fix-pr<N>-round-<R>-report.md`)— **禁止**写到 repo root `FIX_REPORT.md`(会污染 worktree + rebase conflict)。若 `${FIX_OUTPUT_PATH}` 空(env var 漏传),emit `FIX_BLOCKED:env-missing:FIX_OUTPUT_PATH` 不要瞎写默认路径。
+- **Fix artifact path is mandatory: `${FIX_OUTPUT_PATH}`** (typically `.refactor-loop/runs/fix-pr<N>-round-<R>-report.md`). **Do not** write repo root `FIX_REPORT.md`, which pollutes the worktree and causes rebase conflicts. If `${FIX_OUTPUT_PATH}` is empty because env wiring missed it, emit `FIX_BLOCKED:env-missing:FIX_OUTPUT_PATH` instead of inventing a default path.
 - **A demand citing `$PROJECT_RULES` verbatim is presumed valid** — burden of proof is on you to show it's a misreading.
 
 ## Anti-patterns (forbidden — emit FIX_BLOCKED instead of doing these)
@@ -128,7 +128,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 Begin.
 
-## GitHub post(强制)
+## GitHub post (required)
 
 After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
 
@@ -137,9 +137,9 @@ After writing the internal artifact, **call `gh` yourself to post GitHub comment
 
 ---
 
-## AI 内容标识符(强制)
+## AI Content Identifier (Required)
 
-所有 AI 生成的 GitHub issue/PR comment、PR body、commit message、push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
+All AI-generated GitHub issue/PR comments, PR bodies, commit messages, and push notifications **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 

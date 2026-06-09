@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
-from ..context import LoopContext, LoopContextError
+from ..context import LoopContext, LoopContextError, normalize_host_work_language
 from ..github_actor import GitHubAuthenticatedActor
 from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
@@ -186,7 +186,9 @@ class CommentMonitor:
 
     def post_banner(self, number: str, author: str, comment_id: str, body: str) -> None:
         excerpt = (body.splitlines()[0] if body.splitlines() else "")[:80]
-        banner_body = f"""## 📊 状态 — 已收到 maintainer 评论(daemon 识别)
+        language = normalize_host_work_language(raw=self.ctx.host_env.get("HOST_WORK_LANGUAGE", ""))
+        if language == "zh":
+            banner_body = f"""## 📊 状态 — 已收到 maintainer 评论(daemon 识别)
 
 | 维度 | 值 |
 |---|---|
@@ -195,6 +197,21 @@ class CommentMonitor:
 | daemon 反应 | 👀 eyes react 已加 |
 | 下一步 | controller 下次 wakeup(≤25 min)读 daemon log → 派 fresh codex round(maintainer-reply-resets-the-round)→ 更新本卡片 |
 | **是否需要人介入** | ❌ 否(自动响应中) |
+
+🤖 comment-monitor daemon
+
+{AI_SENTINEL}
+"""
+        else:
+            banner_body = f"""## 📊 Status - maintainer comment received (daemon recognized)
+
+| Dimension | Value |
+|---|---|
+| Triggering comment | id={comment_id} author={author} |
+| Comment excerpt | {excerpt} |
+| Daemon reaction | eyes reaction added |
+| Next step | controller reads daemon log on next wakeup (<=25 min), dispatches a fresh codex round (maintainer-reply-resets-the-round), then updates this card |
+| **Human input needed** | No (automatic response in progress) |
 
 🤖 comment-monitor daemon
 

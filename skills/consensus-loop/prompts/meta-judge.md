@@ -138,7 +138,7 @@ End with EXACTLY ONE marker:
 - `META_JUDGE_DONE:consensus:<framing>:<summary>` — controller auto-dispatches implement
 - `META_JUDGE_DONE:converge:round-N:<question>` — controller re-runs Consensus-rnd Phase design-consensus with convergence question; canonical N is the current judge/source round, while the router dispatches the adjacent next solver round
 
-## Marker emission allowlist(强制)
+## Marker emission allowlist (required)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
@@ -166,7 +166,7 @@ Refactor (iter6/issue-118):
 - Follow ${HOST_WORK_LANGUAGE} per SKILL.md; do not add a mandatory parallel English section.
 - Numbers > adjectives.
 
-## GitHub post(强制)
+## GitHub post (required)
 
 After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
 
@@ -175,9 +175,9 @@ After writing the internal artifact, **call `gh` yourself to post GitHub comment
 
 ---
 
-## AI 内容标识符(强制)
+## AI Content Identifier (Required)
 
-所有 AI 生成的 GitHub issue/PR comment、PR body、commit message、push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
+All AI-generated GitHub issue/PR comments, PR bodies, commit messages, and push notifications **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 
