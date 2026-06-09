@@ -115,7 +115,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "may defer to the next daemon tick only when the monitor reports `daemon-self-drive-transient`",
             "fresh `phase9_router_daemon` and `wakeup_runner_daemon` heartbeats plus fresh item-matching unsuppressed dispatch intent evidence",
             "monitor-proven `completed-marker-awaiting-consumption` target-log evidence only under fresh heartbeat and consumption-window gates",
-            "target-log-suppressed without fresh completed-marker evidence, or spawn-claim-suppressed evidence remains same-turn P0",
+            "monitor-proven `target-log-awaiting-terminal-flush` tick only under fresh heartbeat, fresh target-log mtime, strict visible marker, no terminal exit, and zero-streak gates",
+            "target-log-suppressed without fresh completed-marker/terminal-flush evidence, or spawn-claim-suppressed evidence remains same-turn P0",
             "maintainer-blocked exception above remains independent",
         )
         for needle in required:
