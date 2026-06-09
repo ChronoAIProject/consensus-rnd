@@ -44,13 +44,22 @@ class ImplementationPrArtifactsTest(unittest.TestCase):
         self.title.write_text(title, encoding="utf-8")
         self.body.write_text(body, encoding="utf-8")
 
-    def body_with_content(self, *, changed: str, tests: str, deviations: str) -> str:
+    def body_with_content(
+        self,
+        *,
+        changed: str,
+        tests: str,
+        deviations: str,
+        changed_heading: str = "## Changed files",
+        test_heading: str = "## Test results",
+        deviations_heading: str = "## Deviations",
+    ) -> str:
         return (
-            "## Changed files\n\n"
+            f"{changed_heading}\n\n"
             f"{changed}\n\n"
-            "## Test results\n\n"
+            f"{test_heading}\n\n"
             f"{tests}\n\n"
-            "## Deviations\n\n"
+            f"{deviations_heading}\n\n"
             f"{deviations}\n\n"
             "Closes #77\n\n"
             f"{FINAL_SENTINEL}\n"
@@ -59,7 +68,7 @@ class ImplementationPrArtifactsTest(unittest.TestCase):
     def validate(self) -> str | None:
         return validate_implementation_pr_artifacts(self.repo, self.runs, self.action, 77).reason
 
-    def test_fixed_required_section_markers_allow_english_and_chinese_content(self) -> None:
+    def test_required_section_heading_keywords_allow_canonical_and_language_specific_content(self) -> None:
         cases = (
             self.body_with_content(
                 changed="- skills/codex-refactor-loop/scripts/codex_refactor_loop/implementation_pr_artifacts.py",
@@ -77,11 +86,28 @@ class ImplementationPrArtifactsTest(unittest.TestCase):
                 self.write_artifacts(body)
                 self.assertIsNone(self.validate())
 
-    def test_fixed_required_section_markers_reject_missing_or_translated_heading(self) -> None:
+    def test_required_section_heading_keywords_allow_reasonable_english_variants(self) -> None:
+        cases = (
+            ("deviation-record", {"deviations_heading": "## Deviation record"}),
+            ("deviation-singular", {"deviations_heading": "## Deviation"}),
+            ("changed-files-case", {"changed_heading": "## Changed Files"}),
+            ("test-results-case", {"test_heading": "## TEST RESULTS"}),
+        )
+        for name, headings in cases:
+            with self.subTest(name=name):
+                self.write_artifacts(self.body_with_content(changed="- x", tests="- true", deviations="- none", **headings))
+                self.assertIsNone(self.validate())
+
+    def test_required_section_heading_keywords_reject_missing_concept_or_translated_heading(self) -> None:
         valid_body = self.body_with_content(changed="- x", tests="- true", deviations="- none")
-        for heading in ("## Changed files", "## Test results", "## Deviations"):
-            with self.subTest(heading=heading):
-                self.write_artifacts(valid_body.replace(heading, f"{heading} details"))
+        cases = (
+            ("changed", valid_body.replace("## Changed files", "## Files")),
+            ("test", valid_body.replace("## Test results", "## Result summary")),
+            ("deviations", valid_body.replace("## Deviations", "## Notes")),
+        )
+        for name, body in cases:
+            with self.subTest(name=name):
+                self.write_artifacts(body)
                 self.assertEqual("implementation_pr_body_required_section_missing", self.validate())
 
         self.write_artifacts(
@@ -89,6 +115,14 @@ class ImplementationPrArtifactsTest(unittest.TestCase):
                 "## Deviations", ZH_DEVIATION_HEADING
             )
         )
+        self.assertEqual("implementation_pr_body_required_section_missing", self.validate())
+
+    def test_required_section_keywords_must_be_heading_lines(self) -> None:
+        body = self.body_with_content(changed="- x", tests="- true", deviations="- none").replace(
+            "## Deviations\n\n- none",
+            "## Notes\n\n- deviation record: none",
+        )
+        self.write_artifacts(body)
         self.assertEqual("implementation_pr_body_required_section_missing", self.validate())
 
     def test_language_independent_placeholder_title_and_body_headings_are_rejected(self) -> None:

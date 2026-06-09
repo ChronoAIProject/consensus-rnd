@@ -2176,7 +2176,7 @@ class ControllerActionsTests(unittest.TestCase):
             ("wrong-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #78"), encoding="utf-8"), "implementation PR body must contain exactly one matching Closes link"),
             ("multiple-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #77\nCloses #78"), encoding="utf-8"), "implementation PR body must contain exactly one matching Closes link"),
             ("missing-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77\n\n", ""), encoding="utf-8"), "implementation PR body must contain exactly one matching Closes link"),
-            ("missing-section", {}, lambda: body.write_text(valid_body.replace("## Test results", "## test result"), encoding="utf-8"), "implementation PR body missing required section"),
+            ("missing-section", {}, lambda: body.write_text(valid_body.replace("## Test results", "## Results"), encoding="utf-8"), "implementation PR body missing required section"),
             ("placeholder-body", {}, lambda: body.write_text("## issue #77 实现\n\n## Changed files\n\n- x\n\n## Test results\n\n- true\n\n## Deviations\n\n- none\n\nCloses #77\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "implementation PR body is placeholder"),
             ("local-path-authority", {}, lambda: body.write_text(valid_body.replace("## Changed files", "授权: `.refactor-loop/runs/source.md`\n\n## Changed files"), encoding="utf-8"), "implementation PR body invalid: local .refactor-loop artifact path cannot be the only authority source"),
         )
