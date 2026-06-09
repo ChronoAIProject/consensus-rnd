@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from string import Template
@@ -73,6 +74,7 @@ SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
 BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}\\]*)")
 REVIEW_ROLES = ("architect", "tests", "quality")
+REVIEW_PENDING_SECONDS = 90
 PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT = 75
 MANAGED_PR_HEAD_RE = re.compile(r"^refactor/iter([1-9][0-9]*)-([A-Za-z0-9._-]+)$")
 REBASE_RESOLVE_DONE_RE = re.compile(r"^REBASE_RESOLVE_DONE:([1-9][0-9]*):([A-Za-z0-9._-]+)$")
@@ -1618,6 +1620,11 @@ class ControllerActions:
             return False
         log_path = self.ctx.paths.logs / f"review-pr{pr_target}-{role}-r{round_number}.log"
         if not log_path.exists():
+            return False
+        try:
+            if time.time() - log_path.stat().st_mtime >= REVIEW_PENDING_SECONDS:
+                return False
+        except OSError:
             return False
         try:
             text = log_path.read_text(encoding="utf-8", errors="replace")
