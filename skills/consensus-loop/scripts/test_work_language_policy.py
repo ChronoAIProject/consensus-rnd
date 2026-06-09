@@ -17,6 +17,11 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContextError, normalize_host_work_language
 from codex_refactor_loop.github_body import render_github_body
+from codex_refactor_loop.runtime_copy import copy_for
+
+
+def has_han(text: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in text)
 
 
 class WorkLanguagePolicyTests(unittest.TestCase):
@@ -78,6 +83,7 @@ class WorkLanguagePolicyTests(unittest.TestCase):
         self.assertIn("<summary>Inline artifact 1: authority.md</summary>", body)
         self.assertIn("<summary>Local debug clues</summary>", body)
         self.assertNotIn("### 详细说明", body)
+        self.assertFalse(has_han(copy_for("github_body", language="en")["conclusion"]))
         self.assertTrue(body.splitlines()[-1] == "⟦AI:AUTO-LOOP⟧")
 
     def test_invalid_value_fails_closed(self) -> None:
