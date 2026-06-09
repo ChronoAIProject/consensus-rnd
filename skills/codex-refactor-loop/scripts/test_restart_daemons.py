@@ -465,24 +465,26 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.run_helper()
         self.assertEqual(1, self.start_count("dev_sync_daemon"))
 
-    def test_duplicate_canonical_wrappers_are_reconciled_without_spawn(self) -> None:
+    def test_duplicate_canonical_wrappers_are_reaped_before_fresh_spawn(self) -> None:
         self.run_helper()
         old_pid = self.read_pid("concurrency_monitor")
-        duplicate_pid = 424242
+        duplicate_pids = (424242, 424243, 424244)
         command = self.runtime.canonical_command(self.ctx, "concurrency_monitor", FAKE_COMMAND)
-        self.runtime.live_pids.add(duplicate_pid)
+        self.runtime.live_pids.update(duplicate_pids)
+        full_inventory = list(self.runtime.collect_inventory().processes)
+        full_inventory.extend(DaemonProcess(pid, command) for pid in duplicate_pids)
         self.runtime.inventory_override = DaemonProcessInventory(
-            (
-                DaemonProcess(old_pid, command),
-                DaemonProcess(duplicate_pid, command),
-            )
+            tuple(full_inventory)
         )
 
         self.run_helper()
 
-        self.assertEqual([(duplicate_pid, self.config.stop_grace_seconds)], self.runtime.terminated)
-        self.assert_start_count("concurrency_monitor", 1)
-        self.assertEqual(old_pid, self.read_pid("concurrency_monitor"))
+        self.assertEqual(
+            [(pid, self.config.stop_grace_seconds) for pid in (old_pid, *duplicate_pids)],
+            self.runtime.terminated,
+        )
+        self.assert_start_count("concurrency_monitor", 2)
+        self.assertNotEqual(old_pid, self.read_pid("concurrency_monitor"))
 
     def test_duplicate_canonical_matching_ignores_other_repo_and_non_allowlist_commands(self) -> None:
         command = self.runtime.canonical_command(self.ctx, "concurrency_monitor", FAKE_COMMAND)
@@ -507,6 +509,55 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual((111,), live)
+
+    def test_restart_wrapper_matching_accepts_skill_root_and_command_normalization_variance(self) -> None:
+        template = ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon", "--interval", "120")
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", template)
+        old_skill_command = self.runtime.canonical_command(self.ctx, "phase9_router_daemon", template).replace(
+            str(self.skill / "scripts" / "consensus-rnd-cli"),
+            "/opt/old-skill/scripts/consensus-rnd-cli",
+        )
+        spaced_command = f"  {old_skill_command.replace(' ', '   ')}  "
+        inventory = DaemonProcessInventory((DaemonProcess(444, spaced_command),))
+        self.runtime.live_pids.add(444)
+
+        live = inventory.live_restart_wrappers(
+            name="phase9_router_daemon",
+            repo_root=self.ctx.repo_root,
+            pid_file=target.pid_file,
+            died_file=target.died_file,
+            command=target.command,
+            is_alive=self.runtime.pid_alive,
+        )
+
+        self.assertEqual((444,), live)
+
+    def test_restart_wrapper_matching_rejects_unknown_daemon_even_with_matching_shape(self) -> None:
+        command = self.runtime.canonical_command(self.ctx, "not_allowlisted", FAKE_COMMAND)
+        target = restart.daemon_target(self.ctx, "concurrency_monitor", FAKE_COMMAND)
+        inventory = DaemonProcessInventory((DaemonProcess(555, command),))
+        self.runtime.live_pids.add(555)
+
+        live = inventory.live_restart_wrappers(
+            name="not_allowlisted",
+            repo_root=self.ctx.repo_root,
+            pid_file=target.pid_file,
+            died_file=target.died_file,
+            command=target.command,
+            is_alive=self.runtime.pid_alive,
+        )
+
+        self.assertEqual((), live)
+
+    def test_fresh_singleton_skips_when_one_current_wrapper_is_proven(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("concurrency_monitor")
+
+        self.run_helper()
+
+        self.assertEqual(old_pid, self.read_pid("concurrency_monitor"))
+        self.assert_start_count("concurrency_monitor", 1)
+        self.assertEqual([], self.runtime.terminated)
 
     def test_non_owner_restart_daemons_writes_noop_and_starts_no_daemons(self) -> None:
         decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="restart-daemons", lease_id="lease", expires_at="")
