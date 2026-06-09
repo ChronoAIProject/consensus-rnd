@@ -46,7 +46,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "singleton wrapper + actor-owned heartbeat lease",
             "helper-private launch fingerprint",
             "DaemonProcessInventory",
-            "zero duplicate canonical live wrapper",
+            "repo_root plus daemon name plus restart wrapper shape",
             "static allowlist command",
             ".refactor-loop/locks/<daemon>.fingerprint.json",
             "host_env_path",
@@ -60,6 +60,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "STALE_CONTROLLER",
             "$REPO_ROOT",
             "consensus-rnd-cli runtime-retention",
+            "daemon-status",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
@@ -83,6 +84,8 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "DaemonLaunchFingerprint",
             "DaemonTarget",
             "DaemonProcessInventory",
+            "RestartWrapperShape",
+            "live_restart_wrappers",
             "daemon_targets",
             "read_daemon_pid",
             "read_heartbeat_age_seconds",
@@ -146,6 +149,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "helper-private launch fingerprints",
             ".refactor-loop/locks/<daemon>.fingerprint.json",
             "pid alive plus fresh heartbeat plus current fingerprint plus zero duplicate canonical live wrapper",
+            "repo_root plus daemon name plus restart wrapper shape",
             "same resolved static allowlist command",
             "read-only daemon-status projection",
             "repair/reload remains restart-daemons",
