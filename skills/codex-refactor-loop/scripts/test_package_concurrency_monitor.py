@@ -105,17 +105,14 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
         task_id: str,
         *,
         ts: str = "2026-05-26T07:29:00Z",
-        intent_id: str | None = None,
     ) -> None:
+        key = task_id.removeprefix("phase9-issue").replace("-r", "-", 1)
         payload = {
-            "dispatch_state": "harness-intent",
+            "key": key,
+            "marker": "SOLVER_DONE:minimal:ready",
+            "log_path": f".refactor-loop/logs/{task_id}.log",
             "dispatched_at": ts,
-            "intent_id": intent_id or f"harness-spawn-intent:test:{task_id}",
-            "task_id": task_id,
-            "key": f"ledger-{task_id}",
-            "route": "solver_triplet",
-            "log": f".refactor-loop/logs/{task_id}.log",
-            "reason": f"issue #{task_id.removeprefix('phase9-issue')} dispatch",
+            "dispatch_state": "harness-intent",
         }
         ledger = self.refactor_loop / "phase9-router-ledger.jsonl"
         ledger.parent.mkdir(parents=True, exist_ok=True)
@@ -410,8 +407,13 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
         now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
         for case, setup, expected_reason in (
             (
-                "terminal-block",
+                "terminal-block-closed",
                 lambda task_id: self._append_terminal_block(task_id, "target_not_open:CLOSED"),
+                "suppressed-intent:terminal-block",
+            ),
+            (
+                "terminal-block-merged",
+                lambda task_id: self._append_terminal_block(task_id, "target_not_open:MERGED"),
                 "suppressed-intent:terminal-block",
             ),
             (
@@ -453,8 +455,13 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
         now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
         for case, setup, expected_reason in (
             (
-                "terminal-block",
+                "terminal-block-closed",
                 lambda task_id: self._append_terminal_block(task_id, "target_not_open:CLOSED"),
+                "suppressed-intent:terminal-block",
+            ),
+            (
+                "terminal-block-merged",
+                lambda task_id: self._append_terminal_block(task_id, "target_not_open:MERGED"),
                 "suppressed-intent:terminal-block",
             ),
             (
@@ -477,6 +484,9 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
                 (self.refactor_loop / "locks" / "spawn-tasks" / f"{task_id}.lock").unlink(missing_ok=True)
                 self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
                 self.append_phase9_ledger_intent(task_id, ts="2026-05-26T07:29:00Z")
+                ledger_row = json.loads((self.refactor_loop / "phase9-router-ledger.jsonl").read_text(encoding="utf-8"))
+                self.assertNotIn("intent_id", ledger_row)
+                self.assertNotIn("task_id", ledger_row)
                 setup(task_id)
 
                 with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):

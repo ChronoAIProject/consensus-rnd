@@ -75,6 +75,14 @@ class DaemonSelfDriveClassification:
     evidence: list[str]
 
 
+@dataclass(frozen=True)
+class Phase9DispatchTarget:
+    kind: str
+    number: int
+    round_no: int
+    role: str
+
+
 def utc_ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -541,6 +549,7 @@ class ConcurrencyMonitor:
         except OSError as exc:
             return False, f"pending-events-read-error:{exc.__class__.__name__}", []
         blocked_intents = self._terminal_blocked_harness_spawn_intent_ids(pending_lines)
+        blocked_targets = self._targets_for_terminal_blocked_harness_spawn_intents(pending_lines)
         pending_result = self._pending_intent_evidence(
             lines=pending_lines,
             active_targets=active_targets,
@@ -555,6 +564,7 @@ class ConcurrencyMonitor:
             now=now,
             window=window,
             blocked_intents=blocked_intents,
+            blocked_targets=blocked_targets,
         )
         if ledger_result[0] is False:
             return ledger_result
@@ -604,6 +614,7 @@ class ConcurrencyMonitor:
         now: float,
         window: int,
         blocked_intents: set[str],
+        blocked_targets: set[Phase9DispatchTarget],
     ) -> tuple[bool, str, list[str]]:
         ledger = self.ctx.paths.refactor_loop / "phase9-router-ledger.jsonl"
         if not ledger.exists():
@@ -629,7 +640,11 @@ class ConcurrencyMonitor:
                 return False, "malformed-phase9-ledger-ts", []
             if not self._intent_matches_active_target(entry, active_targets):
                 continue
-            suppressed = self._intent_suppression_reason(entry, blocked_intents=blocked_intents)
+            suppressed = self._phase9_ledger_suppression_reason(
+                entry,
+                blocked_intents=blocked_intents,
+                blocked_targets=blocked_targets,
+            )
             age = int(now - created_at)
             if suppressed:
                 return False, f"suppressed-intent:{suppressed}", []
@@ -640,6 +655,14 @@ class ConcurrencyMonitor:
 
     def _terminal_blocked_harness_spawn_intent_ids(self, lines: list[str]) -> set[str]:
         ids: set[str] = set()
+        for intent_id in self._terminal_blocked_harness_spawn_intent_suffixes(lines):
+            ids.add(intent_id)
+            if not intent_id.startswith("harness-spawn-intent:"):
+                ids.add(f"harness-spawn-intent:{intent_id}")
+        return ids
+
+    def _terminal_blocked_harness_spawn_intent_suffixes(self, lines: list[str]) -> list[str]:
+        intent_ids: list[str] = []
         prefix = "WAKEUP_RUNNER_BLOCKED:harness-spawn-intent:"
         for line in lines:
             if prefix not in line:
@@ -650,11 +673,15 @@ class ConcurrencyMonitor:
                 if tail.endswith(suffix):
                     intent_id = tail[: -len(suffix)]
                     if intent_id:
-                        ids.add(intent_id)
-                        if not intent_id.startswith("harness-spawn-intent:"):
-                            ids.add(f"harness-spawn-intent:{intent_id}")
+                        intent_ids.append(intent_id)
                     break
-        return ids
+        return intent_ids
+
+    def _targets_for_terminal_blocked_harness_spawn_intents(self, lines: list[str]) -> set[Phase9DispatchTarget]:
+        targets: set[Phase9DispatchTarget] = set()
+        for intent_id in self._terminal_blocked_harness_spawn_intent_suffixes(lines):
+            targets.update(self._phase9_dispatch_targets_from_text(intent_id))
+        return targets
 
     def _intent_suppression_reason(self, payload: dict[str, object], *, blocked_intents: set[str]) -> str:
         intent_id = str(payload.get("intent_id") or "")
@@ -662,7 +689,7 @@ class ConcurrencyMonitor:
             return "terminal-block"
         if self._target_log_suppresses_intent(payload):
             return "target-log"
-        task_id = str(payload.get("task_id") or "")
+        task_id = self._task_id_for_suppression_payload(payload)
         if task_id:
             try:
                 lock = self.ctx.paths.refactor_loop / "locks" / "spawn-tasks" / f"{safe_task_id_from_task(task_id)}.lock"
@@ -671,6 +698,41 @@ class ConcurrencyMonitor:
             if lock.exists():
                 return "spawn-claim"
         return ""
+
+    def _phase9_ledger_suppression_reason(
+        self,
+        payload: dict[str, object],
+        *,
+        blocked_intents: set[str],
+        blocked_targets: set[Phase9DispatchTarget],
+    ) -> str:
+        if self._ledger_targets(payload) & blocked_targets:
+            return "terminal-block"
+        return self._intent_suppression_reason(payload, blocked_intents=blocked_intents)
+
+    def _ledger_targets(self, payload: dict[str, object]) -> set[Phase9DispatchTarget]:
+        text = " ".join(str(payload.get(field) or "") for field in ("key", "log_path"))
+        return self._phase9_dispatch_targets_from_text(text)
+
+    def _task_id_for_suppression_payload(self, payload: dict[str, object]) -> str:
+        task_id = str(payload.get("task_id") or "")
+        if task_id:
+            return task_id
+        log_value = payload.get("log") or payload.get("log_path")
+        if not isinstance(log_value, str) or not log_value:
+            return ""
+        return Path(log_value).stem
+
+    def _phase9_dispatch_targets_from_text(self, text: str) -> set[Phase9DispatchTarget]:
+        targets: set[Phase9DispatchTarget] = set()
+        roles = "minimal|structural|delete|judge|reflector"
+        for match in re.finditer(rf"phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-({roles})", text):
+            targets.add(Phase9DispatchTarget("issue", int(match.group(1)), int(match.group(2)), match.group(3)))
+        for match in re.finditer(rf"(?<![0-9])([1-9][0-9]*)-([1-9][0-9]*)-({roles})(?![A-Za-z0-9_-])", text):
+            targets.add(Phase9DispatchTarget("issue", int(match.group(1)), int(match.group(2)), match.group(3)))
+        for match in re.finditer(rf"phase9-router:([1-9][0-9]*):([1-9][0-9]*):({roles})", text):
+            targets.add(Phase9DispatchTarget("issue", int(match.group(1)), int(match.group(2)), match.group(3)))
+        return targets
 
     def _target_log_suppresses_intent(self, payload: dict[str, object]) -> bool:
         log_value = payload.get("log") or payload.get("log_path")
