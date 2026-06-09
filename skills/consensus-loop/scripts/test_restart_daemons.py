@@ -43,8 +43,16 @@ class FakeWrapper:
 
 
 class FakeChild:
-    def __init__(self, polls: list[int | None]) -> None:
+    def __init__(
+        self,
+        polls: list[int | None],
+        *,
+        terminate_error: Exception | None = None,
+        kill_error: Exception | None = None,
+    ) -> None:
         self.polls = list(polls)
+        self.terminate_error = terminate_error
+        self.kill_error = kill_error
         self.terminated = 0
         self.killed = 0
         self.wait_timeouts: list[float | None] = []
@@ -56,6 +64,8 @@ class FakeChild:
 
     def terminate(self) -> None:
         self.terminated += 1
+        if self.terminate_error is not None:
+            raise self.terminate_error
         self.polls = [0]
 
     def wait(self, timeout: float | None = None) -> int | None:
@@ -64,6 +74,8 @@ class FakeChild:
 
     def kill(self) -> None:
         self.killed += 1
+        if self.kill_error is not None:
+            raise self.kill_error
         self.polls = [137]
 
 
@@ -571,6 +583,51 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                 died = (target_root / ".refactor-loop" / "logs" / "phase9_router_daemon.died").read_text(encoding="utf-8")
                 self.assertIn("terminating child and restarting same command", died)
                 self.assertEqual(f"{self.runtime.now()}\n", heartbeat.read_text(encoding="utf-8"))
+
+    def test_wrapper_logs_and_aborts_when_child_cannot_be_killed(self) -> None:
+        heartbeat = self.heartbeat_path("phase9_router_daemon")
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+        heartbeat.write_text(f"{self.runtime.now() - 120}\n", encoding="utf-8")
+        launches: list[tuple[str, ...]] = []
+        child = FakeChild(
+            [None],
+            terminate_error=RuntimeError("term denied"),
+            kill_error=RuntimeError("kill denied"),
+        )
+
+        def popen(command: tuple[str, ...]) -> FakeChild:
+            launches.append(command)
+            return child
+
+        with self.assertRaisesRegex(RuntimeError, "child termination failed after kill"):
+            restart._run_restart_wrapper(
+                [
+                    "phase9_router_daemon",
+                    str(self.repo),
+                    str(self.repo / ".refactor-loop" / "locks" / "phase9_router_daemon.pid"),
+                    str(self.repo / ".refactor-loop" / "logs" / "phase9_router_daemon.died"),
+                    *FAKE_COMMAND,
+                ],
+                env={
+                    "RESTART_DAEMON_HEARTBEAT_FILE": str(heartbeat),
+                    "RESTART_DAEMON_HEARTBEAT_INTERVAL": "1",
+                    "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": "30",
+                    "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
+                },
+                popen=popen,
+                sleeper=lambda _seconds: None,
+                clock=lambda: self.runtime.now(),
+                getpid=lambda: 33333,
+                max_supervision_cycles=1,
+            )
+
+        self.assertEqual([FAKE_COMMAND], launches)
+        self.assertEqual(1, child.terminated)
+        self.assertEqual(1, child.killed)
+        died = (self.repo / ".refactor-loop" / "logs" / "phase9_router_daemon.died").read_text(encoding="utf-8")
+        self.assertIn("heartbeat-stale:120s; terminating child and restarting same command", died)
+        self.assertIn("child terminate failed reason=RuntimeError('term denied'); attempting kill", died)
+        self.assertIn("child kill failed reason=RuntimeError('kill denied'); aborting wrapper restart", died)
 
     def test_restarts_when_pid_dead(self) -> None:
         self.runtime.live_pids.discard(999999)

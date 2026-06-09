@@ -782,12 +782,14 @@ class _RestartWrapperRuntime:
         try:
             self.child.terminate()
             self.child.wait(timeout=self.stop_grace_seconds)
-        except Exception:
+        except Exception as terminate_exc:
+            self._log(f"child terminate failed reason={terminate_exc!r}; attempting kill")
             try:
                 self.child.kill()
                 self.child.wait(timeout=1)
-            except Exception:
-                pass
+            except Exception as kill_exc:
+                self._log(f"child kill failed reason={kill_exc!r}; aborting wrapper restart")
+                raise RuntimeError(f"{self.name} child termination failed after kill: {kill_exc!r}") from kill_exc
 
     def _cleanup(self, exit_code: int) -> None:
         self._terminate_child()
