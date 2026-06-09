@@ -2,7 +2,7 @@
 
 English canonical public identity document. 中文 companion: [README.zh-CN.md](./README.zh-CN.md).
 
-`consensus-rnd` is a cross-platform Agent Skills publication repository. Its product identity is a **consensus engine** for repository work: biased independent solvers produce candidate plans, a meta-judge converges them into one concrete plan, implementation runs, independent reviewers apply the same consensus discipline, and only then may the work proceed to merge.
+`consensus-rnd` is a cross-platform Agent Skills publication repository. Its product identity is a **consensus engine** for repo-owned GitHub issue/PR work: biased independent solvers produce candidate plans, a meta-judge converges them into one concrete plan, implementation runs, independent reviewers apply the same consensus discipline, and only then may the work proceed to merge.
 
 This repository is not an application runtime. Its deliverables are skills under `skills/<name>/` plus the platform manifests that expose the same skill tree to Claude Code, Codex, Cursor, and Gemini.
 
@@ -10,7 +10,7 @@ This repository is not an application runtime. Its deliverables are skills under
 
 | skill | What it is for | Runtime shape |
 |---|---|---|
-| `consensus-loop` | Heavy autonomous Consensus R&D work-unit loop for issue/PR resolution, ongoing repository R&D, daemon supervision, Codex workers, GitHub orchestration, review gates, and automated release publication when the host opts in. Audit/refactor is a fallback issue producer when no actionable managed work is open. | Uses checked-in scripts, `.refactor-loop/` state, GitHub, git, and host-provided `host.env` facts. |
+| `consensus-loop` | Heavy autonomous Consensus R&D work-unit loop for repo-owned GitHub issue/PR resolution, ongoing repository R&D, daemon supervision, Codex workers, GitHub orchestration, review gates, and automated release publication when the host opts in. Audit/refactor is a fallback issue producer when no actionable managed work is open. | Uses checked-in scripts, `.refactor-loop/` state, GitHub, git, and host-provided `host.env` facts. |
 | `sshx` | Lightweight worker-delegated inline consensus methodology (轻量 worker-delegated inline 共识方法论) for high-risk decisions or implementation plans that need isolated perspectives but do not need daemon, GitHub, or git orchestration. | WorkerMode dispatches isolated thinking and review workers; no daemon, no lifecycle authority, no runtime control plane, and not a duplicate alias for `consensus-loop`. |
 
 ## Core
@@ -84,9 +84,11 @@ Platform manifests point different agents at the same skills:
 
 Host projects inject runtime facts through `host.env`: repository root, GitHub slug, review and integration branches, project rules, build/test commands, release opt-in, and related surfaces. The skill repository must not hardcode host facts or modify host configuration directly.
 
+Capability boundary: `consensus-loop` supports bounded repo-owned work expressible as managed GitHub issues or PRs, including feature, bug, documentation, governance, and refactor work. It does not provide arbitrary GitHub administration such as Projects, milestones, assignee management, Discussions, label-taxonomy mutation outside the catalog, issue/PR body edits outside named helpers, tag/release operations outside the release allowlist, or custom lifecycle authority.
+
 ## Roadmap
 
-The public product identity is Consensus R&D. Refactoring, issue-solving, and repository R&D are different entry surfaces for the same work-unit loop. `consensus-loop` remains the stable heavy autonomous loop entrypoint, while `sshx` carries the same consensus philosophy as a lightweight worker-delegated inline method, not as a duplicate alias for the heavy loop. Future work should continue generalizing host/project assumptions and producer inputs while keeping runtime authority narrow enough to verify mechanically.
+The public product identity is Consensus R&D. Managed repo-owned GitHub issue/PR work is the main path; audit/refactor is a fallback producer that creates or updates work for that same loop when no actionable managed work is open. Refactoring, issue-solving, and repository R&D are different entry surfaces for the same loop, not separate systems. `consensus-loop` remains the stable heavy autonomous loop entrypoint, while `sshx` carries the same consensus philosophy as a lightweight worker-delegated inline method, not as a duplicate alias for the heavy loop. Future work should continue generalizing host/project assumptions and producer inputs while keeping runtime authority narrow enough to verify mechanically.
 
 ## License
 
