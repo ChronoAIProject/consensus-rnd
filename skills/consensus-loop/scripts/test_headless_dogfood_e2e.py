@@ -525,6 +525,7 @@ class HeadlessDogfoodE2ETests(unittest.TestCase):
             self.assertEqual(3, fixture.pending_events().count("HARNESS_SPAWN_INTENT"))
             plan = fixture.plan()
             self.assertEqual(2, plan["hard_gate"]["dispatch_required"])
+            self.assertEqual(0, plan["concurrency"]["uncovered_deficit"])
             self.assertEqual(3, len([action for action in plan["actions"] if action.get("kind") == "harness-spawn-intent"]))
 
             first_results = fixture.run_runner()

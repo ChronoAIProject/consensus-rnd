@@ -913,6 +913,38 @@ def canonical_actual_count(repo_root: Path, monitor: Any | None) -> int:
         return 0
 
 
+def hard_gate_transient_supply(
+    monitor: Any | None,
+    *,
+    breakdown: list[dict[str, Any]],
+    target: int,
+    actual: int,
+    queue_empty: bool,
+) -> dict[str, Any]:
+    if monitor is None:
+        return {"supply": 0, "targets": [], "evidence": [], "blocked_reason": None}
+    try:
+        projection = monitor.hard_gate_transient_supply(
+            breakdown=breakdown,
+            target=target,
+            actual=actual,
+            queue_empty=queue_empty,
+        )
+    except Exception as exc:
+        return {"supply": 0, "targets": [], "evidence": [], "blocked_reason": f"unavailable:{exc.__class__.__name__}"}
+    raw_supply = getattr(projection, "supply", 0)
+    supply = raw_supply if isinstance(raw_supply, int) else 0
+    raw_blocked_reason = getattr(projection, "blocked_reason", None)
+    raw_targets = getattr(projection, "targets", ())
+    raw_evidence = getattr(projection, "evidence", ())
+    return {
+        "supply": supply,
+        "targets": list(raw_targets) if isinstance(raw_targets, (list, tuple)) else [],
+        "evidence": list(raw_evidence) if isinstance(raw_evidence, (list, tuple)) else [],
+        "blocked_reason": raw_blocked_reason if isinstance(raw_blocked_reason, str) else None,
+    }
+
+
 def _exclude_draft_suppressed_release_rollups(
     items: list[dict[str, Any]],
     release_rollup_actions: list[Mapping[str, Any]] | None,
@@ -1075,8 +1107,19 @@ def concurrency_plan(
     floor = configured_floor()
     target = max(floor, expected)
     deficit = max(0, target - actual)
-    hard_gate_active = deficit > 0 and (expected > 0 or dispatch_queue_has_work or audit_fallback_eligible)
-    hard_gate_line = f"HARD_GATE:dispatch_required={deficit}" if hard_gate_active else None
+    queue_empty = not dispatch_queue_has_work
+    transient_supply = hard_gate_transient_supply(
+        monitor,
+        breakdown=breakdown,
+        target=target,
+        actual=actual,
+        queue_empty=queue_empty,
+    )
+    supply_count = int(transient_supply.get("supply", 0)) if queue_empty else 0
+    uncovered_deficit = max(0, deficit - supply_count)
+    dispatch_pressure = deficit if dispatch_queue_has_work else uncovered_deficit
+    hard_gate_active = dispatch_pressure > 0 and (expected > 0 or dispatch_queue_has_work or audit_fallback_eligible)
+    hard_gate_line = f"HARD_GATE:dispatch_required={dispatch_pressure}" if hard_gate_active else None
     boundary = None
     if deficit > 0 and expected == 0 and concurrency_module is not None:
         try:
@@ -1093,10 +1136,12 @@ def concurrency_plan(
         "floor": floor,
         "target": target,
         "deficit": deficit,
+        "transient_supply": transient_supply,
+        "uncovered_deficit": uncovered_deficit,
         "fixed_point": fixed_point,
         "hard_gate": {
             "active": hard_gate_active,
-            "dispatch_required": deficit if hard_gate_active else 0,
+            "dispatch_required": dispatch_pressure if hard_gate_active else 0,
             "line": hard_gate_line,
             "semantics": (
                 "controller must dispatch this many actionable managed issue/PR tasks or legal fallback issue production through audit before ending the wakeup"
@@ -3745,9 +3790,18 @@ def _release_countdown_score(repo_root: Path, scorer: Any | None = None) -> dict
         with contextlib.redirect_stdout(sys.stderr):
             score = (scorer or decide_release_artifact)(repo_root)
     except (KeyError, RuntimeError, ValueError) as exc:
-        print(f"release-countdown: release goal unavailable: {exc}", file=sys.stderr)
+        if not _release_countdown_quiet_unavailable(repo_root, exc):
+            print(f"release-countdown: release goal unavailable: {exc}", file=sys.stderr)
         return {}
     return score if isinstance(score, dict) else {}
+
+
+def _release_countdown_quiet_unavailable(repo_root: Path, exc: BaseException) -> bool:
+    if os.environ.get("RELEASE_AUTO_ENABLE") == "true":
+        return False
+    if not (repo_root / ".version-bump.json").exists():
+        return True
+    return ".version-bump.json: expected top-level files list" in str(exc)
 
 
 def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
@@ -4238,7 +4292,9 @@ def restore_hard_gate_for_dispatchable_actions(concurrency: dict[str, Any], acti
     hard_gate = concurrency.get("hard_gate", {})
     if not has_hard_gate_dispatch_action(actions):
         return
-    deficit = int(concurrency.get("deficit", 0))
+    uncovered_deficit = int(concurrency.get("uncovered_deficit", 0))
+    raw_deficit = int(concurrency.get("deficit", 0))
+    deficit = uncovered_deficit if uncovered_deficit > 0 else raw_deficit
     if deficit <= 0:
         return
     hard_gate.update(

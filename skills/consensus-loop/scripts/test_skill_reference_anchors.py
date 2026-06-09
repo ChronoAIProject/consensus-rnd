@@ -222,7 +222,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "The default main path is open actionable managed issue/PR resolution",
             "`audit` is the fallback raw artifact issue producer",
             "`audit` remains the stable compatibility producer value and fallback issue producer, not the default\nmain path",
-            "先扫 open actionable managed issue/PR 并派 next-step actor",
+            "先扫 open actionable managed issue/PR,并通过 phase9-router / wakeup-runner / dispatch queue 等 daemon 自驱面确认 next-step actor dispatch evidence",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, detailed)

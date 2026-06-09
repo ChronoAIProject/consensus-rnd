@@ -114,7 +114,9 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "must first read the concurrency monitor/status zero-codex classification",
             "may defer to the next daemon tick only when the monitor reports `daemon-self-drive-transient`",
             "fresh `phase9_router_daemon` and `wakeup_runner_daemon` heartbeats plus fresh item-matching unsuppressed dispatch intent evidence",
-            "missing, stale, malformed, read-error, terminal-blocked, target-log-suppressed, or spawn-claim-suppressed evidence remains same-turn P0",
+            "monitor-proven `completed-marker-awaiting-consumption` target-log evidence only under fresh heartbeat and consumption-window gates",
+            "monitor-proven `target-log-awaiting-terminal-flush` tick only under fresh heartbeat, fresh target-log mtime, strict visible marker, no terminal exit, and zero-streak gates",
+            "target-log-suppressed without fresh completed-marker/terminal-flush evidence, or spawn-claim-suppressed evidence remains same-turn P0",
             "maintainer-blocked exception above remains independent",
         )
         for needle in required:
@@ -167,7 +169,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "ensure labels",
             "restart-helper-managed daemons",
             "arm persistent daemon-event Monitor",
-            "dispatch producer",
+            "Confirm daemon-owned router/runner/queue dispatch evidence",
             "confirm the daemon-event Monitor bridge",
         )
         cursor = -1
@@ -228,7 +230,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         )
         self.assertIn("#wake-source-rules", wake_row)
 
-    def test_wakeup_skeleton_orders_monitor_before_sweep_and_spawn(self) -> None:
+    def test_wakeup_skeleton_orders_monitor_before_sweep_and_daemon_first_dispatch(self) -> None:
         skeleton = section_between(
             self.skill,
             r"^## Wakeup Skeleton$",
@@ -242,7 +244,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "Run `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root \"$REPO_ROOT\"` first",
             "Arm or confirm the persistent daemon-event Monitor bridge",
             "Sweep GitHub comments and pending events",
-            "Spawn the next codexes",
+            "Confirm daemon-owned dispatch evidence covers the next step",
+            "directly spawn with harness background tasks only after the mechanical daemon-stuck predicate",
             "Confirm the daemon-event Monitor bridge is still maintained",
             "ScheduleWakeup fallback",
         )
@@ -257,6 +260,74 @@ class SkillEntrypointContractTests(unittest.TestCase):
             skeleton,
             r"Confirm a wake source: an active daemon-event Monitor bridge,.*or.*ScheduleWakeup",
         )
+
+    def test_daemon_first_controller_boundary_contract_is_anchored(self) -> None:
+        boundary = section_between(
+            self.skill,
+            r'^## Daemon-first controller boundary\(强制,per maintainer-directive 2026-06-09\)$',
+            r"^## Concurrency Floor$",
+        )
+        self.assertTrue(boundary)
+        self.assertIn('<a id="daemon-first-controller-boundary"></a>', self.skill)
+        for needle in (
+            "must not bypass `phase9-router`, `wakeup-runner`, the concurrency monitor dispatch-queue auto-topup",
+            "current-wakeup `consensus-rnd-cli daemon-status --json`",
+            "reports an owner daemon required for the affected route as `stale` or `dead`",
+            "the relevant daemon has emitted a fail-closed pending event naming the target",
+            "has run `consensus-rnd-cli restart-daemons` in the same wakeup",
+            "bounded 10-minute recheck window",
+            "live OPEN actionable issue/PR or a clean marker/fail-closed event",
+            "Anything less is not stuck",
+            "ordinary satisfier is daemon-owned evidence",
+            "queued `HARNESS_SPAWN_INTENT`",
+            "`WAIT:single-active-audit`",
+            "`daemon-self-drive-transient` classification",
+            "Controller fallback sweep is diagnostic, not authoritative dispatch",
+            "must not hand-clear markerless logs, hand-delete spawn-claim locks, hand-kill processes, or spawn replacement workers",
+            "must not install, write, edit, load, unload, bootstrap, or delete crontab entries, LaunchAgent/LaunchDaemon plists, watchdog processes",
+            "No `ps`/`pgrep` liveness probing, no second watchdog, no manual wrapper spawn",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, boundary)
+
+    def test_daemon_first_boundary_forbids_legacy_authoritative_sweep_and_hand_kill_tokens(self) -> None:
+        for forbidden in (
+            "fallback sweep remains authoritative",
+            "pkill -f audit-iter-N",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.skill)
+
+    def test_phase_routing_and_no_gap_default_to_daemon_owned_dispatch(self) -> None:
+        phase_routing = section_between(
+            self.skill,
+            r"^## Phase Routing$",
+            r"^## GitHub State Contract$",
+        )
+        wake_source = section_between(
+            self.skill,
+            r"^## Wake source rules and no-gap details$",
+            r"^### Spawn / merge / banner",
+        )
+        self.assertTrue(phase_routing)
+        self.assertTrue(wake_source)
+        for needle in (
+            "Same-wakeup daemon-owned dispatch evidence / stuck-gated controller fallback",
+            "confirm daemon-owned dispatch evidence",
+            "direct controller spawn is not the default path and is allowed only as a recorded mechanical daemon-stuck fallback",
+            "daemon-owned dispatch evidence covers the next step",
+            "mechanical daemon-stuck predicate 已记录后作为 fallback",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, f"{phase_routing}\n{wake_source}")
+        for forbidden in (
+            "Same-wakeup controller action",
+            "controller dispatches the next-step actor",
+            "sweep dispatch Consensus-rnd Phase design-consensus directly",
+            "必须先派 codex 才允许 ScheduleWakeup",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, f"{phase_routing}\n{wake_source}")
 
     def test_controller_cli_invocation_contract_forbids_bash_interpreter(self) -> None:
         # Refactor (issue-303):

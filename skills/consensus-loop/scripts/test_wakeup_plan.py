@@ -15,6 +15,7 @@ from contextlib import redirect_stderr
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -5444,6 +5445,42 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(hard_gate["blocked_deficit"], 4)
         self.assertEqual(hard_gate["dispatch_required"], 0)
 
+    def test_restore_hard_gate_uses_uncovered_deficit_when_present(self) -> None:
+        action = {
+            "kind": "harness-spawn-intent",
+            "controller_action": "spawn_codex_harness_background",
+        }
+        hard_gate = {
+            "active": False,
+            "reason": None,
+            "blocked_deficit": 0,
+            "dispatch_required": 0,
+        }
+        concurrency = {"deficit": 2, "uncovered_deficit": 1, "hard_gate": hard_gate}
+        restore_hard_gate_for_dispatchable_actions(concurrency, [action])
+
+        self.assertTrue(hard_gate["active"])
+        self.assertEqual(hard_gate["dispatch_required"], 1)
+        self.assertEqual(hard_gate["line"], "HARD_GATE:dispatch_required=1")
+
+    def test_restore_hard_gate_uses_raw_deficit_when_uncovered_deficit_is_zero(self) -> None:
+        action = {
+            "kind": "harness-spawn-intent",
+            "controller_action": "spawn_codex_harness_background",
+        }
+        hard_gate = {
+            "active": False,
+            "reason": None,
+            "blocked_deficit": 0,
+            "dispatch_required": 0,
+        }
+        concurrency = {"deficit": 2, "uncovered_deficit": 0, "hard_gate": hard_gate}
+        restore_hard_gate_for_dispatchable_actions(concurrency, [action])
+
+        self.assertTrue(hard_gate["active"])
+        self.assertEqual(hard_gate["dispatch_required"], 2)
+        self.assertEqual(hard_gate["line"], "HARD_GATE:dispatch_required=2")
+
     def test_wakeup_plan_source_does_not_make_dispatch_next_step_worker_executable(self) -> None:
         projection = wakeup_plan_projection()
 
@@ -5618,7 +5655,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_release_countdown_fail_soft_when_version_manifest_has_no_files_list(self) -> None:
         (self.repo / ".version-bump.json").write_text(json.dumps({"version": "0.0.0"}), encoding="utf-8")
 
-        plan = self.run_plan(fixture="default_milestones")
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "false"}):
+            plan, _stdout, stderr = self.run_plan_with_streams(fixture="default_milestones")
 
         actions = [action for action in plan["actions"] if action["kind"] == "release-countdown"]
         self.assertEqual(len(actions), 1)
@@ -5631,12 +5669,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(action["ready"])
         self.assertEqual(action["red_signals"], [])
         self.assertEqual(action["blocked_reasons"], [])
+        self.assertNotIn("release-countdown: release goal unavailable", stderr)
         self.assertIn("api milestones", (self.repo / "gh-query-labels.log").read_text(encoding="utf-8"))
 
     def test_release_countdown_fail_soft_when_version_manifest_is_absent_with_open_milestone(self) -> None:
         (self.repo / ".version-bump.json").unlink()
 
-        plan = self.run_plan(fixture="default_milestones")
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "false"}):
+            plan, _stdout, stderr = self.run_plan_with_streams(fixture="default_milestones")
 
         actions = [action for action in plan["actions"] if action["kind"] == "release-countdown"]
         self.assertEqual(len(actions), 1)
@@ -5646,6 +5686,40 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIsNone(action["goal"]["release"])
         self.assertTrue(action["status_only"])
         self.assertTrue(action["no_lifecycle_authority"])
+        self.assertFalse((self.repo / ".refactor-loop/state/release-decision.json").exists())
+        self.assertFalse((self.repo / ".refactor-loop/state/release-candidate.json").exists())
+        self.assertNotIn("release-countdown: release goal unavailable", stderr)
+
+    def test_release_countdown_keeps_release_enabled_diagnostic_when_version_manifest_is_absent(self) -> None:
+        (self.repo / ".version-bump.json").unlink()
+
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "true"}):
+            plan, _stdout, stderr = self.run_plan_with_streams(fixture="default_milestones")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "release-countdown"]
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsNone(action["goal"]["release"])
+        self.assertTrue(action["status_only"])
+        self.assertFalse(has_dispatchable_action(actions))
+        self.assertIn("release-countdown: release goal unavailable", stderr)
+        self.assertFalse((self.repo / ".refactor-loop/state/release-decision.json").exists())
+        self.assertFalse((self.repo / ".refactor-loop/state/release-candidate.json").exists())
+
+    def test_release_countdown_keeps_release_enabled_diagnostic_when_version_manifest_has_no_files_list(self) -> None:
+        (self.repo / ".version-bump.json").write_text(json.dumps({"version": "0.0.0"}), encoding="utf-8")
+
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "true"}):
+            plan, _stdout, stderr = self.run_plan_with_streams(fixture="default_milestones")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "release-countdown"]
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsNone(action["goal"]["release"])
+        self.assertFalse(action["ready"])
+        self.assertFalse(has_dispatchable_action(actions))
+        self.assertIn("release-countdown: release goal unavailable", stderr)
+        self.assertIn(".version-bump.json: expected top-level files list", stderr)
         self.assertFalse((self.repo / ".refactor-loop/state/release-decision.json").exists())
         self.assertFalse((self.repo / ".refactor-loop/state/release-candidate.json").exists())
 
@@ -6758,6 +6832,54 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["hard_gate"]["reason"], None)
         self.assertNotEqual(plan.get("recommendation"), "WAIT:single-active-audit")
         self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=4")
+
+    def test_fresh_phase9_intent_reduces_queue_empty_hard_gate_uncovered_deficit(self) -> None:
+        monitor = mock.Mock()
+        monitor.count_in_flight_codex.return_value = 1
+        monitor.dispatch_queue_empty.return_value = True
+        monitor.hard_gate_transient_supply.return_value = SimpleNamespace(
+            supply=1,
+            targets=("task_id:phase9-issue330-r4-judge",),
+            evidence=("pending:phase9-router:330:4:judge:60s",),
+            blocked_reason=None,
+        )
+
+        with mock.patch.dict(os.environ, {"CODEX_FLOOR": "2"}):
+            plan = concurrency_plan(
+                self.repo,
+                fixed_point=False,
+                gh_items=[
+                    GhItem(
+                        kind="issue",
+                        number=330,
+                        title="active",
+                        labels=(label_catalog.MANAGED, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_AUTO),
+                    ),
+                    GhItem(
+                        kind="issue",
+                        number=331,
+                        title="active",
+                        labels=(label_catalog.MANAGED, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_AUTO),
+                    ),
+                    GhItem(
+                        kind="issue",
+                        number=332,
+                        title="active",
+                        labels=(label_catalog.MANAGED, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_AUTO),
+                    ),
+                ],
+                monitor=monitor,
+                concurrency_module=None,
+            )
+
+        self.assertEqual(plan["actual"], 1)
+        self.assertEqual(plan["expected_from_active_tasks"], 3)
+        self.assertEqual(plan["deficit"], 2)
+        self.assertEqual(plan["transient_supply"]["supply"], 1)
+        self.assertEqual(plan["uncovered_deficit"], 1)
+        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 1)
+        self.assertEqual(plan["hard_gate"]["line"], "HARD_GATE:dispatch_required=1")
 
     def test_queued_work_bypasses_single_audit_wait(self) -> None:
         self.write_dispatch("p1", "fix-pr294-round-3")
