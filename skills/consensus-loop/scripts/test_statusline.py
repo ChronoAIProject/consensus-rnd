@@ -96,6 +96,28 @@ class StatuslineCliTests(unittest.TestCase):
         self.assertIn("d:3/5", output)
         self.assertIn("⚠", output)
 
+    def test_stale_daemon_names_and_ages_render_from_snapshot(self) -> None:
+        self.write_snapshot(
+            {
+                "actual": 7,
+                "expected": 5,
+                "floor": 4,
+                "p0_streak": 0,
+                "open_pr_count": 5,
+                "open_issue_count": 4,
+                "freeze_minutes": 0,
+                "daemons_healthy": 3,
+                "daemons_total": 5,
+                "stale_daemons": [
+                    {"name": "phase9_router_daemon", "age_seconds": 121, "reason": "heartbeat-stale"},
+                    {"name": "comment-monitor", "age_seconds": None, "reason": "heartbeat-malformed"},
+                ],
+            }
+        )
+        output = self.run_statusline()
+        self.assertIn("stale:phase9_router_daemon:121s,comment-monitor:?", output)
+        self.assertIn("⚠", output)
+
     def test_no_daemons_field_omits_segment(self) -> None:
         self.write_snapshot({"actual": 7, "expected": 5, "floor": 4, "p0_streak": 0, "open_pr_count": 5, "open_issue_count": 4, "freeze_minutes": 0})
         self.assertNotIn(" d:", self.run_statusline())
