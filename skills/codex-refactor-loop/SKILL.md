@@ -2155,7 +2155,7 @@ Allowlist(唯一 direct spawn-intent authority):
 There are five built-in phase9 direct routes.
 - DesignConsensusIssueIntake: open `crnd:lifecycle:managed` + `crnd:phase:design-solving` issue, source-OPEN gate passed → queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT` with router-rendered prompt/log/output paths and manual issue provenance; existing evidence/log/in-flight for one solver role suppresses only that role.
 - `SOLVER_DONE:<minimal|structural|delete>:*` x3, same issue/round, clean `^EXIT=0`, non-placeholder, not ledgered, not in-flight → render full `prompts/meta-judge.md` with router-scoped inputs and queue same-round meta-judge `HARNESS_SPAWN_INTENT`.
-- `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` is temporarily accepted; before queueing r(S+1) minimal/structural/delete solver intents, run the router-owned stalled predicate(`round >= 3` and solver verdict text unchanged across 3 rounds); if it holds, queue round-S reflector intent with the full `prompts/meta-reflector-stalled.md` template and suppress next solvers; non-adjacent payload mismatch falls back.
+- `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` is temporarily accepted; before queueing r(S+1) minimal/structural/delete solver intents, run the router-owned stalled predicate(`round >= 3` and matching router-normalized no-progress signatures across 3 rounds); if it holds, queue round-S reflector intent with the full `prompts/meta-reflector-stalled.md` template and suppress next solvers; non-adjacent payload mismatch falls back.
 - legacy `META_JUDGE_DONE:escalate:stalled:*`, clean exit + stalled predicate + judge-role/source-OPEN gates → read-only compatibility replay that queues reflector intent with the full `prompts/meta-reflector-stalled.md` template plus the 3 recent rounds x 3 solver log path evidence; template read failure must fail closed in the spawned prompt, not fall back to a generic route.
 - `META_RESOLVED:re-design` from reflector to source-adjacent `marker.round + 1` solver triplet: clean exit, source-OPEN gate passed, not ledgered/in-flight, terminal gate open → queue minimal/structural/delete solver `HARNESS_SPAWN_INTENT`; collisions are suppressed by ledger/log/pending/in-flight/terminal/source-open gates, not by skipping to a later round.
 HostWorkflowSpec is not a phase9 direct-spawn-intent authority: host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces and must not alter this allowlist or block the built-in router routes.
@@ -2519,7 +2519,7 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强�
 
 结构性教训:曾出现多个 `escalate:stalled` 被直接 label 人,**没派 reflector**。现在 fresh judge 不再授权 stalled 输出;router predicate 从 clean converge 历史派生 stalled,legacy stalled marker 只读兼容且仍必须 reflector 优先。
 
-**stalled 判据铁律**:`stalled` 只能由 router 在 `CONVERGENCE_ROUND >= 3` 且 solver verdict 文本连续无变化时从 clean `converge` 派生。round 1 / round 2 不可能 stalled;此时 solver 分歧应判 `converge` 并继续派下一轮,不能接受 meta-judge 在 r1/r2 输出的 `escalate:stalled` 作为事实。若 r1/r2 judge 输出 `escalate:stalled`,controller 必须按 legacy judge 异常处理:重派 judge(同输入,提示 fresh stalled 禁止),而不是派 reflector 或 label 人。
+**stalled 判据铁律**:`stalled` 只能由 router 在 `CONVERGENCE_ROUND >= 3` 且 router-normalized no-progress signature 连续匹配时从 clean `converge` 派生；`source-location-missing-or-invalid`、`no-current-*target*`、以及窄匹配的 target/source/PR unreadable `propose:*` 归一为同一 no-actionable-source family，普通 implementation-bearing `propose:*` 阻止 stalled。round 1 / round 2 不可能 stalled;此时 solver 分歧应判 `converge` 并继续派下一轮,不能接受 meta-judge 在 r1/r2 输出的 `escalate:stalled` 作为事实。若 r1/r2 judge 输出 `escalate:stalled`,controller 必须按 legacy judge 异常处理:重派 judge(同输入,提示 fresh stalled 禁止),而不是派 reflector 或 label 人。
 
 **反面(❌ 严禁)**:
 - ❌ r1 三 solver 分歧,meta-judge 输出 `escalate:stalled`,controller 直接派 reflector。
@@ -2745,7 +2745,7 @@ These are first-class consensus scope, not escalation triggers. Meta-judge MUST 
 7. **Performance constraint unverifiable** — solver claims latency/memory bound but only prod can verify
 8. **Issue body's `human_brief.why_needs_design`** contains: `rule-boundary` / `architecture-change` / `philosophy` / `CLAUDE.md` / `canon-vocabulary`
 
-If the above makes the current framing underspecified, route `converge` with the missing exact text or evidence question. If solvers repeat unchanged text for ≥3 rounds, the router-owned stalled predicate may route that `converge` to reflector. Do not create fresh `escalate:stalled`, `escalate:gpg-ratification`, or `escalate:philosophy`.
+If the above makes the current framing underspecified, route `converge` with the missing exact text or evidence question. If solvers repeat the same router-normalized no-progress signature for ≥3 rounds, the router-owned stalled predicate may route that `converge` to reflector. Do not create fresh `escalate:stalled`, `escalate:gpg-ratification`, or `escalate:philosophy`.
 
 ### GitHub traceability (mandatory per SKILL.md "GitHub traceability" — same standard as Consensus-rnd Phase review-gate)
 
@@ -3062,7 +3062,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 
 **为什么共识机制无法继续推进**:
 - <如:涉及 public surface 删除策略 / cross-cluster 耦合 / $REPO_ROOT 的架构/词汇文档(若有) 改动 / 性能 vs 简洁取舍>
-- <一句话说明 solver verdict 文本如何连续无变化,或 reflector 为什么判定无可收敛 framing>
+- <一句话说明 router-normalized no-progress signature 如何连续匹配,或 reflector 为什么判定无可收敛 framing>
 
 ### 决策选项
 
@@ -3134,7 +3134,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 - CI same-check 失败 6 次(同 test 6 次 fix 仍红)
 - Cumulative PR diff size > 原 PR 200%(scope-runaway 信号)
 - Reviewer 同一类 evidence(test coverage / dead surface / self-doc)在 3 round 内反复出现 → meta-reflect "为什么 evidence 总是同类"
-- **Consensus-rnd Phase design-consensus design issue stall**:3 consecutive round 无 maintainer input AND solver verdict text 无变化 → 也走 meta-layer
+- **Consensus-rnd Phase design-consensus design issue stall**:3 consecutive round 无 maintainer input AND router-normalized no-progress signature 匹配 → 也走 meta-layer
 
 ### 派出 reflector codex
 
