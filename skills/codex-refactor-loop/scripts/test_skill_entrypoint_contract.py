@@ -110,10 +110,12 @@ class SkillEntrypointContractTests(unittest.TestCase):
 
     def test_zero_codex_has_no_observe_mode_exemption(self) -> None:
         required = (
-            "无观察模式豁免(强制,airtight)",
-            "必须在同一 turn 内立即派出真实下一步 codex",
-            "维持 floor 是 controller 不可让渡、不可暂缓的职责",
-            "`actual == 0 + active work` 永远是必须当 turn 修复的 P0,不是可观察的状态",
+            "No observe-mode exemption(narrow, airtight)",
+            "must first read the concurrency monitor/status zero-codex classification",
+            "may defer to the next daemon tick only when the monitor reports `daemon-self-drive-transient`",
+            "fresh `phase9_router_daemon` and `wakeup_runner_daemon` heartbeats plus fresh item-matching unsuppressed dispatch intent evidence",
+            "missing, stale, malformed, read-error, terminal-blocked, target-log-suppressed, or spawn-claim-suppressed evidence remains same-turn P0",
+            "maintainer-blocked exception above remains independent",
         )
         for needle in required:
             with self.subTest(needle=needle):
