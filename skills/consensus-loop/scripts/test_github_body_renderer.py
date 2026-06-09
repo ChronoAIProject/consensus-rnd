@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -100,6 +101,14 @@ class GitHubBodyRendererTests(unittest.TestCase):
             validate_self_contained_github_body(body)
 
     def test_cli_renders_to_stdout_without_mutation_authority(self) -> None:
+        host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
+        host_env.parent.mkdir(parents=True)
+        host_env.write_text('export HOST_WORK_LANGUAGE="en"\n', encoding="utf-8")
+        env = {
+            **os.environ,
+            "REPO_ROOT": str(self.tmp),
+            "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+        }
         result = subprocess.run(
             [
                 sys.executable,
@@ -117,6 +126,7 @@ class GitHubBodyRendererTests(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            env=env,
         )
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("完整共识正文", result.stdout)
