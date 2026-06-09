@@ -804,9 +804,11 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             'git commit -m "Release v<to_version>"',
             "git rev-parse HEAD",
             "git push origin HEAD:refs/heads/<INTEGRATION_BRANCH>",
-            "gh release create v<to_version> --target <fresh release commit sha> --generate-notes [--prerelease]",
+            "gh release create v<to_version> --target <fresh release commit sha> --notes-file <controller-generated release notes file> [--prerelease]",
+            "generate a controller-private release notes file from `.refactor-loop/state/release-commits.json`",
             ".refactor-loop/state/release-publish-result.json",
             "test_release_publisher.py",
+            "test_release_notes.py",
             "test_release_publish_preflight.py",
             "test_cli_command_router.py",
             "test_runtime_exception_authorization_sources.py",
@@ -836,6 +838,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "no `git reset`",
             "no GitHub Release edit/delete/upload",
             "no approval-ticket/emoji gate",
+            "not a new public CLI, workflow release authority, tag authority, release edit/delete/upload authority, issue/PR/label lifecycle authority, or host production SSOT",
             "no issue lifecycle",
             "PR lifecycle",
             "label lifecycle",
@@ -849,8 +852,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("active-controller owner 的 `ReleasePublisher`", self.repo_rules)
         self.assertIn("`ReleasePublishPreflight` 验证 `RELEASE_AUTO_ENABLE=true`", self.repo_rules)
         self.assertIn("`gh api repos/<slug>/commits/<fresh release commit sha>/check-runs --paginate --slurp`", self.repo_rules)
-        self.assertIn("确认该 exact fresh SHA required checks 全绿后才运行", self.repo_rules)
-        self.assertIn("`gh release create v<to_version> --target <fresh release commit sha> --generate-notes [--prerelease]`", self.repo_rules)
+        self.assertIn("`gh release create v<to_version> --target <fresh release commit sha> --notes-file <controller-generated release notes file> [--prerelease]`", self.repo_rules)
+        self.assertIn("确认该 exact fresh SHA required checks 全绿后才生成 controller-private release notes file", self.repo_rules)
+        self.assertIn("过滤 mechanical integration artifacts 并 surface referenced work", self.repo_rules)
+        self.assertIn("该 notes file 不是 public CLI", self.repo_rules)
         self.assertIn("禁止 public release-publish CLI", self.repo_rules)
         self.assertIn("tag target without exact-SHA green checks", self.repo_rules)
         self.assertIn("release edit/delete/upload", self.repo_rules)
@@ -870,7 +875,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "suffix equals the resolved commit sha",
             "git rev-parse HEAD",
             "gh api repos/<slug>/commits/<exact release/reentry commit sha>/check-runs --paginate --slurp",
-            "gh release create v<to_version> --target <exact release/reentry commit sha> --generate-notes [--prerelease]",
+            "gh release create v<to_version> --target <exact release/reentry commit sha> --notes-file <controller-generated release notes file> [--prerelease]",
+            "generate a controller-private release notes file from `.refactor-loop/state/release-commits.json`",
             "pending/red/missing/API-fail fail closed",
             "no proof-ticket/resume system",
             "no public `consensus-rnd-cli release-publish`",
@@ -889,7 +895,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "`git show origin/rollup/<40hex>:<mapped manifest>`",
             "suffix 等于 resolved commit sha",
             "`gh api repos/<slug>/commits/<exact release/reentry commit sha>/check-runs --paginate --slurp`",
-            "`gh release create v<to_version> --target <exact release/reentry commit sha> --generate-notes [--prerelease]`",
+            "`gh release create v<to_version> --target <exact release/reentry commit sha> --notes-file <controller-generated release notes file> [--prerelease]`",
+            "controller-private release notes file",
         ):
             with self.subTest(repo_rules_required=repo_rules_required):
                 self.assertIn(repo_rules_required, self.repo_rules)
