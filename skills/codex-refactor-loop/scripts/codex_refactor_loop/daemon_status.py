@@ -105,7 +105,7 @@ def _project_target(
     stored = read_stored_launch_fingerprint(target)
     expected = expected_launch_fingerprint(ctx, target)
     fingerprint_current = stored is not None and stored.matches(expected)
-    live_wrappers = inventory.live_canonical_wrappers(
+    live_wrappers = inventory.live_restart_wrappers(
         name=target.name,
         repo_root=ctx.repo_root,
         pid_file=target.pid_file,

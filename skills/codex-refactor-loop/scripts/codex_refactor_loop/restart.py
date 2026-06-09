@@ -187,6 +187,35 @@ class DaemonProcessInventory:
             return cls(())
         return cls(tuple(_parse_process_inventory(result.stdout)))
 
+    def live_restart_wrappers(
+        self,
+        *,
+        name: str,
+        repo_root: Path,
+        pid_file: Path,
+        died_file: Path,
+        command: Sequence[str],
+        is_alive=None,
+    ) -> tuple[int, ...]:
+        if name not in restart_managed_daemon_names() and name != SUPERVISOR_DAEMON_COMMAND[0]:
+            return ()
+        alive = is_alive or pid_alive
+        expected = RestartWrapperShape(
+            name=name,
+            repo_root=repo_root,
+            pid_file=pid_file,
+            died_file=died_file,
+            command=tuple(command),
+        )
+        pids = []
+        for process in self.processes:
+            if process.pid <= 0 or not alive(process.pid):
+                continue
+            if not RestartWrapperShape.matches(process.command, expected):
+                continue
+            pids.append(process.pid)
+        return tuple(sorted(set(pids)))
+
     def live_canonical_wrappers(
         self,
         *,
@@ -197,19 +226,37 @@ class DaemonProcessInventory:
         command: Sequence[str],
         is_alive=None,
     ) -> tuple[int, ...]:
-        alive = is_alive or pid_alive
-        expected_suffix = _normalize_process_command(" ".join([name, str(repo_root), str(pid_file), str(died_file), *command]))
-        pids = []
-        for process in self.processes:
-            if process.pid <= 0 or not alive(process.pid):
-                continue
-            command_line = _normalize_process_command(process.command)
-            if f"{sys.executable} -c " not in command_line:
-                continue
-            if not command_line.endswith(expected_suffix):
-                continue
-            pids.append(process.pid)
-        return tuple(sorted(set(pids)))
+        return self.live_restart_wrappers(
+            name=name,
+            repo_root=repo_root,
+            pid_file=pid_file,
+            died_file=died_file,
+            command=command,
+            is_alive=is_alive,
+        )
+
+
+@dataclass(frozen=True)
+class RestartWrapperShape:
+    name: str
+    repo_root: Path
+    pid_file: Path
+    died_file: Path
+    command: tuple[str, ...]
+
+    @classmethod
+    def matches(cls, command_line: str, expected: "RestartWrapperShape") -> bool:
+        normalized = _normalize_process_command(command_line)
+        if f"{sys.executable} -c " not in normalized:
+            return False
+        expected_tail = _normalize_process_command(
+            " ".join([expected.name, str(expected.repo_root), str(expected.pid_file), str(expected.died_file)])
+        )
+        marker = f" {expected_tail} "
+        if marker not in normalized:
+            return False
+        command_tail = normalized.rsplit(marker, 1)[1]
+        return _restart_daemon_command_matches(command_tail, expected.command)
 
 
 def daemon_target(ctx: LoopContext, name: str, command_template: Sequence[str]) -> DaemonTarget:
@@ -391,21 +438,18 @@ class RestartDaemons:
         command = list(target.command)
         current_fingerprint = self._current_fingerprint(name, command)
         inventory = self.runtime.collect_inventory()
-        duplicates_remain = self._reconcile_duplicate_canonical_wrappers(
-            name,
-            command,
-            current_fingerprint=current_fingerprint,
-            inventory=inventory,
-            pid_file=pid_file,
+        live_wrappers = inventory.live_restart_wrappers(
+            name=name,
+            repo_root=self.ctx.repo_root,
+            pid_file=target.pid_file,
             died_file=died_file,
+            command=target.command,
+            is_alive=self.runtime.pid_alive,
         )
-        if duplicates_remain:
-            self._log(f"{name} skip: duplicate canonical wrappers reconciled; waiting for next tick")
-            return
-        if self._singleton_check_fresh(name, current_fingerprint):
+        if len(live_wrappers) == 1 and self._singleton_check_fresh(target, current_fingerprint, live_wrappers):
             self._log(f"{name} skip: alive pid={pid_file.read_text(encoding='utf-8').strip()} heartbeat=fresh")
             return
-        self._stop_existing_daemon(name)
+        self._stop_existing_daemon(target, live_wrappers=live_wrappers)
         wrapper_code = WRAPPER_CODE
         env = accounting_env(
             self.ctx.env_for_subprocess(),
@@ -495,66 +539,36 @@ class RestartDaemons:
             except OSError:
                 pass
 
-    def _singleton_check_fresh(self, name: str, current_fingerprint: DaemonLaunchFingerprint) -> bool:
-        pid = _read_pid(self.ctx.paths.refactor_loop / "locks" / f"{name}.pid")
-        stored_fingerprint = DaemonLaunchFingerprint.read(self._fingerprint_path(name))
+    def _singleton_check_fresh(
+        self,
+        target: DaemonTarget,
+        current_fingerprint: DaemonLaunchFingerprint,
+        live_wrappers: Sequence[int],
+    ) -> bool:
+        pid = _read_pid(target.pid_file)
+        stored_fingerprint = DaemonLaunchFingerprint.read(target.fingerprint_file)
         return (
             pid is not None
+            and tuple(live_wrappers) == (pid,)
             and self.runtime.pid_alive(pid)
-            and self._heartbeat_is_fresh(name)
+            and self._heartbeat_is_fresh(target.name)
             and stored_fingerprint is not None
             and stored_fingerprint.matches(current_fingerprint)
         )
-
-    def _reconcile_duplicate_canonical_wrappers(
-        self,
-        name: str,
-        command: Sequence[str],
-        *,
-        current_fingerprint: DaemonLaunchFingerprint,
-        inventory: DaemonProcessInventory,
-        pid_file: Path,
-        died_file: Path,
-    ) -> bool:
-        live = inventory.live_canonical_wrappers(
-            name=name,
-            repo_root=self.ctx.repo_root,
-            pid_file=pid_file,
-            died_file=died_file,
-            command=command,
-            is_alive=self.runtime.pid_alive,
-        )
-        if len(live) <= 1:
-            return False
-        keeper = self._canonical_wrapper_keeper(name, live)
-        pid_file.write_text(f"{keeper}\n", encoding="utf-8")
-        current_fingerprint.write(self._fingerprint_path(name))
-        for pid in live:
-            if pid != keeper:
-                self.runtime.terminate_pid(pid, self.config.stop_grace_seconds)
-        return True
-
-    def _canonical_wrapper_keeper(self, name: str, live: Sequence[int]) -> int:
-        pid = _read_pid(self.ctx.paths.refactor_loop / "locks" / f"{name}.pid")
-        if pid in live and self._heartbeat_is_fresh(name):
-            stored_fingerprint = DaemonLaunchFingerprint.read(self._fingerprint_path(name))
-            if stored_fingerprint is not None:
-                current_command = next((command for daemon, command in DAEMON_COMMANDS if daemon == name), ())
-                resolved = daemon_target(self.ctx, name, current_command).command
-                if stored_fingerprint.matches(self._current_fingerprint(name, resolved)):
-                    return pid
-        return min(live)
 
     def _heartbeat_is_fresh(self, name: str) -> bool:
         target = daemon_target(self.ctx, name, ())
         return heartbeat_is_fresh(target, self.config, now=self.runtime.now())
 
-    def _stop_existing_daemon(self, name: str) -> None:
-        pid_file = self.ctx.paths.refactor_loop / "locks" / f"{name}.pid"
-        pid = _read_pid(pid_file)
-        if pid is not None and self.runtime.pid_alive(pid):
-            self.runtime.terminate_pid(pid, self.config.stop_grace_seconds)
-        pid_file.unlink(missing_ok=True)
+    def _stop_existing_daemon(self, target: DaemonTarget, *, live_wrappers: Sequence[int]) -> None:
+        pids = set(live_wrappers)
+        pid = _read_pid(target.pid_file)
+        if pid is not None:
+            pids.add(pid)
+        for existing_pid in sorted(pids):
+            if self.runtime.pid_alive(existing_pid):
+                self.runtime.terminate_pid(existing_pid, self.config.stop_grace_seconds)
+        target.pid_file.unlink(missing_ok=True)
 
     def _fingerprint_path(self, name: str) -> Path:
         return self.ctx.paths.refactor_loop / "locks" / f"{name}.fingerprint.json"
@@ -682,6 +696,24 @@ def _parse_process_inventory(stdout: str) -> list[DaemonProcess]:
 
 def _normalize_process_command(command: str) -> str:
     return " ".join(command.split())
+
+
+def _restart_daemon_command_matches(actual_tail: str, expected: Sequence[str]) -> bool:
+    actual_parts = _normalize_process_command(actual_tail).split()
+    expected_parts = [_normalize_process_command(part) for part in expected]
+    if len(actual_parts) != len(expected_parts):
+        return False
+    for index, expected_part in enumerate(expected_parts):
+        actual_part = actual_parts[index]
+        if index == 1 and _is_consensus_cli_path(actual_part) and _is_consensus_cli_path(expected_part):
+            continue
+        if actual_part != expected_part:
+            return False
+    return True
+
+
+def _is_consensus_cli_path(value: str) -> bool:
+    return Path(value).name == CLI_ENTRYPOINT_NAME
 
 
 def _read_pid(path: Path) -> int | None:
