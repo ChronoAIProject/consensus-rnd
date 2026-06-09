@@ -98,6 +98,19 @@ class ImplementationPrArtifactsTest(unittest.TestCase):
                 self.write_artifacts(self.body_with_content(changed="- x", tests="- true", deviations="- none", **headings))
                 self.assertIsNone(self.validate())
 
+    def test_required_section_heading_keywords_reject_embedded_token_matches(self) -> None:
+        cases = (
+            ("unchanged-files", {"changed_heading": "## Unchanged files"}),
+            ("unchanged-profile", {"changed_heading": "## Unchanged profile"}),
+            ("latest-results", {"test_heading": "## Latest results"}),
+            ("latest-result", {"test_heading": "## Latest result"}),
+            ("nodeviation", {"deviations_heading": "## Nodeviation"}),
+        )
+        for name, headings in cases:
+            with self.subTest(name=name):
+                self.write_artifacts(self.body_with_content(changed="- x", tests="- true", deviations="- none", **headings))
+                self.assertEqual("implementation_pr_body_required_section_missing", self.validate())
+
     def test_required_section_heading_keywords_reject_missing_concept_or_translated_heading(self) -> None:
         valid_body = self.body_with_content(changed="- x", tests="- true", deviations="- none")
         cases = (

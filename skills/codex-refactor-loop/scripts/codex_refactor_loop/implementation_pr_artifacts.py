@@ -177,7 +177,12 @@ def _has_heading_with_keywords(text: str, keywords: tuple[str, ...]) -> bool:
     for line in text.splitlines():
         if not re.match(r"^\s*##\s+", line):
             continue
-        normalized = line.strip().casefold()
-        if all(keyword.casefold() in normalized for keyword in keywords):
+        tokens = set(re.findall(r"[A-Za-z0-9]+", line.casefold()))
+        if all(_heading_token_matches_keyword(tokens, keyword) for keyword in keywords):
             return True
     return False
+
+
+def _heading_token_matches_keyword(tokens: set[str], keyword: str) -> bool:
+    normalized = keyword.casefold()
+    return normalized in tokens or f"{normalized}s" in tokens
