@@ -3745,9 +3745,18 @@ def _release_countdown_score(repo_root: Path, scorer: Any | None = None) -> dict
         with contextlib.redirect_stdout(sys.stderr):
             score = (scorer or decide_release_artifact)(repo_root)
     except (KeyError, RuntimeError, ValueError) as exc:
-        print(f"release-countdown: release goal unavailable: {exc}", file=sys.stderr)
+        if not _release_countdown_quiet_unavailable(repo_root, exc):
+            print(f"release-countdown: release goal unavailable: {exc}", file=sys.stderr)
         return {}
     return score if isinstance(score, dict) else {}
+
+
+def _release_countdown_quiet_unavailable(repo_root: Path, exc: BaseException) -> bool:
+    if os.environ.get("RELEASE_AUTO_ENABLE") == "true":
+        return False
+    if not (repo_root / ".version-bump.json").exists():
+        return True
+    return ".version-bump.json: expected top-level files list" in str(exc)
 
 
 def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
