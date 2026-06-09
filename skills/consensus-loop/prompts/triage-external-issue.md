@@ -101,12 +101,8 @@ Write to `$REPO_ROOT/.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}.json`:
 
 ## GitHub post
 
-<<<<<<< HEAD
 Follow the render-time inlined shared rules.
-=======
-遵循渲染期内联的共享规则。
 Public-facing natural-language prose follows `${HOST_WORK_LANGUAGE}`; do not add a mandatory parallel English section. Code identifiers, paths, schema fields, labels, and marker strings remain literal.
->>>>>>> origin/auto-refact-dev
 
 {{GITHUB_POST_RULES_CONTRACT}}
 

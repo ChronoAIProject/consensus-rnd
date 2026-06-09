@@ -16,7 +16,7 @@ from typing import Any, Mapping, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
 from .banners import BannerRequest, build_status_banner, gh_comment_command
-from .context import LoopContext
+from .context import LoopContext, normalize_host_work_language
 from .cross_instance_stand_down import CrossInstanceAdmission, check_cross_instance_admission
 from .default_issue_intake import DefaultIssueIntakeClaim, DefaultIssueIntakeResult
 from .gh_invoke import build_gh_argv
@@ -268,9 +268,7 @@ class ControllerActions:
         if denied is not None:
             raise RuntimeError(f"post_status_banner: cross-instance admission denied rc={denied}")
         language = normalize_host_work_language(raw=self.ctx.host_env.get("HOST_WORK_LANGUAGE", ""))
-        body = build_status_banner(normalized)
-        if language != "en":
-            body = build_status_banner(normalized, language=language)
+        body = build_status_banner(normalized, language=language)
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
             handle.write(body)
             tmp = handle.name
