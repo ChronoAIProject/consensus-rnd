@@ -59,9 +59,24 @@ def read_worker_terminal_marker(log_path: Path) -> WorkerMarkerRead:
     return WorkerMarkerRead(reason="marker_missing")
 
 
+def read_worker_visible_terminal_marker(log_path: Path) -> WorkerMarkerRead:
+    lines = _read_lines(log_path)
+    if lines is None:
+        return WorkerMarkerRead(reason="log_unreadable")
+    marker = _marker_from_log_tail_lines(lines[-MARKER_TAIL_LINES:], log_path.name)
+    if marker.found or marker.reason:
+        return marker
+    return WorkerMarkerRead(reason="marker_missing")
+
+
 def log_has_clean_exit(log_path: Path) -> bool:
     lines = _read_lines(log_path)
     return lines is not None and _terminal_exit_line(lines) == "EXIT=0"
+
+
+def log_has_terminal_exit(log_path: Path) -> bool:
+    lines = _read_lines(log_path)
+    return lines is not None and bool(_terminal_exit_line(lines))
 
 
 def extract_standalone_marker(text: str) -> str:
@@ -128,14 +143,17 @@ def _marker_from_clean_log_lines(lines: list[str], log_name: str) -> WorkerMarke
     except ValueError:
         return WorkerMarkerRead()
     before_exit = lines[:exit_index]
-    tail = before_exit[-MARKER_TAIL_LINES:]
-    solver_marker = _solver_tail_marker(tail, log_name)
+    return _marker_from_log_tail_lines(before_exit[-MARKER_TAIL_LINES:], log_name)
+
+
+def _marker_from_log_tail_lines(lines: list[str], log_name: str) -> WorkerMarkerRead:
+    solver_marker = _solver_tail_marker(lines, log_name)
     if solver_marker.found or solver_marker.reason:
         return solver_marker
-    marker = _last_final_marker(tail, log_name)
+    marker = _last_final_marker(lines, log_name)
     if marker.found or marker.reason:
         return marker
-    return _sentinel_adjacent_marker(tail)
+    return _sentinel_adjacent_marker(lines)
 
 
 def _solver_tail_marker(lines: list[str], log_name: str) -> WorkerMarkerRead:
