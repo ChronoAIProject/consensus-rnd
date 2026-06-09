@@ -91,6 +91,34 @@ class DaemonStatusProjectionTests(unittest.TestCase):
         self.assertEqual("123\n", pid.read_text(encoding="utf-8"))
         self.assertEqual("1000\n", heartbeat.read_text(encoding="utf-8"))
 
+    def test_future_heartbeat_is_malformed_stale_projection_without_writing_it(self) -> None:
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+        heartbeat = self.tmp / ".refactor-loop" / "heartbeats" / "comment-monitor.ts"
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+        heartbeat.write_text("1200\n", encoding="utf-8")
+        pid = self.tmp / ".refactor-loop" / "locks" / "comment-monitor.pid"
+        pid.parent.mkdir(parents=True, exist_ok=True)
+        pid.write_text("456\n", encoding="utf-8")
+        (self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect") as collect_inventory:
+                collect_inventory.return_value = daemon_status.DaemonProcessInventory(())
+                with mock.patch("codex_refactor_loop.restart.time.time", return_value=1120):
+                    with mock.patch("codex_refactor_loop.daemon_status.pid_alive", return_value=True):
+                        report = daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        daemon = next(item for item in report.to_json()["daemons"] if item["name"] == "comment-monitor")
+        self.assertEqual("stale", daemon["status"])
+        self.assertEqual("malformed", daemon["heartbeat_status"])
+        self.assertIsNone(daemon["heartbeat_age_seconds"])
+        self.assertEqual("heartbeat-future", daemon["stale_reason"])
+        self.assertEqual("456\n", pid.read_text(encoding="utf-8"))
+        self.assertEqual("1200\n", heartbeat.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

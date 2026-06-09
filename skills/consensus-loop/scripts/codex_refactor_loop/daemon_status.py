@@ -17,7 +17,6 @@ from .restart import (
     RestartConfig,
     daemon_targets,
     expected_launch_fingerprint,
-    heartbeat_is_fresh,
     pid_alive,
     read_daemon_pid,
     read_heartbeat_age_seconds,

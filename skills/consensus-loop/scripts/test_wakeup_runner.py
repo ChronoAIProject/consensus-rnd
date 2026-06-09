@@ -1348,7 +1348,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.action_id for result in results], ["spawn:0", "spawn:1", "spawn:2"])
         self.assertEqual(launch.call_count, 3)
 
-    def test_wakeup_runner_spawn_batch_uses_projected_dispatch_required(self) -> None:
+    def test_wakeup_runner_spawn_batch_does_not_overshoot_dispatch_required(self) -> None:
         actions = [self.spawn_action(action_id=f"spawn:{index}", log=str(self.repo / f".refactor-loop/logs/task-{index}.log")) for index in range(4)]
 
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
@@ -1357,18 +1357,6 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.action_id for result in results], ["spawn:0", "spawn:1"])
         self.assertEqual([result.status for result in results], ["applied", "applied"])
         self.assertEqual(launch.call_count, 2)
-
-    def test_wakeup_runner_covered_transient_supply_keeps_single_apply_compatibility(self) -> None:
-        actions = [self.spawn_action(action_id=f"spawn:{index}", log=str(self.repo / f".refactor-loop/logs/task-{index}.log")) for index in range(3)]
-        plan = self.batch_plan(actions, dispatch_required=0, deficit=2, active=False)
-        plan["concurrency"]["transient_supply"] = {"supply": 2}
-
-        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
-            results = self.run_result(plan)
-
-        self.assertEqual([result.action_id for result in results], ["spawn:0"])
-        self.assertEqual([result.status for result in results], ["applied"])
-        self.assertEqual(launch.call_count, 1)
 
     def test_wakeup_runner_spawn_batch_uses_deficit_as_upper_bound(self) -> None:
         actions = [self.spawn_action(action_id=f"spawn:{index}", log=str(self.repo / f".refactor-loop/logs/task-{index}.log")) for index in range(3)]

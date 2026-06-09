@@ -84,7 +84,6 @@ class DaemonTarget:
 class DaemonHeartbeatStatus:
     state: str
     age_seconds: int | None
-    stale: bool
     reason: str
 
     @property
@@ -312,15 +311,15 @@ def read_heartbeat_status(
     try:
         raw = target.heartbeat_file.read_text(encoding="utf-8").strip()
     except OSError:
-        return DaemonHeartbeatStatus("missing", None, True, "heartbeat-missing")
+        return DaemonHeartbeatStatus("missing", None, "heartbeat-missing")
     if not raw.isdigit():
-        return DaemonHeartbeatStatus("malformed", None, True, "heartbeat-malformed")
+        return DaemonHeartbeatStatus("malformed", None, "heartbeat-malformed")
     age = current_time - int(raw)
     if age < 0:
-        return DaemonHeartbeatStatus("malformed", None, True, "heartbeat-future")
+        return DaemonHeartbeatStatus("malformed", None, "heartbeat-future")
     if age >= config.heartbeat_fresh_seconds:
-        return DaemonHeartbeatStatus("stale", age, True, f"heartbeat-stale:{age}s")
-    return DaemonHeartbeatStatus("fresh", age, False, f"heartbeat-fresh:{age}s")
+        return DaemonHeartbeatStatus("stale", age, f"heartbeat-stale:{age}s")
+    return DaemonHeartbeatStatus("fresh", age, f"heartbeat-fresh:{age}s")
 
 
 def read_stored_launch_fingerprint(target: DaemonTarget) -> DaemonLaunchFingerprint | None:

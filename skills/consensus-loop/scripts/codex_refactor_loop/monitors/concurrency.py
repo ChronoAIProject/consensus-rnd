@@ -83,14 +83,6 @@ class Phase9DispatchTarget:
     role: str
 
 
-@dataclass(frozen=True)
-class HardGateTransientSupply:
-    supply: int
-    targets: tuple[str, ...]
-    evidence: tuple[str, ...]
-    blocked_reason: str | None = None
-
-
 def utc_ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -598,69 +590,6 @@ class ConcurrencyMonitor:
             return True, "fresh-item-matching-intent", evidence
         return False, "missing-fresh-item-matching-intent", []
 
-    def hard_gate_transient_supply(
-        self,
-        *,
-        breakdown: list[dict],
-        target: int,
-        actual: int,
-        queue_empty: bool,
-        now: float | None = None,
-    ) -> HardGateTransientSupply:
-        if not queue_empty or target <= actual:
-            return HardGateTransientSupply(0, (), ())
-        active_targets = self._active_item_targets(breakdown)
-        if not active_targets:
-            return HardGateTransientSupply(0, (), ())
-        window = self.daemon_self_drive_consumption_window_seconds()
-        if now is None:
-            now = time.time()
-        return self._hard_gate_transient_supply_from_intents(
-            active_targets=active_targets,
-            limit=target - actual,
-            now=now,
-            window=window,
-        )
-
-    def _hard_gate_transient_supply_from_intents(
-        self,
-        *,
-        active_targets: set[tuple[str, int]],
-        limit: int,
-        now: float,
-        window: int,
-    ) -> HardGateTransientSupply:
-        try:
-            pending_lines = self.pending_events.read_text(encoding="utf-8", errors="replace").splitlines()
-        except FileNotFoundError:
-            pending_lines = []
-        except OSError as exc:
-            return HardGateTransientSupply(0, (), (), f"pending-events-read-error:{exc.__class__.__name__}")
-        blocked_intents = self._terminal_blocked_harness_spawn_intent_ids(pending_lines)
-        blocked_targets = self._targets_for_terminal_blocked_harness_spawn_intents(pending_lines)
-        pending_supply = self._pending_transient_supply(
-            lines=pending_lines,
-            active_targets=active_targets,
-            now=now,
-            window=window,
-            blocked_intents=blocked_intents,
-        )
-        if pending_supply.blocked_reason:
-            return pending_supply
-        ledger_supply = self._phase9_ledger_transient_supply(
-            active_targets=active_targets,
-            now=now,
-            window=window,
-            blocked_intents=blocked_intents,
-            blocked_targets=blocked_targets,
-        )
-        if ledger_supply.blocked_reason:
-            return ledger_supply
-        targets = tuple(dict.fromkeys([*pending_supply.targets, *ledger_supply.targets]))
-        evidence = tuple([*pending_supply.evidence, *ledger_supply.evidence])
-        supply = min(limit, len(targets))
-        return HardGateTransientSupply(supply, targets[:supply], evidence)
-
     def _pending_intent_evidence(
         self,
         *,
@@ -694,45 +623,6 @@ class ConcurrencyMonitor:
                 return False, f"stale-unconsumed-intent:{age}s", []
             evidence.append(f"pending:{payload.get('intent_id') or payload.get('task_id')}:{age}s")
         return True, "pending-ok", evidence
-
-    def _pending_transient_supply(
-        self,
-        *,
-        lines: list[str],
-        active_targets: set[tuple[str, int]],
-        now: float,
-        window: int,
-        blocked_intents: set[str],
-    ) -> HardGateTransientSupply:
-        targets: list[str] = []
-        evidence: list[str] = []
-        for line in lines:
-            if " HARNESS_SPAWN_INTENT " not in line:
-                continue
-            ts, payload_text = line.split(" HARNESS_SPAWN_INTENT ", 1)
-            try:
-                payload = json.loads(payload_text)
-            except json.JSONDecodeError:
-                return HardGateTransientSupply(0, (), (), "malformed-harness-spawn-intent")
-            if not isinstance(payload, dict):
-                return HardGateTransientSupply(0, (), (), "malformed-harness-spawn-intent")
-            if payload.get("source") != "phase9-router":
-                continue
-            created_at = self._line_time(ts)
-            if created_at is None:
-                return HardGateTransientSupply(0, (), (), "malformed-harness-spawn-intent-ts")
-            target_key = self._intent_active_target_key(payload, active_targets)
-            if target_key is None:
-                continue
-            suppressed = self._intent_suppression_reason(payload, blocked_intents=blocked_intents)
-            age = int(now - created_at)
-            if suppressed:
-                continue
-            if age > window:
-                continue
-            targets.append(target_key)
-            evidence.append(f"pending:{payload.get('intent_id') or payload.get('task_id')}:{age}s")
-        return HardGateTransientSupply(len(set(targets)), tuple(dict.fromkeys(targets)), tuple(evidence))
 
     def _phase9_ledger_intent_evidence(
         self,
@@ -779,55 +669,6 @@ class ConcurrencyMonitor:
                 return False, f"stale-unconsumed-intent:{age}s", []
             evidence.append(f"phase9-ledger:{entry.get('key') or '?'}:{age}s")
         return True, "phase9-ledger-ok", evidence
-
-    def _phase9_ledger_transient_supply(
-        self,
-        *,
-        active_targets: set[tuple[str, int]],
-        now: float,
-        window: int,
-        blocked_intents: set[str],
-        blocked_targets: set[Phase9DispatchTarget],
-    ) -> HardGateTransientSupply:
-        ledger = self.ctx.paths.refactor_loop / "phase9-router-ledger.jsonl"
-        if not ledger.exists():
-            return HardGateTransientSupply(0, (), ())
-        try:
-            lines = ledger.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError as exc:
-            return HardGateTransientSupply(0, (), (), f"phase9-ledger-read-error:{exc.__class__.__name__}")
-        targets: list[str] = []
-        evidence: list[str] = []
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                return HardGateTransientSupply(0, (), (), "malformed-phase9-ledger")
-            if not isinstance(entry, dict):
-                return HardGateTransientSupply(0, (), (), "malformed-phase9-ledger")
-            if entry.get("dispatch_state") != "harness-intent":
-                continue
-            created_at = self._line_time(str(entry.get("dispatched_at") or ""))
-            if created_at is None:
-                return HardGateTransientSupply(0, (), (), "malformed-phase9-ledger-ts")
-            target_key = self._intent_active_target_key(entry, active_targets)
-            if target_key is None:
-                continue
-            suppressed = self._phase9_ledger_suppression_reason(
-                entry,
-                blocked_intents=blocked_intents,
-                blocked_targets=blocked_targets,
-            )
-            age = int(now - created_at)
-            if suppressed:
-                continue
-            if age > window:
-                continue
-            targets.append(target_key)
-            evidence.append(f"phase9-ledger:{entry.get('key') or '?'}:{age}s")
-        return HardGateTransientSupply(len(set(targets)), tuple(dict.fromkeys(targets)), tuple(evidence))
 
     def _terminal_blocked_harness_spawn_intent_ids(self, lines: list[str]) -> set[str]:
         ids: set[str] = set()
@@ -920,26 +761,16 @@ class ConcurrencyMonitor:
         return log_path.exists()
 
     def _intent_matches_active_target(self, payload: dict[str, object], active_targets: set[tuple[str, int]]) -> bool:
-        return self._intent_active_target_key(payload, active_targets) is not None
-
-    def _intent_active_target_key(self, payload: dict[str, object], active_targets: set[tuple[str, int]]) -> str | None:
         text = " ".join(
             str(payload.get(field) or "")
             for field in ("task_id", "intent_id", "route", "reason", "key", "marker", "log", "log_path", "prompt")
         )
         for kind, number in self._targets_from_text(text):
             if (kind, number) in active_targets:
-                return self._intent_distinct_supply_key(payload, f"{kind}:{number}")
+                return True
             if kind == "unknown" and (("issue", number) in active_targets or ("pr", number) in active_targets):
-                return self._intent_distinct_supply_key(payload, f"unknown:{number}")
-        return None
-
-    def _intent_distinct_supply_key(self, payload: dict[str, object], fallback: str) -> str:
-        for field in ("task_id", "intent_id", "key", "log", "log_path", "prompt"):
-            value = payload.get(field)
-            if isinstance(value, str) and value:
-                return f"{field}:{value}"
-        return fallback
+                return True
+        return False
 
     def _targets_from_text(self, text: str) -> set[tuple[str, int]]:
         targets: set[tuple[str, int]] = set()
@@ -1210,13 +1041,6 @@ class ConcurrencyMonitor:
         if actual < target:
             if self.dispatch_queue_empty():
                 deficit = target - actual
-                transient_supply = self.hard_gate_transient_supply(
-                    breakdown=breakdown,
-                    target=target,
-                    actual=actual,
-                    queue_empty=True,
-                )
-                uncovered_deficit = max(0, deficit - transient_supply.supply)
                 boundary = None
                 if expected == 0:
                     boundary = single_active_audit_boundary(self.repo_root, self, items, True)
@@ -1228,25 +1052,11 @@ class ConcurrencyMonitor:
                     self.write_pending_event(event)
                     log(event)
                     tick_action = f"blocked:single-active-audit deficit={deficit}"
-                elif owner_allowed and expected > 0 and uncovered_deficit > 0:
-                    detail = (
-                        f"HARD_GATE:dispatch_required={uncovered_deficit}:actual={actual} "
-                        f"expected={expected} queue=0 transient_supply={transient_supply.supply} "
-                        f"uncovered_deficit={uncovered_deficit}"
-                    )
+                elif owner_allowed and expected > 0:
+                    detail = f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0"
                     self.write_pending_event(detail)
                     log(detail)
-                    tick_action = (
-                        f"blocked:dispatch-required deficit={deficit} "
-                        f"transient_supply={transient_supply.supply} uncovered_deficit={uncovered_deficit}"
-                    )
-                elif owner_allowed and expected > 0:
-                    log(
-                        "HARD_GATE:covered-by-transient-supply "
-                        f"actual={actual} expected={expected} queue=0 deficit={deficit} "
-                        f"transient_supply={transient_supply.supply}"
-                    )
-                    tick_action = f"noop:transient-supply-covered deficit={deficit}"
+                    tick_action = f"blocked:dispatch-required deficit={deficit}"
                 elif owner_allowed:
                     log(
                         "HARD_GATE:noop:zero-expected "
