@@ -212,6 +212,14 @@ export CONSENSUS_RND_HOST_ENV=.config/consensus-rnd/host.env
 
 Fill the host-owned `host.env` according to the Host env surface matrix: required values must be set, defaulted values may keep their template defaults, optional/noop values may stay empty, and conditional fail-closed surfaces such as `MAINTAINER_WHITELIST` are required only when their surface is enabled. The optional `HOST_*` language-policy variables are empty by default and may stay empty unless the host has explicit policy text to inject. `CONSENSUS_RND_HOST_ENV` must point at this host-owned file before loop runtime commands run.
 
+### Greenfield host bootstrap path
+
+For a greenfield host, the maintainer must first create a minimal repository skeleton that can build and test without consensus-loop. Run the host-owned build and test commands successfully in the main checkout before enabling issue-driven / Path A.
+
+Only after that baseline is green, configure the host-owned `.config/consensus-rnd/host.env` from `host.env.example`. `BUILD_CMD` and `TEST_CMD` must be self-contained shell command strings that also work in a fresh isolated `$REPO_ROOT/.worktrees/<id>` checkout after `CONSENSUS_RND_HOST_ENV` is sourced. If ignored dependencies such as `node_modules/` are absent in that worktree, the commands must prepare them themselves, for example `npm ci --no-audit --no-fund && npm run build` and `npm ci --no-audit --no-fund && npm test`.
+
+This is documentation-only bootstrap guidance. It does not add a setup CLI, installer, Node-specific environment variable, runtime preinstall hook, README command matrix, host `.git` or CI edits, or host write authority. Once the minimal skeleton builds and tests in both the main checkout and a fresh isolated worktree, enter the normal issue-driven / Path A flow.
+
 <a id="github-workflow-portability-checklist"></a>
 ### GitHub workflow portability checklist
 
