@@ -443,6 +443,46 @@ class Phase9RouterPackageTests(unittest.TestCase):
         )
         self.assertIn("# Role: Meta-reflector - stalled route resolver", prompt)
 
+    def test_package_router_stalled_normalizes_unreachable_source_oscillation(self) -> None:
+        verdicts = {
+            1: "escalate:no-plan:source-location-missing-or-invalid",
+            2: "abstain:no-current-source-target",
+            3: "propose:source-unreadable-current-checkout",
+        }
+        for round_no, verdict in verdicts.items():
+            for role in ("minimal", "structural", "delete"):
+                self.write_log(f"phase9-issue708-r{round_no}-{role}.log", f"SOLVER_DONE:{role}:{verdict}:summary")
+        self.write_log("phase9-issue708-r3-judge.log", "META_JUDGE_DONE:converge:round-3:no-actionable-source")
+
+        self.router.tick()
+
+        reflector_commands = [
+            command for command in self.commands if "phase9-issue708-r3-reflector.log" in self.intent_text(command)
+        ]
+        self.assertEqual(len(reflector_commands), 1)
+        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
+        self.assertIn("708-3-reflector", ledger_keys)
+        self.assertNotIn("708-4-minimal", ledger_keys)
+
+    def test_package_router_implementation_bearing_propose_blocks_stalled(self) -> None:
+        verdicts = {
+            1: "propose:add-router-helper",
+            2: "propose:update-prompt-contract",
+            3: "propose:add-behavior-tests",
+        }
+        for round_no, verdict in verdicts.items():
+            for role in ("minimal", "structural", "delete"):
+                self.write_log(f"phase9-issue709-r{round_no}-{role}.log", f"SOLVER_DONE:{role}:{verdict}:summary")
+        self.write_log("phase9-issue709-r3-judge.log", "META_JUDGE_DONE:converge:round-3:choose-implementation")
+
+        self.router.tick()
+
+        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
+        self.assertNotIn("709-3-reflector", ledger_keys)
+        self.assertIn("709-4-minimal", ledger_keys)
+        self.assertIn("709-4-structural", ledger_keys)
+        self.assertIn("709-4-delete", ledger_keys)
+
     def test_router_ignores_host_policy_roles_and_dispatch_for_active_spawn_allowlist(self) -> None:
         ctx = self.write_host_policy()
         router = Phase9Router(ctx=ctx, command_runner=self.commands.append)

@@ -770,21 +770,24 @@ class Phase9Router:
             return False
         recent: list[set[str]] = []
         for r in range(round_no - 2, round_no + 1):
-            verdicts: set[str] = set()
+            signatures: set[str] = set()
             for role in self._solver_roles():
-                role_verdicts: set[str] = set()
+                role_signatures: set[str] = set()
                 for path in self._solver_history_log_paths(issue, r, role):
                     if not self._is_clean_exit(path):
                         continue
                     for marker in self._collect_markers_from_path(path):
                         if marker.startswith(f"SOLVER_DONE:{role}:"):
-                            role_verdicts.add(self._solver_verdict_text(marker))
-                if not role_verdicts:
+                            signature = self._solver_no_progress_signature(marker)
+                            if signature is None:
+                                return False
+                            role_signatures.add(signature)
+                if not role_signatures:
                     return False
-                verdicts.update(role_verdicts)
-            if not verdicts:
+                signatures.update(role_signatures)
+            if not signatures:
                 return False
-            recent.append(verdicts)
+            recent.append(signatures)
         return recent[0] == recent[1] == recent[2]
 
     def _collect_markers_from_path(self, path: Path) -> list[str]:
@@ -796,6 +799,30 @@ class Phase9Router:
     def _solver_verdict_text(self, marker: str) -> str:
         parts = marker.split(":", 3)
         return parts[2] if len(parts) >= 3 else marker
+
+    def _solver_no_progress_signature(self, marker: str) -> str | None:
+        parts = marker.split(":", 2)
+        if len(parts) < 3:
+            return None
+        payload = parts[2].strip().lower()
+        if not payload:
+            return None
+        if "source-location-missing-or-invalid" in payload:
+            return "source-unreachable/no-actionable-source"
+        if re.search(r"\bno-current-[a-z0-9._/-]*target\b", payload):
+            return "source-unreachable/no-actionable-source"
+        if payload.startswith("propose:") and self._propose_unreadable_source_signature(payload) is not None:
+            return "source-unreachable/no-actionable-source"
+        if payload.startswith("propose:"):
+            return None
+        return self._solver_verdict_text(marker)
+
+    def _propose_unreadable_source_signature(self, payload: str) -> str | None:
+        if not re.search(r"\b(?:target|source|pr)[a-z0-9._/-]*-unreadable\b", payload):
+            return None
+        if not re.search(r"\b(?:current-checkout|checkout|source|target|pr)\b", payload):
+            return None
+        return "source-unreachable/no-actionable-source"
 
     def _in_flight(self, log_path: Path) -> bool:
         return log_path.exists() or self._spawn_codex_in_flight(log_path)
@@ -1889,9 +1916,25 @@ class Phase9Router:
         lines = []
         for r in range(round_no - 2, round_no + 1):
             for role in self._solver_roles():
-                paths = " or ".join(self._artifact_path(path) for path in self._solver_history_log_paths(issue, r, role))
-                lines.append(f"- r{r} {role}: {paths}")
+                paths = self._solver_history_log_paths(issue, r, role)
+                artifact_paths = " or ".join(self._artifact_path(path) for path in paths)
+                signatures = self._solver_no_progress_signatures_for_paths(role, paths)
+                signature_text = ", ".join(sorted(signatures)) if signatures else "unavailable"
+                lines.append(f"- r{r} {role}: {artifact_paths}; normalized_no_progress_signature={signature_text}")
         return lines
+
+    def _solver_no_progress_signatures_for_paths(self, role: str, paths: tuple[Path, ...]) -> set[str]:
+        signatures: set[str] = set()
+        for path in paths:
+            if not self._is_clean_exit(path):
+                continue
+            for marker in self._collect_markers_from_path(path):
+                if not marker.startswith(f"SOLVER_DONE:{role}:"):
+                    continue
+                signature = self._solver_no_progress_signature(marker)
+                if signature is not None:
+                    signatures.add(signature)
+        return signatures
 
     def _log_path(self, issue: str, round_no: int, actor: str) -> Path:
         return self.logs_dir / f"phase9-issue{issue}-r{round_no}-{actor}.log"
