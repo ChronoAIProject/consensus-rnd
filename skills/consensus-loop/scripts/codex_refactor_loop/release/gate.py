@@ -463,8 +463,8 @@ class AutoReleaseGate:
         }
 
     def dispatch_release(self, decision: dict[str, Any]) -> None:
-        write_json(self.decision_path, decision)
         if not decision.get("ready"):
+            write_json(self.decision_path, decision)
             if self.candidate_path.exists():
                 self.candidate_path.unlink()
             return
@@ -472,13 +472,14 @@ class AutoReleaseGate:
             liveness = classify_release_candidate_liveness(
                 self.repo_root,
                 read_json(self.candidate_path, {}),
-                decision,
+                read_json(self.decision_path, {}),
                 now=self.now(),
             )
             if liveness.blocks_dispatch:
                 raise RuntimeError("release_candidate_already_exists")
             print(f"RELEASE_GATE_DISPATCH_STALE_CANDIDATE:{liveness.stale_reason}")
             self.candidate_path.unlink()
+        write_json(self.decision_path, decision)
         write_json(self.candidate_path, self.release_candidate(decision))
 
     def release_candidate(self, decision: dict[str, Any]) -> dict[str, Any]:

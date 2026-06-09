@@ -12,15 +12,6 @@ from typing import Any
 from ..state import read_json
 
 
-RELEASE_CANDIDATE_STALE_REASONS = frozenset(
-    {
-        "release_candidate_expired",
-        "release_candidate_generated_stale",
-        "release_candidate_consumed_by_publish_result",
-        "release_candidate_decision_mismatch",
-        "release_candidate_target_ref_invalid",
-    }
-)
 GENERATION_LIVE_SECONDS = 120 * 60
 
 
@@ -150,7 +141,6 @@ def _canonical_digest(data: Any) -> str:
 
 
 __all__ = [
-    "RELEASE_CANDIDATE_STALE_REASONS",
     "ReleaseCandidateLiveness",
     "classify_release_candidate_liveness",
 ]
