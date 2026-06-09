@@ -860,9 +860,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
         (runs / f"implementation-pr-{cluster_id}-body.md").write_text(
-            "## 修改文件\n\n- 0 LOC no source changes\n\n"
-            "## 测试结果\n\n- no-op verification only\n\n"
-            "## deviation 记录\n\n- none\n\n"
+            "## Changed files\n\n- 0 LOC no source changes\n\n"
+            "## Test results\n\n- no-op verification only\n\n"
+            "## Deviations\n\n- none\n\n"
             f"Closes #{issue}\n\n"
             "⟦AI:AUTO-LOOP⟧\n",
             encoding="utf-8",
@@ -980,9 +980,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         body = runs / "implementation-pr-issue-77-body.md"
         title.write_text("完成 issue #77 的发布契约\n", encoding="utf-8")
         body.write_text(
-            "## 修改文件\n\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_runner.py\n\n"
-            "## 测试结果\n\n- python3 skills/codex-refactor-loop/scripts/test_wakeup_runner.py\n\n"
-            "## deviation 记录\n\n- none\n\n"
+            "## Changed files\n\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_runner.py\n\n"
+            "## Test results\n\n- python3 skills/codex-refactor-loop/scripts/test_wakeup_runner.py\n\n"
+            "## Deviations\n\n- none\n\n"
             "Closes #77\n\n"
             "⟦AI:AUTO-LOOP⟧\n",
             encoding="utf-8",
@@ -3357,9 +3357,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         title = self.repo / ".refactor-loop" / "runs" / "implementation-pr-issue-77-title.txt"
         body = self.repo / ".refactor-loop" / "runs" / "implementation-pr-issue-77-body.md"
         valid_body = (
-            "## 修改文件\n\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_runner.py\n\n"
-            "## 测试结果\n\n- python3 skills/codex-refactor-loop/scripts/test_wakeup_runner.py\n\n"
-            "## deviation 记录\n\n- none\n\n"
+            "## Changed files\n\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_runner.py\n\n"
+            "## Test results\n\n- python3 skills/codex-refactor-loop/scripts/test_wakeup_runner.py\n\n"
+            "## Deviations\n\n- none\n\n"
             "Closes #77\n\n"
             "⟦AI:AUTO-LOOP⟧\n"
         )
@@ -3379,8 +3379,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             ("wrong-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #78"), encoding="utf-8"), "publish_implementation_body_closes_mismatch"),
             ("multiple-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #77\nCloses #78"), encoding="utf-8"), "publish_implementation_body_closes_mismatch"),
             ("missing-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77\n\n", ""), encoding="utf-8"), "publish_implementation_body_closes_mismatch"),
-            ("missing-section", {}, lambda: body.write_text(valid_body.replace("## 修改文件", "## files"), encoding="utf-8"), "publish_implementation_body_required_section_missing"),
-            ("placeholder-body", {}, lambda: body.write_text("## issue #77 实现\n\n## 修改文件\n\n- x\n\n## 测试结果\n\n- true\n\n## deviation 记录\n\n- none\n\nCloses #77\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "publish_implementation_body_placeholder"),
+            ("missing-section", {}, lambda: body.write_text(valid_body.replace("## Changed files", "## files"), encoding="utf-8"), "publish_implementation_body_required_section_missing"),
+            ("placeholder-body", {}, lambda: body.write_text("## issue #77 实现\n\n## Changed files\n\n- x\n\n## Test results\n\n- true\n\n## Deviations\n\n- none\n\nCloses #77\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "publish_implementation_body_placeholder"),
         )
         for name, overrides, mutate, reason in cases:
             with self.subTest(name=name):

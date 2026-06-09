@@ -42,11 +42,13 @@ Use the implementation summary, implementation log, and current implementation w
 
 Internal marker-bearing runs/*.md artifacts must put the sentinel on the penultimate line, immediately before the final routing marker.
 
-Write a self-contained PR body that follows `${HOST_WORK_LANGUAGE}` to the body output path. It must include these section concepts, rendered in the selected work language:
+Write a self-contained PR body to the body output path. It must use these exact fixed section headings as language-independent machine markers. Do not translate the headings:
 
-- changed files
-- test results
-- deviation record
+- `## Changed files`
+- `## Test results`
+- `## Deviations`
+
+The prose/content under each heading follows `${HOST_WORK_LANGUAGE}`.
 
 The body must contain exactly one matching closing link:
 
