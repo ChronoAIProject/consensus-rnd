@@ -31,7 +31,7 @@ def build_codex_args(*, cd: str, model: str, add_dirs: Sequence[str]) -> list[st
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run codex with process-exit-or-timeout supervision")
+    parser = argparse.ArgumentParser(description="Run codex with process-exit or total wall-clock timeout supervision")
     parser.add_argument("--cd", required=True)
     prompt = parser.add_mutually_exclusive_group(required=True)
     prompt.add_argument("--prompt")
@@ -51,7 +51,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f"prompt file not found: {prompt_path}\n")
         return 2
     if args.stall <= 0:
-        sys.stderr.write(f"codex timeout must be a positive integer number of seconds: {args.stall}\n")
+        sys.stderr.write(f"codex total wall-clock timeout must be a positive integer number of seconds: {args.stall}\n")
         return 2
     command = build_codex_args(cd=args.cd, model=args.model, add_dirs=args.add_dir)
     try:

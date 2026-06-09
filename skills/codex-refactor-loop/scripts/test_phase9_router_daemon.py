@@ -428,7 +428,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             self.setUp()
             self.solver_triplet(issue=38, round_no=5)
             target_log = self.router._log_path("38", 5, "judge")
-            ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {target_log} --stall 3600\n"
+            ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {target_log} --stall 5400\n"
 
             with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=mock.Mock(stdout=ps_output)):
                 self.router.tick()
@@ -646,7 +646,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router._log_path("417", 1, "minimal").write_text("already seeded\n", encoding="utf-8")
         self.write_ledger_key("417-1-structural")
         delete_log = self.router._log_path("417", 1, "delete")
-        ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {delete_log} --stall 3600\n"
+        ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {delete_log} --stall 5400\n"
 
         def fake_run(command, **kwargs):
             return mock.Mock(returncode=0, stdout=ps_output, stderr="")
@@ -782,7 +782,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
     def test_phase9_router_triplet_in_flight_target_suppression_appends_single_fallback(self) -> None:
         self.solver_triplet(issue=284, round_no=1)
         target_log = self.router._log_path("284", 1, "judge")
-        ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {target_log} --stall 3600\n"
+        ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {target_log} --stall 5400\n"
 
         with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=mock.Mock(stdout=ps_output)):
             self.router.tick()

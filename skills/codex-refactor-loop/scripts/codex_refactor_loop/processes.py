@@ -14,12 +14,17 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 
-TIMEOUT_EXIT_CODE = 137
+STALL_EXIT_CODE = 137
+TIMEOUT_EXIT_CODE = STALL_EXIT_CODE
 
 
 @dataclass(frozen=True)
 class ProcessSupervisor:
-    """Supervise a command until process exit or total wall-clock timeout."""
+    """Supervise a command by process exit or total wall-clock timeout.
+
+    The `stall` argument is a compatibility name for the total wall-clock
+    runtime limit in seconds. It is not a log-idle timeout.
+    """
 
     poll_interval: float = 1.0
     clock: callable = time.time
@@ -39,7 +44,7 @@ class ProcessSupervisor:
         if not stdin.is_file():
             raise ValueError(f"prompt file not found: {stdin}")
         if stall <= 0:
-            raise ValueError(f"stall must be positive: {stall}")
+            raise ValueError(f"total wall-clock timeout must be positive: {stall}")
         log.parent.mkdir(parents=True, exist_ok=True)
         if log.exists() and not _has_exit_marker(log):
             _rotate_unfinished_log(log)
@@ -59,12 +64,14 @@ class ProcessSupervisor:
             except OSError as exc:
                 _append(log, f"SPAWN_FAILED={exc}\nEXIT=127\nDONE_AT={_utc_now()}\n")
                 return 127
-            started_at = self.clock()
+            start = self.clock()
             timed_out = False
             try:
                 while proc.poll() is None:
                     self.sleeper(self.poll_interval)
-                    if self.clock() - started_at >= stall:
+                    if proc.poll() is not None:
+                        break
+                    if self.clock() - start >= stall:
                         _append(log, f"TIMEOUT_KILL_AFTER={stall}s\nTIMEOUT_KILL_AT={_utc_now()}\n")
                         kill_process_group(proc.pid)
                         timed_out = True
@@ -96,7 +103,7 @@ def launch_spawn_codex_supervisor(
     if not prompt.is_file():
         return 2
     if stall <= 0:
-        raise ValueError(f"stall must be positive: {stall}")
+        raise ValueError(f"total wall-clock timeout must be positive: {stall}")
     repo_root = repo_root.resolve()
     skill_root = skill_root.resolve()
     cli = skill_root / "scripts" / "consensus-rnd-cli"
