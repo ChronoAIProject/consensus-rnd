@@ -35,7 +35,11 @@ class FakeGit:
         head_sha: str = "head-sha",
         ahead_count: int = 1,
         replay_count: int = 1,
+        replayed_count: int | None = None,
+        old_subjects: list[str] | None = None,
+        new_subjects: list[str] | None = None,
         merge_in_progress: bool = False,
+        rebase_in_progress: bool = False,
         dirty: bool = False,
         ff_fails: bool = False,
         ancestor_ok: bool = True,
@@ -46,7 +50,11 @@ class FakeGit:
         self.head_sha = head_sha
         self.ahead_count = ahead_count
         self.replay_count = replay_count
+        self.replayed_count = replay_count if replayed_count is None else replayed_count
+        self.old_subjects = old_subjects if old_subjects is not None else ["commit one"] * replay_count
+        self.new_subjects = new_subjects if new_subjects is not None else list(self.old_subjects)
         self.merge_in_progress = merge_in_progress
+        self.rebase_in_progress = rebase_in_progress
         self.dirty = dirty
         self.ff_fails = ff_fails
         self.ancestor_ok = ancestor_ok
@@ -55,6 +63,8 @@ class FakeGit:
         self.commands: list[list[str]] = []
         self.merge_head = Path("/tmp/no-merge-head")
         self.merge_msg = Path("/tmp/stale-merge-msg")
+        self.rebase_merge = Path("/tmp/no-rebase-merge")
+        self.rebase_apply = Path("/tmp/no-rebase-apply")
 
     def __call__(self, cmd: list[str], cwd: Path, check: bool = False) -> subprocess.CompletedProcess[str]:
         self.commands.append(cmd)
@@ -65,7 +75,13 @@ class FakeGit:
         if cmd[:3] == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(cmd, 0, f"{self.head_sha}\n", "")
         if cmd[:3] == ["git", "rev-parse", "--git-path"]:
-            return subprocess.CompletedProcess(cmd, 0, f"{self.merge_head if cmd[3] == 'MERGE_HEAD' else self.merge_msg}\n", "")
+            paths = {
+                "MERGE_HEAD": self.merge_head,
+                "MERGE_MSG": self.merge_msg,
+                "rebase-merge": self.rebase_merge,
+                "rebase-apply": self.rebase_apply,
+            }
+            return subprocess.CompletedProcess(cmd, 0, f"{paths[cmd[3]]}\n", "")
         if cmd[:3] == ["git", "diff", "--quiet"]:
             return subprocess.CompletedProcess(cmd, 1 if self.dirty else 0, "", "")
         if cmd[:3] == ["git", "diff", "--cached"]:
@@ -77,6 +93,13 @@ class FakeGit:
                 return subprocess.CompletedProcess(cmd, 0, f"{self.ahead_count}\n", "")
             if cmd[3] == "old-head..origin/auto-refact-dev":
                 return subprocess.CompletedProcess(cmd, 0, f"{self.replay_count}\n", "")
+            if cmd[3] == "origin/dev..HEAD":
+                return subprocess.CompletedProcess(cmd, 0, f"{self.replayed_count}\n", "")
+        if cmd[:3] == ["git", "log", "--cherry-pick"]:
+            if cmd[-1] == "old-head...origin/auto-refact-dev":
+                return subprocess.CompletedProcess(cmd, 0, "\n".join(self.old_subjects) + ("\n" if self.old_subjects else ""), "")
+            if cmd[-1] == "origin/dev...HEAD":
+                return subprocess.CompletedProcess(cmd, 0, "\n".join(self.new_subjects) + ("\n" if self.new_subjects else ""), "")
         if cmd[:3] == ["git", "merge-base", "--is-ancestor"]:
             return subprocess.CompletedProcess(cmd, 0 if self.ancestor_ok else 1, "", "")
         if cmd[:3] == ["git", "merge", "--ff-only"] and self.ff_fails:
@@ -180,6 +203,9 @@ class PackagedIntegrationSyncExecutorTests(unittest.TestCase):
             fake.merge_msg = self.worktree / ".git" / "MERGE_MSG"
             fake.merge_msg.parent.mkdir(parents=True, exist_ok=True)
             fake.merge_msg.write_text("stale message\n", encoding="utf-8")
+        if fake.rebase_in_progress:
+            fake.rebase_merge = self.worktree / ".git" / "rebase-merge"
+            fake.rebase_merge.mkdir(parents=True, exist_ok=True)
         return self.executor.execute(
             operation,
             repo=self.repo,
@@ -228,6 +254,16 @@ class PackagedIntegrationSyncExecutorTests(unittest.TestCase):
                     ["git", "rev-list", "--count", "old-head..origin/auto-refact-dev"],
                     ["git", "reset", "--hard", "origin/auto-refact-dev"],
                     ["git", "rebase", "--rebase-merges", "--onto", "origin/dev", "old-head"],
+                    ["git", "push", "--force-with-lease=refs/heads/auto-refact-dev:remote-sha", "origin", "HEAD:auto-refact-dev"],
+                ],
+            ),
+            (
+                self.operation(kind="continue-resolved-rollup-adoption-rebase", old_rollup_head="old-head", old_rollup_ahead_count=1),
+                FakeGit(rebase_in_progress=True, replay_count=1, old_subjects=["commit one"], new_subjects=["commit one"]),
+                [
+                    ["git", "diff", "--name-only", "--diff-filter=U"],
+                    ["git", "rebase", "--continue"],
+                    ["git", "rev-list", "--count", "origin/dev..HEAD"],
                     ["git", "push", "--force-with-lease=refs/heads/auto-refact-dev:remote-sha", "origin", "HEAD:auto-refact-dev"],
                 ],
             ),
@@ -301,6 +337,49 @@ class PackagedIntegrationSyncExecutorTests(unittest.TestCase):
         )
         self.assertFalse(result.ok)
         self.assertIn("invalid rollup ancestry", self.record("rejected").read_text(encoding="utf-8"))
+
+    def test_continue_rollup_adoption_rebase_rejects_before_push_without_rebase_or_resolution(self) -> None:
+        operation = self.operation(kind="continue-resolved-rollup-adoption-rebase", old_rollup_head="old-head", old_rollup_ahead_count=1)
+
+        result = self.execute(operation, FakeGit())
+        self.assertFalse(result.ok)
+        self.assertIn("no rebase in progress", self.record("rejected").read_text(encoding="utf-8"))
+
+        fake = FakeGit(rebase_in_progress=True, unresolved=True)
+        result = self.execute(operation, fake)
+        self.assertFalse(result.ok)
+        self.assertIn("rebase has unresolved paths", self.record("rejected").read_text(encoding="utf-8"))
+        self.assertFalse(any(command[:2] == ["git", "push"] for command in fake.commands))
+
+    def test_continue_rollup_adoption_rebase_rejects_replay_loss_before_push(self) -> None:
+        operation = self.operation(kind="continue-resolved-rollup-adoption-rebase", old_rollup_head="old-head", old_rollup_ahead_count=2)
+        fake = FakeGit(
+            rebase_in_progress=True,
+            replay_count=2,
+            replayed_count=1,
+            old_subjects=["commit one", "commit two"],
+            new_subjects=["commit one"],
+        )
+
+        result = self.execute(operation, fake)
+
+        self.assertFalse(result.ok)
+        self.assertIn("replay integrity mismatch", self.record("rejected").read_text(encoding="utf-8"))
+        self.assertIn(["git", "rebase", "--continue"], fake.commands)
+        self.assertFalse(any(command[:2] == ["git", "push"] for command in fake.commands))
+
+    def test_non_continuation_operations_reject_in_progress_rebase_before_adoption(self) -> None:
+        fake = FakeGit(rebase_in_progress=True)
+
+        result = self.execute(
+            self.operation(kind="adopt-merged-rollup", old_rollup_head="old-head", old_rollup_ahead_count=1),
+            fake,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("rebase in progress requires typed continuation", self.record("rejected").read_text(encoding="utf-8"))
+        self.assertFalse(any(command[:3] == ["git", "reset", "--hard"] for command in fake.commands))
+        self.assertFalse(any(command[:2] == ["git", "push"] for command in fake.commands))
 
     def test_stale_merge_msg_without_merge_head_rejects_continue_resolved_merge(self) -> None:
         # Refactor (issue-264): Old: stale MERGE_MSG could be confused with a merge.

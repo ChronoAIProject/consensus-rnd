@@ -1429,9 +1429,19 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for token in (
             "reset --hard",
             "rebase --rebase-merges",
+            "git rebase --continue",
+            "continue-resolved-rollup-adoption-rebase",
+            "adoption artifact evidence",
+            "replay-integrity verification",
             "merge --ff-only|--no-ff",
             "git push HEAD:$INTEGRATION_BRANCH",
             "force-with-lease",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, integration_entry)
+        for token in (
+            "no generic rebase",
+            "rebase abort/cleanup",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, integration_entry)

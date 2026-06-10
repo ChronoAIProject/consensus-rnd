@@ -85,6 +85,14 @@ class IntegrationSyncExecutor:
         staged = command_runner(["git", "diff", "--cached", "--quiet"], worktree)
         return unstaged.returncode == 0 and staged.returncode == 0, False
 
+    def _rebase_in_progress(self, worktree: Path, *, command_runner=None) -> bool:
+        command_runner = command_runner or run
+        for state_dir in ("rebase-merge", "rebase-apply"):
+            result = command_runner(["git", "rev-parse", "--git-path", state_dir], worktree)
+            if result.returncode == 0 and Path(result.stdout.strip()).exists():
+                return True
+        return False
+
     def _expected_branches(self, env: dict[str, str] | None = None, cwd: Path | str | None = None) -> tuple[str, str]:
         source_env = dict(os.environ if env is None else env)
         host_env: dict[str, str] = {}
@@ -249,6 +257,69 @@ class IntegrationSyncExecutor:
             )
         return result
 
+    def _verify_replayed_rollup_commits(
+        self,
+        operation: IntegrationSyncOperation,
+        worktree: Path,
+        *,
+        command_runner=None,
+    ) -> None:
+        command_runner = command_runner or run
+        assert operation.old_rollup_head is not None
+        assert operation.old_rollup_ahead_count is not None
+        replayed = command_runner(
+            ["git", "rev-list", "--count", f"origin/{operation.review_base_branch}..HEAD"],
+            worktree,
+        )
+        try:
+            replayed_n = int((replayed.stdout or "0").strip() or "0")
+        except ValueError as exc:
+            raise IntegrationSyncOperationError("replay count unknown after rebase") from exc
+        if replayed_n != operation.old_rollup_ahead_count:
+            raise IntegrationSyncOperationError("replay integrity mismatch")
+        old_patch_ids = command_runner(
+            ["git", "log", "--cherry-pick", "--right-only", "--pretty=format:%s", f"{operation.old_rollup_head}...origin/{operation.integration_branch}"],
+            worktree,
+        )
+        new_patch_ids = command_runner(
+            ["git", "log", "--cherry-pick", "--right-only", "--pretty=format:%s", f"origin/{operation.review_base_branch}...HEAD"],
+            worktree,
+        )
+        if old_patch_ids.returncode != 0 or new_patch_ids.returncode != 0:
+            raise IntegrationSyncOperationError("replay subject projection failed")
+        old_subjects = [line.strip() for line in old_patch_ids.stdout.splitlines() if line.strip()]
+        new_subjects = [line.strip() for line in new_patch_ids.stdout.splitlines() if line.strip()]
+        if len(old_subjects) != operation.old_rollup_ahead_count or old_subjects != new_subjects:
+            raise IntegrationSyncOperationError("replay integrity mismatch")
+
+    def _execute_continue_resolved_rollup_adoption_rebase(
+        self,
+        operation: IntegrationSyncOperation,
+        worktree: Path,
+        *,
+        command_runner=None,
+    ) -> subprocess.CompletedProcess[str]:
+        command_runner = command_runner or run
+        if not self._rebase_in_progress(worktree, command_runner=command_runner):
+            raise IntegrationSyncOperationError("no rebase in progress")
+        unresolved = command_runner(["git", "diff", "--name-only", "--diff-filter=U"], worktree)
+        if unresolved.returncode != 0 or unresolved.stdout.strip():
+            raise IntegrationSyncOperationError("rebase has unresolved paths")
+        result = command_runner(["git", "rebase", "--continue"], worktree)
+        if result.returncode != 0:
+            return result
+        self._verify_replayed_rollup_commits(operation, worktree, command_runner=command_runner)
+        return command_runner(
+            [
+                "git",
+                "push",
+                f"--force-with-lease=refs/heads/{operation.integration_branch}:{operation.expected_remote_sha}",
+                "origin",
+                f"HEAD:{operation.integration_branch}",
+            ],
+            worktree,
+        )
+
     def execute(
         self,
         operation: IntegrationSyncOperation,
@@ -261,8 +332,11 @@ class IntegrationSyncExecutor:
         command_runner = command_runner or run
         try:
             self._validate_common(repo, worktree, operation, env=env, command_runner=command_runner)
+            rebase_in_progress = self._rebase_in_progress(worktree, command_runner=command_runner)
+            if rebase_in_progress and operation.kind != "continue-resolved-rollup-adoption-rebase":
+                raise IntegrationSyncOperationError("rebase in progress requires typed continuation")
             clean, merge_in_progress = self._ensure_clean_or_merge(worktree, command_runner=command_runner)
-            if not clean:
+            if not clean and not rebase_in_progress:
                 raise IntegrationSyncOperationError("dirty non-merge worktree")
 
             if operation.kind == "push-local-ahead":
@@ -274,6 +348,12 @@ class IntegrationSyncExecutor:
                     operation,
                     worktree,
                     merge_in_progress=merge_in_progress,
+                    command_runner=command_runner,
+                )
+            elif operation.kind == "continue-resolved-rollup-adoption-rebase":
+                result = self._execute_continue_resolved_rollup_adoption_rebase(
+                    operation,
+                    worktree,
                     command_runner=command_runner,
                 )
             elif operation.kind == "forward-sync-review-base":
