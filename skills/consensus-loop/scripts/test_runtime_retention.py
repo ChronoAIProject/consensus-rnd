@@ -280,6 +280,23 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
             with self.subTest(reason=reason):
                 self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
 
+    def test_generated_file_gc_keeps_dead_and_failed_worker_recovery_logs(self) -> None:
+        dead_log = self.write_file(".refactor-loop/logs/implement-issue-8.log", "started\n", 25)
+        failed_log = self.write_file(".refactor-loop/logs/review-pr8-tests-r1.log", "started\nREVIEW_DONE:8:tests:reject\nEXIT=1\n", 25)
+        self.write_generated_files_plan(
+            self.generated_file_plan_item(".refactor-loop/logs/implement-issue-8.log"),
+            self.generated_file_plan_item(".refactor-loop/logs/review-pr8-tests-r1.log"),
+        )
+
+        result = retain_runtime(self.repo, enabled=True)
+
+        self.assertEqual((result.deleted, result.kept), (0, 2))
+        self.assertTrue(dead_log.exists())
+        self.assertTrue(failed_log.exists())
+        for reason in ("generated_file_recovery_dead_worker_log", "generated_file_recovery_failed_worker_log"):
+            with self.subTest(reason=reason):
+                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+
     def test_generated_file_gc_keeps_malformed_path_escape_symlink_fifo_and_missing_entries(self) -> None:
         old_target = self.write_file(".refactor-loop/logs/target.log", "target\n", 25)
         symlink_log = self.refactor_loop / "logs" / "linked.log"
@@ -603,8 +620,6 @@ class RuntimeRetentionSourceRegressionTests(unittest.TestCase):
             "no_pending_intent",
             "no_unconsumed_marker",
             "no_recovery_surface",
-            "deleted = 0",
-            "kept = 0",
             '"worktree", "remove"',
             '"worktree", "prune"',
             "no_in_flight",

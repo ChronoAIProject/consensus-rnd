@@ -85,8 +85,6 @@ def retain_runtime(
 
     now_value = time.time() if now is None else now
     diagnostics: list[str] = []
-    deleted = 0
-    kept = 0
     compacted = _compact_pending_events(refactor_loop / ".controller-pending-events.log")
     plan = _read_retention_plan(repo_real / RETENTION_PLAN_PATH, diagnostics=diagnostics)
     deleted, kept = _delete_planner_generated_files(repo_real, plan.generated_files, now=now_value, diagnostics=diagnostics)
