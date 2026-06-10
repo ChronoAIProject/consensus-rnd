@@ -107,6 +107,7 @@ HARNESS_SPAWN_TARGET_TEXT_PATTERNS = (
 )
 TERMINAL_HARNESS_SPAWN_INTENT_BLOCKED_REASONS = {"target_not_open:CLOSED", "target_not_open:MERGED"}
 RUNNER_AUTHORITY = "wakeup-runner-396"
+REBASE_RESOLVE_FALSE_DONE_RETRY_LIMIT = 2
 PLAN_AUTHORIZATION = "skills/consensus-loop/authorizations/runtime-exceptions.md#wakeup-runner-396"
 READ_ONLY_PLAN_AUTHORIZATION = "skills/consensus-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script"
 RUNNER_NAMED_HELPER_ACTIONS = {
@@ -1360,14 +1361,70 @@ def rebase_resolve_completed_marker_actions(repo_root: Path, gh_items: list[GhIt
         if worktree is not None:
             action["worktree"] = str(worktree)
         if not _worktree_merge_in_progress_resolved(repo_root, worktree):
-            action["status_only"] = True
-            action["no_lifecycle_authority"] = True
-            action["reason"] = "rebase_resolve_done_without_resolved_merge"
-            action.pop("controller_action", None)
-            action.pop("runner_authority", None)
-            action.pop("no_generic_command", None)
+            retry_count, archived_artifact = _record_rebase_resolve_false_done(repo_root, log_path, pr_number, head_ref, marker)
+            action["evidence"] = archived_artifact
+            action["source_artifact"] = archived_artifact
+            if retry_count > REBASE_RESOLVE_FALSE_DONE_RETRY_LIMIT:
+                action["status_only"] = True
+                action["no_lifecycle_authority"] = True
+                action["reason"] = "rebase_resolve_false_done_retry_limit_exceeded"
+                action.pop("controller_action", None)
+                action.pop("runner_authority", None)
+                action.pop("no_generic_command", None)
+            else:
+                action.update(
+                    {
+                        "kind": "stale-base-conflicting-pr",
+                        "action_id": f"dispatch-pr-rebase-resolve:false-done:{pr_number}:{head_ref}:{retry_count}",
+                        "phase": "review-gate",
+                        "route": "dispatch-pr-rebase-resolve",
+                        "reason": "rebase_resolve_done_without_resolved_merge",
+                        "controller_action": "dispatch_pr_rebase_resolve",
+                        "preconditions": [
+                            "active_controller_owner",
+                            "clean_exit_source_marker",
+                            "live_managed_target",
+                            "false_done_unresolved_or_not_commit_ready",
+                        ],
+                        "runner_authority": RUNNER_AUTHORITY,
+                        "no_generic_command": True,
+                    }
+                )
         actions.append(action)
     return actions
+
+
+def _record_rebase_resolve_false_done(repo_root: Path, log_path: Path, pr_number: int, head_ref: str, marker: str) -> tuple[int, str]:
+    state_dir = repo_root / ".refactor-loop" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "rebase-resolve-false-done-recovery.json"
+    archived_log = _archive_rebase_resolve_false_done_log(log_path)
+    archived_artifact = str(archived_log.relative_to(repo_root))
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        state = {}
+    if not isinstance(state, dict):
+        state = {}
+    key = f"PR:{pr_number}:{head_ref}"
+    record = state.get(key)
+    if not isinstance(record, dict):
+        record = {"count": 0}
+    record["count"] = int(record.get("count") or 0) + 1
+    record["source_artifact"] = archived_artifact
+    record["source_marker"] = marker
+    state[key] = record
+    state_path.write_text(json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    return int(record["count"]), archived_artifact
+
+
+def _archive_rebase_resolve_false_done_log(log_path: Path) -> Path:
+    archive = log_path.with_name(f"{log_path.name}.false-done")
+    try:
+        log_path.replace(archive)
+    except OSError:
+        return log_path
+    return archive
 
 
 def _rebase_resolve_marker_from_log(log_path: Path) -> str:
@@ -2688,21 +2745,6 @@ def _rebase_resolve_in_flight(repo_root: Path, pr_number: int, monitor: Any | No
         if _rebase_resolve_marker_from_log(log):
             continue
         if _harness_spawn_intent_log_suppresses_retry(log) or _canonical_in_flight_for_log(log, monitor):
-            return True
-    pending = repo_root / ".refactor-loop" / ".controller-pending-events.log"
-    try:
-        lines = pending.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
-    prefix = f"dispatch-pr-rebase-resolve:{pr_number}:"
-    for line in lines:
-        if " HARNESS_SPAWN_INTENT " not in line:
-            continue
-        try:
-            intent = json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(intent, dict) and str(intent.get("intent_id") or "").startswith(prefix):
             return True
     return False
 

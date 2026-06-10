@@ -416,7 +416,7 @@ class WakeupRunner:
             and action.get("controller_action") != "publish_release_candidate"
         ):
             path = self.ctx.repo_root / source_artifact
-            if action.get("controller_action") == "commit_push_resolved_pr_rebase":
+            if action.get("controller_action") in {"commit_push_resolved_pr_rebase", "dispatch_pr_rebase_resolve"}:
                 if _source_log_has_clean_rebase_resolve_marker(path, source_marker):
                     return None
                 return "clean_exit_marker_missing"
@@ -950,9 +950,18 @@ class WakeupRunner:
         preconditions = action.get("preconditions")
         if not isinstance(preconditions, list):
             return "dispatch_pr_rebase_resolve_missing_preconditions"
-        for required in ("active_controller_owner", "live_managed_target", "base_ahead_pr_branch"):
-            if required not in preconditions:
-                return f"dispatch_pr_rebase_resolve_missing_precondition:{required}"
+        required_sets = (
+            ("active_controller_owner", "live_managed_target", "base_ahead_pr_branch"),
+            (
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_managed_target",
+                "false_done_unresolved_or_not_commit_ready",
+            ),
+        )
+        if not any(all(required in preconditions for required in required_set) for required_set in required_sets):
+            missing = [required for required in required_sets[0] if required not in preconditions]
+            return f"dispatch_pr_rebase_resolve_missing_precondition:{missing[0]}"
         target = int(action["target_number"])
         if not self._live_target_has_managed_label("pr", target):
             return "dispatch_pr_rebase_resolve_target_not_managed"

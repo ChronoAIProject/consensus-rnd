@@ -273,6 +273,37 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("rebase_resolve_in_flight", actions[0]["reason"])
         self.assertTrue(actions[0]["status_only"])
 
+    def test_rebase_resolve_actions_ignore_historical_pending_spawn_intent(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+            mergeable="CONFLICTING",
+        )
+        pending = {
+            "intent_id": "dispatch-pr-rebase-resolve:77:old-head",
+            "controller_action": "dispatch_pr_rebase_resolve",
+        }
+        (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text(
+            f"2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(pending, sort_keys=True)}\n",
+            encoding="utf-8",
+        )
+        ctx = mock.Mock(host_env={"INTEGRATION_BRANCH": "auto-refact-dev"})
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text") as git_text_mock:
+            git_text_mock.side_effect = [
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="head\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="base\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="oldbase\n", stderr=""),
+            ]
+            actions = rebase_resolve_actions(self.repo, ctx, [item], monitor=None)
+
+        self.assertEqual("dispatch_pr_rebase_resolve", actions[0]["controller_action"])
+        self.assertFalse(actions[0].get("status_only", False))
+
     def test_rebase_resolve_completed_marker_projects_commit_push_action(self) -> None:
         log = self.logs / "rebase-resolve-pr77-r1.log"
         log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
@@ -306,6 +337,87 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("commit_push_resolved_pr_rebase", action["controller_action"])
         self.assertEqual("REBASE_RESOLVE_DONE:77:ok", action["source_marker"])
         self.assertEqual(str(worktree), action["worktree"])
+
+    def test_rebase_resolve_false_done_projects_recovery_dispatch_and_archives_log(self) -> None:
+        log = self.logs / "rebase-resolve-pr77-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+        worktree = self.repo / ".worktrees" / "iter77-stale"
+        worktree.mkdir(parents=True)
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+        )
+        porcelain = f"worktree {worktree}\nbranch refs/heads/refactor/iter77-stale\n"
+
+        def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(self.repo), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout=porcelain, stderr="")
+            if command == ["git", "-C", str(worktree), "rev-parse", "--git-dir"]:
+                return subprocess.CompletedProcess(command, 0, stdout=str(worktree / ".git") + "\n", stderr="")
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected")
+
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+            actions = rebase_resolve_completed_marker_actions(self.repo, [item])
+
+        action = actions[0]
+        self.assertEqual("dispatch_pr_rebase_resolve", action["controller_action"])
+        self.assertEqual("rebase_resolve_done_without_resolved_merge", action["reason"])
+        self.assertEqual(".refactor-loop/logs/rebase-resolve-pr77-r1.log.false-done", action["source_artifact"])
+        self.assertEqual("REBASE_RESOLVE_DONE:77:ok", action["source_marker"])
+        self.assertEqual(str(worktree), action["worktree"])
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(77, action["target_number"])
+        self.assertEqual("refactor/iter77-stale", action["head_ref"])
+        self.assertNotIn("mode", action)
+        self.assertEqual(
+            [
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_managed_target",
+                "false_done_unresolved_or_not_commit_ready",
+            ],
+            action["preconditions"],
+        )
+        self.assertFalse(log.exists())
+        self.assertTrue((self.logs / "rebase-resolve-pr77-r1.log.false-done").exists())
+
+    def test_rebase_resolve_false_done_retry_limit_is_status_only(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+        )
+        worktree = self.repo / ".worktrees" / "iter77-stale"
+        worktree.mkdir(parents=True)
+        porcelain = f"worktree {worktree}\nbranch refs/heads/refactor/iter77-stale\n"
+        state = {"PR:77:refactor/iter77-stale": {"count": 2}}
+        (self.repo / ".refactor-loop" / "state" / "rebase-resolve-false-done-recovery.json").write_text(
+            json.dumps(state), encoding="utf-8"
+        )
+        log = self.logs / "rebase-resolve-pr77-r3.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+
+        def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(self.repo), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout=porcelain, stderr="")
+            if command == ["git", "-C", str(worktree), "rev-parse", "--git-dir"]:
+                return subprocess.CompletedProcess(command, 0, stdout=str(worktree / ".git") + "\n", stderr="")
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected")
+
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+            actions = rebase_resolve_completed_marker_actions(self.repo, [item])
+
+        self.assertEqual("rebase_resolve_false_done_retry_limit_exceeded", actions[0]["reason"])
+        self.assertTrue(actions[0]["status_only"])
+        self.assertNotIn("controller_action", actions[0])
+        self.assertTrue((self.logs / "rebase-resolve-pr77-r3.log.false-done").exists())
 
     def test_wakeup_plan_projects_conflicting_stale_base_pr_dispatch_as_executable(self) -> None:
         plan = self.run_plan(fixture="stale_base_conflicting_pr")

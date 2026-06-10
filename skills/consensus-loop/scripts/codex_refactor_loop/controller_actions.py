@@ -1823,6 +1823,9 @@ class ControllerActions:
         if unmerged:
             sys.stderr.write(f"commit_push_resolved_pr_rebase: unresolved conflicts: {','.join(unmerged)}\n")
             return 2
+        if not self._merge_commit_ready(worktree):
+            sys.stderr.write("commit_push_resolved_pr_rebase: merge not commit-ready\n")
+            return 2
         commit = self._git_in(worktree, ["commit", "--no-edit"], check=False)
         if commit.returncode != 0:
             sys.stderr.write(
@@ -1932,6 +1935,22 @@ class ControllerActions:
         if result.returncode != 0:
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+    def _merge_commit_ready(self, worktree: Path) -> bool:
+        status = self._git_in(worktree, ["status", "--porcelain"], check=False)
+        if status.returncode != 0:
+            return False
+        rows = [line for line in status.stdout.splitlines() if line.strip()]
+        if not rows:
+            return False
+        for row in rows:
+            if len(row) < 3:
+                return False
+            index_status = row[0]
+            worktree_status = row[1]
+            if index_status == "?" or worktree_status not in {" ", "?"}:
+                return False
+        return True
 
     def _branch_is_base_behind(self, worktree: Path, base_ref: str) -> bool:
         merge_base = self._git_in(worktree, ["merge-base", "HEAD", base_ref], check=False)

@@ -1614,6 +1614,27 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.status for result in results], ["applied"])
         self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
 
+    def test_wakeup_runner_routes_false_done_rebase_recovery_dispatch(self) -> None:
+        log = self.repo / ".refactor-loop/logs/rebase-resolve-pr77-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+        action = self.rebase_dispatch_action(
+            action_id="dispatch-pr-rebase-resolve:false-done:77:refactor/iter77-worker:1",
+            source_artifact=".refactor-loop/logs/rebase-resolve-pr77-r1.log",
+            source_marker="REBASE_RESOLVE_DONE:77:ok",
+            reason="rebase_resolve_done_without_resolved_merge",
+            preconditions=[
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_managed_target",
+                "false_done_unresolved_or_not_commit_ready",
+            ],
+        )
+        actions = FakeActions()
+        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
+        self.assertEqual([result.status for result in results], ["applied"])
+        self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
+        self.assertNotIn("mode", actions.calls[0][1])
+
     def test_hard_gate_dispatch_pr_rebase_resolve_is_not_starved_by_spawn_budget(self) -> None:
         spawns = [
             self.spawn_action(
@@ -1729,6 +1750,21 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
         self.assertEqual([result.status for result in results], ["applied"])
         self.assertEqual([call[0] for call in actions.calls], ["commit_push_resolved_pr_rebase"])
+
+    def test_wakeup_runner_blocks_false_done_recovery_without_recovery_precondition(self) -> None:
+        log = self.repo / ".refactor-loop/logs/rebase-resolve-pr77-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+        action = self.rebase_dispatch_action(
+            action_id="dispatch-pr-rebase-resolve:false-done:77:refactor/iter77-worker:1",
+            source_artifact=".refactor-loop/logs/rebase-resolve-pr77-r1.log",
+            source_marker="REBASE_RESOLVE_DONE:77:ok",
+            preconditions=["active_controller_owner", "clean_exit_source_marker", "live_managed_target"],
+        )
+        actions = FakeActions()
+        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
+        self.assertEqual([result.status for result in results], ["blocked"])
+        self.assertEqual("dispatch_pr_rebase_resolve_missing_precondition:base_ahead_pr_branch", results[0].reason)
+        self.assertEqual([], actions.calls)
 
     def test_wakeup_runner_blocked_lifecycle_action_does_not_dead_stop_later_spawn_batch(self) -> None:
         blocked = self.implementation_output_action(
