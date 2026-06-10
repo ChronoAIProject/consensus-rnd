@@ -27,7 +27,7 @@ Input evidence:
 - Do not decide router peer isolation, meta-judge dispatch, review truth tables, merge gates, release preflight, or governance policy.
 - Do not create a fallback decision artifact or generic command/action schema.
 
-## Marker emission allowlist(强制)
+## Marker emission allowlist (required)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
