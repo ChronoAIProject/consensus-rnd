@@ -533,6 +533,15 @@ def _patrol_daemon_heartbeat_lease(ctx: LoopContext) -> DaemonHeartbeatLease:
     return DaemonHeartbeatLease(PATROL_DAEMON_NAME, ctx.repo_root)
 
 
+def _run_daemon_tick(inspector: PatrolInspector, lease: DaemonHeartbeatLease, interval_seconds: int) -> None:
+    try:
+        inspector.run_once(beat=lease.beat)
+    except Exception as exc:
+        print(f"patrol-inspector daemon tick failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        lease.beat()
+    lease.sleep_with_lease(interval_seconds)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="run the patrol inspector")
     mode = parser.add_mutually_exclusive_group()
@@ -553,8 +562,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return inspector.run_once()
     lease = _patrol_daemon_heartbeat_lease(ctx)
     while True:
-        inspector.run_once(beat=lease.beat)
-        lease.sleep_with_lease(config.interval_seconds)
+        _run_daemon_tick(inspector, lease, config.interval_seconds)
 
 
 if __name__ == "__main__":
