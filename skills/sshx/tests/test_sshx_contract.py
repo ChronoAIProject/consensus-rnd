@@ -169,7 +169,6 @@ class SshxContractTests(unittest.TestCase):
         review_section = text[review_start:review_truth_start]
 
         self.assertIn(
-<<<<<<< HEAD
             "Before proposing, revising, rejecting, or abstaining, each thinking perspective must run a lightweight Reference-frame harness pass",
             thinking_section,
         )
@@ -179,18 +178,10 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("`no applicable mature theory found` is an acceptable explicit harness", thinking_section)
         self.assertIn("one short free-form note", thinking_section)
         self.assertIn("reference frame in `SshxResultEnvelope.conclusion`", thinking_section)
-=======
-            "Before proposing, revising, rejecting, or abstaining, each thinking perspective must first identify the applicable mature human theory, engineering principle, industry best practice, or constraint framework governing this class of problem",
-            thinking_section,
-        )
-        self.assertIn('"No applicable mature theory found" is an acceptable explicit harness', thinking_section)
-        self.assertIn("name the reference frame in `SshxResultEnvelope.conclusion`", thinking_section)
->>>>>>> origin/auto-refact-dev
         self.assertIn(
             "Harness discovery does not override `GoalArtifact`, the assigned bias, the thinking truth table, or the allowed verdict set",
             thinking_section,
         )
-<<<<<<< HEAD
         for boundary in [
             "not mandatory citation work",
             "not a literature search",
@@ -202,16 +193,10 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(boundary, thinking_section)
         self.assertLess(
             thinking_section.index("Reference-frame harness"),
-=======
-        self.assertIn("must not block valid `abstain` or `reject` outcomes", thinking_section)
-        self.assertLess(
-            thinking_section.index("Before proposing, revising, rejecting, or abstaining"),
->>>>>>> origin/auto-refact-dev
             thinking_section.index("Each perspective returns one of:"),
         )
 
         self.assertIn(
-<<<<<<< HEAD
             "Before approving, commenting, or rejecting, each reviewer must run a lightweight Reference-frame harness pass",
             review_section,
         )
@@ -221,18 +206,10 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("`no applicable mature theory found` is an acceptable explicit harness", review_section)
         self.assertIn("one short free-form note", review_section)
         self.assertIn("reference frame in `SshxResultEnvelope.conclusion`", review_section)
-=======
-            "Before approving, commenting, or rejecting, each reviewer must first identify the applicable mature human theory, engineering principle, industry best practice, or constraint framework governing this class of implementation",
-            review_section,
-        )
-        self.assertIn('"No applicable mature theory found" is an acceptable explicit harness', review_section)
-        self.assertIn("name the reference frame in `SshxResultEnvelope.conclusion`", review_section)
->>>>>>> origin/auto-refact-dev
         self.assertIn(
             "Harness discovery does not override `GoalArtifact`, the review focus, the review truth table, or the allowed verdict set",
             review_section,
         )
-<<<<<<< HEAD
         for boundary in [
             "not mandatory citation work",
             "not a literature search",
@@ -244,11 +221,6 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(boundary, review_section)
         self.assertLess(
             review_section.index("Reference-frame harness"),
-=======
-        self.assertIn("must not block valid `comment` or `reject` outcomes", review_section)
-        self.assertLess(
-            review_section.index("Before approving, commenting, or rejecting"),
->>>>>>> origin/auto-refact-dev
             review_section.index("Each reviewer returns one of:"),
         )
 
