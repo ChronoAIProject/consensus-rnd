@@ -38,6 +38,7 @@ SPAWN_ONLY_CONTROLLER_ACTION = "spawn_codex_harness_background"
 KNOWN_CONTROLLER_ACTIONS = frozenset(
     {
         SPAWN_ONLY_CONTROLLER_ACTION,
+        "archive_invalid_harness_spawn_intent",
         "safe_push",
         "dispatch_consensus_implementation",
         "publish_implementation_output",

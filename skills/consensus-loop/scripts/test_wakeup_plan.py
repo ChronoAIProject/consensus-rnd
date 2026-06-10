@@ -2419,6 +2419,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 self.assertEqual(action["evidence_digest"], harness_spawn_intent_line_digest(action["evidence"]))
                 self.assertEqual(action["runner_authority"], "wakeup-runner-396")
                 self.assertEqual(action["preconditions"], ["source_artifact_contains_evidence"])
+                self.assertEqual(action["controller_action"], "archive_invalid_harness_spawn_intent")
                 self.assertTrue(action["no_generic_command"])
 
     def test_harness_spawn_intent_rejects_missing_queued_at_with_digest_invalid_action(self) -> None:
@@ -2434,9 +2435,44 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(harness_spawn_intent_line_digest(action["evidence"]), action["evidence_digest"])
         self.assertEqual("wakeup-runner-396", action["runner_authority"])
         self.assertEqual(["source_artifact_contains_evidence"], action["preconditions"])
+        self.assertEqual("archive_invalid_harness_spawn_intent", action["controller_action"])
         self.assertTrue(action["no_lifecycle_authority"])
         self.assertTrue(action["no_generic_command"])
-        self.assertNotIn("controller_action", action)
+        self.assertNotIn("status_only", action)
+
+    def test_invalid_legacy_harness_spawn_intent_is_executable_when_floor_satisfied(self) -> None:
+        payload = {
+            "cd": "/Users/auric/consensus-rnd",
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "intent_id": "dispatch-reviewers:774:architect:r5",
+            "log": ".refactor-loop/logs/review-pr774-architect-r5.log",
+            "no_lifecycle_authority": True,
+            "priority": "p1",
+            "prompt": ".refactor-loop/prompts/review-pr774-architect-r5.md",
+            "reason": "review PR #774 as architect",
+            "route": "dispatch-reviewers",
+            "run_in_background_required": True,
+            "source": "controller-actions",
+            "stall": 5400,
+            "task_id": "review-pr774-architect-r5",
+        }
+        line = "2026-06-10T11:48:39Z HARNESS_SPAWN_INTENT " + json.dumps(payload, sort_keys=True)
+        (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text(line + "\n", encoding="utf-8")
+
+        plan = self.run_plan(ps_count=5)
+
+        self.assertEqual(0, plan["concurrency"]["deficit"])
+        self.assertFalse(plan["hard_gate"]["active"])
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent-invalid")
+        self.assertEqual("missing-queued_at", action["reason"])
+        self.assertEqual(f"harness-spawn-intent-invalid:{harness_spawn_intent_line_digest(line)}", action["action_id"])
+        self.assertEqual("archive_invalid_harness_spawn_intent", action["controller_action"])
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertEqual(["source_artifact_contains_evidence"], action["preconditions"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertTrue(action["no_generic_command"])
+        self.assertNotIn("status_only", action)
 
     def test_harness_spawn_intent_projects_valid_same_id_after_archived_invalid(self) -> None:
         malformed_intent = {

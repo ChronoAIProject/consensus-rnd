@@ -113,6 +113,7 @@ PLAN_AUTHORIZATION = "skills/consensus-loop/authorizations/runtime-exceptions.md
 READ_ONLY_PLAN_AUTHORIZATION = "skills/consensus-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script"
 RUNNER_NAMED_HELPER_ACTIONS = {
     "spawn_codex_harness_background",
+    "archive_invalid_harness_spawn_intent",
     "safe_push",
     "dispatch_consensus_implementation",
     "publish_implementation_output",
@@ -171,6 +172,7 @@ def _contained_artifact_execution_path(ctx: LoopContext, text: str, *, field: st
 
 EXECUTABLE_ACTION_KINDS = {
     "harness-spawn-intent",
+    "harness-spawn-intent-invalid",
     "repository-stalled-meta-reflector",
     "stale-base-conflicting-pr",
     "unpushed-worker-output",
@@ -942,6 +944,7 @@ def _invalid_harness_spawn_intent(reason: str, evidence: str, *, intent_id: str 
         "phase": "bootstrap",
         "actor": "controller",
         "route": "harness-spawn-intent",
+        "controller_action": "archive_invalid_harness_spawn_intent",
         "reason": reason,
         "evidence": evidence,
         "source_artifact": INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT,
