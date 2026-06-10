@@ -143,6 +143,32 @@ class PackagedIntegrationSyncOperationTests(unittest.TestCase):
                 with self.assertRaises(IntegrationSyncOperationError):
                     validate_operation_dict(data)
 
+    def test_continue_rollup_adoption_rebase_schema_requires_rollup_evidence(self) -> None:
+        data = self.valid_operation()
+        data.update(
+            {
+                "kind": "continue-resolved-rollup-adoption-rebase",
+                "old_rollup_head": "old-head",
+                "old_rollup_ahead_count": 2,
+            }
+        )
+
+        operation = validate_operation_dict(data)
+
+        self.assertEqual("continue-resolved-rollup-adoption-rebase", operation.kind)
+        self.assertEqual("old-head", operation.old_rollup_head)
+        self.assertEqual(2, operation.old_rollup_ahead_count)
+
+        for field in ("old_rollup_head", "old_rollup_ahead_count"):
+            missing = dict(data)
+            del missing[field]
+            with self.subTest(missing=field):
+                with self.assertRaisesRegex(
+                    IntegrationSyncOperationError,
+                    f"continue-resolved-rollup-adoption-rebase requires {field}",
+                ):
+                    validate_operation_dict(missing)
+
     def test_write_operation_artifact_uses_operation_path_and_json_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
