@@ -19,7 +19,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest
+from codex_refactor_loop.issue_decomposition import issue_decomposition_child_fingerprint, issue_decomposition_plan_file_digest
 from codex_refactor_loop import labels
 from codex_refactor_loop.cross_instance_stand_down import CrossInstanceAdmission
 from codex_refactor_loop.github_budget import reset_graphql_budget_cache
@@ -4322,28 +4322,59 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             unmanaged_actions,
         )
 
-    def test_issue_decomposition_single_parent_sentinel_skips_and_multiple_hits_fail_closed(self) -> None:
+    def test_issue_decomposition_matching_tracking_comments_dispatch_for_helper_reconciliation(self) -> None:
         base = self.issue_decomposition_action()
         digest = base["issue_decomposition_plan_digest"]
+        first_fingerprint = issue_decomposition_child_fingerprint(403, digest, "first-child")
+        second_fingerprint = issue_decomposition_child_fingerprint(403, digest, "second-child")
+        tracking = "\n".join(
+            [
+                "<!-- crnd:issue-decomposition-tracking -->",
+                "Parent issue: #403",
+                f"IssueDecompositionPlan digest: {digest}",
+                "Children:",
+                f"- first-child: #501 https://github.com/owner/repo/issues/501 fingerprint={first_fingerprint}",
+                f"- second-child: #502 https://github.com/owner/repo/issues/502 fingerprint={second_fingerprint}",
+                "<!-- /crnd:issue-decomposition-tracking -->",
+            ]
+        )
         single_actions = FakeActions()
-        single = self.issue_decomposition_action(action_id="decompose:single-sentinel")
+        single = self.issue_decomposition_action(action_id="decompose:single-tracking")
         comments = [{"body": f"tracked\nIssueDecompositionPlan digest: {digest}\n"}]
 
         single_results = self.run_result(self.base_plan(single), actions=single_actions, issue_comments=comments)
 
-        self.assertEqual(single_results[0].status, "skipped")
-        self.assertEqual(single_results[0].reason, "issue_decomposition_duplicate_sentinel")
-        self.assertEqual(single_actions.calls, [])
+        self.assertEqual(single_results[0].status, "applied")
+        self.assertEqual(single_actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
 
-        multiple_actions = FakeActions()
-        multiple = self.issue_decomposition_action(action_id="decompose:multiple-sentinels")
-        multiple_results = self.run_result(self.base_plan(multiple), actions=multiple_actions, issue_comments=comments * 2)
+        duplicate_actions = FakeActions()
+        duplicate = self.issue_decomposition_action(action_id="decompose:duplicate-matching-tracking")
+        duplicate_results = self.run_result(self.base_plan(duplicate), actions=duplicate_actions, issue_comments=[{"body": tracking}, {"body": tracking}])
+
+        self.assertEqual(duplicate_results[0].status, "applied")
+        self.assertEqual(duplicate_actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
+
+    def test_issue_decomposition_conflicting_tracking_fails_closed(self) -> None:
+        base = self.issue_decomposition_action()
+        digest = base["issue_decomposition_plan_digest"]
+        conflicting = "\n".join(
+            [
+                "<!-- crnd:issue-decomposition-tracking -->",
+                "Parent issue: #404",
+                f"IssueDecompositionPlan digest: {digest}",
+                "Children:",
+                "<!-- /crnd:issue-decomposition-tracking -->",
+            ]
+        )
+        actions = FakeActions()
+        action = self.issue_decomposition_action(action_id="decompose:conflicting-tracking")
+        results = self.run_result(self.base_plan(action), actions=actions, issue_comments=[{"body": conflicting}])
 
         self.assert_blocked_before_dispatch(
-            multiple_results,
-            "decompose:multiple-sentinels",
-            "issue_decomposition_multiple_sentinels",
-            multiple_actions,
+            results,
+            "decompose:conflicting-tracking",
+            "issue_decomposition_parent_tracking_conflict",
+            actions,
         )
 
     def test_dispatch_consensus_implementation_blocks_precondition_string_only_projection(self) -> None:

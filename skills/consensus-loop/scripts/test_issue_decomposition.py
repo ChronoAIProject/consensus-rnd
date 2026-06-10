@@ -20,8 +20,14 @@ from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop import issue_decomposition
 from codex_refactor_loop.issue_decomposition import (
     IssueDecompositionError,
+    IssueDecompositionTrackingChild,
+    append_issue_decomposition_tracking_block,
+    build_issue_decomposition_tracking_block,
+    issue_decomposition_child_fingerprint,
     issue_decomposition_plan_digest,
     load_issue_decomposition_plan,
+    parse_issue_decomposition_tracking_comments,
+    reconcile_issue_decomposition_tracking_children,
 )
 
 
@@ -343,6 +349,78 @@ class IssueDecompositionTests(unittest.TestCase):
         }
 
         self.assertEqual(issue_decomposition_plan_digest(payload), issue_decomposition_plan_digest(reordered))
+
+    def test_child_fingerprint_is_stable_and_bound_to_parent_digest_and_slug(self) -> None:
+        first = issue_decomposition_child_fingerprint(403, "a" * 64, "first-child")
+        self.assertEqual(first, issue_decomposition_child_fingerprint(403, "a" * 64, "first-child"))
+        self.assertNotEqual(first, issue_decomposition_child_fingerprint(404, "a" * 64, "first-child"))
+        self.assertNotEqual(first, issue_decomposition_child_fingerprint(403, "b" * 64, "first-child"))
+        self.assertNotEqual(first, issue_decomposition_child_fingerprint(403, "a" * 64, "second-child"))
+
+    def test_exact_helper_tracking_parser_ignores_sentinel_like_prose_and_reconciles_duplicates(self) -> None:
+        plan_path = self.write_plan(self.valid_payload())
+        plan = load_issue_decomposition_plan(self.ctx, plan_path)
+        digest = issue_decomposition.issue_decomposition_plan_file_digest(self.ctx, plan_path)
+        children = tuple(
+            IssueDecompositionTrackingChild(
+                slug=child.slug,
+                issue_number=501 + index,
+                url=f"https://github.com/owner/repo/issues/{501 + index}",
+                fingerprint=issue_decomposition_child_fingerprint(plan.parent_issue, digest, child.slug),
+            )
+            for index, child in enumerate(plan.children)
+        )
+        block = build_issue_decomposition_tracking_block(plan.parent_issue, digest, children)
+        comments = [
+            {"body": f"solver prose says IssueDecompositionPlan digest: {digest} but is not helper tracking"},
+            {"body": block},
+            {"body": "prefix\n" + block + "\nsuffix"},
+        ]
+
+        projection = parse_issue_decomposition_tracking_comments(comments, expected_parent_issue=403, expected_digest=digest)
+        reconciled = reconcile_issue_decomposition_tracking_children(plan, digest, projection)
+
+        self.assertFalse(projection.conflicts)
+        self.assertEqual({"first-child", "second-child"}, set(reconciled))
+        self.assertEqual(501, reconciled["first-child"].issue_number)
+
+    def test_tracking_parser_fails_closed_on_conflicting_digest_or_parent(self) -> None:
+        plan_path = self.write_plan(self.valid_payload())
+        plan = load_issue_decomposition_plan(self.ctx, plan_path)
+        digest = issue_decomposition.issue_decomposition_plan_file_digest(self.ctx, plan_path)
+        child = IssueDecompositionTrackingChild(
+            slug="first-child",
+            issue_number=501,
+            url="https://github.com/owner/repo/issues/501",
+            fingerprint=issue_decomposition_child_fingerprint(plan.parent_issue, digest, "first-child"),
+        )
+        wrong_digest = build_issue_decomposition_tracking_block(403, "b" * 64, [child])
+        wrong_parent = build_issue_decomposition_tracking_block(404, digest, [child])
+
+        for body in (wrong_digest, wrong_parent):
+            with self.subTest(body=body):
+                projection = parse_issue_decomposition_tracking_comments([{"body": body}], expected_parent_issue=403, expected_digest=digest)
+                self.assertTrue(projection.conflicts)
+
+    def test_append_tracking_block_requires_final_sentinel_and_exact_grammar(self) -> None:
+        child = IssueDecompositionTrackingChild(
+            slug="first-child",
+            issue_number=501,
+            url="https://github.com/owner/repo/issues/501",
+            fingerprint="a" * 64,
+        )
+        text = append_issue_decomposition_tracking_block(
+            "Parent issue: #403\n\n⟦AI:AUTO-LOOP⟧\n",
+            403,
+            "b" * 64,
+            [child],
+            "\n⟦AI:AUTO-LOOP⟧\n",
+        )
+
+        self.assertIn("<!-- crnd:issue-decomposition-tracking -->", text)
+        self.assertIn("IssueDecompositionPlan digest: " + "b" * 64, text)
+        self.assertIn("fingerprint=" + "a" * 64, text)
+        self.assertTrue(text.endswith("\n⟦AI:AUTO-LOOP⟧\n"))
 
     def test_source_regression_issue_decomposition_validator_keeps_exact_schema_and_body_guards(self) -> None:
         self.assertEqual(

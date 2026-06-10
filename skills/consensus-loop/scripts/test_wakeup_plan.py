@@ -26,7 +26,7 @@ sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from codex_refactor_loop import labels as label_catalog  # noqa: E402
 from codex_refactor_loop.context import LoopContext  # noqa: E402
-from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest  # noqa: E402
+from codex_refactor_loop.issue_decomposition import issue_decomposition_child_fingerprint, issue_decomposition_plan_file_digest  # noqa: E402
 from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult  # noqa: E402
 from codex_refactor_loop.release.gate import canonical_digest, isoformat  # noqa: E402
 from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E402
@@ -1967,7 +1967,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         )
         comments_path = self.repo / f"gh-issue-{issue}-comments.json"
         comments_path.write_text(
-            json.dumps({"comments": [{"body": f"tracked\nIssueDecompositionPlan digest: {digest}\n⟦AI:AUTO-LOOP⟧\n"}]}),
+            json.dumps({"comments": [{"body": self.decomposition_tracking_comment(issue, digest)}]}),
             encoding="utf-8",
         )
         ledger = self.repo / ".refactor-loop" / "state" / "wakeup-runner-ledger.jsonl"
@@ -1990,6 +1990,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
         return plan_path, digest
+
+    def decomposition_tracking_comment(self, issue: int, digest: str) -> str:
+        first = issue_decomposition_child_fingerprint(issue, digest, "first-child")
+        second = issue_decomposition_child_fingerprint(issue, digest, "second-child")
+        return "\n".join(
+            [
+                "<!-- crnd:issue-decomposition-tracking -->",
+                f"Parent issue: #{issue}",
+                f"IssueDecompositionPlan digest: {digest}",
+                "Children:",
+                f"- first-child: #501 https://github.com/owner/repo/issues/501 fingerprint={first}",
+                f"- second-child: #502 https://github.com/owner/repo/issues/502 fingerprint={second}",
+                "<!-- /crnd:issue-decomposition-tracking -->",
+                "⟦AI:AUTO-LOOP⟧",
+                "",
+            ]
+        )
 
     def write_implement_result(self, *, issue: int = 537, status: str = "partial") -> None:
         self.append_harness_spawn_intent(

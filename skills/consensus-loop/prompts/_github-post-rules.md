@@ -45,6 +45,7 @@ Escalation / consensus picks **must** include a clear option table with one-line
 - **No filler**: avoid empty phrases such as "we will analyze", "various improvements", or "comprehensive review".
 - **No cross-section deferrals**: do not write "see above", "see the English section", or equivalent references.
 - **zsh-safe exit-code variables**: if shell code captures a `gh` exit code, use variable names such as `post_exit_code` or `gh_exit_code`; **do not** use `status`. `status` is a zsh read-only special variable and assignment will fail the worker.
+- **Decomposition tracking grammar is helper-owned**: workers may discuss `IssueDecompositionPlan` artifacts, but must not write `<!-- crnd:issue-decomposition-tracking -->`, `IssueDecompositionChild fingerprint:`, or parent tracking blocks in GitHub-facing prose; the checked-in #403 helper is the only writer for that idempotency grammar.
 
 ## Allowed `gh` Commands
 
