@@ -24,10 +24,13 @@ from codex_refactor_loop.project_rules import (
     CANONICAL_BODY,
     CANONICAL_HASH,
     END_MARKER,
+    OLD_CANONICAL_HASH,
     OLD_CANONICAL_BODY,
     ProjectRulesFixedPointProbe,
     ProjectRulesPatchArtifact,
     START_RE,
+    ZH_COMPATIBILITY_BODY,
+    ZH_COMPATIBILITY_HASH,
     sha256_text,
 )
 
@@ -59,6 +62,20 @@ class ProjectRulesFixedPointTests(unittest.TestCase):
         self.assertEqual(before_mtime, self.rules.stat().st_mtime_ns)
         self.assertFalse(self.artifact.exists())
 
+    def test_probe_explicit_zh_current_accepts_zh_compatibility_body(self) -> None:
+        block = self._managed_block(ZH_COMPATIBILITY_BODY)
+        self.rules.write_text(f"# Host rules\n\n{block}", encoding="utf-8")
+        before = self.rules.read_bytes()
+        before_mtime = self.rules.stat().st_mtime_ns
+
+        report = ProjectRulesFixedPointProbe(str(self.tmp), host_work_language="zh").inspect()
+
+        self.assertTrue(report.is_current)
+        self.assertEqual("current", report.reason)
+        self.assertEqual(before, self.rules.read_bytes())
+        self.assertEqual(before_mtime, self.rules.stat().st_mtime_ns)
+        self.assertFalse(self.artifact.exists())
+
     def test_probe_missing_block_writes_patch_artifact_and_leaves_target_unchanged(self) -> None:
         before = self.rules.read_bytes()
         report = ProjectRulesFixedPointProbe(str(self.tmp)).inspect()
@@ -70,8 +87,32 @@ class ProjectRulesFixedPointTests(unittest.TestCase):
         patch = artifact.read_text(encoding="utf-8")
         self.assertIn("--- a/CLAUDE.md", patch)
         self.assertIn("+++ b/CLAUDE.md", patch)
+        self.assertIn("+## Consensus R&D Foundational Invariants (managed by consensus-rnd)", patch)
+        self.assertIn("+- FI-007 Prefer deletion; remove deprecated paths directly unless host rules explicitly require migration-period compatibility.", patch)
+        self.assertEqual(before, self.rules.read_bytes())
+
+    def test_explicit_zh_missing_block_writes_zh_compatibility_patch(self) -> None:
+        before = self.rules.read_bytes()
+        report = ProjectRulesFixedPointProbe(str(self.tmp), host_work_language="zh").inspect()
+
+        self.assertTrue(report.needs_patch)
+        self.assertEqual("missing", report.reason)
+        artifact = ProjectRulesPatchArtifact(self.tmp).write(report)
+        patch = artifact.read_text(encoding="utf-8")
         self.assertIn("+## 共识研发不动点（由 consensus-rnd 管理）", patch)
         self.assertIn("+- FI-007 删除优先；废弃路径直接移除，除非 host 规则明确要求迁移期兼容。", patch)
+        self.assertEqual(before, self.rules.read_bytes())
+
+    def test_explicit_en_missing_block_writes_english_canonical_patch(self) -> None:
+        before = self.rules.read_bytes()
+        report = ProjectRulesFixedPointProbe(str(self.tmp), host_work_language="en").inspect()
+
+        self.assertTrue(report.needs_patch)
+        self.assertEqual("missing", report.reason)
+        artifact = ProjectRulesPatchArtifact(self.tmp).write(report)
+        patch = artifact.read_text(encoding="utf-8")
+        self.assertIn("+## Consensus R&D Foundational Invariants (managed by consensus-rnd)", patch)
+        self.assertIn("+- FI-007 Prefer deletion; remove deprecated paths directly unless host rules explicitly require migration-period compatibility.", patch)
         self.assertEqual(before, self.rules.read_bytes())
 
     def test_generated_patch_is_git_apply_compatible_and_preserves_sentinel_hash(self) -> None:
@@ -94,10 +135,37 @@ class ProjectRulesFixedPointTests(unittest.TestCase):
         self.assertEqual(start.group(1), sha256_text(enclosed))
         self.assertEqual(CANONICAL_HASH, start.group(1))
 
-    def test_probe_known_old_block_writes_replacement_patch_without_overwrite(self) -> None:
+    def test_probe_zh_current_block_replaces_to_default_english_without_overwrite(self) -> None:
+        old_text = f"# Host rules\n\n{self._managed_block(ZH_COMPATIBILITY_BODY)}"
+        self.rules.write_text(old_text, encoding="utf-8")
+        report = ProjectRulesFixedPointProbe(str(self.tmp)).inspect()
+
+        self.assertTrue(report.needs_patch)
+        self.assertEqual("known-old", report.reason)
+        artifact = ProjectRulesPatchArtifact(self.tmp).write(report)
+        patch = artifact.read_text(encoding="utf-8")
+        self.assertIn("-## 共识研发不动点（由 consensus-rnd 管理）", patch)
+        self.assertIn("+## Consensus R&D Foundational Invariants (managed by consensus-rnd)", patch)
+        self.assertIn("+- FI-007 Prefer deletion; remove deprecated paths directly unless host rules explicitly require migration-period compatibility.", patch)
+        self.assertEqual(old_text, self.rules.read_text(encoding="utf-8"))
+
+    def test_probe_legacy_old_block_writes_default_english_replacement_without_overwrite(self) -> None:
         old_text = f"# Host rules\n\n{self._managed_block(OLD_CANONICAL_BODY)}"
         self.rules.write_text(old_text, encoding="utf-8")
         report = ProjectRulesFixedPointProbe(str(self.tmp)).inspect()
+
+        self.assertTrue(report.needs_patch)
+        self.assertEqual("known-old", report.reason)
+        artifact = ProjectRulesPatchArtifact(self.tmp).write(report)
+        patch = artifact.read_text(encoding="utf-8")
+        self.assertIn("- FI-001 AI 产物默认不可信；进入主线前必须经过独立检查。", patch)
+        self.assertIn("+- FI-007 Prefer deletion; remove deprecated paths directly unless host rules explicitly require migration-period compatibility.", patch)
+        self.assertEqual(old_text, self.rules.read_text(encoding="utf-8"))
+
+    def test_explicit_zh_known_old_block_writes_zh_compatibility_replacement_without_overwrite(self) -> None:
+        old_text = f"# Host rules\n\n{self._managed_block(OLD_CANONICAL_BODY)}"
+        self.rules.write_text(old_text, encoding="utf-8")
+        report = ProjectRulesFixedPointProbe(str(self.tmp), host_work_language="zh").inspect()
 
         self.assertTrue(report.needs_patch)
         self.assertEqual("known-old", report.reason)
@@ -109,7 +177,7 @@ class ProjectRulesFixedPointTests(unittest.TestCase):
 
     def test_probe_tampered_block_fails_closed_without_apply(self) -> None:
         self.rules.write_text(f"# Host rules\n\n{self._managed_block(CANONICAL_BODY)}", encoding="utf-8")
-        tampered = self.rules.read_text(encoding="utf-8").replace("FI-007 删除优先", "FI-007 edited")
+        tampered = self.rules.read_text(encoding="utf-8").replace("FI-007 Prefer deletion", "FI-007 edited")
         self.rules.write_text(tampered, encoding="utf-8")
 
         report = ProjectRulesFixedPointProbe(str(self.tmp)).inspect()
@@ -121,8 +189,25 @@ class ProjectRulesFixedPointTests(unittest.TestCase):
         self.assertEqual(tampered, self.rules.read_text(encoding="utf-8"))
         self.assertFalse(self.artifact.exists())
 
+    def test_matching_hash_for_unknown_block_fails_closed_without_repair(self) -> None:
+        unknown_body = "## Unknown managed block\n\n- FI-001 Unknown but hash-valid.\n"
+        self.rules.write_text(f"# Host rules\n\n{self._managed_block(unknown_body)}", encoding="utf-8")
+
+        report = ProjectRulesFixedPointProbe(str(self.tmp)).inspect()
+
+        self.assertEqual("blocked", report.status)
+        self.assertEqual("unknown-old", report.reason)
+        self.assertIn("unknown managed block", report.detail)
+        self.assertIsNone(report.proposed_text)
+        self.assertFalse(self.artifact.exists())
+
+    def test_invalid_host_work_language_fails_closed(self) -> None:
+        with self.assertRaisesRegex(Exception, "invalid HOST_WORK_LANGUAGE: fr"):
+            ProjectRulesFixedPointProbe(str(self.tmp), host_work_language="fr")
+
     def test_cli_operation_runs_from_single_entrypoint(self) -> None:
         env = os.environ.copy()
+        env.pop("HOST_WORK_LANGUAGE", None)
         env["REPO_ROOT"] = str(self.tmp)
         result = subprocess.run(
             [sys.executable, str(CLI), "check-project-rules"],
@@ -137,6 +222,25 @@ class ProjectRulesFixedPointTests(unittest.TestCase):
         self.assertIn("reason=missing", result.stdout)
         self.assertEqual("# Host rules\n", self.rules.read_text(encoding="utf-8"))
         self.assertTrue(self.artifact.is_file())
+
+    def test_cli_explicit_zh_operation_uses_zh_compatibility_payload(self) -> None:
+        env = os.environ.copy()
+        env["HOST_WORK_LANGUAGE"] = "zh"
+        env["REPO_ROOT"] = str(self.tmp)
+        result = subprocess.run(
+            [sys.executable, str(CLI), "check-project-rules"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("PROJECT_RULES_FIXED_POINT:patch-required", result.stdout)
+        self.assertIn("reason=missing", result.stdout)
+        patch = self.artifact.read_text(encoding="utf-8")
+        self.assertIn("+## 共识研发不动点（由 consensus-rnd 管理）", patch)
+        self.assertIn("+- FI-007 删除优先；废弃路径直接移除，除非 host 规则明确要求迁移期兼容。", patch)
+        self.assertEqual("# Host rules\n", self.rules.read_text(encoding="utf-8"))
 
     def test_ensure_project_rules_command_is_removed_and_no_writer_remains(self) -> None:
         result = subprocess.run(
@@ -158,16 +262,19 @@ class ProjectRulesFixedPointTests(unittest.TestCase):
 
     def test_hash_helpers_are_stable(self) -> None:
         self.assertEqual(CANONICAL_HASH, sha256_text(CANONICAL_BODY))
+        self.assertEqual(ZH_COMPATIBILITY_HASH, sha256_text(ZH_COMPATIBILITY_BODY))
+        self.assertEqual(OLD_CANONICAL_HASH, sha256_text(OLD_CANONICAL_BODY))
+        self.assertNotEqual(CANONICAL_HASH, ZH_COMPATIBILITY_HASH)
         self.assertNotEqual(CANONICAL_HASH, sha256_text(OLD_CANONICAL_BODY))
         self.assertRegex(START_RE.pattern, "sha256")
         self.assertIn("consensus-rnd:foundational-invariants:end", END_MARKER)
 
     def test_fi002_mentions_skill_private_runtime_not_host_ssot(self) -> None:
         expected = (
-            "- FI-002 Host 事实必须由 host 配置或 host 规则注入；通用 skill / engine "
-            "不硬编码具体项目、组织、路径、分支或人员事实；skill-private runtime "
-            "directories such as `.refactor-loop/` must not become host production "
-            "configuration or ledger SSOT."
+            "- FI-002 Host facts must be injected by host configuration or host rules; "
+            "generic skills and engines must not hardcode project, organization, path, "
+            "branch, or personnel facts; skill-private runtime directories such as "
+            "`.refactor-loop/` must not become host production configuration or ledger SSOT."
         )
         self.assertIn(expected, CANONICAL_BODY)
         self.assertIn(expected, self._managed_block(CANONICAL_BODY))
