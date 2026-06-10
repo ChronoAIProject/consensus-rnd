@@ -21,6 +21,10 @@ Your job: read every reviewer's output, treat only `reject` evidence as blocking
 4. Cluster source: audit `${AUDIT_PATH}` and implement summary `${IMPLEMENT_SUMMARY_PATH}`.
 5. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` — every fix must comply with these clauses.
 
+## Reference-frame harness
+
+Before applying fixes, run a lightweight reference-frame pass: identify the applicable mature theory, engineering principle, industry best practice, or constraint framework for this repair round, then compare the fix plan against that known-good shape. Surface one short free-form note naming the frame, or say `no applicable mature theory found`. This is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for an honest false-positive or blocked outcome.
+
 ## Procedure
 
 ### Step 1 — Build the demand list

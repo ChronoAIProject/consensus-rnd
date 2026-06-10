@@ -32,6 +32,10 @@ Use only the router-injected validated transition projection for transition asse
 
 Use only the router-injected work-unit provenance to distinguish audit-backed work from issue-driven / Path A greenfield work. When `${WORK_UNIT_PRODUCER}` is `manual-issue (prompt-only provenance)` and `${WORK_UNIT_SOURCE_REF}` is `gh-issue-${ISSUE_NUMBER}`, absence of an existing local audit artifact or existing code-to-delete is neutral for delete-solver classification; it supports an abstain-compatible Path A greenfield frame, not a delete-solver defect.
 
+## Reference-frame harness
+
+Before arbitrating, run a lightweight reference-frame pass: identify the applicable mature theory, engineering principle, industry best practice, or constraint framework for judging this design-consensus decision, then compare the solver agreement against that known-good shape. Surface one short free-form note naming the frame, or say `no applicable mature theory found`. This is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for an honest converge decision.
+
 ## Procedure
 
 ### Step 0 — Host production SSOT boundary

@@ -20,6 +20,10 @@ When `${DESIGN_DECISION_PATH}` is non-empty, use the design-issue pathway and re
 - **Bad pattern**: ${OLD_PATTERN}
 - **Design principle**: ${NEW_PRINCIPLE}
 
+## Reference-frame harness
+
+Before implementing, run a lightweight reference-frame pass: identify the applicable mature theory, engineering principle, industry best practice, or constraint framework for this change, then compare the implementation plan against that known-good shape. Surface one short free-form note naming the frame, or say `no applicable mature theory found`. This is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for an honest blocked or partial outcome.
+
 ## Hard constraints
 
 1. **Scope**: modify only the files below; before expanding scope, print `SCOPE_EXTEND: <file> <reason>`:
