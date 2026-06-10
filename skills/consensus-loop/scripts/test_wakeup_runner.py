@@ -4875,6 +4875,28 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(second_actions.calls, [])
 
+    def test_release_rollup_remote_head_suppresses_second_tick_retry(self) -> None:
+        first_actions = FakeActions()
+        action = self.release_rollup_action()
+
+        first = self.run_result(self.base_plan(action), actions=first_actions)
+
+        self.assertEqual(first[0].status, "applied")
+        self.assertEqual([call[0] for call in first_actions.calls], ["open_release_rollup_pr_from_action"])
+        second_actions = FakeActions()
+        second = self.run_result(
+            self.base_plan(action),
+            actions=second_actions,
+            open_rollup_prs=[],
+            remote_rollup_refs={"rollup/abc123": "abc123"},
+        )
+
+        self.assertEqual(
+            [(result.action_id, result.status, result.reason) for result in second],
+            [(action["action_id"], "skipped", "duplicate")],
+        )
+        self.assertEqual(second_actions.calls, [])
+
     def test_release_rollup_body_spawn_renders_prompt_and_does_not_open_pr(self) -> None:
         action = self.release_rollup_body_action()
         actions = FakeActions()
