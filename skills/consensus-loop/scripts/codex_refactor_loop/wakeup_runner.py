@@ -342,7 +342,7 @@ class WakeupRunner:
         action_id = str(action.get("action_id") or "")
         if not action_id:
             return self._blocked(action, "missing_action_id")
-        if self._ledger_has(action):
+        if self._ledger_suppresses_retry(action):
             return self._record(RunnerResult(action_id, "skipped", "duplicate"), action)
         error = self._validate_action(action)
         if error:
@@ -366,6 +366,8 @@ class WakeupRunner:
             return self._blocked(action, f"exception:{exc}")
         status = "applied" if exit_code == 0 else "blocked"
         reason = "" if exit_code == 0 else f"helper_exit:{exit_code}"
+        if exit_code == 0 and controller_action == "dispatch_consensus_implementation":
+            self._append_consensus_implementation_dispatch_receipt(action)
         if exit_code != 0:
             self._append_pending_event(f"WAKEUP_RUNNER_HELPER_EXIT:{action_id}:{controller_action}:{exit_code}")
         return self._record(RunnerResult(action_id, status, reason), action)
@@ -1806,7 +1808,7 @@ class WakeupRunner:
         full = build_gh_argv(self.ctx.gh_repo_slug, command)
         return subprocess.run(full, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
 
-    def _ledger_has(self, action: Mapping[str, Any]) -> bool:
+    def _ledger_suppresses_retry(self, action: Mapping[str, Any]) -> bool:
         action_id = str(action.get("action_id") or "")
         if not self.ledger_path.exists():
             return False
@@ -1821,20 +1823,96 @@ class WakeupRunner:
             if status == "dry-run":
                 return True
             if status == "applied":
-                if _is_remote_ci_red_dispatch(action):
-                    continue
-                if self._release_dispatch_stale_ledger_reason(action):
+                stale_release_reason = self._release_dispatch_stale_ledger_reason(action)
+                if stale_release_reason:
                     self._append_pending_event(
-                        f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action_id}:{self._release_dispatch_stale_ledger_reason(action)}"
+                        f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action_id}:{stale_release_reason}"
                     )
                     continue
                 stale_spawn_reason = self._applied_spawn_stale_reason(action)
                 if stale_spawn_reason:
                     self._append_pending_event(f"WAKEUP_RUNNER_STALE_SPAWN_LEDGER:{action_id}:{stale_spawn_reason}")
                     continue
-                return True
+                if self._applied_row_current_effect_suppresses_retry(action):
+                    return True
             if status == "blocked" and _terminal_blocked_reason(str(row.get("reason") or "")):
                 return True
+        return False
+
+    def _applied_row_current_effect_suppresses_retry(self, action: Mapping[str, Any]) -> bool:
+        controller_action = str(action.get("controller_action") or "")
+        if controller_action == "spawn_codex_harness_background":
+            return self._applied_spawn_stale_reason(action) == ""
+        if controller_action == "dispatch_release_candidate":
+            return self._release_dispatch_stale_ledger_reason(action) == ""
+        if controller_action == "dispatch_consensus_implementation":
+            return self._consensus_implementation_current_effect_suppresses_retry(action)
+        if controller_action == "publish_review_fix_output_from_action":
+            return self._publish_review_fix_current_effect_suppresses_retry(action)
+        if controller_action == "dispatch_reviewers":
+            return self._dispatch_reviewers_current_effect_suppresses_retry(action)
+        if _is_remote_ci_red_dispatch(action):
+            return False
+        return False
+
+    def _consensus_implementation_current_effect_suppresses_retry(self, action: Mapping[str, Any]) -> bool:
+        if consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root):
+            return True
+        receipt = self._consensus_implementation_dispatch_receipt(action)
+        try:
+            text = self.pending_events_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        return receipt in text.splitlines()
+
+    def _append_consensus_implementation_dispatch_receipt(self, action: Mapping[str, Any]) -> None:
+        self._append_pending_event(self._consensus_implementation_dispatch_receipt(action))
+
+    def _consensus_implementation_dispatch_receipt(self, action: Mapping[str, Any]) -> str:
+        action_id = str(action.get("action_id") or "")
+        target = action.get("target_number")
+        cluster_id = str(action.get("cluster_id") or "").strip()
+        return f"WAKEUP_RUNNER_CONSENSUS_IMPLEMENTATION_DISPATCHED:{target}:{cluster_id}:{action_id}"
+
+    def _publish_review_fix_current_effect_suppresses_retry(self, action: Mapping[str, Any]) -> bool:
+        target = action.get("target_number")
+        if not isinstance(target, int) or target <= 0:
+            return False
+        projected_head = str(action.get("head_sha") or "").strip()
+        live_head = self._pr_head_sha(target)
+        if not live_head:
+            return False
+        if projected_head and live_head != projected_head:
+            return True
+        worktree = self._review_fix_worktree(target)
+        if worktree is None:
+            return False
+        status = self.command_runner(["git", "-C", str(worktree), "status", "--porcelain"])
+        if status.returncode != 0:
+            return False
+        return not status.stdout.strip()
+
+    def _dispatch_reviewers_current_effect_suppresses_retry(self, action: Mapping[str, Any]) -> bool:
+        target = action.get("target_number")
+        if not isinstance(target, int) or target <= 0:
+            return False
+        marker = str(action.get("source_marker") or "")
+        if marker.startswith("FIX_DONE:"):
+            return self._publish_review_fix_current_effect_suppresses_retry(action)
+        if action.get("kind") == "review-evidence-redispatch" or action.get("stale_review_roles"):
+            projected_head = str(action.get("head_sha") or "").strip()
+            if not projected_head:
+                return False
+            gate = self._review_gate(target)
+            live_head = str(gate.get("live_head_sha") or "").strip()
+            if live_head and live_head != projected_head:
+                return True
+            stale_roles = action.get("stale_review_roles")
+            roles = [str(role) for role in stale_roles] if isinstance(stale_roles, list) else list(REQUIRED_REVIEW_ROLES)
+            heads = gate.get("heads_by_role")
+            if not isinstance(heads, Mapping):
+                return False
+            return all(str(heads.get(role) or "") == projected_head for role in roles)
         return False
 
     def _release_dispatch_stale_ledger_reason(self, action: Mapping[str, Any]) -> str:
