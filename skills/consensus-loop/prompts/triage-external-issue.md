@@ -1,10 +1,5 @@
 # Triage codex - external issue assessment + intake or reject
 
-<!-- Legacy contract anchors for source-regression compatibility:
-bounded `scope_paths`、desired end state / invariant 和 verification hints
-类别本身不是 reject 理由
--->
-
 Artifact profile: marker-only-work-unit
 
 You are triage codex. Your task is to evaluate an **external issue** labeled `crnd:triage:pending` by a maintainer as:

@@ -1,11 +1,5 @@
 # Task: Verify implementation changes for ${WORK_UNIT_ID}
 
-<!-- Legacy contract anchors for source-regression compatibility:
-缺失任何一处且无合理 not-applicable 说明 → 标记缺陷
-新增 `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster` refactor-history source comments → 标记缺陷
-不得新增或保留 suite-level host-wide process-table guard
--->
-
 Artifact profile: marker-only-work-unit
 
 <!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->

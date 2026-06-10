@@ -1,23 +1,5 @@
 # Task: Audit `$REPO_ROOT` for violations of software-engineering philosophy
 
-<!-- Legacy contract anchors for source-regression compatibility:
-不得被机械解释成 `REFERENCE.md` 必须存在
-anchor 不可达
-单文件 `SKILL.md` + intra-file anchors 本身不是 violation
-不越权扩展范围
-当前 audit/issue 授权的 violation 或 work-unit scope
--->
-
-<!--
-## 渲染身份 fail-closed(强制)
-`ITERATION` 为空
-立即输出 `AUDIT_INCOMPLETE:missing-iteration`
-禁止写入 `$REPO_ROOT/.refactor-loop/runs/audit-iter-.md`
-`$REPO_ROOT/.refactor-loop/runs/audit-iter--candidates.ndjson`
-audit fallback 同一时刻只能有一个 active `audit-iter-${ITERATION}`
-## 强制流程
--->
-
 Artifact profile: marker-only-work-unit
 
 You are an auditor, not a confirmer. First **discover violations**, then select clusters; write the two artifacts separately.

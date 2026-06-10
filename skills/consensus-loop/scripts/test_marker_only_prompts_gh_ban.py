@@ -65,10 +65,8 @@ AFFIRMATIVE_DIRECT_POST_SNIPPETS = (
 )
 
 LOCAL_COMMAND_ROSTER_SNIPPETS = (
-    "可调:",
-    "不可调:",
-    "你能调的 gh 命令",
-    "你不能调的(controller 边界)",
+    "Allowed gh Commands",
+    "Disallowed Commands (Controller Boundary)",
 )
 
 DIRECT_POST_COMMAND_ROSTER_SNIPPETS = (
@@ -228,8 +226,8 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
 
     def test_shared_github_post_rules_own_complete_command_roster(self) -> None:
         body = (PROMPTS_DIR / "_github-post-rules.md").read_text(encoding="utf-8")
-        allowed = re.search(r"(?ms)^## 你能调的 gh 命令.*?(?=^## |\Z)", body)
-        forbidden = re.search(r"(?ms)^## 你不能调的\(controller 边界\).*?(?=^## |\Z)", body)
+        allowed = re.search(r"(?ms)^## Allowed gh Commands.*?(?=^## |\Z)", body)
+        forbidden = re.search(r"(?ms)^## Disallowed Commands \(Controller Boundary\).*?(?=^## |\Z)", body)
         self.assertIsNotNone(allowed)
         self.assertIsNotNone(forbidden)
 

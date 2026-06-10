@@ -236,7 +236,7 @@ def prompt_line_findings(path: Path, repo_root: Path = REPO_ROOT) -> list[Findin
             continue
         if "<!--" in stripped:
             in_html_comment = True
-        category = prompt_line_category(path, line, in_fence=in_fence, in_html_comment=in_html_comment)
+        category = prompt_line_category(line, in_fence=in_fence, in_html_comment=in_html_comment)
         if has_han(line) and category == "active-prompt-instruction":
             findings.append(
                 Finding(
@@ -253,8 +253,7 @@ def prompt_line_findings(path: Path, repo_root: Path = REPO_ROOT) -> list[Findin
     return findings
 
 
-def prompt_line_category(path: Path, line: str, *, in_fence: bool, in_html_comment: bool) -> str:
-    del path
+def prompt_line_category(line: str, *, in_fence: bool, in_html_comment: bool) -> str:
     stripped = line.strip()
     if in_fence:
         return "prompt-fenced-example"

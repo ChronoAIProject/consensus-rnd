@@ -1,42 +1,5 @@
 # GitHub post rules (shared rules for codex prompts)
 
-<!-- Legacy contract anchors for source-regression compatibility:
-## Body 结构(强制)
-第一行 `## 🤖 ` 开头
-raw artifact 必折叠
-zsh-safe 退出码变量
-禁止**用 `status`
-可调:
-不可调:
-gh pr create/merge/close
-gh issue create/close
--->
-
-<!--
-## 你能调的 gh 命令
-- gh issue/pr comment
-- gh issue view
-- gh issue comment
-- gh pr view
-- gh pr comment
-- gh pr edit --body-file
-- gh api .../reactions
-- mktemp
-## 你不能调的(controller 边界)
-- git commit/push/checkout
-- git merge/reset/rebase
-- git merge
-- git reset
-- git rebase
-- gh pr create/merge/close
-- gh pr close
-- gh issue create/close
-- gh issue edit --add-label
-- gh issue edit --remove-label
-- gh pr edit --add-label
-- gh pr edit --remove-label
--->
-
 Artifact profile: github-ai-post-body
 
 When any codex role (solver, meta-judge, fix, reviewer, clarifier, investigator, analyst, etc.) produces user-facing content, **call `gh` directly yourself** to post it to GitHub. The controller does not relay it, and there is no dedicated writer-codex.

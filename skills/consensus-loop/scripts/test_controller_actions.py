@@ -4060,7 +4060,7 @@ class ControllerActionsTests(unittest.TestCase):
 
         rendered = output.read_text(encoding="utf-8")
         self.assertIn("# GitHub post rules", rendered)
-        self.assertIn("## Body 结构", rendered)
+        self.assertIn("## Body Structure (Required)", rendered)
         self.assertNotIn(GITHUB_POST_RULES_CONTRACT_TOKEN, rendered)
         self.assertNotIn("prompts/_github-post-rules.md", rendered)
 

@@ -1,23 +1,5 @@
 # Task: Implement ${WORK_UNIT_ID}
 
-<!-- Legacy contract anchors for source-regression compatibility:
-不越权扩展范围
-source issue、consensus artifact 和 `scope_paths` 授权的当前 work-unit
-feature、bug、doc、refactor、governance 工作
-worker 输出、validator 通过、`.refactor-loop/host.env`、prompt body 或第一次 `consensus:decompose` 均不是 apply 授权来源
-plan-level judge artifact 结构字段 + validated plan digest/proof + #191 owner + live parent open/tracking + sentinel idempotency
-测试 ratchet
-不得新增 suite-level host-wide process-table guard
-除此之外 `.refactor-loop/` 一律禁改
-missing/empty/default/`none` 归一化为 `none`
-新增极小辅助类型的注释也必须遵守 `${HOST_REFACTOR_COMMENT_POLICY}`
-不得写 `refactor helper`, `no behavior change`, `Old`, `New`, 或 `iterN`
-只写面向业务行为的准确英文说明
-仅 explicit `self-doc-comment` 时才按第 2 条既有 Refactor self-documentation 格式写注释
-`self-doc-comment`：被重构的每个类/关键方法必须
-源码注释必须 English-only
--->
-
 Artifact profile: marker-only-work-unit
 
 <!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
@@ -59,18 +41,6 @@ ${SCOPE_PATHS}
 8. **Build commands**: use host-configured `$BUILD_CMD` / `$TEST_CMD`. They are shell command strings and must be executed in a shell that has sourced `host.env`, using `bash -lc "$BUILD_CMD"` / `bash -lc "$TEST_CMD"` or equivalent shell invocation.
 9. **Host production SSOT boundary**: do not write host tools config, branch topology, machine paths, durable ledger authority, or host artifacts back into `.refactor-loop/` or `.refactor-loop/host.env`. `.refactor-loop/` only carries skill-private runtime/cache/log/state/prompt/run artifacts; production facts must flow through host-owned config/rules/artifacts.
 10. **IssueDecompositionPlan boundary**: if consensus requires issue decomposition, the implement worker may only land/verify the controller-private `IssueDecompositionPlan` schema, child body artifact contract, checked-in active-controller apply helper, and docs/tests. Worker output, validator success, `.refactor-loop/host.env`, prompt body, or the first `consensus:decompose` are not apply authorization sources. Only plan-level judge artifact structured fields + validated plan digest/proof + #191 owner + live parent open/tracking + sentinel idempotency may let #396 project the named `controller_action="apply_issue_decomposition_plan"`. Do not call or suggest worker GitHub lifecycle actions, do not add a public issue factory, do not let `wakeup_plan.py` project generic decompose actions/status, and do not close/reopen/edit the parent issue.
-
-<!-- legacy-section-headings: implement-flow-redline -->
-<!--
-## 流程
-$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt
-$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md
-## Marker emission allowlist
-## 红线
-$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt
-$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md
-## 附录
--->
 
 ## Procedure
 
