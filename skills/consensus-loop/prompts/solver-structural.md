@@ -23,7 +23,7 @@ Refactor (iter364/issue364):
    - If issue body/comments cite files absent from the current checkout, look for a read-only source locator in that source: `git show <ref>:<path>`, raw URL, `gh api`, or a host-provided path from the explicit host-owned file named by `CONSENSUS_RND_HOST_ENV`. Use it only to read source; must not fetch/checkout/switch/merge/rebase/reset; must not create source worktree/add-dir. If the locator is missing or invalid and the current checkout cannot verify the cited source, emit `SOLVER_DONE:structural:escalate:no-plan:source-location-missing-or-invalid` instead of a generic no-plan.
    - `audit-iter-${ITERATION}.md if present` is an audit-backed source only when the current `WORK_UNIT_SOURCE_REF` / `source_ref` points to it; do not fabricate audit artifacts.
 3. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` — primary rules that frame the violation; `$REPO_ROOT/AGENTS.md` — supporting rules when present.
-4. `$REPO_ROOT/$REPO_ROOT 的架构/词汇文档(若有)` — repo vocabulary (Module / Interface / Depth / Seam / Adapter / Leverage / Locality).
+4. `$REPO_ROOT/<repo architecture/vocabulary docs if present>` — repo vocabulary (Module / Interface / Depth / Seam / Adapter / Leverage / Locality).
 5. The actual source files cited by the current work-unit source (issue body/comments, manual-issue reshaped fields, local artifact, audit evidence, or repo rules). Open them; verify line numbers.
 
 ## Procedure
@@ -122,18 +122,18 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - Follow ${HOST_WORK_LANGUAGE} per SKILL.md; do not add a mandatory parallel English section.
 - No filler. Numbers > adjectives.
 
-## GitHub post(强制)
+## GitHub post (mandatory)
 
-After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `${HOST_WORK_LANGUAGE}`**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 
 
 ---
 
-## AI 内容标识符(强制)
+## AI content identifier (mandatory)
 
-所有 AI 生成的 GitHub issue/PR comment、PR body、commit message、push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
+Every AI-authored GitHub issue/PR comment, PR body, commit message, or push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 

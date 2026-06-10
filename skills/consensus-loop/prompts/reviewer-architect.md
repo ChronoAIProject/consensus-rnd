@@ -12,7 +12,7 @@ You are **one of N independent reviewers**; you do not see the other reviewers' 
 
 1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` — full text. The PR must not regress any clause.
 2. `$REPO_ROOT/AGENTS.md` — supporting rules when present.
-3. PR diff: `cd $REPO_ROOT && git diff origin/${BASE_BRANCH}...origin/${HEAD_BRANCH} -- $SOURCE_GLOBS '$REPO_ROOT 的架构/词汇文档(若有)'` **(three dots — symmetric-from-merge-base; two dots would mis-flag dev's new commits as PR deletions)**
+3. PR diff: `cd $REPO_ROOT && git diff origin/${BASE_BRANCH}...origin/${HEAD_BRANCH} -- $SOURCE_GLOBS '<repo architecture/vocabulary docs if present>'` **(three dots — symmetric-from-merge-base; two dots would mis-flag dev's new commits as PR deletions)**
 4. Cluster source (audit + implement summary): `${AUDIT_PATH}` and `${IMPLEMENT_SUMMARY_PATH}` if they exist (skip if not — some PRs are out-of-loop).
 
 ## Your checklist (architect angle only — other reviewers cover other angles)
@@ -82,18 +82,18 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - Don't edit any file outside `${REVIEW_OUTPUT_PATH}`.
 - No bilingual requirement here (this is an internal artifact consumed by controller).
 
-## GitHub post(强制)
+## GitHub post (mandatory)
 
-After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `${HOST_WORK_LANGUAGE}`**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 
 
 ---
 
-## AI 内容标识符(强制)
+## AI content identifier (mandatory)
 
-所有 AI 生成的 GitHub issue/PR comment、PR body、commit message、push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
+Every AI-authored GitHub issue/PR comment, PR body, commit message, or push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 

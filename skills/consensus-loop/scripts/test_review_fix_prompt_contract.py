@@ -19,7 +19,7 @@ class ReviewFixPromptContractTests(unittest.TestCase):
         self.assertIn("`${FIX_OUTPUT_PATH}`", text)
         self.assertIn(".refactor-loop/runs/", text)
         self.assertIn("FIX_BLOCKED:env-missing:FIX_OUTPUT_PATH", text)
-        self.assertIn("repo root `FIX_REPORT.md`", text)
+        self.assertIn("repo-root `FIX_REPORT.md`", text)
         self.assertNotIn("Record in `FIX_REPORT.md`", text)
         self.assertNotIn("Write FIX_REPORT", text)
 
