@@ -163,6 +163,18 @@ PROMPT_ARTIFACT_PROFILES = {
     "implementation-pr-artifact-repair.md": "marker-only-work-unit",
 }
 
+REFERENCE_FRAME_PROMPTS = (
+    "solver-minimal.md",
+    "solver-structural.md",
+    "solver-delete.md",
+    "meta-judge.md",
+    "reviewer-architect.md",
+    "reviewer-tests.md",
+    "reviewer-quality.md",
+    "implement.md",
+    "review-fix.md",
+)
+
 PROFILE_TERMINAL_MARKER_TOKENS = {
     "marker-only-work-unit": {
         "AUDIT_DONE",
@@ -314,6 +326,33 @@ class MarkerEmissionContractTests(unittest.TestCase):
                     profile_tokens,
                     f"{filename} allowlist tokens must fit profile {profile}",
                 )
+
+    def test_thought_heavy_prompts_require_reference_frame_harness(self) -> None:
+        for filename in REFERENCE_FRAME_PROMPTS:
+            with self.subTest(prompt=filename):
+                body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+
+                self.assertEqual(body.count("## Reference-frame harness"), 1)
+                self.assertIn("applicable mature theory, engineering principle, industry best practice", body)
+                self.assertIn("constraint framework", body)
+                self.assertIn("known-good shape", body)
+                self.assertIn("one short free-form note", body)
+                self.assertIn("`no applicable mature theory found`", body)
+
+    def test_reference_frame_harness_is_not_citation_or_authority_surface(self) -> None:
+        for filename in REFERENCE_FRAME_PROMPTS:
+            with self.subTest(prompt=filename):
+                body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+                harness = body.split("## Reference-frame harness", 1)[1].split("\n## ", 1)[0]
+
+                for boundary in [
+                    "not mandatory citation work",
+                    "not a literature search",
+                    "not a parsed schema field",
+                    "not marker data",
+                    "not lifecycle authority",
+                ]:
+                    self.assertIn(boundary, harness)
 
     def test_meta_judge_prompt_does_not_authorize_fresh_stalled_marker(self) -> None:
         # Refactor (issue-304): Old: meta-judge allowlist authorized a fresh

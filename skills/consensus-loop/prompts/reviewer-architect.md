@@ -15,6 +15,10 @@ You are **one of N independent reviewers**; you do not see the other reviewers' 
 3. PR diff: `cd $REPO_ROOT && git diff origin/${BASE_BRANCH}...origin/${HEAD_BRANCH} -- $SOURCE_GLOBS '<repo architecture/vocabulary docs if present>'` **(three dots — symmetric-from-merge-base; two dots would mis-flag dev's new commits as PR deletions)**
 4. Cluster source (audit + implement summary): `${AUDIT_PATH}` and `${IMPLEMENT_SUMMARY_PATH}` if they exist (skip if not — some PRs are out-of-loop).
 
+## Reference-frame harness
+
+Before approving, commenting, or rejecting, run a lightweight reference-frame pass: identify the applicable mature theory, engineering principle, industry best practice, or constraint framework for your review angle, then compare the PR evidence against that known-good shape. Surface one short free-form note naming the frame, or say `no applicable mature theory found`. This is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for an honest comment or reject outcome.
+
 ## Your checklist (architect angle only — other reviewers cover other angles)
 
 - [ ] **Old/New pattern comment policy**: read `${HOST_REFACTOR_COMMENT_POLICY}`. missing/empty/default/`none` normalizes to `none`: absence is compliant, rationale belongs in external artifacts, and new Old/New/iteration refactor-history source comments must be rejected. Explicit `self-doc-comment` is a downstream compatibility opt-in: each refactored type/method follows `${HOST_COMMENT_RULE}` for English-only refactor self-documentation, or surrounding file comment style when `${HOST_COMMENT_RULE}` is empty; if the file type cannot carry comments, accept a documented not-applicable reason. Any other value is invalid and fail-closed; do not guess.
