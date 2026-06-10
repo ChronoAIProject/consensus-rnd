@@ -895,7 +895,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "pr list" ]]; then
-                  if [[ "$args" == *"--base review"* && "$args" == *"--json number,headRefName,baseRefName,headRefOid"* ]]; then
+                  if [[ "$args" == *"--state open"* && "$args" == *"--base review"* && "$args" == *"--json number,headRefName,baseRefName,headRefOid"* ]]; then
                     if [[ -n "${WAKEUP_PLAN_GH_RELEASE_ROLLUP_LOG:-}" ]]; then
                       printf '%s\n' "$args" >> "$WAKEUP_PLAN_GH_RELEASE_ROLLUP_LOG"
                     fi
@@ -910,6 +910,26 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '{"not":"a-list"}\n'
                         ;;
                       release_rollup_live_unavailable)
+                        exit 42
+                        ;;
+                      *)
+                        printf '[]\n'
+                        ;;
+                    esac
+                    exit 0
+                  fi
+                  if [[ "$args" == *"--state merged"* && "$args" == *"--base review"* && "$args" == *"--head rollup/integration-sha"* && "$args" == *"--json number,state,headRefName,headRefOid,baseRefName"* ]]; then
+                    if [[ -n "${WAKEUP_PLAN_GH_RELEASE_ROLLUP_LOG:-}" ]]; then
+                      printf '%s\n' "$args" >> "$WAKEUP_PLAN_GH_RELEASE_ROLLUP_LOG"
+                    fi
+                    case "$fixture" in
+                      release_rollup_merged_satisfied)
+                        printf '[{"number":792,"state":"MERGED","baseRefName":"review","headRefName":"rollup/integration-sha","headRefOid":"integration-sha"}]\n'
+                        ;;
+                      release_rollup_merged_changed_sha)
+                        printf '[{"number":792,"state":"MERGED","baseRefName":"review","headRefName":"rollup/old-integration-sha","headRefOid":"old-integration-sha"}]\n'
+                        ;;
+                      release_rollup_merged_probe_failure)
                         exit 42
                         ;;
                       *)
@@ -5150,7 +5170,70 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         actions = [action for action in plan_without_matching_pr["actions"] if action["kind"] == "release-rollup-needed"]
         self.assertEqual(1, len(actions))
         self.assertEqual("open_release_rollup_pr_from_action", actions[0]["controller_action"])
-        self.assertEqual(1, len(live_probe_log.read_text(encoding="utf-8").splitlines()))
+        probe_calls = live_probe_log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(2, len(probe_calls))
+        self.assertIn("pr list --state open --base review", probe_calls[0])
+        self.assertIn("pr list --state merged --base review --head rollup/integration-sha", probe_calls[1])
+
+    def test_wakeup_plan_release_rollup_suppresses_event_when_merged_rollup_head_matches_integration_sha(self) -> None:
+        self.append_release_rollup_event()
+        live_probe_log = self.repo / "release-rollup-live-pr-list.log"
+
+        plan, _stdout = self.run_plan_with_env(
+            {"WAKEUP_PLAN_GH_RELEASE_ROLLUP_LOG": str(live_probe_log)},
+            fixture="release_rollup_merged_satisfied",
+        )
+
+        self.assertFalse([action for action in plan["actions"] if action["kind"] == "release-rollup-needed"])
+        probe_calls = live_probe_log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(2, len(probe_calls))
+        self.assertIn("pr list --state open --base review", probe_calls[0])
+        self.assertIn("pr list --state merged --base review --head rollup/integration-sha", probe_calls[1])
+        self.assertIn("--json number,state,headRefName,headRefOid,baseRefName", probe_calls[1])
+
+    def test_wakeup_plan_release_rollup_projects_when_merged_rollup_head_is_different_sha(self) -> None:
+        self.append_release_rollup_event(integration_sha="integration-sha")
+        body_file = self.repo / ".refactor-loop" / "runs" / "release-rollup-pr-body.md"
+        body_file.parent.mkdir(parents=True, exist_ok=True)
+        body_file.write_text(
+            "## rollup\n\nbody\n\n⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        live_probe_log = self.repo / "release-rollup-live-pr-list.log"
+
+        plan, _stdout = self.run_plan_with_env(
+            {"WAKEUP_PLAN_GH_RELEASE_ROLLUP_LOG": str(live_probe_log)},
+            fixture="release_rollup_merged_changed_sha",
+        )
+
+        actions = [action for action in plan["actions"] if action["kind"] == "release-rollup-needed"]
+        self.assertEqual(1, len(actions))
+        self.assertEqual("open_release_rollup_pr_from_action", actions[0]["controller_action"])
+        probe_calls = live_probe_log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(2, len(probe_calls))
+        self.assertIn("pr list --state merged --base review --head rollup/integration-sha", probe_calls[1])
+
+    def test_wakeup_plan_release_rollup_merged_probe_failure_fails_open(self) -> None:
+        self.append_release_rollup_event()
+        body_file = self.repo / ".refactor-loop" / "runs" / "release-rollup-pr-body.md"
+        body_file.parent.mkdir(parents=True, exist_ok=True)
+        body_file.write_text(
+            "## rollup\n\nbody\n\n⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        live_probe_log = self.repo / "release-rollup-live-pr-list.log"
+
+        plan, _stdout = self.run_plan_with_env(
+            {"WAKEUP_PLAN_GH_RELEASE_ROLLUP_LOG": str(live_probe_log)},
+            fixture="release_rollup_merged_probe_failure",
+        )
+
+        actions = [action for action in plan["actions"] if action["kind"] == "release-rollup-needed"]
+        self.assertEqual(1, len(actions))
+        self.assertEqual("open_release_rollup_pr_from_action", actions[0]["controller_action"])
+        probe_calls = live_probe_log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(2, len(probe_calls))
+        self.assertIn("pr list --state merged --base review --head rollup/integration-sha", probe_calls[1])
 
     def test_release_rollup_satisfied_probe_timeout_fails_open(self) -> None:
         event = {
