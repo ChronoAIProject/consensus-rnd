@@ -35,6 +35,7 @@ from codex_refactor_loop.runtime_retention import RuntimeRetentionResult
 
 DAEMON_NAMES = restart_managed_daemon_names()
 FAKE_COMMAND = (sys.executable, "-m", "codex_refactor_loop.fake_daemon")
+MACOS_FRAMEWORK_PYTHON = "/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
 
 
 @dataclass
@@ -174,6 +175,24 @@ class FakeRestartDaemonRuntime:
             *target.command,
         )
         return " ".join(parts)
+
+    def framework_python_wrapper_command(self, ctx: LoopContext, name: str, command: tuple[str, ...]) -> str:
+        target = restart.daemon_target(ctx, name, command)
+        framework_child = (MACOS_FRAMEWORK_PYTHON, *command[1:])
+        parts = (
+            MACOS_FRAMEWORK_PYTHON,
+            "-c",
+            restart.WRAPPER_CODE,
+            name,
+            str(ctx.repo_root),
+            str(target.pid_file),
+            str(target.died_file),
+            *framework_child,
+        )
+        return " ".join(parts)
+
+    def framework_python_child_command(self, command: tuple[str, ...]) -> str:
+        return " ".join((MACOS_FRAMEWORK_PYTHON, *command[1:]))
 
 
 class RestartDaemonsBehaviorTests(unittest.TestCase):
@@ -973,6 +992,41 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
         self.assertEqual((444,), live)
 
+    def test_restart_wrapper_matching_accepts_macos_framework_python_launcher(self) -> None:
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        command = self.runtime.framework_python_wrapper_command(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        inventory = DaemonProcessInventory((DaemonProcess(445, command, 1),))
+        self.runtime.live_pids.add(445)
+
+        live = inventory.live_restart_wrappers(
+            name="phase9_router_daemon",
+            repo_root=self.ctx.repo_root,
+            pid_file=target.pid_file,
+            died_file=target.died_file,
+            command=target.command,
+            is_alive=self.runtime.pid_alive,
+        )
+
+        self.assertEqual((445,), live)
+
+    def test_restart_wrapper_matching_rejects_non_python_launcher(self) -> None:
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        command = self.runtime.framework_python_wrapper_command(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        command = command.replace(MACOS_FRAMEWORK_PYTHON, "/usr/bin/ruby", 1)
+        inventory = DaemonProcessInventory((DaemonProcess(446, command, 1),))
+        self.runtime.live_pids.add(446)
+
+        live = inventory.live_restart_wrappers(
+            name="phase9_router_daemon",
+            repo_root=self.ctx.repo_root,
+            pid_file=target.pid_file,
+            died_file=target.died_file,
+            command=target.command,
+            is_alive=self.runtime.pid_alive,
+        )
+
+        self.assertEqual((), live)
+
     def test_restart_wrapper_matching_rejects_unknown_daemon_even_with_matching_shape(self) -> None:
         command = self.runtime.canonical_command(self.ctx, "not_allowlisted", FAKE_COMMAND)
         target = restart.daemon_target(self.ctx, "concurrency_monitor", FAKE_COMMAND)
@@ -999,6 +1053,50 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual(old_pid, self.read_pid("concurrency_monitor"))
         self.assert_start_count("concurrency_monitor", 1)
         self.assertEqual([], self.runtime.terminated)
+
+    def test_fresh_singleton_skips_with_macos_framework_python_wrapper_and_child(self) -> None:
+        target = restart.daemon_target(self.ctx, "concurrency_monitor", FAKE_COMMAND)
+        pid = 505050
+        target.pid_file.parent.mkdir(parents=True, exist_ok=True)
+        target.pid_file.write_text(f"{pid}\n", encoding="utf-8")
+        target.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
+        target.heartbeat_file.write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+        restart.DaemonLaunchFingerprint.current(self.ctx, "concurrency_monitor", target.command).write(target.fingerprint_file)
+        self.runtime.live_pids.update({pid, 505051})
+        self.runtime.inventory_override = DaemonProcessInventory(
+            (
+                DaemonProcess(pid, self.runtime.framework_python_wrapper_command(self.ctx, "concurrency_monitor", FAKE_COMMAND), 1),
+                DaemonProcess(505051, self.runtime.framework_python_child_command(target.command), pid),
+            )
+        )
+
+        helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
+        helper.start_daemon("concurrency_monitor", FAKE_COMMAND)
+
+        self.assertEqual(pid, self.read_pid("concurrency_monitor"))
+        self.assert_start_count("concurrency_monitor", 0)
+        self.assertEqual([], self.runtime.terminated)
+
+    def test_macos_framework_python_orphan_child_lock_holder_is_reaped_and_restarted_once(self) -> None:
+        self.run_helper()
+        old_wrapper_pid = self.read_pid("phase9_router_daemon")
+        orphan_child_pid = 525252
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        (self.repo / ".refactor-loop" / "phase9-router.lock").write_text(f"pid={orphan_child_pid}\n", encoding="utf-8")
+        self.runtime.live_pids.discard(old_wrapper_pid)
+        self.runtime.wrapper_commands.pop(old_wrapper_pid, None)
+        self.runtime.live_pids.add(orphan_child_pid)
+        self.runtime.inventory_override = DaemonProcessInventory(
+            (DaemonProcess(orphan_child_pid, self.runtime.framework_python_child_command(target.command), 1),)
+        )
+
+        helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
+        helper.start_daemon("phase9_router_daemon", FAKE_COMMAND)
+
+        new_pid = self.read_pid("phase9_router_daemon")
+        self.assertEqual([(orphan_child_pid, self.config.stop_grace_seconds)], self.runtime.terminated)
+        self.assertNotEqual(old_wrapper_pid, new_pid)
+        self.assert_start_count("phase9_router_daemon", 2)
 
     def test_non_owner_restart_daemons_writes_noop_and_starts_no_daemons(self) -> None:
         decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="restart-daemons", lease_id="lease", expires_at="")
@@ -1128,6 +1226,38 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertNotIn("orphan_managed_child_pids", payload)
         self.assertEqual(old_pid, self.read_pid("phase9_router_daemon"))
         self.assert_start_count("phase9_router_daemon", 1)
+
+    def test_daemon_status_reports_running_for_macos_framework_python_wrapper_and_child(self) -> None:
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        pid = 606060
+        child_pid = 606061
+        target.pid_file.parent.mkdir(parents=True, exist_ok=True)
+        target.pid_file.write_text(f"{pid}\n", encoding="utf-8")
+        target.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
+        target.heartbeat_file.write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+        restart.DaemonLaunchFingerprint.current(self.ctx, "phase9_router_daemon", target.command).write(target.fingerprint_file)
+        (self.repo / ".refactor-loop" / "state").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+        self.runtime.live_pids.update({pid, child_pid})
+        inventory = DaemonProcessInventory(
+            (
+                DaemonProcess(pid, self.runtime.framework_python_wrapper_command(self.ctx, "phase9_router_daemon", FAKE_COMMAND), 1),
+                DaemonProcess(child_pid, self.runtime.framework_python_child_command(target.command), pid),
+            )
+        )
+
+        report = self.collect_status_with_fake_allowlist(inventory)
+
+        daemon = next(item for item in report.daemons if item.name == "phase9_router_daemon")
+        payload = daemon.to_json()
+        self.assertEqual("running", daemon.status)
+        self.assertEqual([child_pid], payload["managed_child_pids"])
+        self.assertEqual([child_pid], payload["canonical_child_pids"])
+        self.assertEqual([], payload["orphan_child_pids"])
+        self.assertEqual([], payload["bounded_lock_holder_pids"])
 
     def test_daemon_status_resolves_static_allowlist_targets(self) -> None:
         targets = daemon_targets(self.ctx)
