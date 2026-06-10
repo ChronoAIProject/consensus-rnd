@@ -828,15 +828,28 @@ class Phase9Router:
         if not self.pending_events_path.exists():
             return logs
         try:
-            content = self.pending_events_path.read_text(encoding="utf-8", errors="replace")
+            lines = self.pending_events_path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             return logs
-        for line in content.splitlines():
+        from ..wakeup_plan import (
+            archived_invalid_harness_spawn_intent_markers,
+            harness_spawn_intent_line_is_archived_invalid,
+            live_valid_harness_spawn_intent,
+        )
+
+        archived_invalid_markers = archived_invalid_harness_spawn_intent_markers(lines)
+        for line in lines:
             if " HARNESS_SPAWN_INTENT " not in line:
+                continue
+            if harness_spawn_intent_line_is_archived_invalid(line, None, archived_invalid_markers):
                 continue
             try:
                 event = json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
             except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if not live_valid_harness_spawn_intent(self.ctx, line, event, archived_invalid_markers):
                 continue
             log = event.get("log")
             if isinstance(log, str):
