@@ -7,6 +7,8 @@ import json
 import shutil
 import tempfile
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -781,6 +783,58 @@ class PatrolInspectorTests(unittest.TestCase):
                         main(["--daemon", "--interval-seconds", "1"])
 
         self.assertEqual([("patrol_inspector_daemon", self.ctx.repo_root)], FakeLease.calls)
+
+    def test_daemon_tick_failure_logs_heartbeat_sleeps_and_continues_without_publication(self) -> None:
+        class FakeLease:
+            instance = None
+
+            def __init__(self, _name: object, _repo_root: object) -> None:
+                self.beats = 0
+                self.sleeps: list[int] = []
+                FakeLease.instance = self
+
+            def beat(self) -> None:
+                self.beats += 1
+
+            def sleep_with_lease(self, seconds: int) -> None:
+                self.sleeps.append(seconds)
+                if len(self.sleeps) >= 2:
+                    raise KeyboardInterrupt()
+
+        class FakePublisher:
+            instance = None
+
+            def __init__(self, _ctx: LoopContext) -> None:
+                self.published: list[tuple[str, str, str]] = []
+                FakePublisher.instance = self
+
+            def publish(self, *, fingerprint: str, title: str, body: str):
+                self.published.append((fingerprint, title, body))
+                return type("Issue", (), {"number": 1})()
+
+        decisions = type(
+            "Decision",
+            (),
+            {"allowed": True, "owner_device": "device", "status": "owner", "action": "patrol-inspector", "lease_id": "", "expires_at": ""},
+        )()
+        stderr = StringIO()
+        with patch("codex_refactor_loop.patrol.require_active_controller", return_value=decisions):
+            with patch("codex_refactor_loop.patrol.DaemonHeartbeatLease", FakeLease):
+                with patch("codex_refactor_loop.patrol.PatrolIssuePublisher", FakePublisher):
+                    with patch("codex_refactor_loop.patrol.LoopContext.load", return_value=self.ctx):
+                        with patch("codex_refactor_loop.patrol.load_github_items_with_status", side_effect=[([], False), ([], True)]) as load_items:
+                            with redirect_stderr(stderr):
+                                with self.assertRaises(KeyboardInterrupt):
+                                    main(["--daemon", "--interval-seconds", "3"])
+
+        self.assertEqual(2, load_items.call_count)
+        self.assertIsNotNone(FakeLease.instance)
+        self.assertEqual(2, FakeLease.instance.beats)
+        self.assertEqual([3, 3], FakeLease.instance.sleeps)
+        self.assertIsNotNone(FakePublisher.instance)
+        self.assertEqual([], FakePublisher.instance.published)
+        self.assertIn("patrol-inspector daemon tick failed: RuntimeError:", stderr.getvalue())
+        self.assertIn("loaded_ok_false", stderr.getvalue())
 
 
 if __name__ == "__main__":
