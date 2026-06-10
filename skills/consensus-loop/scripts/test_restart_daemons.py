@@ -86,6 +86,19 @@ class FakeChild:
         self.polls = [137]
 
 
+class AdvancingClock:
+    def __init__(self, now: float) -> None:
+        self.now = now
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
 class FakeRestartDaemonRuntime:
     def __init__(self, now: int = 1_700_000_000) -> None:
         self._now = now
@@ -506,6 +519,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         heartbeat = self.heartbeat_path("comment-monitor")
         heartbeat.parent.mkdir(parents=True, exist_ok=True)
         heartbeat.write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+        clock = AdvancingClock(float(self.runtime.now()))
         launches: list[tuple[str, ...]] = []
         children = [FakeChild([7]), FakeChild([None])]
 
@@ -528,23 +542,23 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                 "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
             },
             popen=popen,
-            sleeper=lambda _seconds: None,
-            clock=lambda: self.runtime.now(),
+            sleeper=clock.sleep,
+            clock=clock,
             getpid=lambda: 12345,
             max_supervision_cycles=2,
         )
 
         self.assertEqual([FAKE_COMMAND, FAKE_COMMAND], launches)
+        self.assertEqual([1.0, 1.0], clock.sleeps)
         died = (self.repo / ".refactor-loop" / "logs" / "comment-monitor.died").read_text(encoding="utf-8")
         self.assertIn("child exited exit=7; restarting same command", died)
         self.assertEqual(0, children[0].terminated)
         self.assertEqual(f"{self.runtime.now()}\n", heartbeat.read_text(encoding="utf-8"))
 
-    def test_wrapper_self_heals_stale_missing_and_malformed_heartbeat_without_writing_it(self) -> None:
+    def test_wrapper_graces_inherited_stale_and_missing_heartbeat_until_current_child_window_expires(self) -> None:
         cases = {
             "stale": f"{self.runtime.now() - 120}\n",
             "missing": None,
-            "malformed": "not-a-timestamp\n",
         }
         for case, heartbeat_text in cases.items():
             with self.subTest(case=case):
@@ -553,6 +567,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                 if heartbeat_text is not None:
                     heartbeat.parent.mkdir(parents=True, exist_ok=True)
                     heartbeat.write_text(heartbeat_text, encoding="utf-8")
+                clock = AdvancingClock(float(self.runtime.now()))
                 launches: list[tuple[str, ...]] = []
                 children = [FakeChild([None]), FakeChild([None])]
 
@@ -560,7 +575,56 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                     launches.append(command)
                     if len(launches) == 2:
                         heartbeat.parent.mkdir(parents=True, exist_ok=True)
-                        heartbeat.write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+                        heartbeat.write_text(f"{int(clock())}\n", encoding="utf-8")
+                    return children[len(launches) - 1]
+
+                restart._run_restart_wrapper(
+                    [
+                        "phase9_router_daemon",
+                        str(target_root),
+                        str(target_root / ".refactor-loop" / "locks" / "phase9_router_daemon.pid"),
+                        str(target_root / ".refactor-loop" / "logs" / "phase9_router_daemon.died"),
+                        *FAKE_COMMAND,
+                    ],
+                    env={
+                        "RESTART_DAEMON_HEARTBEAT_FILE": str(heartbeat),
+                        "RESTART_DAEMON_HEARTBEAT_INTERVAL": "1",
+                        "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": "3",
+                        "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
+                    },
+                    popen=popen,
+                    sleeper=clock.sleep,
+                    clock=clock,
+                    getpid=lambda: 22222,
+                    max_supervision_cycles=5,
+                )
+
+                self.assertEqual([FAKE_COMMAND, FAKE_COMMAND], launches)
+                self.assertEqual([1.0, 1.0, 1.0, 1.0, 1.0], clock.sleeps)
+                self.assertEqual(1, children[0].terminated)
+                self.assertEqual([1], children[0].wait_timeouts)
+                died = (target_root / ".refactor-loop" / "logs" / "phase9_router_daemon.died").read_text(encoding="utf-8")
+                self.assertIn("terminating child and restarting same command", died)
+                self.assertEqual(f"{self.runtime.now() + 4}\n", heartbeat.read_text(encoding="utf-8"))
+
+    def test_wrapper_restarts_immediately_for_malformed_and_future_heartbeat_without_writing_it(self) -> None:
+        cases = {
+            "malformed": "not-a-timestamp\n",
+            "future": f"{self.runtime.now() + 120}\n",
+        }
+        for case, heartbeat_text in cases.items():
+            with self.subTest(case=case):
+                target_root = self.repo / case
+                heartbeat = target_root / ".refactor-loop" / "heartbeats" / "phase9_router_daemon.ts"
+                heartbeat.parent.mkdir(parents=True, exist_ok=True)
+                heartbeat.write_text(heartbeat_text, encoding="utf-8")
+                original_heartbeat = heartbeat.read_text(encoding="utf-8")
+                clock = AdvancingClock(float(self.runtime.now()))
+                launches: list[tuple[str, ...]] = []
+                children = [FakeChild([None]), FakeChild([None])]
+
+                def popen(command: tuple[str, ...]) -> FakeChild:
+                    launches.append(command)
                     return children[len(launches) - 1]
 
                 restart._run_restart_wrapper(
@@ -578,23 +642,28 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                         "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
                     },
                     popen=popen,
-                    sleeper=lambda _seconds: None,
-                    clock=lambda: self.runtime.now(),
+                    sleeper=clock.sleep,
+                    clock=clock,
                     getpid=lambda: 22222,
-                    max_supervision_cycles=3 if case == "missing" else 2,
+                    max_supervision_cycles=1,
                 )
 
                 self.assertEqual([FAKE_COMMAND, FAKE_COMMAND], launches)
+                self.assertEqual([1.0], clock.sleeps)
                 self.assertEqual(1, children[0].terminated)
                 self.assertEqual([1], children[0].wait_timeouts)
                 died = (target_root / ".refactor-loop" / "logs" / "phase9_router_daemon.died").read_text(encoding="utf-8")
-                self.assertIn("terminating child and restarting same command", died)
-                self.assertEqual(f"{self.runtime.now()}\n", heartbeat.read_text(encoding="utf-8"))
+                if case == "future":
+                    self.assertIn("heartbeat-future; terminating child and restarting same command", died)
+                else:
+                    self.assertIn("heartbeat-malformed; terminating child and restarting same command", died)
+                self.assertEqual(original_heartbeat, heartbeat.read_text(encoding="utf-8"))
 
     def test_wrapper_logs_and_aborts_when_child_cannot_be_killed(self) -> None:
         heartbeat = self.heartbeat_path("phase9_router_daemon")
         heartbeat.parent.mkdir(parents=True, exist_ok=True)
         heartbeat.write_text(f"{self.runtime.now() - 120}\n", encoding="utf-8")
+        clock = AdvancingClock(float(self.runtime.now()))
         launches: list[tuple[str, ...]] = []
         child = FakeChild(
             [None],
@@ -618,21 +687,21 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                 env={
                     "RESTART_DAEMON_HEARTBEAT_FILE": str(heartbeat),
                     "RESTART_DAEMON_HEARTBEAT_INTERVAL": "1",
-                    "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": "30",
+                    "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": "1",
                     "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
                 },
                 popen=popen,
-                sleeper=lambda _seconds: None,
-                clock=lambda: self.runtime.now(),
+                sleeper=clock.sleep,
+                clock=clock,
                 getpid=lambda: 33333,
-                max_supervision_cycles=1,
+                max_supervision_cycles=2,
             )
 
         self.assertEqual([FAKE_COMMAND], launches)
         self.assertEqual(1, child.terminated)
         self.assertEqual(1, child.killed)
         died = (self.repo / ".refactor-loop" / "logs" / "phase9_router_daemon.died").read_text(encoding="utf-8")
-        self.assertIn("heartbeat-stale:120s; terminating child and restarting same command", died)
+        self.assertIn("heartbeat-stale:121s; terminating child and restarting same command", died)
         self.assertIn("child terminate failed reason=RuntimeError('term denied'); attempting kill", died)
         self.assertIn("child kill failed reason=RuntimeError('kill denied'); aborting wrapper restart", died)
 
