@@ -46,7 +46,7 @@ ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "AUTHORITY_PATH_RE", "validator regex recognizes Chinese authority labels in GitHub bodies"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "INLINE_ARTIFACT_DETAILS_RE", "validator regex recognizes zh inline artifact details"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/runtime_copy.py", "COPY_CATALOG", "explicit zh runtime copy catalog for host work language"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "CANONICAL_BODY", "project-rules fixed point text is intentionally Chinese host-facing policy"),
+    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "ZH_COMPATIBILITY_BODY", "project-rules fixed point text is the explicit zh compatibility payload"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "OLD_CANONICAL_BODY", "legacy project-rules fixed point text is intentionally Chinese host-facing policy"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/closed_label_reconciler.py", "comment", "#238 reconciliation refactor self-documents per review gate policy"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/closed_phase_labels.py", "comment", "#238 phase helper refactor self-documents per review gate policy"),
