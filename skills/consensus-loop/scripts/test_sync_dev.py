@@ -24,8 +24,10 @@ from codex_refactor_loop.sync.dev import (
     dispatch_codex_resolve,
     load_dev_sync_config,
     merge_in_progress,
+    rebase_in_progress,
     run_dev_sync_reconcile_tick,
 )
+from codex_refactor_loop.sync.operations import IntegrationSyncOperation, write_operation_artifact
 
 
 SYNC_DEV = SCRIPT_DIR / "codex_refactor_loop" / "sync" / "dev.py"
@@ -53,6 +55,7 @@ class FakeGit:
         integration_ref_exists: bool = True,
         dirty: bool = False,
         unresolved: bool = False,
+        rebase_unresolved: bool | None = None,
         ff_fails: bool = False,
         head_rev_parse_fails: bool = False,
     ) -> None:
@@ -74,6 +77,7 @@ class FakeGit:
         self.integration_ref_exists = integration_ref_exists
         self.dirty = dirty
         self.unresolved = unresolved
+        self.rebase_unresolved = rebase_unresolved
         self.ff_fails = ff_fails
         self.head_rev_parse_fails = head_rev_parse_fails
         self.commands: list[list[str]] = []
@@ -117,7 +121,8 @@ class FakeGit:
         elif cmd[:3] == ["git", "diff", "--cached"]:
             returncode = 0
         elif cmd[:4] == ["git", "diff", "--name-only", "--diff-filter=U"]:
-            stdout = "conflict.txt\n" if self.unresolved else ""
+            unresolved = self.unresolved if self.rebase_unresolved is None else self.rebase_unresolved
+            stdout = "conflict.txt\n" if unresolved else ""
         elif cmd[:3] == ["git", "merge-base", "--is-ancestor"]:
             returncode = 0 if (self.merge_base_adopted if cmd[3] == "origin/dev" else self.old_head_is_ancestor) else 1
         elif cmd[:3] == ["git", "merge", "--ff-only"] and self.ff_fails:
@@ -159,6 +164,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
             logger=lambda _msg: None,
             ensure_worktree_fn=lambda: True,
             merge_detector=overrides.get("merge_detector", lambda _cwd: False),
+            rebase_detector=overrides.get("rebase_detector", lambda _cwd: False),
             dirty_detector=overrides.get("dirty_detector", lambda _cwd: False),
             resolver_in_flight=overrides.get("resolver_in_flight", lambda: False),
             resolver_dispatcher=overrides.get("resolver_dispatcher", lambda: None),
@@ -178,6 +184,23 @@ class SyncDevBehaviorTests(unittest.TestCase):
     def execution_jsons(self, status: str = "applied") -> list[dict]:
         paths = sorted((self.repo / ".refactor-loop" / "runs" / "integration-sync-executions").glob(f"*.{status}.json"))
         return [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+
+    def write_adoption_operation(self, *, expected_remote_sha: str = "remote-sha", ahead_count: int = 2) -> None:
+        write_operation_artifact(
+            self.repo,
+            IntegrationSyncOperation(
+                kind="adopt-merged-rollup",
+                integration_branch="auto-refact-dev",
+                review_base_branch="dev",
+                worktree_head="head-sha",
+                expected_remote_sha=expected_remote_sha,
+                old_rollup_head="old-head",
+                old_rollup_ahead_count=ahead_count,
+                pr_number=45,
+                evidence={"reason": "merged-rollup-adoption", "replay_count": ahead_count},
+                created_at="2026-05-27T00:00:00Z",
+            ),
+        )
 
     def test_clean_local_ahead_records_managed_adoption_event_without_push(self) -> None:
         fake = FakeGit(ahead=2)
@@ -372,6 +395,98 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertEqual([True], dispatched)
         self.assertEqual([], self.operation_jsons())
 
+    def test_unresolved_rebase_dispatches_existing_resolver_without_operation(self) -> None:
+        fake = FakeGit(rebase_unresolved=True)
+        rebase_state = self.worktree / ".git" / "rebase-merge"
+        rebase_state.mkdir(parents=True)
+        dispatched: list[bool] = []
+
+        self.daemon(
+            fake,
+            rebase_detector=lambda cwd: rebase_in_progress(cwd, fake),
+            resolver_in_flight=lambda: False,
+            resolver_dispatcher=lambda: dispatched.append(True),
+        ).tick()
+
+        self.assertEqual([True], dispatched)
+        self.assertEqual([], self.operation_jsons())
+
+    def test_resolved_adoption_rebase_emits_typed_continuation_only(self) -> None:
+        fake = FakeGit(replay_count=2)
+        rebase_state = self.worktree / ".git" / "rebase-merge"
+        rebase_state.mkdir(parents=True)
+        self.write_adoption_operation(ahead_count=2)
+
+        self.daemon(fake, rebase_detector=lambda cwd: rebase_in_progress(cwd, fake), resolver_in_flight=lambda: False).tick()
+
+        operations = self.operation_jsons()
+        self.assertEqual(["adopt-merged-rollup", "continue-resolved-rollup-adoption-rebase"], [op["kind"] for op in operations])
+        continuation = operations[1]
+        self.assertEqual("old-head", continuation["old_rollup_head"])
+        self.assertEqual(2, continuation["old_rollup_ahead_count"])
+        self.assertFalse(any(command[:3] == ["git", "merge", "--continue"] for command in fake.commands))
+        self.assertIn(["git", "rebase", "--continue"], fake.commands)
+
+    def test_stale_or_missing_adoption_rebase_is_pending_only(self) -> None:
+        for label, writer in (
+            ("missing", lambda: None),
+            ("stale", lambda: self.write_adoption_operation(expected_remote_sha="old-remote")),
+        ):
+            with self.subTest(label=label):
+                self.tearDown()
+                self.setUp()
+                fake = FakeGit()
+                (self.worktree / ".git" / "rebase-merge").mkdir(parents=True)
+                writer()
+
+                self.daemon(fake, rebase_detector=lambda cwd: rebase_in_progress(cwd, fake), resolver_in_flight=lambda: False).tick()
+
+                self.assertEqual([], [op for op in self.operation_jsons() if op["kind"] == "continue-resolved-rollup-adoption-rebase"])
+                self.assertTrue(self.pending_events()[0].startswith("DEV_SYNC_PENDING:rollup-adoption-rebase-ambiguous:"))
+                self.assertFalse(any(command[:3] == ["git", "rebase", "--continue"] for command in fake.commands))
+
+    def test_malformed_newest_adoption_rebase_artifact_is_diagnostic_pending_only(self) -> None:
+        fake = FakeGit(replay_count=2)
+        (self.worktree / ".git" / "rebase-merge").mkdir(parents=True)
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (runs / "integration-sync-operation-adopt-merged-rollup-1000.json").write_text(
+            json.dumps(
+                {
+                    "authority": "integration-branch-git-allowlist",
+                    "created_at": "2026-05-27T00:00:00Z",
+                    "evidence": {"reason": "merged-rollup-adoption"},
+                    "executor": "dev_sync_daemon",
+                    "expected_remote_sha": "remote-sha",
+                    "integration_branch": "auto-refact-dev",
+                    "kind": "adopt-merged-rollup",
+                    "old_rollup_ahead_count": 2,
+                    "old_rollup_head": "old-head",
+                    "review_base_branch": "dev",
+                    "schema": "IntegrationSyncOperation",
+                    "worktree_head": "head-sha",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        newest = runs / "integration-sync-operation-adopt-merged-rollup-2000.json"
+        newest.write_text("{not-json\n", encoding="utf-8")
+
+        self.daemon(fake, rebase_detector=lambda cwd: rebase_in_progress(cwd, fake), resolver_in_flight=lambda: False).tick()
+
+        events = self.pending_events()
+        self.assertEqual(2, len(events))
+        self.assertEqual(
+            "DEV_SYNC_PENDING:rollup-adoption-operation-malformed:"
+            "integration-sync-operation-adopt-merged-rollup-2000.json:"
+            "IntegrationSyncOperationError:malformed json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)",
+            events[0],
+        )
+        self.assertEqual("DEV_SYNC_PENDING:rollup-adoption-rebase-ambiguous:missing-adoption-operation", events[1])
+        self.assertEqual([], list(runs.glob("integration-sync-operation-continue-resolved-rollup-adoption-rebase-*.json")))
+        self.assertFalse(any(command[:3] == ["git", "rebase", "--continue"] for command in fake.commands))
+
     def test_daemon_continue_resolved_merge_pushes(self) -> None:
         fake = FakeGit()
         merge_head = self.worktree / ".git" / "MERGE_HEAD"
@@ -383,6 +498,17 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertEqual("continue-resolved-merge", operation["kind"])
         self.assertIn(["git", "merge", "--continue"], fake.commands)
         self.assertIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
+
+    def test_stale_merge_msg_behavior_remains_merge_head_only(self) -> None:
+        merge_msg = self.worktree / ".git" / "MERGE_MSG"
+        merge_msg.parent.mkdir(parents=True, exist_ok=True)
+        merge_msg.write_text("stale message\n", encoding="utf-8")
+        fake = FakeGit(behind=3, merge_base_adopted=True, remote_sha="head-sha")
+
+        self.daemon(fake, merge_detector=lambda cwd: merge_in_progress(cwd, fake)).tick()
+
+        self.assertEqual("forward-sync-review-base", self.operation_jsons()[0]["kind"])
+        self.assertFalse(any(command[:3] == ["git", "merge", "--continue"] for command in fake.commands))
 
     def test_release_rollup_needed_appends_existing_pending_event_format(self) -> None:
         fake = FakeGit(merge_base_adopted=True, release_ahead=3, remote_sha="head-sha", review_base_sha="base-sha")
@@ -592,6 +718,22 @@ class SyncDevBehaviorTests(unittest.TestCase):
         merge_head.write_text("abc\n", encoding="utf-8")
         self.assertTrue(merge_in_progress(self.worktree, command_runner))
         self.assertTrue(all(command[-1] == "MERGE_HEAD" for command in commands))
+
+    def test_rebase_in_progress_uses_git_path_for_rebase_state(self) -> None:
+        rebase_merge = self.repo / ".git" / "worktrees" / "dev-sync" / "rebase-merge"
+        rebase_apply = self.repo / ".git" / "worktrees" / "dev-sync" / "rebase-apply"
+        rebase_merge.parent.mkdir(parents=True)
+        commands: list[list[str]] = []
+
+        def command_runner(cmd: list[str], cwd: Path | None = None, check: bool = False) -> subprocess.CompletedProcess[str]:
+            commands.append(cmd)
+            target = rebase_merge if cmd[-1] == "rebase-merge" else rebase_apply
+            return subprocess.CompletedProcess(cmd, 0, f"{target}\n", "")
+
+        self.assertFalse(rebase_in_progress(self.worktree, command_runner))
+        rebase_merge.mkdir()
+        self.assertTrue(rebase_in_progress(self.worktree, command_runner))
+        self.assertTrue(any(command[-1] == "rebase-merge" for command in commands))
 
     def test_conflict_resolver_prompt_stores_relative_paths_but_spawn_argv_absolute(self) -> None:
         worktree = self.repo / ".worktrees" / "dev-sync"

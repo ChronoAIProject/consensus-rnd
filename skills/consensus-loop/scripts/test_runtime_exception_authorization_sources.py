@@ -1426,15 +1426,28 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("integration-branch git allowlist", integration_entry)
         self.assertIn("worker-diff commit", integration_entry)
         self.assertIn("PR create, merge, close, or edit", integration_entry)
+        self.assertIn("#53 adoption rebase continuation", self.repo_rules)
         for token in (
             "reset --hard",
             "rebase --rebase-merges",
+            "git rebase --continue",
+            "continue-resolved-rollup-adoption-rebase",
+            "adoption artifact evidence",
+            "replay-integrity verification",
             "merge --ff-only|--no-ff",
             "git push HEAD:$INTEGRATION_BRANCH",
             "force-with-lease",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, integration_entry)
+                self.assertIn(token, self.repo_rules)
+        for token in (
+            "no generic rebase",
+            "rebase abort/cleanup",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, integration_entry)
+                self.assertIn(token, self.repo_rules)
 
         other_mirror_entries = self.mirror.replace(integration_entry, "")
         self.assertNotIn(expected_command, other_mirror_entries)
