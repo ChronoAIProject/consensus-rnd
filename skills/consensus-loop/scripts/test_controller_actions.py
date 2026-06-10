@@ -698,6 +698,20 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual([], push.mock_calls)
         self.assertTrue(self.actions._merge_in_progress(worktree))
 
+    def test_commit_push_resolved_pr_rebase_blocks_non_merge_dirty_state(self) -> None:
+        worktree, head_ref = self.init_rebase_repo(conflict=True)
+        owner_patch, gh_patch = self.patch_rebase_owner_and_gh(head_ref)
+        self.run_git(worktree, ["fetch", "origin"])
+        subprocess.run(["git", "-C", str(worktree), "merge", "--no-commit", "--no-ff", "origin/canonical-integration"], capture_output=True, text=True, check=False)
+        (worktree / "file.txt").write_text("resolved but unstaged\n", encoding="utf-8")
+        with owner_patch, gh_patch, mock.patch.object(self.actions, "safe_push") as push:
+            rc = self.actions.commit_push_resolved_pr_rebase(
+                {"target_kind": "PR", "target_number": 77, "head_ref": head_ref, "worktree": str(worktree), "source_marker": "REBASE_RESOLVE_DONE:77:ok"}
+            )
+        self.assertEqual(2, rc)
+        self.assertEqual([], push.mock_calls)
+        self.assertTrue(self.actions._merge_in_progress(worktree))
+
     def test_commit_push_resolved_pr_rebase_blocked_marker_aborts_and_surfaces_event(self) -> None:
         worktree, head_ref = self.init_rebase_repo(conflict=True)
         owner_patch, gh_patch = self.patch_rebase_owner_and_gh(head_ref)
