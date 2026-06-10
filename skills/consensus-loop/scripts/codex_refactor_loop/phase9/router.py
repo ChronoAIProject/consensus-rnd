@@ -799,7 +799,7 @@ class Phase9Router:
         if payload.startswith("propose:") and self._propose_unreadable_source_signature(payload) is not None:
             return "source-unreachable/no-actionable-source"
         if payload.startswith("propose:"):
-            return None
+            return payload
         return self._solver_verdict_text(marker)
 
     def _propose_unreadable_source_signature(self, payload: str) -> str | None:

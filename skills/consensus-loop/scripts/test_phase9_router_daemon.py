@@ -2046,6 +2046,25 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertNotIn("708-4-structural", ledger_keys)
         self.assertNotIn("708-4-delete", ledger_keys)
 
+    def test_phase9_router_stalled_routes_repeated_ordinary_propose_to_reflector(self) -> None:
+        for round_no in (1, 2, 3):
+            self.solver_triplet(issue=756, round_no=round_no, verdict="propose:same-implementation-framing")
+        self.write_ledger_key("756-1-judge")
+        self.write_ledger_key("756-2-judge")
+        self.write_log("phase9-issue756-r3-judge.log", "META_JUDGE_DONE:converge:round-3:same-framing")
+
+        self.router.tick()
+
+        reflector_commands = [
+            command for command in self.commands if "phase9-issue756-r3-reflector.log" in self.intent_text(command)
+        ]
+        self.assertEqual(len(reflector_commands), 1)
+        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
+        self.assertIn("756-3-reflector", ledger_keys)
+        self.assertNotIn("756-4-minimal", ledger_keys)
+        self.assertNotIn("756-4-structural", ledger_keys)
+        self.assertNotIn("756-4-delete", ledger_keys)
+
     def test_phase9_router_stalled_rejects_implementation_bearing_propose_changes(self) -> None:
         verdicts = {
             1: "propose:add-router-helper",
