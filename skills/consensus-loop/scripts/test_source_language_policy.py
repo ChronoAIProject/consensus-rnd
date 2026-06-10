@@ -48,7 +48,7 @@ SEMANTIC_ALLOWANCES: tuple[SemanticAllowance, ...] = (
     SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "AUTHORITY_PATH_RE", "named-read-compat-regex", "validator regex recognizes legacy zh authority labels in existing GitHub bodies"),
     SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "INLINE_ARTIFACT_DETAILS_RE", "named-read-compat-regex", "validator regex recognizes explicit zh inline artifact summaries"),
     SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/runtime_copy.py", "COPY_CATALOG", "explicit-zh-runtime-rendering", "explicit zh runtime copy catalog for host work language"),
-    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "CANONICAL_BODY", "project-rules-contract-anchor", "managed CLAUDE.md fixed-point contract text"),
+    SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "ZH_COMPATIBILITY_BODY", "project-rules-contract-anchor", "managed CLAUDE.md zh compatibility fixed-point contract text"),
     SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "OLD_CANONICAL_BODY", "project-rules-contract-anchor", "legacy managed fixed-point text used for read compatibility"),
     SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/closed_label_reconciler.py", "comment", "historical-self-doc-comment", "existing #238 self-documentation comment retained as historical source"),
     SemanticAllowance("skills/consensus-loop/scripts/codex_refactor_loop/closed_phase_labels.py", "comment", "historical-self-doc-comment", "existing #238 self-documentation comment retained as historical source"),
@@ -263,6 +263,8 @@ def prompt_line_category(line: str, *, in_fence: bool, in_html_comment: bool) ->
         return "blank"
     if stripped == "⟦AI:AUTO-LOOP⟧":
         return "sentinel-literal"
+    if stripped == "## Marker emission allowlist(强制)":
+        return "protocol-literal"
     if "MarkerEmissionContract" in stripped or re.search(r"\b[A-Z_]+_DONE:", stripped):
         return "protocol-literal"
     if "${HOST_WORK_LANGUAGE}" in stripped or "$HOST_WORK_LANGUAGE" in stripped:
@@ -441,6 +443,7 @@ class SourceLanguagePolicyTests(unittest.TestCase):
                 "Example 中文\n"
                 "```\n"
                 "<!-- historical 中文 -->\n"
+                "## Marker emission allowlist(强制)\n"
                 "Marker `IMPLEMENT_DONE:<cluster>:<status>` 中文\n"
                 "Final sentinel:\n"
                 "⟦AI:AUTO-LOOP⟧\n",
