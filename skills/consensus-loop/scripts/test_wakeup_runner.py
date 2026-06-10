@@ -641,6 +641,59 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertIn(f"WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{digest}:missing-queued_at", self.ctx.paths.pending_events.read_text(encoding="utf-8"))
         self.assertEqual(["open_release_rollup_pr_from_action"], [name for name, _payload in actions.calls])
 
+    def test_ordinary_tick_archives_capped_invalid_harness_batch_then_allows_work(self) -> None:
+        invalid_actions = []
+        pending_lines = []
+        for index in range(7):
+            raw_line = "2026-06-10T11:48:39Z HARNESS_SPAWN_INTENT " + json.dumps(
+                {
+                    "cd": str(self.repo),
+                    "command": "spawn-codex",
+                    "controller_action": "spawn_codex_harness_background",
+                    "intent_id": f"invalid-review:{index}",
+                    "log": f".refactor-loop/logs/invalid-review-{index}.log",
+                    "no_lifecycle_authority": True,
+                    "prompt": f".refactor-loop/prompts/invalid-review-{index}.md",
+                    "run_in_background_required": True,
+                    "source": "controller-actions",
+                    "task_id": f"invalid-review-{index}",
+                },
+                sort_keys=True,
+            )
+            pending_lines.append(raw_line)
+            digest = harness_spawn_intent_line_digest(raw_line)
+            invalid_actions.append(
+                {
+                    "kind": "harness-spawn-intent-invalid",
+                    "action_id": f"harness-spawn-intent-invalid:{digest}",
+                    "runner_authority": "wakeup-runner-396",
+                    "preconditions": ["source_artifact_contains_evidence"],
+                    "source_artifact": ".refactor-loop/.controller-pending-events.log",
+                    "source_marker": "HARNESS_SPAWN_INTENT",
+                    "evidence_digest": digest,
+                    "reason": "missing-queued_at",
+                    "no_lifecycle_authority": True,
+                    "no_generic_command": True,
+                }
+            )
+        self.ctx.paths.pending_events.write_text("\n".join(pending_lines) + "\n", encoding="utf-8")
+        ordinary = self.release_rollup_action(action_id="release-rollup-needed:after-invalid-batch")
+        with self.ctx.paths.pending_events.open("a", encoding="utf-8") as handle:
+            handle.write("\n".join(pending_lines) + "\n")
+        actions = FakeActions()
+
+        results = self.run_result(
+            self.batch_plan([ordinary, *invalid_actions], dispatch_required=0, deficit=0, active=False),
+            actions=actions,
+        )
+
+        archived = [result for result in results if result.reason.startswith("archived_invalid_harness_spawn_intent:")]
+        self.assertGreater(len(archived), 1)
+        self.assertLessEqual(len(archived), 5)
+        self.assertEqual(results[-1].action_id, "release-rollup-needed:after-invalid-batch")
+        self.assertEqual(results[-1].status, "applied")
+        self.assertEqual(["open_release_rollup_pr_from_action"], [name for name, _payload in actions.calls])
+
     def test_runner_applies_at_most_one_medium_non_spawn_per_tick(self) -> None:
         base = {
             "kind": "default-issue-intake-claim",
@@ -738,6 +791,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         implementation_base: tuple[str, str] = ("base-sha", "base-sha"),
         actions=None,
         issue_comments: list[dict] | None = None,
+        open_rollup_prs: list[dict] | None = None,
+        remote_rollup_refs: dict[str, str] | None = None,
     ) -> list:
         def command_runner(command):
             if command[:2] == ["gh", "api"]:
@@ -780,6 +835,11 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
                 return subprocess.CompletedProcess(command, 0, "{}", "")
             if command[:4] == ["gh", "pr", "list", "--state"]:
+                if "--head" in command:
+                    head = str(command[command.index("--head") + 1])
+                    payload = open_rollup_prs or []
+                    payload = [row for row in payload if row.get("headRefName") == head]
+                    return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
                 payload = duplicate_prs
                 if payload is None:
                     payload = [
@@ -842,6 +902,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     f"worktree {repo_root / '.worktrees' / 'iter77-worker'}\nbranch refs/heads/{gh_head_ref}\n\n",
                     "",
                 )
+            if command[:5] == ["git", "ls-remote", "--exit-code", "--heads", "origin"]:
+                ref = str(command[5])
+                sha = (remote_rollup_refs or {}).get(ref)
+                if sha:
+                    return subprocess.CompletedProcess(command, 0, f"{sha}\trefs/heads/{ref}\n", "")
+                return subprocess.CompletedProcess(command, 2, "", "")
             return subprocess.CompletedProcess(command, 0, "", "")
 
         runner = WakeupRunner(
@@ -4781,6 +4847,33 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "open_release_rollup_pr_from_action")
+
+    def test_release_rollup_current_open_pr_suppresses_second_tick_retry(self) -> None:
+        first_actions = FakeActions()
+        action = self.release_rollup_action()
+
+        first = self.run_result(self.base_plan(action), actions=first_actions)
+
+        self.assertEqual(first[0].status, "applied")
+        self.assertEqual([call[0] for call in first_actions.calls], ["open_release_rollup_pr_from_action"])
+        second_actions = FakeActions()
+        second = self.run_result(
+            self.base_plan(action),
+            actions=second_actions,
+            open_rollup_prs=[
+                {
+                    "number": 123,
+                    "headRefName": "rollup/abc123",
+                    "headRefOid": "abc123",
+                }
+            ],
+        )
+
+        self.assertEqual(
+            [(result.action_id, result.status, result.reason) for result in second],
+            [(action["action_id"], "skipped", "duplicate")],
+        )
+        self.assertEqual(second_actions.calls, [])
 
     def test_release_rollup_body_spawn_renders_prompt_and_does_not_open_pr(self) -> None:
         action = self.release_rollup_body_action()

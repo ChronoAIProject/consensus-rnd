@@ -119,6 +119,7 @@ REMOTE_CI_FIX_ATTEMPT_CAP = 2
 REMOTE_CI_FIX_DONE_RE = re.compile(r"^REMOTE_CI_FIX_DONE:([^:]+):(ok|infra|blocked)$")
 SAFE_CI_CHECK_TOKEN_RE = re.compile(r"[^A-Za-z0-9._-]+")
 NON_BLOCKING_VALIDATION_REASONS = frozenset({"publish_implementation_empty_scoped_diff"})
+INVALID_HARNESS_CLEANUP_LIMIT_PER_TICK = 5
 STAND_DOWN_MANAGED_WRITE_ACTIONS = frozenset(
     {
         "safe_push",
@@ -288,24 +289,35 @@ class WakeupRunner:
         results: list[RunnerResult] = []
         applied_spawns = 0
         applied_medium_non_spawns = 0
+        applied_invalid_harness_cleanups = 0
         worker_top_up_only = False
         for action in self._actions_for_apply(plan.get("actions", []), budget):
             if not isinstance(action, dict) or action.get("status_only") is True:
+                continue
+            is_invalid_harness_cleanup = _is_invalid_harness_cleanup(action)
+            if (
+                is_invalid_harness_cleanup
+                and applied_invalid_harness_cleanups >= INVALID_HARNESS_CLEANUP_LIMIT_PER_TICK
+            ):
                 continue
             is_spawn_action = budget.is_spawn_action(action)
             consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)
             if (
                 action.get("risk_tier") == "medium"
                 and not consumes_spawn_budget
+                and not is_invalid_harness_cleanup
                 and applied_medium_non_spawns >= MEDIUM_NON_SPAWN_LIMIT_PER_TICK
             ):
                 continue
-            if worker_top_up_only and not consumes_spawn_budget and not _is_invalid_harness_cleanup(action):
+            if worker_top_up_only and not consumes_spawn_budget and not is_invalid_harness_cleanup:
                 continue
             if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:
                 continue
             result = self.apply_action(action)
             results.append(result)
+            if is_invalid_harness_cleanup and result.status == "skipped":
+                applied_invalid_harness_cleanups += 1
+                continue
             if result.status == "skipped" and consumes_spawn_budget:
                 continue
             if result.status != "applied":
@@ -1937,10 +1949,11 @@ class WakeupRunner:
                         f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action_id}:{stale_release_reason}"
                     )
                     continue
-                stale_spawn_reason = self._applied_spawn_stale_reason(action)
-                if stale_spawn_reason:
-                    self._append_pending_event(f"WAKEUP_RUNNER_STALE_SPAWN_LEDGER:{action_id}:{stale_spawn_reason}")
-                    continue
+                if action.get("controller_action") == "spawn_codex_harness_background":
+                    stale_spawn_reason = self._applied_spawn_stale_reason(action)
+                    if stale_spawn_reason:
+                        self._append_pending_event(f"WAKEUP_RUNNER_STALE_SPAWN_LEDGER:{action_id}:{stale_spawn_reason}")
+                        continue
                 if self._applied_row_current_effect_suppresses_retry(action):
                     return True
             if status == "blocked" and _terminal_blocked_reason(str(row.get("reason") or "")):
@@ -1965,9 +1978,54 @@ class WakeupRunner:
             return self._publish_review_fix_current_effect_suppresses_retry(action)
         if controller_action == "dispatch_reviewers":
             return self._dispatch_reviewers_current_effect_suppresses_retry(action)
+        if controller_action == "open_release_rollup_pr_from_action":
+            return self._release_rollup_current_effect_suppresses_retry(action)
         if _is_remote_ci_red_dispatch(action):
             return False
         return False
+
+    def _release_rollup_current_effect_suppresses_retry(self, action: Mapping[str, Any]) -> bool:
+        integration_sha = _release_rollup_integration_sha(action)
+        if not integration_sha:
+            return False
+        rollup_head = f"rollup/{integration_sha}"
+        if any(
+            _release_rollup_pr_matches_integration_sha(row, integration_sha, rollup_head)
+            for row in self._open_release_rollup_prs(rollup_head)
+        ):
+            return True
+        result = self.command_runner(["git", "ls-remote", "--exit-code", "--heads", "origin", rollup_head])
+        if result.returncode != 0:
+            return False
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == integration_sha and parts[1] == f"refs/heads/{rollup_head}":
+                return True
+        return False
+
+    def _open_release_rollup_prs(self, rollup_head: str) -> list[Mapping[str, Any]]:
+        result = self.command_runner(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--head",
+                rollup_head,
+                "--json",
+                "number,headRefName,headRefOid",
+            ]
+        )
+        if result.returncode != 0:
+            return []
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [row for row in payload if isinstance(row, Mapping)]
 
     def _consensus_implementation_current_effect_suppresses_retry(self, action: Mapping[str, Any]) -> bool:
         if consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root):
@@ -2436,6 +2494,29 @@ def _single_line(value: str) -> str:
 
 def _is_invalid_harness_cleanup(action: Mapping[str, Any]) -> bool:
     return action.get("kind") == "harness-spawn-intent-invalid"
+
+
+def _release_rollup_integration_sha(action: Mapping[str, Any]) -> str:
+    event = action.get("event")
+    if isinstance(event, Mapping):
+        integration_sha = str(event.get("integration_sha") or "").strip()
+        if integration_sha:
+            return integration_sha
+    target = action.get("target")
+    if isinstance(target, Mapping):
+        integration_sha = str(target.get("integration_sha") or "").strip()
+        if integration_sha:
+            return integration_sha
+    action_id = str(action.get("action_id") or "")
+    if action_id.startswith("release-rollup-needed:"):
+        return action_id.removeprefix("release-rollup-needed:").strip()
+    return ""
+
+
+def _release_rollup_pr_matches_integration_sha(row: Mapping[str, Any], integration_sha: str, rollup_head: str) -> bool:
+    head_ref = str(row.get("headRefName") or "").strip()
+    head_sha = str(row.get("headRefOid") or "").strip()
+    return head_ref == rollup_head and head_sha == integration_sha
 
 
 def _reviewer_log_terminal_failed(path: Path) -> bool:
