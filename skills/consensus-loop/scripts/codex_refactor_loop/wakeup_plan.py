@@ -1361,7 +1361,22 @@ def rebase_resolve_completed_marker_actions(repo_root: Path, gh_items: list[GhIt
         if worktree is not None:
             action["worktree"] = str(worktree)
         if not _worktree_merge_in_progress_resolved(repo_root, worktree):
-            retry_count, archived_artifact = _record_rebase_resolve_false_done(repo_root, log_path, pr_number, head_ref, marker)
+            recovery = _record_rebase_resolve_false_done(repo_root, log_path, pr_number, head_ref, marker)
+            if recovery.error_reason is not None:
+                action["status_only"] = True
+                action["no_lifecycle_authority"] = True
+                action["reason"] = recovery.error_reason
+                action["diagnostic"] = recovery.diagnostic
+                action["evidence"] = recovery.archived_artifact
+                action["source_artifact"] = recovery.archived_artifact
+                print(recovery.diagnostic, file=sys.stderr)
+                action.pop("controller_action", None)
+                action.pop("runner_authority", None)
+                action.pop("no_generic_command", None)
+                actions.append(action)
+                continue
+            retry_count = recovery.retry_count
+            archived_artifact = recovery.archived_artifact
             action["evidence"] = archived_artifact
             action["source_artifact"] = archived_artifact
             if retry_count > REBASE_RESOLVE_FALSE_DONE_RETRY_LIMIT:
@@ -1394,37 +1409,115 @@ def rebase_resolve_completed_marker_actions(repo_root: Path, gh_items: list[GhIt
     return actions
 
 
-def _record_rebase_resolve_false_done(repo_root: Path, log_path: Path, pr_number: int, head_ref: str, marker: str) -> tuple[int, str]:
+@dataclass(frozen=True)
+class RebaseResolveFalseDoneRecovery:
+    retry_count: int
+    archived_artifact: str
+    error_reason: str | None = None
+    diagnostic: str | None = None
+
+
+def _record_rebase_resolve_false_done(
+    repo_root: Path, log_path: Path, pr_number: int, head_ref: str, marker: str
+) -> RebaseResolveFalseDoneRecovery:
     state_dir = repo_root / ".refactor-loop" / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     state_path = state_dir / "rebase-resolve-false-done-recovery.json"
-    archived_log = _archive_rebase_resolve_false_done_log(log_path)
+    archived_log, archive_error = _archive_rebase_resolve_false_done_log(log_path)
     archived_artifact = str(archived_log.relative_to(repo_root))
+    if archive_error is not None:
+        reason = "rebase_resolve_false_done_archive_failed"
+        archive_path = log_path.with_name(f"{log_path.name}.false-done")
+        return RebaseResolveFalseDoneRecovery(
+            retry_count=0,
+            archived_artifact=archived_artifact,
+            error_reason=reason,
+            diagnostic=(
+                f"{reason}: pr={pr_number} head_ref={head_ref} log_path={log_path.relative_to(repo_root)} "
+                f"archive_path={archive_path.relative_to(repo_root)} error={archive_error}"
+            ),
+        )
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
         state = {}
+    except (OSError, json.JSONDecodeError) as exc:
+        reason = "rebase_resolve_false_done_state_unreadable"
+        return RebaseResolveFalseDoneRecovery(
+            retry_count=0,
+            archived_artifact=archived_artifact,
+            error_reason=reason,
+            diagnostic=(
+                f"{reason}: pr={pr_number} head_ref={head_ref} state_path={state_path.relative_to(repo_root)} "
+                f"log_path={archived_artifact} error={type(exc).__name__}:{exc}"
+            ),
+        )
     if not isinstance(state, dict):
-        state = {}
+        reason = "rebase_resolve_false_done_state_invalid"
+        return RebaseResolveFalseDoneRecovery(
+            retry_count=0,
+            archived_artifact=archived_artifact,
+            error_reason=reason,
+            diagnostic=(
+                f"{reason}: pr={pr_number} head_ref={head_ref} state_path={state_path.relative_to(repo_root)} "
+                f"log_path={archived_artifact} error=top-level-json-is-not-object"
+            ),
+        )
     key = f"PR:{pr_number}:{head_ref}"
     record = state.get(key)
-    if not isinstance(record, dict):
+    if record is None:
         record = {"count": 0}
-    record["count"] = int(record.get("count") or 0) + 1
+    elif not isinstance(record, dict):
+        reason = "rebase_resolve_false_done_state_invalid"
+        return RebaseResolveFalseDoneRecovery(
+            retry_count=0,
+            archived_artifact=archived_artifact,
+            error_reason=reason,
+            diagnostic=(
+                f"{reason}: pr={pr_number} head_ref={head_ref} state_path={state_path.relative_to(repo_root)} "
+                f"log_path={archived_artifact} error=retry-record-is-not-object"
+            ),
+        )
+    try:
+        retry_count = int(record.get("count") or 0) + 1
+    except (TypeError, ValueError) as exc:
+        reason = "rebase_resolve_false_done_state_invalid"
+        return RebaseResolveFalseDoneRecovery(
+            retry_count=0,
+            archived_artifact=archived_artifact,
+            error_reason=reason,
+            diagnostic=(
+                f"{reason}: pr={pr_number} head_ref={head_ref} state_path={state_path.relative_to(repo_root)} "
+                f"log_path={archived_artifact} error=count:{type(exc).__name__}:{exc}"
+            ),
+        )
+    record["count"] = retry_count
     record["source_artifact"] = archived_artifact
     record["source_marker"] = marker
     state[key] = record
-    state_path.write_text(json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    return int(record["count"]), archived_artifact
+    try:
+        state_path.write_text(json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        reason = "rebase_resolve_false_done_state_write_failed"
+        return RebaseResolveFalseDoneRecovery(
+            retry_count=0,
+            archived_artifact=archived_artifact,
+            error_reason=reason,
+            diagnostic=(
+                f"{reason}: pr={pr_number} head_ref={head_ref} state_path={state_path.relative_to(repo_root)} "
+                f"log_path={archived_artifact} error={type(exc).__name__}:{exc}"
+            ),
+        )
+    return RebaseResolveFalseDoneRecovery(retry_count=int(record["count"]), archived_artifact=archived_artifact)
 
 
-def _archive_rebase_resolve_false_done_log(log_path: Path) -> Path:
+def _archive_rebase_resolve_false_done_log(log_path: Path) -> tuple[Path, str | None]:
     archive = log_path.with_name(f"{log_path.name}.false-done")
     try:
         log_path.replace(archive)
-    except OSError:
-        return log_path
-    return archive
+    except OSError as exc:
+        return log_path, f"{type(exc).__name__}:{exc}"
+    return archive, None
 
 
 def _rebase_resolve_marker_from_log(log_path: Path) -> str:
@@ -2626,7 +2719,22 @@ def _worktree_merge_in_progress_resolved(repo_root: Path, worktree: Path | None)
     unmerged = git_text(["git", "-C", str(worktree), "diff", "--name-only", "--diff-filter=U"], cwd=repo_root)
     if unmerged.returncode != 0:
         return False
-    return not any(line.strip() for line in unmerged.stdout.splitlines())
+    if any(line.strip() for line in unmerged.stdout.splitlines()):
+        return False
+    status = git_text(["git", "-C", str(worktree), "status", "--porcelain"], cwd=repo_root)
+    if status.returncode != 0:
+        return False
+    rows = [line for line in status.stdout.splitlines() if line.strip()]
+    if not rows:
+        return False
+    for row in rows:
+        if len(row) < 3:
+            return False
+        index_status = row[0]
+        worktree_status = row[1]
+        if index_status == "?" or worktree_status not in {" ", "?"}:
+            return False
+    return True
 
 
 def safe_head_ref(value: str | None) -> str | None:
