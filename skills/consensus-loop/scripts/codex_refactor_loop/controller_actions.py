@@ -51,7 +51,9 @@ from .secondary_mutation_backoff import (
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import (
+    archived_invalid_harness_spawn_intent_markers,
     consensus_implementation_suppressed_reason,
+    live_valid_harness_spawn_intent,
     validate_harness_spawn_intent,
     zero_code_implementation_completion_proven,
 )
@@ -1623,6 +1625,7 @@ class ControllerActions:
             lines = self.ctx.paths.pending_events.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             return False
+        archived_invalid_markers = archived_invalid_harness_spawn_intent_markers(lines)
         intent_id = f"dispatch-reviewers:{pr_target}:{role}:r{round_number}"
         for line in lines:
             if " HARNESS_SPAWN_INTENT " not in line:
@@ -1631,7 +1634,11 @@ class ControllerActions:
                 intent = json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
             except json.JSONDecodeError:
                 continue
-            if isinstance(intent, dict) and intent.get("intent_id") == intent_id:
+            if not isinstance(intent, dict):
+                continue
+            if not live_valid_harness_spawn_intent(self.ctx, line, intent, archived_invalid_markers):
+                continue
+            if intent.get("intent_id") == intent_id:
                 return True
         return False
 

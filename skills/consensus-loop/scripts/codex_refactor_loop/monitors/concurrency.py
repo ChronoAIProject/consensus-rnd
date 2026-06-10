@@ -32,8 +32,8 @@ from ..state import read_json, write_json
 from ..task_spawn_claim import TaskSpawnClaimError, safe_task_id_from_task
 from ..update_check import parse_time
 from ..wakeup_plan import (
-    ARCHIVED_INVALID_HARNESS_SPAWN_INTENT_MARKER,
-    harness_spawn_intent_line_digest,
+    archived_invalid_harness_spawn_intent_markers,
+    harness_spawn_intent_line_is_archived_invalid,
     validate_harness_spawn_intent,
 )
 from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work, is_draft_release_rollup_pr
@@ -693,7 +693,7 @@ class ConcurrencyMonitor:
         zero_streak: int,
     ) -> tuple[bool, str, list[str]]:
         evidence: list[str] = []
-        archived_invalid_markers = self._archived_invalid_harness_spawn_intent_markers(lines)
+        archived_invalid_markers = archived_invalid_harness_spawn_intent_markers(lines)
         for line in lines:
             if " HARNESS_SPAWN_INTENT " not in line:
                 continue
@@ -701,11 +701,11 @@ class ConcurrencyMonitor:
             try:
                 payload = json.loads(payload_text)
             except json.JSONDecodeError:
-                if self._harness_spawn_intent_line_is_archived_invalid(line, None, archived_invalid_markers):
+                if harness_spawn_intent_line_is_archived_invalid(line, None, archived_invalid_markers):
                     continue
                 return False, "malformed-harness-spawn-intent", []
             if not isinstance(payload, dict):
-                if self._harness_spawn_intent_line_is_archived_invalid(line, None, archived_invalid_markers):
+                if harness_spawn_intent_line_is_archived_invalid(line, None, archived_invalid_markers):
                     continue
                 return False, "malformed-harness-spawn-intent", []
             created_at = self._line_time(ts)
@@ -713,7 +713,7 @@ class ConcurrencyMonitor:
                 return False, "malformed-harness-spawn-intent-ts", []
             validation_reason = self._harness_spawn_intent_validation_reason(payload)
             if validation_reason:
-                if self._harness_spawn_intent_line_is_archived_invalid(line, payload, archived_invalid_markers):
+                if harness_spawn_intent_line_is_archived_invalid(line, payload, archived_invalid_markers):
                     continue
                 return False, validation_reason, []
             if not self._intent_matches_active_target(payload, active_targets):
@@ -747,7 +747,7 @@ class ConcurrencyMonitor:
     ) -> HardGateTransientSupply:
         targets: list[str] = []
         evidence: list[str] = []
-        archived_invalid_markers = self._archived_invalid_harness_spawn_intent_markers(lines)
+        archived_invalid_markers = archived_invalid_harness_spawn_intent_markers(lines)
         for line in lines:
             if " HARNESS_SPAWN_INTENT " not in line:
                 continue
@@ -755,11 +755,11 @@ class ConcurrencyMonitor:
             try:
                 payload = json.loads(payload_text)
             except json.JSONDecodeError:
-                if self._harness_spawn_intent_line_is_archived_invalid(line, None, archived_invalid_markers):
+                if harness_spawn_intent_line_is_archived_invalid(line, None, archived_invalid_markers):
                     continue
                 return HardGateTransientSupply(0, (), (), "malformed-harness-spawn-intent")
             if not isinstance(payload, dict):
-                if self._harness_spawn_intent_line_is_archived_invalid(line, None, archived_invalid_markers):
+                if harness_spawn_intent_line_is_archived_invalid(line, None, archived_invalid_markers):
                     continue
                 return HardGateTransientSupply(0, (), (), "malformed-harness-spawn-intent")
             created_at = self._line_time(ts)
@@ -767,7 +767,7 @@ class ConcurrencyMonitor:
                 return HardGateTransientSupply(0, (), (), "malformed-harness-spawn-intent-ts")
             validation_reason = self._harness_spawn_intent_validation_reason(payload)
             if validation_reason:
-                if self._harness_spawn_intent_line_is_archived_invalid(line, payload, archived_invalid_markers):
+                if harness_spawn_intent_line_is_archived_invalid(line, payload, archived_invalid_markers):
                     continue
                 return HardGateTransientSupply(0, (), (), validation_reason)
             if payload.get("source") != "phase9-router":
@@ -794,30 +794,6 @@ class ConcurrencyMonitor:
                 return f"malformed-harness-spawn-intent:{detail}"
             return "malformed-harness-spawn-intent"
         return ""
-
-    def _archived_invalid_harness_spawn_intent_markers(self, lines: list[str]) -> tuple[str, ...]:
-        markers: list[str] = []
-        prefix = f"{ARCHIVED_INVALID_HARNESS_SPAWN_INTENT_MARKER}:"
-        for line in lines:
-            if prefix not in line:
-                continue
-            tail = line.split(prefix, 1)[1].strip()
-            if tail:
-                markers.append(tail)
-        return tuple(markers)
-
-    def _harness_spawn_intent_line_is_archived_invalid(
-        self,
-        line: str,
-        payload: dict[str, object] | None,
-        archived_invalid_markers: tuple[str, ...],
-    ) -> bool:
-        identities = {harness_spawn_intent_line_digest(line)}
-        if payload is not None:
-            intent_id = payload.get("intent_id")
-            if isinstance(intent_id, str) and intent_id:
-                identities.add(intent_id)
-        return any(marker.startswith(f"{identity}:") or marker == identity for marker in archived_invalid_markers for identity in identities)
 
     def _phase9_ledger_intent_evidence(
         self,
