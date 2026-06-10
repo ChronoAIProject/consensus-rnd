@@ -5947,7 +5947,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["action_id"], "release-gate-dispatch:1.0.0-beta.10->1.0.0-beta.11")
-        self.assertIn("release_candidate_already_published", actions[0]["preconditions"])
+        self.assertIn("release_candidate_consumed_by_publish_result", actions[0]["preconditions"])
         self.assertEqual(release_publish_actions(self.repo), [])
 
     def test_release_gate_dispatch_refreshes_decision_mismatched_candidate(self) -> None:
@@ -5975,7 +5975,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["controller_action"], "dispatch_release_candidate")
         self.assertEqual(actions[0]["action_id"], "release-gate-dispatch:1.0.0-beta.8->1.0.0-beta.9")
-        self.assertIn("release_candidate_target_ref_invalid", actions[0]["preconditions"])
+        self.assertIn("release_candidate_decision_mismatch", actions[0]["preconditions"])
         self.assertEqual(release_publish_actions(self.repo), [])
 
     def test_release_gate_dispatch_refreshes_expired_candidate(self) -> None:
@@ -6001,7 +6001,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["controller_action"], "dispatch_release_candidate")
-        self.assertIn("release_candidate_target_ref_invalid", actions[0]["preconditions"])
+        self.assertIn("release_candidate_expired", actions[0]["preconditions"])
         self.assertEqual(release_publish_actions(self.repo), [])
 
     def test_release_gate_dispatch_recovers_ready_gate_when_candidate_target_ref_is_empty(self) -> None:
@@ -6033,6 +6033,30 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(action.get("status_only", False))
         self.assertTrue(has_dispatchable_action(actions))
         self.assertEqual(release_publish_actions(self.repo), [])
+
+    def test_release_gate_dispatch_refreshes_generated_stale_candidate(self) -> None:
+        current = release_decision("1.2.3-beta.4", "1.2.3-beta.5")
+        stale = release_candidate(current)
+        stale["generated_at"] = isoformat(datetime.now(timezone.utc) - timedelta(minutes=121))
+        stale["expires_at"] = isoformat(datetime.now(timezone.utc) + timedelta(minutes=30))
+        (self.repo / ".refactor-loop/state/release-decision.json").write_text(json.dumps(current), encoding="utf-8")
+        (self.repo / ".refactor-loop/state/release-candidate.json").write_text(json.dumps(stale), encoding="utf-8")
+
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "true"}):
+            actions = release_gate_dispatch_actions(
+                self.repo,
+                scorer=lambda _: {
+                    "from_version": "1.2.3-beta.4",
+                    "to_version": "1.2.3-beta.5",
+                    "stability_score": 100,
+                    "ready": True,
+                    "signals": {},
+                    "blocked_reasons": [],
+                },
+            )
+
+        self.assertEqual(len(actions), 1)
+        self.assertIn("release_candidate_generated_stale", actions[0]["preconditions"])
 
     def test_release_gate_dispatch_requires_host_opt_in(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):

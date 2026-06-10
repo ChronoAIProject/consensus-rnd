@@ -20,7 +20,7 @@ sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.restart import restart_managed_daemon_names
-from codex_refactor_loop.release.gate import AutoReleaseGate, CommitInfo, classify_bump
+from codex_refactor_loop.release.gate import AutoReleaseGate, CommitInfo, canonical_digest, classify_bump
 from codex_refactor_loop.release.versions import next_release_version
 
 
@@ -974,6 +974,81 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertEqual(candidate["from_version"], decision["from_version"])
             self.assertEqual(candidate["to_version"], decision["to_version"])
             self.assertEqual((repo / "package.json").read_text(encoding="utf-8"), before)
+
+    def test_dispatch_replaces_expired_candidate_with_diagnostic(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_opt_in(repo)
+            write_green_signals(repo)
+            current_version = read_json(repo / "package.json")["version"]
+            decision = {
+                "from_version": current_version,
+                "to_version": classify_expected_patch(current_version),
+                "bump_type": "patch",
+                "coordinate_policy": None,
+                "ready": True,
+                "signals": {"fresh_heartbeats": {"passed": True}},
+                "blocked_reasons": [],
+            }
+            stale_candidate = {
+                "ready": True,
+                "target_ref": "origin/review-base",
+                "from_version": decision["from_version"],
+                "to_version": decision["to_version"],
+                "bump_type": "patch",
+                "coordinate_policy": None,
+                "generated_at": (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat().replace("+00:00", "Z"),
+                "expires_at": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+                "decision_digest": canonical_digest(decision),
+            }
+            write_json(repo / ".refactor-loop/state/release-decision.json", decision)
+            write_json(repo / ".refactor-loop/state/release-candidate.json", stale_candidate)
+            env = {**os.environ, "REPO_ROOT": str(repo), "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--dispatch", "--min-recent-merges", "0"],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("RELEASE_GATE_DISPATCH_STALE_CANDIDATE:release_candidate_expired", result.stdout)
+            candidate = read_json(repo / ".refactor-loop/state/release-candidate.json")
+            self.assertIsInstance(candidate, dict)
+            assert isinstance(candidate, dict)
+            self.assertEqual(candidate["to_version"], decision["to_version"])
+            self.assertNotEqual(candidate["expires_at"], stale_candidate["expires_at"])
+
+    def test_dispatch_live_candidate_fails_closed(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_opt_in(repo)
+            write_green_signals(repo)
+            env = {**os.environ, "REPO_ROOT": str(repo), "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+            first = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--dispatch", "--min-recent-merges", "0"],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(first.returncode, 0, first.stderr)
+
+            second = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--dispatch", "--min-recent-merges", "0"],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(second.returncode, 1)
+            self.assertIn("release_candidate_already_exists", second.stderr)
 
     def test_dispatch_recomputes_and_clears_stale_candidate_when_no_commits(self) -> None:
         with copy_repo_fixture() as tmp:
