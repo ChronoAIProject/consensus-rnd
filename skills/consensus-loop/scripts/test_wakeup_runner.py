@@ -570,7 +570,6 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             },
             sort_keys=True,
         )
-        self.ctx.paths.pending_events.write_text(raw_line + "\n", encoding="utf-8")
         digest = harness_spawn_intent_line_digest(raw_line)
         invalid = {
             "kind": "harness-spawn-intent-invalid",
@@ -585,12 +584,62 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "no_generic_command": True,
         }
         spawn = self.spawn_action(action_id="spawn:hard-gate-top-up")
+        with self.ctx.paths.pending_events.open("a", encoding="utf-8") as handle:
+            handle.write(raw_line + "\n")
 
         results = self.run_result(self.batch_plan([spawn, invalid], dispatch_required=2, deficit=2), actions=FakeActions())
 
         self.assertIn(f"WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{digest}:missing-queued_at", self.ctx.paths.pending_events.read_text(encoding="utf-8"))
         self.assertEqual(["skipped", "applied"], [result.status for result in results])
         self.assertEqual("archived_invalid_harness_spawn_intent:missing-queued_at", results[0].reason)
+
+    def test_ordinary_tick_archives_legacy_malformed_review_intent_for_merged_pr_before_successful_action(self) -> None:
+        raw_line = "2026-06-10T11:48:39Z HARNESS_SPAWN_INTENT " + json.dumps(
+            {
+                "cd": "/Users/auric/consensus-rnd",
+                "command": "spawn-codex",
+                "controller_action": "spawn_codex_harness_background",
+                "intent_id": "dispatch-reviewers:774:architect:r5",
+                "log": ".refactor-loop/logs/review-pr774-architect-r5.log",
+                "no_lifecycle_authority": True,
+                "priority": "p1",
+                "prompt": ".refactor-loop/prompts/review-pr774-architect-r5.md",
+                "reason": "review PR #774 as architect",
+                "route": "dispatch-reviewers",
+                "run_in_background_required": True,
+                "source": "controller-actions",
+                "stall": 5400,
+                "task_id": "review-pr774-architect-r5",
+            },
+            sort_keys=True,
+        )
+        self.ctx.paths.pending_events.write_text(raw_line + "\n", encoding="utf-8")
+        digest = harness_spawn_intent_line_digest(raw_line)
+        invalid = {
+            "kind": "harness-spawn-intent-invalid",
+            "action_id": f"harness-spawn-intent-invalid:{digest}",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["source_artifact_contains_evidence"],
+            "source_artifact": ".refactor-loop/.controller-pending-events.log",
+            "source_marker": "HARNESS_SPAWN_INTENT",
+            "evidence_digest": digest,
+            "reason": "missing-queued_at",
+            "no_lifecycle_authority": True,
+            "no_generic_command": True,
+        }
+        successful = self.release_rollup_action(action_id="release-rollup-needed:ordinary-success")
+        with self.ctx.paths.pending_events.open("a", encoding="utf-8") as handle:
+            handle.write(raw_line + "\n")
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", side_effect=AssertionError("must not spawn")):
+            results = self.run_result(self.batch_plan([successful, invalid], dispatch_required=0, deficit=0, active=False), actions=actions)
+
+        self.assertEqual(["skipped", "applied"], [result.status for result in results])
+        self.assertEqual("archived_invalid_harness_spawn_intent:missing-queued_at", results[0].reason)
+        self.assertEqual("release-rollup-needed:ordinary-success", results[1].action_id)
+        self.assertIn(f"WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{digest}:missing-queued_at", self.ctx.paths.pending_events.read_text(encoding="utf-8"))
+        self.assertEqual(["open_release_rollup_pr_from_action"], [name for name, _payload in actions.calls])
 
     def test_runner_applies_at_most_one_medium_non_spawn_per_tick(self) -> None:
         base = {
