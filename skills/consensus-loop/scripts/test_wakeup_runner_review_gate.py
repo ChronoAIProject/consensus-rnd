@@ -287,12 +287,29 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:stale_reviewed_head_sha:architect")
         self.assertEqual(self.actions.merged, [])
 
-    def test_review_gate_uses_latest_round_per_role_after_partial_redispatch(self) -> None:
-        stale = "b" * 40
-        self.write_review("architect", "approve", head_sha=stale, round_number=1)
-        self.write_review("tests", "approve", head_sha="a" * 40, round_number=1)
-        self.write_review("quality", "comment", head_sha="a" * 40, round_number=1)
-        self.write_review("architect", "reject", head_sha="a" * 40, round_number=2)
+    def test_review_gate_uses_complete_lower_round_despite_higher_inflight_same_head(self) -> None:
+        self.write_review("architect", "approve", head_sha="a" * 40, round_number=4)
+        self.write_review("tests", "approve", head_sha="a" * 40, round_number=4)
+        self.write_review("quality", "comment", head_sha="a" * 40, round_number=4)
+        (self.repo / ".refactor-loop/logs/review-pr12-architect-r5.log").write_text(
+            f"head_sha: {'a' * 40}\nREVIEW_DONE:12:architect:approve\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_action()
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.merged, ["12"])
+        self.assertEqual(self.actions.rendered, [])
+
+    def test_review_gate_lower_complete_reject_is_not_masked_by_higher_pending(self) -> None:
+        self.write_review("architect", "reject", head_sha="a" * 40, round_number=4)
+        self.write_review("tests", "approve", head_sha="a" * 40, round_number=4)
+        self.write_review("quality", "comment", head_sha="a" * 40, round_number=4)
+        (self.repo / ".refactor-loop/logs/review-pr12-tests-r5.log").write_text(
+            f"head_sha: {'a' * 40}\nREVIEW_DONE:12:tests:approve\n",
+            encoding="utf-8",
+        )
 
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
             result = self.run_action()
@@ -301,7 +318,23 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(self.actions.merged, [])
         self.assertEqual(self.actions.rendered, [(12, 1)])
         launch.assert_called_once()
-        self.assertEqual(self.supervisor.calls, 0)
+
+    def test_review_gate_no_complete_round_waits_on_candidate_missing_role(self) -> None:
+        self.write_review("architect", "approve", head_sha="a" * 40, round_number=4)
+        self.write_review("tests", "approve", head_sha="a" * 40, round_number=4)
+        (self.repo / ".refactor-loop/logs/review-pr12-architect-r5.log").write_text(
+            f"head_sha: {'a' * 40}\nREVIEW_DONE:12:architect:approve\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_action()
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:missing_reviewers")
+        runner = WakeupRunner(self.ctx, actions=self.actions, supervisor=self.supervisor, command_runner=lambda command: subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", ""))
+        gate = runner._review_gate(12)
+        self.assertEqual({"architect": "a" * 40, "tests": "a" * 40}, gate["heads_by_role"])
+        self.assertNotIn("quality", gate["heads_by_role"])
 
     def test_missing_artifact_head_recovers_from_controller_rendered_prompt(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
@@ -479,12 +512,6 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(completed.status, "applied")
         self.assertEqual(self.actions.merged, ["12"])
         self.assertEqual(self.supervisor.calls, 0)
-
-    def test_review_gate_source_locks_latest_evidence_per_role(self) -> None:
-        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
-        self.assertIn("def _latest_review_evidence_by_role(", source)
-        self.assertIn("evidences = self._latest_review_evidence_by_role(pr_number)", source)
-        self.assertIn("evidence.round_number > existing.round_number", source)
 
     def test_review_gate_source_does_not_treat_draft_as_mergeability_blocker(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")

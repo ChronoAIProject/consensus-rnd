@@ -351,7 +351,12 @@ class ConcurrencyMonitor:
 
     def list_in_flight_codex_lines(self) -> list[str]:
         lines: list[str] = []
-        for line in self.run(["ps", "-eo", "command="]).stdout.splitlines():
+        try:
+            process_snapshot = self.run(["ps", "-eo", "command="])
+        except PermissionError as exc:
+            print(f"concurrency-monitor ps unavailable: {exc}", file=sys.stderr)
+            return []
+        for line in process_snapshot.stdout.splitlines():
             if "consensus-rnd-cli" not in line or "spawn-codex" not in line:
                 continue
             if " -c " in line:

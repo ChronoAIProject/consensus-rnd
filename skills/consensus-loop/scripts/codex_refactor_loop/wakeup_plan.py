@@ -257,6 +257,13 @@ class HarnessSpawnIntentValidation:
     stall: int
 
 
+@dataclass(frozen=True)
+class ReviewRoundCompletion:
+    round_number: int
+    head_sha: str
+    heads_by_role: dict[str, str]
+
+
 def run_json(cmd: list[str], *, cwd: Path) -> Any:
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
@@ -329,26 +336,13 @@ def harness_spawn_intent_actions(
     for line in lines:
         if " HARNESS_SPAWN_INTENT " not in line:
             continue
-        if harness_spawn_intent_line_is_archived_invalid(line, None, archived_invalid_markers):
+        invalid_action, intent, validated = _invalid_harness_spawn_intent_action_for_line(ctx, line, archived_invalid_markers)
+        if invalid_action is not None:
+            actions.append(invalid_action)
             continue
-        raw_json = line.split(" HARNESS_SPAWN_INTENT ", 1)[1]
-        try:
-            intent = json.loads(raw_json)
-        except json.JSONDecodeError:
-            actions.append(_invalid_harness_spawn_intent("invalid-json", line))
+        if intent is None or validated is None:
             continue
-        if not isinstance(intent, dict):
-            actions.append(_invalid_harness_spawn_intent("intent-not-object", line))
-            continue
-        intent_id = intent.get("intent_id")
-        if not isinstance(intent_id, str) or not intent_id:
-            actions.append(_invalid_harness_spawn_intent("missing-intent-id", line))
-            continue
-        try:
-            validated = validate_harness_spawn_intent(ctx, intent)
-        except ValueError as exc:
-            actions.append(_invalid_harness_spawn_intent(str(exc), line, intent_id=intent_id))
-            continue
+        intent_id = str(intent["intent_id"])
         if intent_id in seen:
             continue
         seen.add(intent_id)
@@ -390,6 +384,30 @@ def harness_spawn_intent_actions(
             _harness_spawn_intent_action(intent, intent_id, cd, prompt, log_path, line)
         )
     return actions
+
+
+def _invalid_harness_spawn_intent_action_for_line(
+    ctx: LoopContext,
+    line: str,
+    archived_invalid_markers: tuple[str, ...],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, HarnessSpawnIntentValidation | None]:
+    if harness_spawn_intent_line_is_archived_invalid(line, None, archived_invalid_markers):
+        return None, None, None
+    raw_json = line.split(" HARNESS_SPAWN_INTENT ", 1)[1]
+    try:
+        intent = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return _invalid_harness_spawn_intent("invalid-json", line), None, None
+    if not isinstance(intent, dict):
+        return _invalid_harness_spawn_intent("intent-not-object", line), None, None
+    intent_id = intent.get("intent_id")
+    if not isinstance(intent_id, str) or not intent_id:
+        return _invalid_harness_spawn_intent("missing-intent-id", line), None, None
+    try:
+        validated = validate_harness_spawn_intent(ctx, intent)
+    except ValueError as exc:
+        return _invalid_harness_spawn_intent(str(exc), line, intent_id=intent_id), None, None
+    return None, intent, validated
 
 
 def harness_spawn_intent_line_digest(line: str) -> str:
@@ -2202,15 +2220,12 @@ def _review_done_action_head_sha(repo_root: Path, log_path: Path, marker: str, g
     if match is None:
         return _reviewed_head_sha_from_log(log_path)
     pr_number = int(match.group(1))
-    role = match.group(2)
     live_head = _gh_item_head_sha(gh_items, pr_number)
-    heads = latest_reviewer_heads(repo_root, pr_number)
-    role_head = heads.get(role, "")
-    if role_head:
-        return role_head
-    if live_head and all(heads.get(required, "") == live_head for required in REQUIRED_REVIEW_ROLES):
+    if live_head and highest_complete_required_review_round(repo_root, pr_number, live_head) is not None:
         return live_head
-    return _reviewed_head_sha_from_log(log_path)
+    artifact_path = repo_root / ".refactor-loop" / "runs" / log_path.with_suffix(".md").name
+    prompt_path = repo_root / ".refactor-loop" / "prompts" / log_path.with_suffix(".md").name
+    return _reviewed_head_sha_from_file(artifact_path) or _reviewed_head_sha_from_file(prompt_path) or _reviewed_head_sha_from_log(log_path)
 
 
 def _gh_item_head_sha(gh_items: list[GhItem] | None, pr_number: int) -> str:
@@ -2335,6 +2350,54 @@ def latest_valid_reviewer_rounds(repo_root: Path, pr_number: int) -> dict[str, t
     return by_role
 
 
+def highest_complete_required_review_round(repo_root: Path, pr_number: int, head_sha: str) -> ReviewRoundCompletion | None:
+    if not head_sha:
+        return None
+    by_round: dict[int, dict[str, list[str]]] = {}
+    artifact_keys: set[tuple[str, int]] = set()
+    runs_dir = repo_root / ".refactor-loop" / "runs"
+    logs_dir = repo_root / ".refactor-loop" / "logs"
+    prompts_dir = repo_root / ".refactor-loop" / "prompts"
+    for path in sorted(runs_dir.glob(f"review-pr{pr_number}-*-r*.md")):
+        match = REVIEW_ARTIFACT_RE.match(path.name)
+        if not match or int(match.group(1)) != pr_number:
+            continue
+        role = match.group(2)
+        round_number = int(match.group(3))
+        artifact_keys.add((role, round_number))
+        log_path = logs_dir / f"review-pr{pr_number}-{role}-r{round_number}.log"
+        if not _reviewer_log_has_exit_zero(log_path) or not _reviewer_log_has_valid_marker(log_path, pr_number, role):
+            continue
+        reviewed_head = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompts_dir / path.name) or _reviewed_head_sha_from_file(log_path)
+        by_round.setdefault(round_number, {}).setdefault(role, []).append(reviewed_head)
+    for path in sorted(logs_dir.glob(f"review-pr{pr_number}-*-r*.log")):
+        match = REVIEW_LOG_RE.match(path.name)
+        if not match or int(match.group(1)) != pr_number:
+            continue
+        role = match.group(2)
+        round_number = int(match.group(3))
+        if (role, round_number) in artifact_keys:
+            continue
+        if not _reviewer_log_has_exit_zero(path) or not _reviewer_log_has_valid_marker(path, pr_number, role):
+            continue
+        prompt_path = prompts_dir / path.with_suffix(".md").name
+        reviewed_head = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompt_path)
+        by_round.setdefault(round_number, {}).setdefault(role, []).append(reviewed_head)
+    for round_number in sorted(by_round, reverse=True):
+        role_heads = by_round[round_number]
+        heads_by_role: dict[str, str] = {}
+        complete = True
+        for role in REQUIRED_REVIEW_ROLES:
+            heads = role_heads.get(role, [])
+            if len(heads) != 1 or heads[0] != head_sha:
+                complete = False
+                break
+            heads_by_role[role] = heads[0]
+        if complete:
+            return ReviewRoundCompletion(round_number=round_number, head_sha=head_sha, heads_by_role=heads_by_role)
+    return None
+
+
 def pending_or_fresh_review_evidence_exists(repo_root: Path, pr_number: int) -> bool:
     now = time.time()
     for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
@@ -2346,6 +2409,20 @@ def pending_or_fresh_review_evidence_exists(repo_root: Path, pr_number: int) -> 
         if now - path.stat().st_mtime < REVIEW_PENDING_SECONDS:
             return True
     return False
+
+
+def pending_or_fresh_review_evidence_roles(repo_root: Path, pr_number: int) -> set[str]:
+    roles: set[str] = set()
+    now = time.time()
+    for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
+        match = REVIEW_LOG_RE.match(path.name)
+        if not match or int(match.group(1)) != pr_number:
+            continue
+        if _reviewer_log_has_exit_zero(path) or _reviewer_log_terminal_failed(path):
+            continue
+        if now - path.stat().st_mtime < REVIEW_PENDING_SECONDS:
+            roles.add(match.group(2))
+    return roles
 
 
 def dead_reviewer_roles(repo_root: Path, pr_number: int) -> set[str]:
@@ -2378,11 +2455,17 @@ def reviewer_roles_with_evidence(repo_root: Path, pr_number: int) -> set[str]:
 
 
 def valid_required_review_round_complete(repo_root: Path, pr_number: int, head_sha: str) -> bool:
-    rounds = latest_valid_reviewer_rounds(repo_root, pr_number)
-    return all(rounds.get(role, (0, ""))[1] == head_sha for role in REQUIRED_REVIEW_ROLES)
+    return highest_complete_required_review_round(repo_root, pr_number, head_sha) is not None
 
 
-def pending_review_spawn_exists(repo_root: Path, pr_number: int, ctx: LoopContext | None = None) -> bool:
+def pending_review_spawn_exists(
+    repo_root: Path,
+    pr_number: int,
+    ctx: LoopContext | None = None,
+    *,
+    role: str | None = None,
+    head_sha: str | None = None,
+) -> bool:
     pending_path = repo_root / ".refactor-loop" / ".controller-pending-events.log"
     try:
         lines = pending_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -2406,6 +2489,20 @@ def pending_review_spawn_exists(repo_root: Path, pr_number: int, ctx: LoopContex
         intent_id = str(intent.get("intent_id") or "")
         if not intent_id.startswith(prefix):
             continue
+        if role is not None and intent_id.split(":")[2:3] != [role]:
+            continue
+        if head_sha is not None:
+            prompt_value = str(intent.get("prompt") or "")
+            prompt_path = Path(prompt_value)
+            if not prompt_path.is_absolute():
+                prompt_path = repo_root / prompt_path
+            log_value = str(intent.get("log") or "")
+            log_path_for_head = Path(log_value)
+            if not log_path_for_head.is_absolute():
+                log_path_for_head = repo_root / log_path_for_head
+            intent_head = _reviewed_head_sha_from_file(prompt_path) or _reviewed_head_sha_from_file(log_path_for_head)
+            if intent_head != head_sha:
+                continue
         log_value = str(intent.get("log") or "")
         log_path = Path(log_value)
         if not log_path.is_absolute():
@@ -2427,19 +2524,22 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem], 
         projection = label_catalog.normalize_label_set(item.labels)
         if projection.phase not in {label_catalog.PHASE_REVIEWING, label_catalog.PHASE_PR_OPEN}:
             continue
-        if not item.head_sha or pending_review_spawn_exists(repo_root, item.number, ctx):
+        if not item.head_sha:
             continue
-        if valid_required_review_round_complete(repo_root, item.number, item.head_sha):
-            continue
-        if pending_or_fresh_review_evidence_exists(repo_root, item.number):
+        if highest_complete_required_review_round(repo_root, item.number, item.head_sha) is not None:
             continue
         heads = latest_reviewer_heads(repo_root, item.number)
         dead_roles = dead_reviewer_roles(repo_root, item.number)
         evidence_roles = reviewer_roles_with_evidence(repo_root, item.number)
+        pending_roles = pending_or_fresh_review_evidence_roles(repo_root, item.number)
+        live_head_roles = {role for role, head in heads.items() if head == item.head_sha}
         stale_roles = [
             role
             for role in REQUIRED_REVIEW_ROLES
-            if heads.get(role, "") != item.head_sha and (heads.get(role, "") or role in dead_roles or role in evidence_roles)
+            if heads.get(role, "") != item.head_sha
+            and role not in pending_roles
+            and (heads.get(role, "") or role in dead_roles or role in evidence_roles or live_head_roles)
+            and not pending_review_spawn_exists(repo_root, item.number, ctx, role=role, head_sha=item.head_sha)
         ]
         if not stale_roles:
             continue
@@ -2457,6 +2557,7 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem], 
                 "target_number": item.number,
                 "target": {"kind": "PR", "number": item.number},
                 "stale_review_roles": stale_roles,
+                "head_sha": item.head_sha,
                 "preconditions": ["active_controller_owner", "live_open_target_if_present", "missing_or_stale_reviewer_head_evidence"],
                 "runner_authority": RUNNER_AUTHORITY,
                 "no_generic_command": True,

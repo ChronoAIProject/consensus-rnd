@@ -550,6 +550,48 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             )
             self.assertEqual(1, pending.count(marker))
 
+    def test_hard_gate_archives_invalid_harness_intent_before_spawn_top_up(self) -> None:
+        raw_line = "2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT " + json.dumps(
+            {
+                "intent_id": "dispatch-reviewers:77:quality:r6",
+                "source": "dispatch-reviewers",
+                "route": "dispatch-reviewers",
+                "task_id": "review-pr77-quality-r6",
+                "priority": "p1",
+                "command": "spawn-codex",
+                "controller_action": "spawn_codex_harness_background",
+                "cd": str(self.repo),
+                "prompt": ".refactor-loop/prompts/review-pr77-quality-r6.md",
+                "log": ".refactor-loop/logs/review-pr77-quality-r6.log",
+                "stall": 5400,
+                "reason": "review PR #77 as quality",
+                "run_in_background_required": True,
+                "no_lifecycle_authority": True,
+            },
+            sort_keys=True,
+        )
+        self.ctx.paths.pending_events.write_text(raw_line + "\n", encoding="utf-8")
+        digest = harness_spawn_intent_line_digest(raw_line)
+        invalid = {
+            "kind": "harness-spawn-intent-invalid",
+            "action_id": f"harness-spawn-intent-invalid:{digest}",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["source_artifact_contains_evidence"],
+            "source_artifact": ".refactor-loop/.controller-pending-events.log",
+            "source_marker": "HARNESS_SPAWN_INTENT",
+            "evidence_digest": digest,
+            "reason": "missing-queued_at",
+            "no_lifecycle_authority": True,
+            "no_generic_command": True,
+        }
+        spawn = self.spawn_action(action_id="spawn:hard-gate-top-up")
+
+        results = self.run_result(self.batch_plan([spawn, invalid], dispatch_required=2, deficit=2), actions=FakeActions())
+
+        self.assertIn(f"WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{digest}:missing-queued_at", self.ctx.paths.pending_events.read_text(encoding="utf-8"))
+        self.assertEqual(["skipped", "applied"], [result.status for result in results])
+        self.assertEqual("archived_invalid_harness_spawn_intent:missing-queued_at", results[0].reason)
+
     def test_runner_applies_at_most_one_medium_non_spawn_per_tick(self) -> None:
         base = {
             "kind": "default-issue-intake-claim",
