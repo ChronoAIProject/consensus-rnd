@@ -43,21 +43,14 @@ class AllowlistEntry:
 
 
 ALLOWLIST: tuple[AllowlistEntry, ...] = (
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/banners.py", "ROLE_NEXT_STEPS", "GitHub banner body is intentionally Chinese user-facing output"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/banners.py", "build_status_banner", "GitHub banner body is intentionally Chinese user-facing output"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "DEBUG_SUMMARY", "debug details summary is the explicit zh branch for host work language"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "AUTHORITY_PATH_RE", "validator regex recognizes Chinese authority labels in GitHub bodies"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "INLINE_ARTIFACT_DETAILS_RE", "validator regex recognizes zh inline artifact details"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "_body_copy", "GitHub body copy includes the explicit zh branch for host work language"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", "_kind_label", "GitHub body kind labels include the explicit zh branch for host work language"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/monitors/comment.py", "CommentMonitor.post_banner.banner_body", "maintainer-facing GitHub notification text is intentionally Chinese"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/peek.py", "PeekStatusLens.render", "status lens renders existing Chinese labels and user-facing state"),
+    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/runtime_copy.py", "COPY_CATALOG", "explicit zh runtime copy catalog for host work language"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "ZH_COMPATIBILITY_BODY", "project-rules fixed point text is the explicit zh compatibility payload"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/project_rules.py", "OLD_CANONICAL_BODY", "legacy project-rules fixed point text is intentionally Chinese host-facing policy"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/closed_label_reconciler.py", "comment", "#238 reconciliation refactor self-documents per review gate policy"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/closed_phase_labels.py", "comment", "#238 phase helper refactor self-documents per review gate policy"),
     AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/checks/degradation.py", "DOC_FORBIDDEN_CONTEXT", "static checker recognizes Chinese forbidden-context terms in docs"),
-    AllowlistEntry("skills/consensus-loop/scripts/codex_refactor_loop/controller_actions.py", "ControllerActions._commit_publish_implementation_diff", "controller-authored commit messages are intentionally Chinese working-state output"),
 )
 
 
@@ -236,6 +229,32 @@ class SourceLanguagePolicyTests(unittest.TestCase):
         )
 
         self.assertIn(expected, source_files(REPO_ROOT))
+
+    def test_renderer_owned_chinese_copy_lives_only_in_runtime_catalog(self) -> None:
+        findings = [
+            finding
+            for finding in comment_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", REPO_ROOT)
+            + string_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/github_body.py", REPO_ROOT)
+            + comment_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/banners.py", REPO_ROOT)
+            + string_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/banners.py", REPO_ROOT)
+            + comment_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/monitors/comment.py", REPO_ROOT)
+            + string_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/monitors/comment.py", REPO_ROOT)
+            + comment_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/peek.py", REPO_ROOT)
+            + string_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/peek.py", REPO_ROOT)
+            + comment_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/controller_actions.py", REPO_ROOT)
+            + string_findings(REPO_ROOT / "skills/consensus-loop/scripts/codex_refactor_loop/controller_actions.py", REPO_ROOT)
+            if has_han(finding.text)
+        ]
+        unallowlisted = [finding for finding in findings if not is_allowlisted(finding)]
+
+        self.assertEqual([], unallowlisted)
+        self.assertTrue(
+            all(
+                finding.relative_path.endswith("runtime_copy.py")
+                or finding.relative_path.endswith("github_body.py")
+                for finding in findings
+            )
+        )
 
     def test_scan_python_source_language_is_clean(self) -> None:
         findings = scan_python_source_language(REPO_ROOT)

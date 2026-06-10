@@ -22,6 +22,7 @@ from .context import LoopContext, LoopContextError
 from .holistic_status import collect as collect_holistic_status
 from .holistic_status import render_peek_summary
 from .pr_checks import PrChecksProjection
+from .runtime_copy import copy_for, current_work_language
 from .work_items import ManagedWorkProjection
 from .workflow_stages import format_stage
 from .wakeup_plan import load_github_items, unpushed_worker_output_actions
@@ -33,11 +34,12 @@ class PeekStatusLens:
 
     def render(self) -> str:
         lines: list[str] = []
+        copy = copy_for("peek", language=current_work_language(env={**os.environ, **self.ctx.host_env}))
         lines.append(f"═══════════════ peek {datetime.now(timezone.utc).strftime('%H:%M:%SZ')} ═══════════════")
         lines.extend(["", *self._holistic_summary()])
-        lines.extend(["", "▍Activity timeline (read-only facts):"])
+        lines.extend(["", copy["activity"]])
         lines.extend(self._activity_timeline(limit=12))
-        lines.extend(["", "▍🚨 maintainer comments (read first — missed read = controller bug):"])
+        lines.extend(["", copy["maintainer_comments"]])
         lines.extend(self._maintainer_comments())
         lines.extend(["", f"▍Active codex: {self._count_loop_codex()}"])
         active = self._list_loop_codex()
@@ -47,27 +49,27 @@ class PeekStatusLens:
         lines.extend(_prefixed_tail(self.ctx.paths.refactor_loop / "phase9-router-ledger.jsonl", 10, "    "))
         lines.append("  pending events tail:")
         lines.extend(_prefixed_tail(self.ctx.paths.pending_events, 10, "    "))
-        lines.extend(["", "▍Milestone (优先) issues:"])
+        lines.extend(["", copy["milestone"]])
         lines.extend(self._milestone_items())
-        lines.extend(["", "▍Open auto-loop PRs:"])
+        lines.extend(["", copy["open_prs"]])
         lines.extend(self._open_prs())
-        lines.extend(["", "▍Unpushed worker output:"])
+        lines.extend(["", copy["unpushed"]])
         lines.extend(self._unpushed_worker_output())
-        lines.extend(["", "▍Monitor zero_streak (last 10 ticks):"])
+        lines.extend(["", copy["zero_streak"]])
         lines.extend(self._zero_streak())
-        lines.extend(["", "▍Stale labels (CLOSED but still carrying in-flight phase labels):"])
+        lines.extend(["", copy["stale_labels"]])
         lines.extend(self._stale_labels())
-        lines.extend(["", "▍Issue/PR linkage mismatch:"])
+        lines.extend(["", copy["linkage_mismatch"]])
         lines.extend(self._linkage_mismatch())
-        lines.extend(["", "▍Spawn drop (N solvers complete but judge was not dispatched):"])
+        lines.extend(["", copy["spawn_drop"]])
         lines.extend(self._spawn_drop())
-        lines.extend(["", "▍Drift (label vs codex mismatch):"])
+        lines.extend(["", copy["drift"]])
         lines.extend(self._drift())
-        lines.extend(["", "▍Stale worktree (remote branch missing; cleanup is controller-owned):"])
+        lines.extend(["", copy["stale_worktree"]])
         lines.extend(self._stale_worktrees())
-        lines.extend(["", "▍Stuck too long (>6h without maintainer reply; consider 4h reflector re-evaluation):"])
+        lines.extend(["", copy["stuck"]])
         lines.extend(self._stuck_too_long())
-        lines.extend(["", "▍Open auto-loop issues:"])
+        lines.extend(["", copy["open_issues"]])
         lines.extend(self._open_issues())
         lines.extend(["", "═══════════════════════════════════════════════════"])
         return "\n".join(lines) + "\n"
