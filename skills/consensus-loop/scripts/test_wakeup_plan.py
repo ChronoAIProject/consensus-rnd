@@ -33,6 +33,8 @@ from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E4
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     GhItem,
+    INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT,
+    INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER,
     _revive_stale_redispatchable_implement_log,
     ci_red_actions,
     close_projection_actions,
@@ -42,6 +44,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     consensus_implementation_suppressed_reason,
     existing_issue_actions,
     has_dispatchable_action,
+    harness_spawn_intent_line_digest,
     load_github_items_with_status,
     marker_from_completed_log,
     meta_escalation_stuck_seconds,
@@ -2093,6 +2096,25 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             handle.write(f"2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(intent, sort_keys=True)}\n")
         return intent
 
+    def valid_review_harness_spawn_intent(self, pr_number: int, role: str, round_number: int) -> dict[str, object]:
+        return {
+            "intent_id": f"dispatch-reviewers:{pr_number}:{role}:r{round_number}",
+            "source": "dispatch-reviewers",
+            "route": "dispatch-reviewers",
+            "task_id": f"review-pr{pr_number}-{role}-r{round_number}",
+            "priority": "p1",
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "cd": ".",
+            "prompt": f".refactor-loop/prompts/review-pr{pr_number}-{role}-r{round_number}.md",
+            "log": f".refactor-loop/logs/review-pr{pr_number}-{role}-r{round_number}.log",
+            "stall": 5400,
+            "reason": "test review intent",
+            "queued_at": "2026-05-31T00:00:00Z",
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
+        }
+
     def append_raw_harness_spawn_intent(self, payload: str) -> None:
         pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
         with pending.open("a", encoding="utf-8") as handle:
@@ -2366,6 +2388,87 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent-invalid")
                 self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
                 self.assertEqual(action["reason"], expected_reason)
+                self.assertEqual(action["action_id"], f"harness-spawn-intent-invalid:{harness_spawn_intent_line_digest(action['evidence'])}")
+                self.assertEqual(action["source_artifact"], INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT)
+                self.assertEqual(action["source_marker"], INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER)
+                self.assertEqual(action["evidence_digest"], harness_spawn_intent_line_digest(action["evidence"]))
+                self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+                self.assertEqual(action["preconditions"], ["source_artifact_contains_evidence"])
+                self.assertTrue(action["no_generic_command"])
+
+    def test_harness_spawn_intent_rejects_missing_queued_at_with_digest_invalid_action(self) -> None:
+        self.append_harness_spawn_intent(intent_id="missing-queued-at", queued_at=None)
+
+        plan = self.run_plan()
+
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent-invalid")
+        self.assertEqual("missing-queued_at", action["reason"])
+        self.assertEqual(f"harness-spawn-intent-invalid:{harness_spawn_intent_line_digest(action['evidence'])}", action["action_id"])
+        self.assertEqual(INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT, action["source_artifact"])
+        self.assertEqual(INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER, action["source_marker"])
+        self.assertEqual(harness_spawn_intent_line_digest(action["evidence"]), action["evidence_digest"])
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertEqual(["source_artifact_contains_evidence"], action["preconditions"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertTrue(action["no_generic_command"])
+        self.assertNotIn("controller_action", action)
+
+    def test_harness_spawn_intent_projects_valid_same_id_after_archived_invalid(self) -> None:
+        malformed_intent = {
+            "intent_id": "same-id-successor",
+            "controller_action": "spawn_codex_harness_background",
+        }
+        bad_line = "2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT " + json.dumps(malformed_intent, sort_keys=True)
+        archived_digest = harness_spawn_intent_line_digest(bad_line)
+        valid_intent = {
+            "intent_id": "same-id-successor",
+            "source": "controller-actions",
+            "route": "test-harness-spawn",
+            "task_id": "same-id-successor",
+            "priority": "p1",
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "cd": ".",
+            "prompt": ".refactor-loop/prompts/same-id-successor.md",
+            "log": ".refactor-loop/logs/same-id-successor.log",
+            "stall": 5400,
+            "reason": "test review intent",
+            "queued_at": "2026-05-31T00:00:00Z",
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
+        }
+        valid_line = "2026-05-31T00:00:02Z HARNESS_SPAWN_INTENT " + json.dumps(valid_intent, sort_keys=True)
+        (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text(
+            bad_line
+            + "\n"
+            + f"2026-05-31T00:00:01Z WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{archived_digest}:missing-queued_at\n"
+            + valid_line
+            + "\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan()
+        actions = self.harness_spawn_actions(plan)
+
+        self.assertEqual(1, len(actions))
+        self.assertEqual("same-id-successor", actions[0]["intent_id"])
+        self.assertEqual("harness-spawn-intent:same-id-successor", actions[0]["action_id"])
+        self.assertEqual(valid_line, actions[0]["evidence"])
+
+    def test_harness_spawn_intent_invalid_same_id_lines_are_digest_scoped(self) -> None:
+        self.append_harness_spawn_intent(intent_id="repeat-bad", queued_at=None, reason="first bad")
+        self.append_harness_spawn_intent(intent_id="repeat-bad", queued_at=None, reason="second bad")
+
+        plan = self.run_plan()
+        actions = [action for action in plan["actions"] if action["kind"] == "harness-spawn-intent-invalid"]
+
+        self.assertEqual(2, len(actions))
+        self.assertEqual(["missing-queued_at", "missing-queued_at"], [action["reason"] for action in actions])
+        self.assertEqual(
+            [f"harness-spawn-intent-invalid:{harness_spawn_intent_line_digest(action['evidence'])}" for action in actions],
+            [action["action_id"] for action in actions],
+        )
+        self.assertEqual(2, len({action["action_id"] for action in actions}))
 
     def test_harness_spawn_intent_rejects_missing_path_fields_and_bad_path(self) -> None:
         for field in ("cd", "prompt", "log"):
@@ -4945,6 +5048,95 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual([], review_actions)
         self.assertEqual([], ci_actions)
         checks_projection.assert_not_called()
+
+    def test_archived_invalid_review_spawn_intent_does_not_suppress_review_redispatch(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale review",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="impl/pr77",
+            head_sha="a" * 40,
+        )
+        malformed_intent = {
+            "intent_id": "dispatch-reviewers:77:architect:r1",
+            "controller_action": "spawn_codex_harness_background",
+        }
+        line = "2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT " + json.dumps(malformed_intent, sort_keys=True)
+        archived_digest = harness_spawn_intent_line_digest(line)
+        (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text(
+            line
+            + "\n"
+            + f"2026-05-31T00:00:01Z WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{archived_digest}:missing-queued_at\n",
+            encoding="utf-8",
+        )
+        (self.logs / "review-pr77-architect-r1.log").write_text(
+            f"head_sha: {'b' * 40}\nEXIT=1\n",
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.repo, read_only=True)
+
+        actions = review_evidence_redispatch_actions(self.repo, [item], ctx)
+
+        self.assertEqual(1, len(actions))
+        self.assertEqual("dispatch_reviewers", actions[0]["controller_action"])
+        self.assertEqual(["architect"], actions[0]["stale_review_roles"])
+
+    def test_valid_review_spawn_intent_after_archived_invalid_same_id_suppresses_review_redispatch(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale review",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="impl/pr77",
+            head_sha="a" * 40,
+        )
+        malformed_intent = {
+            "intent_id": "dispatch-reviewers:77:architect:r1",
+            "controller_action": "spawn_codex_harness_background",
+        }
+        bad_line = "2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT " + json.dumps(malformed_intent, sort_keys=True)
+        archived_digest = harness_spawn_intent_line_digest(bad_line)
+        valid_intent = self.valid_review_harness_spawn_intent(77, "architect", 1)
+        valid_line = "2026-05-31T00:00:02Z HARNESS_SPAWN_INTENT " + json.dumps(valid_intent, sort_keys=True)
+        (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text(
+            bad_line
+            + "\n"
+            + f"2026-05-31T00:00:01Z WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{archived_digest}:missing-queued_at\n"
+            + valid_line
+            + "\n",
+            encoding="utf-8",
+        )
+        (self.logs / "review-pr77-architect-r1.log").write_text(
+            f"head_sha: {'b' * 40}\nEXIT=1\n",
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.repo, read_only=True)
+
+        actions = review_evidence_redispatch_actions(self.repo, [item], ctx)
+
+        self.assertEqual([], actions)
+
+    def test_live_valid_review_spawn_intent_suppresses_review_redispatch(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale review",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="impl/pr77",
+            head_sha="a" * 40,
+        )
+        intent = self.valid_review_harness_spawn_intent(77, "architect", 1)
+        self.append_raw_harness_spawn_intent(json.dumps(intent, sort_keys=True))
+        (self.logs / "review-pr77-architect-r1.log").write_text(
+            f"head_sha: {'b' * 40}\nEXIT=1\n",
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.repo, read_only=True)
+
+        actions = review_evidence_redispatch_actions(self.repo, [item], ctx)
+
+        self.assertEqual([], actions)
 
     def test_rollup_pr_projects_ci_only_auto_merge_action(self) -> None:
         item = GhItem(

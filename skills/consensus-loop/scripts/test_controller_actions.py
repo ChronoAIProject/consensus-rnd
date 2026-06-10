@@ -39,6 +39,7 @@ from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKE
 from codex_refactor_loop.release.publisher import ReleasePublishResult
 from codex_refactor_loop.secondary_mutation_backoff import record_secondary_mutation_backoff
 from codex_refactor_loop.wakeup_plan import harness_spawn_intent_actions
+from codex_refactor_loop.wakeup_plan import harness_spawn_intent_line_digest
 
 
 class AllowingGitHubActor:
@@ -183,6 +184,44 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(str((self.tmp / ".config" / "consensus-rnd" / "host.env").resolve()), captured_env["CONSENSUS_RND_HOST_ENV"])
         self.assertEqual(str(self.tmp.resolve()), captured_env["REPO_ROOT"])
         self.assertEqual("owner/repo", captured_env["GH_REPO_SLUG"])
+
+    def valid_harness_spawn_intent(
+        self,
+        *,
+        intent_id: str,
+        task_id: str,
+        prompt: str,
+        log: str,
+        source: str = "test",
+        route: str = "test",
+    ) -> dict[str, object]:
+        return {
+            "intent_id": intent_id,
+            "source": source,
+            "route": route,
+            "task_id": task_id,
+            "priority": "p1",
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "cd": str(self.tmp.resolve()),
+            "prompt": prompt,
+            "log": log,
+            "stall": 5400,
+            "reason": "test intent",
+            "queued_at": "2026-06-01T00:00:00Z",
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
+        }
+
+    def valid_review_harness_spawn_intent(self, pr_number: int, role: str, round_number: int) -> dict[str, object]:
+        return self.valid_harness_spawn_intent(
+            intent_id=f"dispatch-reviewers:{pr_number}:{role}:r{round_number}",
+            source="dispatch-reviewers",
+            route="dispatch-reviewers",
+            task_id=f"review-pr{pr_number}-{role}-r{round_number}",
+            prompt=f".refactor-loop/prompts/review-pr{pr_number}-{role}-r{round_number}.md",
+            log=f".refactor-loop/logs/review-pr{pr_number}-{role}-r{round_number}.log",
+        )
 
     def test_controller_actions_source_locks_named_wakeup_runner_helpers(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
@@ -2579,6 +2618,8 @@ class ControllerActionsTests(unittest.TestCase):
         pending = self.pending_events()
         self.assertRegex(pending, r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z HARNESS_SPAWN_INTENT ")
         self.assertIn(" HARNESS_SPAWN_INTENT ", pending)
+        raw_intent = json.loads(next(line.split(" HARNESS_SPAWN_INTENT ", 1)[1] for line in pending.splitlines() if " HARNESS_SPAWN_INTENT " in line))
+        self.assertRegex(raw_intent["queued_at"], r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
         ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp, read_only=True)
         projected = harness_spawn_intent_actions(self.tmp, ctx, monitor=None, gh_items=[], gh_items_loaded=False)
@@ -2647,10 +2688,14 @@ class ControllerActionsTests(unittest.TestCase):
                 action = action_for(reason)
                 cluster_id = str(action["cluster_id"])
                 if reason == "pending_implement_intent":
-                    pending = {
-                        "intent_id": "dispatch-consensus-implementation:413",
-                        "task_id": f"implement-{cluster_id}",
-                    }
+                    pending = self.valid_harness_spawn_intent(
+                        intent_id="dispatch-consensus-implementation:413",
+                        source="dispatch-consensus-implementation",
+                        route="dispatch-consensus-implementation",
+                        task_id=f"implement-{cluster_id}",
+                        prompt=f".refactor-loop/prompts/implement-{cluster_id}.md",
+                        log=f".refactor-loop/logs/implement-{cluster_id}.log",
+                    )
                     (self.tmp / ".refactor-loop" / ".controller-pending-events.log").write_text(
                         f"2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(pending)}\n",
                         encoding="utf-8",
@@ -2833,10 +2878,7 @@ class ControllerActionsTests(unittest.TestCase):
 
     def test_dispatch_reviewers_redispatches_only_stale_roles_and_skips_pending_intents(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
-        existing_intent = {
-            "intent_id": "dispatch-reviewers:77:architect:r1",
-            "controller_action": "spawn_codex_harness_background",
-        }
+        existing_intent = self.valid_review_harness_spawn_intent(77, "architect", 1)
         (self.tmp / ".refactor-loop" / ".controller-pending-events.log").write_text(
             f"2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(existing_intent, sort_keys=True)}\n",
             encoding="utf-8",
@@ -2880,6 +2922,57 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn('"intent_id": "dispatch-reviewers:77:tests:r1"', pending)
         self.assertNotIn('"intent_id": "dispatch-reviewers:77:quality:r1"', pending)
 
+    def test_dispatch_reviewers_ignores_archived_invalid_pending_intent(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
+        malformed_intent = {
+            "intent_id": "dispatch-reviewers:77:architect:r1",
+            "controller_action": "spawn_codex_harness_background",
+        }
+        line = "2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT " + json.dumps(malformed_intent, sort_keys=True)
+        archived_digest = harness_spawn_intent_line_digest(line)
+        (self.tmp / ".refactor-loop" / ".controller-pending-events.log").write_text(
+            line
+            + "\n"
+            + f"2026-06-01T00:00:01Z WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{archived_digest}:missing-queued_at\n",
+            encoding="utf-8",
+        )
+        render_envs: list[dict[str, str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["pr", "view", "77", "--json", "title,baseRefName,headRefName,headRefOid"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"title": "Fix wakeup runner", "baseRefName": "dev", "headRefName": "refactor/issue413", "headRefOid": "a" * 40}),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_render(_template: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
+            assert env is not None
+            render_envs.append(dict(env))
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_text("review prompt\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
+                    self.assertEqual(
+                        0,
+                        self.actions.dispatch_reviewers(
+                            {
+                                "target_kind": "PR",
+                                "target_number": 77,
+                                "stale_review_roles": ["architect"],
+                                "head_sha": "b" * 40,
+                            }
+                        ),
+                    )
+
+        self.assertEqual([".refactor-loop/runs/review-pr77-architect-r1.md"], [env["REVIEW_OUTPUT_PATH"] for env in render_envs])
+        pending = self.pending_events()
+        self.assertEqual(2, pending.count('"intent_id": "dispatch-reviewers:77:architect:r1"'))
+        self.assertTrue(self.actions._pending_review_spawn_exists("77", "architect", 1))
+
     def test_dispatch_reviewers_redispatch_uses_next_round_after_completed_stale_logs(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
         for role in ("architect", "tests"):
@@ -2893,10 +2986,7 @@ class ControllerActionsTests(unittest.TestCase):
                 f"head_sha: {'b' * 40}\nREVIEW_DONE:77:{role}:approve\nEXIT=0\n",
                 encoding="utf-8",
             )
-        existing_intent = {
-            "intent_id": "dispatch-reviewers:77:architect:r2",
-            "controller_action": "spawn_codex_harness_background",
-        }
+        existing_intent = self.valid_review_harness_spawn_intent(77, "architect", 2)
         (self.tmp / ".refactor-loop" / ".controller-pending-events.log").write_text(
             f"2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(existing_intent, sort_keys=True)}\n",
             encoding="utf-8",

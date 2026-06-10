@@ -607,6 +607,46 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                 self.assertIn("terminating child and restarting same command", died)
                 self.assertEqual(f"{self.runtime.now() + 4}\n", heartbeat.read_text(encoding="utf-8"))
 
+    def test_wrapper_rereads_heartbeat_each_cycle_and_fresh_touch_stops_stale_kill(self) -> None:
+        heartbeat = self.heartbeat_path("phase9_router_daemon")
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+        heartbeat.write_text(f"{self.runtime.now() - 120}\n", encoding="utf-8")
+        launches: list[tuple[str, ...]] = []
+        child = FakeChild([None, None])
+
+        def popen(command: tuple[str, ...]) -> FakeChild:
+            launches.append(command)
+            return child
+
+        def sleeper(_seconds: float) -> None:
+            self.runtime._now += 31
+            heartbeat.write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+
+        restart._run_restart_wrapper(
+            [
+                "phase9_router_daemon",
+                str(self.repo),
+                str(self.repo / ".refactor-loop" / "locks" / "phase9_router_daemon.pid"),
+                str(self.repo / ".refactor-loop" / "logs" / "phase9_router_daemon.died"),
+                *FAKE_COMMAND,
+            ],
+            env={
+                "RESTART_DAEMON_HEARTBEAT_FILE": str(heartbeat),
+                "RESTART_DAEMON_HEARTBEAT_INTERVAL": "1",
+                "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": "30",
+                "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
+            },
+            popen=popen,
+            sleeper=sleeper,
+            clock=lambda: self.runtime.now(),
+            getpid=lambda: 22223,
+            max_supervision_cycles=2,
+        )
+
+        self.assertEqual([FAKE_COMMAND], launches)
+        self.assertEqual(0, child.terminated)
+        self.assertEqual(f"{self.runtime.now()}\n", heartbeat.read_text(encoding="utf-8"))
+
     def test_wrapper_restarts_immediately_for_malformed_and_future_heartbeat_without_writing_it(self) -> None:
         cases = {
             "malformed": "not-a-timestamp\n",

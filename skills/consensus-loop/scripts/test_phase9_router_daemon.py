@@ -30,6 +30,10 @@ from codex_refactor_loop.phase9.router import (
     run_phase9_router_reconcile_tick,
 )
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
+from codex_refactor_loop.wakeup_plan import (
+    ARCHIVED_INVALID_HARNESS_SPAWN_INTENT_MARKER,
+    harness_spawn_intent_line_digest,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -193,6 +197,25 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
     def intent_text(self, intent: dict[str, object]) -> str:
         return json.dumps(intent, ensure_ascii=False, sort_keys=True)
+
+    def valid_harness_spawn_intent_for_log(self, log: str) -> dict[str, object]:
+        return {
+            "intent_id": f"phase9-router-test:{Path(log).stem}",
+            "source": "phase9-router-test",
+            "route": "actor_health_recovery",
+            "task_id": Path(log).stem,
+            "priority": "p1",
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "cd": str(self.repo.resolve()),
+            "prompt": ".refactor-loop/prompts/phase9/test.md",
+            "log": log,
+            "stall": 5400,
+            "reason": "test pending intent",
+            "queued_at": "2026-01-01T00:00:00Z",
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
+        }
 
     def solver_triplet(self, issue: int = 37, round_no: int = 4, verdict: str = "same") -> None:
         for role in ("minimal", "structural", "delete"):
@@ -1316,7 +1339,12 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 self.repo / ".refactor-loop" / "logs" / "solver-issue262-r1-minimal.log"
             ).write_text("reserved by legacy solver log\n", encoding="utf-8")),
             ("pending-intent", lambda: (self.repo / ".refactor-loop/.controller-pending-events.log").write_text(
-                '2026-01-01T00:00:00Z HARNESS_SPAWN_INTENT {"log": ".refactor-loop/logs/phase9-issue262-r1-minimal.log"}\n',
+                "2026-01-01T00:00:00Z HARNESS_SPAWN_INTENT "
+                + json.dumps(
+                    self.valid_harness_spawn_intent_for_log(".refactor-loop/logs/phase9-issue262-r1-minimal.log"),
+                    sort_keys=True,
+                )
+                + "\n",
                 encoding="utf-8",
             )),
             ("in-flight", lambda: setattr(
@@ -1366,6 +1394,60 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
                 self.assertEqual(self.commands, [])
                 self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["262-1-minimal"])
+
+    def test_phase9_router_malformed_pending_intent_does_not_block_stale_actor_recovery(self) -> None:
+        self.write_ledger_entry(
+            key="262-1-minimal",
+            marker="DesignConsensusIssueIntake",
+            log_path=".refactor-loop/logs/phase9-issue262-r1-minimal.log",
+            dispatched_at="2026-01-01T00:00:00Z",
+        )
+        self.router.ctx.host_env["STALE_REVIVAL_HOURS"] = "0.001"
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending.write_text(
+            '2026-01-01T00:00:00Z HARNESS_SPAWN_INTENT {"log": ".refactor-loop/logs/phase9-issue262-r1-minimal.log"}\n',
+            encoding="utf-8",
+        )
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        self.assertEqual(self.commands[0]["route"], "actor_health_recovery")
+        self.assertEqual(self.commands[0]["log"], ".refactor-loop/logs/phase9-issue262-r1-minimal.log")
+
+    def test_phase9_router_archived_invalid_pending_intent_does_not_block_stale_actor_recovery(self) -> None:
+        self.write_ledger_entry(
+            key="262-1-minimal",
+            marker="DesignConsensusIssueIntake",
+            log_path=".refactor-loop/logs/phase9-issue262-r1-minimal.log",
+            dispatched_at="2026-01-01T00:00:00Z",
+        )
+        self.router.ctx.host_env["STALE_REVIVAL_HOURS"] = "0.001"
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        malformed_line = (
+            "2026-01-01T00:00:00Z HARNESS_SPAWN_INTENT "
+            + json.dumps(
+                {
+                    "intent_id": "phase9-router:262:1:minimal",
+                    "log": ".refactor-loop/logs/phase9-issue262-r1-minimal.log",
+                    "queued_at": None,
+                },
+                sort_keys=True,
+            )
+        )
+        archived_digest = harness_spawn_intent_line_digest(malformed_line)
+        pending.write_text(
+            malformed_line
+            + "\n"
+            + f"2026-01-01T00:00:01Z {ARCHIVED_INVALID_HARNESS_SPAWN_INTENT_MARKER}:{archived_digest}:missing-queued_at\n",
+            encoding="utf-8",
+        )
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        self.assertEqual(self.commands[0]["route"], "actor_health_recovery")
+        self.assertEqual(self.commands[0]["log"], ".refactor-loop/logs/phase9-issue262-r1-minimal.log")
 
     def test_phase9_router_recovers_missing_ledgered_actor_during_capacity_hard_gate(self) -> None:
         now = datetime.now(timezone.utc)

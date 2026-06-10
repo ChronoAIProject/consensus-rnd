@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import importlib
 import json
 import os
@@ -210,6 +211,9 @@ DESIGN_CONSENSUS_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)
 IMPLEMENT_PENDING_INTENT_PREFIX = "dispatch-consensus-implementation:"
 IMPLEMENT_TASK_PREFIX = "implement-"
 REVIEW_PENDING_SECONDS = 90
+INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT = ".refactor-loop/.controller-pending-events.log"
+INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER = "HARNESS_SPAWN_INTENT"
+ARCHIVED_INVALID_HARNESS_SPAWN_INTENT_MARKER = "WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT"
 
 
 @dataclass(frozen=True)
@@ -318,11 +322,14 @@ def harness_spawn_intent_actions(
     actions: list[dict[str, Any]] = []
     seen: set[str] = set()
     terminal_blocked_intent_ids = _terminal_blocked_harness_spawn_intent_ids(lines)
+    archived_invalid_markers = archived_invalid_harness_spawn_intent_markers(lines)
     open_items = gh_items or []
     open_targets = _open_managed_targets(open_items) if gh_items_loaded else set()
     terminal_design_targets = _terminal_design_consensus_targets(open_items) if gh_items_loaded else set()
     for line in lines:
         if " HARNESS_SPAWN_INTENT " not in line:
+            continue
+        if harness_spawn_intent_line_is_archived_invalid(line, None, archived_invalid_markers):
             continue
         raw_json = line.split(" HARNESS_SPAWN_INTENT ", 1)[1]
         try:
@@ -337,14 +344,14 @@ def harness_spawn_intent_actions(
         if not isinstance(intent_id, str) or not intent_id:
             actions.append(_invalid_harness_spawn_intent("missing-intent-id", line))
             continue
-        if intent_id in seen:
-            continue
-        seen.add(intent_id)
         try:
             validated = validate_harness_spawn_intent(ctx, intent)
         except ValueError as exc:
             actions.append(_invalid_harness_spawn_intent(str(exc), line, intent_id=intent_id))
             continue
+        if intent_id in seen:
+            continue
+        seen.add(intent_id)
         cd = validated.cd
         prompt = validated.prompt
         log_path = validated.log_path
@@ -383,6 +390,10 @@ def harness_spawn_intent_actions(
             _harness_spawn_intent_action(intent, intent_id, cd, prompt, log_path, line)
         )
     return actions
+
+
+def harness_spawn_intent_line_digest(line: str) -> str:
+    return hashlib.sha256(line.encode("utf-8")).hexdigest()[:16]
 
 
 def _harness_spawn_intent_action(
@@ -862,6 +873,9 @@ def _harness_spawn_intent_invalid_reason(intent: dict[str, Any]) -> str | None:
         return "missing-background-requirement"
     if intent.get("no_lifecycle_authority") is not True:
         return "missing-no-lifecycle-authority"
+    queued_at = intent.get("queued_at")
+    if not isinstance(queued_at, str) or not queued_at:
+        return "missing-queued_at"
     return None
 
 
@@ -893,17 +907,57 @@ def validate_harness_spawn_intent(ctx: LoopContext, intent: dict[str, Any]) -> H
 
 
 def _invalid_harness_spawn_intent(reason: str, evidence: str, *, intent_id: str | None = None) -> dict[str, Any]:
+    identity = harness_spawn_intent_line_digest(evidence)
     return {
         "priority": 2,
         "kind": "harness-spawn-intent-invalid",
+        "action_id": f"harness-spawn-intent-invalid:{identity}",
         "item": intent_id,
         "phase": "bootstrap",
         "actor": "controller",
         "route": "harness-spawn-intent",
         "reason": reason,
         "evidence": evidence,
+        "source_artifact": INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT,
+        "source_marker": INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER,
+        "evidence_digest": harness_spawn_intent_line_digest(evidence),
+        "runner_authority": RUNNER_AUTHORITY,
+        "preconditions": ["source_artifact_contains_evidence"],
         "no_lifecycle_authority": True,
+        "no_generic_command": True,
     }
+
+
+def archived_invalid_harness_spawn_intent_markers(lines: list[str]) -> tuple[str, ...]:
+    markers: list[str] = []
+    prefix = f"{ARCHIVED_INVALID_HARNESS_SPAWN_INTENT_MARKER}:"
+    for line in lines:
+        if prefix not in line:
+            continue
+        tail = line.split(prefix, 1)[1].strip()
+        if tail:
+            markers.append(tail)
+    return tuple(markers)
+
+
+def harness_spawn_intent_line_is_archived_invalid(
+    line: str,
+    payload: Mapping[str, Any] | None,
+    archived_invalid_markers: tuple[str, ...],
+) -> bool:
+    del payload
+    line_digest = harness_spawn_intent_line_digest(line)
+    return any(marker.startswith(f"{line_digest}:") or marker == line_digest for marker in archived_invalid_markers)
+
+
+def live_valid_harness_spawn_intent(ctx: LoopContext, line: str, intent: dict[str, Any], archived_invalid_markers: tuple[str, ...]) -> bool:
+    if harness_spawn_intent_line_is_archived_invalid(line, intent, archived_invalid_markers):
+        return False
+    try:
+        validate_harness_spawn_intent(ctx, intent)
+    except ValueError:
+        return False
+    return True
 
 
 def configured_floor() -> int:
@@ -2328,12 +2382,15 @@ def valid_required_review_round_complete(repo_root: Path, pr_number: int, head_s
     return all(rounds.get(role, (0, ""))[1] == head_sha for role in REQUIRED_REVIEW_ROLES)
 
 
-def pending_review_spawn_exists(repo_root: Path, pr_number: int) -> bool:
+def pending_review_spawn_exists(repo_root: Path, pr_number: int, ctx: LoopContext | None = None) -> bool:
     pending_path = repo_root / ".refactor-loop" / ".controller-pending-events.log"
     try:
         lines = pending_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return False
+    if ctx is None:
+        ctx = LoopContext.load(repo_root=repo_root, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=repo_root, read_only=True)
+    archived_invalid_markers = archived_invalid_harness_spawn_intent_markers(lines)
     prefix = f"dispatch-reviewers:{pr_number}:"
     for line in lines:
         if " HARNESS_SPAWN_INTENT " not in line:
@@ -2343,6 +2400,8 @@ def pending_review_spawn_exists(repo_root: Path, pr_number: int) -> bool:
         except json.JSONDecodeError:
             continue
         if not isinstance(intent, dict):
+            continue
+        if not live_valid_harness_spawn_intent(ctx, line, intent, archived_invalid_markers):
             continue
         intent_id = str(intent.get("intent_id") or "")
         if not intent_id.startswith(prefix):
@@ -2368,7 +2427,7 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem], 
         projection = label_catalog.normalize_label_set(item.labels)
         if projection.phase not in {label_catalog.PHASE_REVIEWING, label_catalog.PHASE_PR_OPEN}:
             continue
-        if not item.head_sha or pending_review_spawn_exists(repo_root, item.number):
+        if not item.head_sha or pending_review_spawn_exists(repo_root, item.number, ctx):
             continue
         if valid_required_review_round_complete(repo_root, item.number, item.head_sha):
             continue
@@ -3807,7 +3866,7 @@ def _open_pr_exists_for_branch(items: list[GhItem], head_ref: str) -> bool:
     return False
 
 
-def _pending_implement_intent_exists(repo_root: Path, issue: int, action: dict[str, Any]) -> bool:
+def _pending_implement_intent_exists(repo_root: Path, issue: int, action: dict[str, Any], ctx: LoopContext | None = None) -> bool:
     pending_path = repo_root / ".refactor-loop" / ".controller-pending-events.log"
     if not pending_path.exists():
         return False
@@ -3815,6 +3874,9 @@ def _pending_implement_intent_exists(repo_root: Path, issue: int, action: dict[s
         lines = pending_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return False
+    if ctx is None:
+        ctx = LoopContext.load(repo_root=repo_root, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=repo_root, read_only=True)
+    archived_invalid_markers = archived_invalid_harness_spawn_intent_markers(lines)
     cluster_id = str(action.get("cluster_id") or "").strip()
     expected_ids = {f"{IMPLEMENT_PENDING_INTENT_PREFIX}{issue}"}
     if cluster_id:
@@ -3827,6 +3889,8 @@ def _pending_implement_intent_exists(repo_root: Path, issue: int, action: dict[s
         except json.JSONDecodeError:
             continue
         if not isinstance(intent, dict):
+            continue
+        if not live_valid_harness_spawn_intent(ctx, line, intent, archived_invalid_markers):
             continue
         intent_values = {str(intent.get("intent_id") or ""), str(intent.get("task_id") or "")}
         if expected_ids.intersection(intent_values):

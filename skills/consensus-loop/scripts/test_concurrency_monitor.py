@@ -28,7 +28,9 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         from codex_refactor_loop import labels as label_catalog
         from codex_refactor_loop.monitors import concurrency as concurrency_module
         from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
+        from codex_refactor_loop.wakeup_plan import harness_spawn_intent_line_digest
         self.module = concurrency_module
+        self.harness_spawn_intent_line_digest = harness_spawn_intent_line_digest
         self.labels = label_catalog
         self.ctx = LoopContext.load(repo_root=self.repo, env=os.environ)
         self.monitor = ConcurrencyMonitor(self.ctx)
@@ -878,6 +880,116 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 )
 
                 self.assertEqual(supply.supply, 0)
+
+    def test_archived_invalid_harness_spawn_intent_no_longer_blocks_hard_gate_supply(self) -> None:
+        malformed_intent = self.append_phase9_harness_spawn_intent("phase9-issue333-r4-minimal")
+        malformed_intent.pop("queued_at")
+        line = "2026-05-26T07:29:00Z HARNESS_SPAWN_INTENT " + json.dumps(malformed_intent, sort_keys=True)
+        pending = self.refactor_loop / ".controller-pending-events.log"
+        pending.write_text(line + "\n", encoding="utf-8")
+
+        blocked = self.monitor.hard_gate_transient_supply(
+            breakdown=[{"id": "#333", "kind": "issue", "phase": self.labels.PHASE_DESIGN_SOLVING, "expected": 1}],
+            target=3,
+            actual=0,
+            queue_empty=True,
+            now=1_779_780_600,
+        )
+
+        self.assertEqual(0, blocked.supply)
+        self.assertEqual("malformed-harness-spawn-intent:missing-queued_at", blocked.blocked_reason)
+
+        pending.write_text(
+            line
+            + "\n"
+            + "WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:"
+            + str(malformed_intent["intent_id"])
+            + ":missing-queued_at\n",
+            encoding="utf-8",
+        )
+
+        unblocked = self.monitor.hard_gate_transient_supply(
+            breakdown=[{"id": "#333", "kind": "issue", "phase": self.labels.PHASE_DESIGN_SOLVING, "expected": 1}],
+            target=3,
+            actual=0,
+            queue_empty=True,
+            now=1_779_780_600,
+        )
+
+        self.assertEqual("malformed-harness-spawn-intent:missing-queued_at", unblocked.blocked_reason)
+        self.assertEqual(0, unblocked.supply)
+
+        pending.write_text(
+            line
+            + "\n"
+            + "WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:"
+            + self.harness_spawn_intent_line_digest(line)
+            + ":missing-queued_at\n",
+            encoding="utf-8",
+        )
+        digest_unblocked = self.monitor.hard_gate_transient_supply(
+            breakdown=[{"id": "#333", "kind": "issue", "phase": self.labels.PHASE_DESIGN_SOLVING, "expected": 1}],
+            target=3,
+            actual=0,
+            queue_empty=True,
+            now=1_779_780_600,
+        )
+
+        self.assertIsNone(digest_unblocked.blocked_reason)
+
+    def test_distinct_archived_invalid_harness_spawn_intents_same_id_recover_by_digest(self) -> None:
+        first = self.append_phase9_harness_spawn_intent("phase9-issue333-r4-minimal")
+        first.pop("queued_at")
+        first["reason"] = "first malformed"
+        second = dict(first)
+        second["reason"] = "second malformed"
+        first_line = "2026-05-26T07:29:00Z HARNESS_SPAWN_INTENT " + json.dumps(first, sort_keys=True)
+        second_line = "2026-05-26T07:29:01Z HARNESS_SPAWN_INTENT " + json.dumps(second, sort_keys=True)
+        pending = self.refactor_loop / ".controller-pending-events.log"
+        pending.write_text(
+            first_line
+            + "\n"
+            + second_line
+            + "\n"
+            + "WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:"
+            + self.harness_spawn_intent_line_digest(first_line)
+            + ":missing-queued_at\n",
+            encoding="utf-8",
+        )
+
+        still_blocked = self.monitor.hard_gate_transient_supply(
+            breakdown=[{"id": "#333", "kind": "issue", "phase": self.labels.PHASE_DESIGN_SOLVING, "expected": 1}],
+            target=3,
+            actual=0,
+            queue_empty=True,
+            now=1_779_780_600,
+        )
+
+        self.assertEqual("malformed-harness-spawn-intent:missing-queued_at", still_blocked.blocked_reason)
+
+        pending.write_text(
+            first_line
+            + "\n"
+            + second_line
+            + "\n"
+            + "WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:"
+            + self.harness_spawn_intent_line_digest(first_line)
+            + ":missing-queued_at\n"
+            + "WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:"
+            + self.harness_spawn_intent_line_digest(second_line)
+            + ":missing-queued_at\n",
+            encoding="utf-8",
+        )
+
+        recovered = self.monitor.hard_gate_transient_supply(
+            breakdown=[{"id": "#333", "kind": "issue", "phase": self.labels.PHASE_DESIGN_SOLVING, "expected": 1}],
+            target=3,
+            actual=0,
+            queue_empty=True,
+            now=1_779_780_600,
+        )
+
+        self.assertIsNone(recovered.blocked_reason)
 
     def test_tick_terminal_implement_result_does_not_trigger_no_gap_expected_worker(self) -> None:
         items = [
