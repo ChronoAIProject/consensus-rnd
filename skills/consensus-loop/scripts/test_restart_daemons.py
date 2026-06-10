@@ -657,6 +657,25 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assert_start_count("concurrency_monitor", 2)
         self.assertNotEqual(old_pid, self.read_pid("concurrency_monitor"))
 
+    def test_orphan_managed_child_lock_holder_is_reaped_and_restarted_once(self) -> None:
+        self.run_helper()
+        old_wrapper_pid = self.read_pid("phase9_router_daemon")
+        orphan_child_pid = 515151
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        (self.repo / ".refactor-loop" / "phase9-router.lock").write_text(f"pid={orphan_child_pid}\n", encoding="utf-8")
+        self.runtime.live_pids.discard(old_wrapper_pid)
+        self.runtime.wrapper_commands.pop(old_wrapper_pid, None)
+        self.runtime.live_pids.add(orphan_child_pid)
+        self.runtime.inventory_override = DaemonProcessInventory((DaemonProcess(orphan_child_pid, " ".join(target.command)),))
+
+        helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
+        helper.start_daemon("phase9_router_daemon", FAKE_COMMAND)
+
+        new_pid = self.read_pid("phase9_router_daemon")
+        self.assertEqual([(orphan_child_pid, self.config.stop_grace_seconds)], self.runtime.terminated)
+        self.assertNotEqual(old_wrapper_pid, new_pid)
+        self.assert_start_count("phase9_router_daemon", 2)
+
     def test_duplicate_canonical_matching_ignores_other_repo_and_non_allowlist_commands(self) -> None:
         command = self.runtime.canonical_command(self.ctx, "concurrency_monitor", FAKE_COMMAND)
         other_repo = command.replace(str(self.ctx.repo_root), "/tmp/other-repo")
@@ -680,6 +699,38 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual((111,), live)
+
+    def test_daemon_instance_projects_wrappers_children_and_bounded_lock_holders(self) -> None:
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        wrapper_command = self.runtime.canonical_command(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        lock_holder = self.repo / ".refactor-loop" / "phase9-router.lock"
+        lock_holder.write_text("pid=222\n", encoding="utf-8")
+        other_lock = self.repo / ".refactor-loop" / "other.lock"
+        other_lock.write_text("333\n", encoding="utf-8")
+        inventory = DaemonProcessInventory(
+            (
+                DaemonProcess(111, wrapper_command),
+                DaemonProcess(222, " ".join(target.command)),
+                DaemonProcess(333, " ".join(target.command)),
+                DaemonProcess(444, "python3 unrelated.py"),
+            )
+        )
+        self.runtime.live_pids.update({111, 222, 333, 444})
+
+        projection = inventory.daemon_instance(
+            name="phase9_router_daemon",
+            repo_root=self.ctx.repo_root,
+            pid_file=target.pid_file,
+            died_file=target.died_file,
+            command=target.command,
+            lock_files=(lock_holder,),
+            is_alive=self.runtime.pid_alive,
+        )
+
+        self.assertEqual((111,), projection.live_wrapper_pids)
+        self.assertEqual((222, 333), projection.live_managed_child_pids)
+        self.assertEqual((222,), projection.bounded_lock_holder_pids)
+        self.assertEqual((111, 222), projection.repair_pids)
 
     def test_restart_wrapper_matching_accepts_skill_root_and_command_normalization_variance(self) -> None:
         template = ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon", "--interval", "120")
@@ -829,6 +880,33 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual(old_pid, self.read_pid("concurrency_monitor"))
         self.assert_start_count("concurrency_monitor", 1)
 
+    def test_daemon_status_reports_orphan_child_lock_holder_stale_without_repair(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("phase9_router_daemon")
+        orphan_child_pid = 616161
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        (self.repo / ".refactor-loop" / "state").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop" / "phase9-router.lock").write_text(f"pid={orphan_child_pid}\n", encoding="utf-8")
+        self.runtime.live_pids.discard(old_pid)
+        self.runtime.wrapper_commands.pop(old_pid, None)
+        self.runtime.live_pids.add(orphan_child_pid)
+        inventory = DaemonProcessInventory((DaemonProcess(orphan_child_pid, " ".join(target.command)),))
+
+        report = self.collect_status_with_fake_allowlist(inventory)
+
+        daemon = next(item for item in report.daemons if item.name == "phase9_router_daemon")
+        payload = daemon.to_json()
+        self.assertEqual("stale", daemon.status)
+        self.assertEqual("orphan-lock-holders:1", daemon.stale_reason)
+        self.assertEqual([orphan_child_pid], payload["managed_child_pids"])
+        self.assertEqual([orphan_child_pid], payload["bounded_lock_holder_pids"])
+        self.assertEqual(old_pid, self.read_pid("phase9_router_daemon"))
+        self.assert_start_count("phase9_router_daemon", 1)
+
     def test_daemon_status_resolves_static_allowlist_targets(self) -> None:
         targets = daemon_targets(self.ctx)
         self.assertEqual(DAEMON_NAMES, tuple(target.name for target in targets))
@@ -870,6 +948,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             "DaemonHeartbeatStatus",
             "expected_launch_fingerprint",
             "DaemonProcessInventory",
+            "DaemonInstanceProjection",
+            "live_managed_children",
+            "bounded_lock_holder_pids",
             "_run_restart_wrapper",
             "child exited exit=",
             "terminating child and restarting same command",

@@ -15,6 +15,7 @@ from .restart import (
     DaemonProcessInventory,
     DaemonTarget,
     RestartConfig,
+    daemon_lock_files,
     daemon_targets,
     expected_launch_fingerprint,
     pid_alive,
@@ -35,6 +36,8 @@ class DaemonStatusProjection:
     fingerprint_current: bool
     duplicate_canonical_wrappers: int
     active_controller: str
+    managed_child_pids: tuple[int, ...] = ()
+    bounded_lock_holder_pids: tuple[int, ...] = ()
     heartbeat_status: str = ""
     stale_reason: str = ""
     current_github_login: str = ""
@@ -51,6 +54,8 @@ class DaemonStatusProjection:
             "heartbeat_fresh": self.heartbeat_fresh,
             "fingerprint_current": self.fingerprint_current,
             "duplicate_canonical_wrappers": self.duplicate_canonical_wrappers,
+            "managed_child_pids": list(self.managed_child_pids),
+            "bounded_lock_holder_pids": list(self.bounded_lock_holder_pids),
             "active_controller": self.active_controller,
             "current_github_login": self.current_github_login,
             "identity_authority": self.identity_authority,
@@ -110,16 +115,35 @@ def _project_target(
     stored = read_stored_launch_fingerprint(target)
     expected = expected_launch_fingerprint(ctx, target)
     fingerprint_current = stored is not None and stored.matches(expected)
-    live_wrappers = inventory.live_restart_wrappers(
+    instance = inventory.daemon_instance(
         name=target.name,
         repo_root=ctx.repo_root,
         pid_file=target.pid_file,
         died_file=target.died_file,
         command=target.command,
+        lock_files=daemon_lock_files(ctx, target.name),
+        is_alive=pid_alive,
     )
-    duplicate_count = max(0, len(live_wrappers) - 1)
-    running = pid is not None and pid_alive(pid) and heartbeat_fresh and fingerprint_current and duplicate_count == 0
-    status = _daemon_status(active_status["active_controller"], pid, running, heartbeat_fresh, fingerprint_current, duplicate_count)
+    duplicate_count = instance.duplicate_wrapper_count
+    orphan_lock_holder_count = len(instance.orphan_lock_holder_pids)
+    running = (
+        pid is not None
+        and instance.live_wrapper_pids == (pid,)
+        and pid_alive(pid)
+        and heartbeat_fresh
+        and fingerprint_current
+        and duplicate_count == 0
+        and orphan_lock_holder_count == 0
+    )
+    status = _daemon_status(
+        active_status["active_controller"],
+        pid,
+        running,
+        heartbeat_fresh,
+        fingerprint_current,
+        duplicate_count,
+        orphan_lock_holder_count,
+    )
     stale_reason = _stale_reason(
         status=status,
         pid=pid,
@@ -127,6 +151,7 @@ def _project_target(
         heartbeat_fresh=heartbeat_fresh,
         fingerprint_current=fingerprint_current,
         duplicate_count=duplicate_count,
+        orphan_lock_holder_count=orphan_lock_holder_count,
     )
     return DaemonStatusProjection(
         name=target.name,
@@ -136,6 +161,8 @@ def _project_target(
         heartbeat_fresh=heartbeat_fresh,
         fingerprint_current=fingerprint_current,
         duplicate_canonical_wrappers=duplicate_count,
+        managed_child_pids=instance.live_managed_child_pids,
+        bounded_lock_holder_pids=instance.bounded_lock_holder_pids,
         active_controller=active_status["active_controller"],
         heartbeat_status=heartbeat.state,
         stale_reason=stale_reason,
@@ -151,14 +178,17 @@ def _daemon_status(
     heartbeat_fresh: bool,
     fingerprint_current: bool,
     duplicate_count: int,
+    orphan_lock_holder_count: int,
 ) -> str:
     if active_controller.startswith("noop:not-owner"):
         return "not-owner"
     if running:
         return "running"
+    if orphan_lock_holder_count:
+        return "stale"
     if pid is None:
         return "dead"
-    if not heartbeat_fresh or not fingerprint_current or duplicate_count:
+    if not heartbeat_fresh or not fingerprint_current or duplicate_count or orphan_lock_holder_count:
         return "stale"
     if not pid_alive(pid):
         return "dead"
@@ -173,11 +203,14 @@ def _stale_reason(
     heartbeat_fresh: bool,
     fingerprint_current: bool,
     duplicate_count: int,
+    orphan_lock_holder_count: int,
 ) -> str:
     if status == "running":
         return ""
     if status == "not-owner":
         return "not-owner"
+    if orphan_lock_holder_count:
+        return f"orphan-lock-holders:{orphan_lock_holder_count}"
     if pid is None:
         return "pid-missing"
     if not pid_alive(pid):

@@ -187,6 +187,37 @@ class DaemonProcess:
 
 
 @dataclass(frozen=True)
+class DaemonInstanceProjection:
+    name: str
+    pid_file_pid: int | None
+    live_wrapper_pids: tuple[int, ...]
+    live_managed_child_pids: tuple[int, ...]
+    bounded_lock_holder_pids: tuple[int, ...]
+
+    @property
+    def duplicate_wrapper_count(self) -> int:
+        return max(0, len(self.live_wrapper_pids) - 1)
+
+    @property
+    def has_singleton_wrapper(self) -> bool:
+        return len(self.live_wrapper_pids) == 1
+
+    @property
+    def orphan_lock_holder_pids(self) -> tuple[int, ...]:
+        if self.has_singleton_wrapper:
+            return ()
+        return self.bounded_lock_holder_pids
+
+    @property
+    def repair_pids(self) -> tuple[int, ...]:
+        pids = set(self.live_wrapper_pids)
+        pids.update(self.bounded_lock_holder_pids)
+        if self.pid_file_pid is not None:
+            pids.add(self.pid_file_pid)
+        return tuple(sorted(pids))
+
+
+@dataclass(frozen=True)
 class DaemonProcessInventory:
     processes: tuple[DaemonProcess, ...]
 
@@ -227,6 +258,84 @@ class DaemonProcessInventory:
             pids.append(process.pid)
         return tuple(sorted(set(pids)))
 
+    def daemon_instance(
+        self,
+        *,
+        name: str,
+        repo_root: Path,
+        pid_file: Path,
+        died_file: Path,
+        command: Sequence[str],
+        lock_files: Sequence[Path] = (),
+        is_alive=None,
+    ) -> DaemonInstanceProjection:
+        alive = is_alive or pid_alive
+        live_wrappers = self.live_restart_wrappers(
+            name=name,
+            repo_root=repo_root,
+            pid_file=pid_file,
+            died_file=died_file,
+            command=command,
+            is_alive=alive,
+        )
+        child_pids = self.live_managed_children(
+            name=name,
+            command=command,
+            is_alive=alive,
+        )
+        lock_holder_pids = self.bounded_lock_holder_pids(
+            name=name,
+            command=command,
+            lock_files=lock_files,
+            is_alive=alive,
+        )
+        return DaemonInstanceProjection(
+            name=name,
+            pid_file_pid=_read_pid(pid_file),
+            live_wrapper_pids=live_wrappers,
+            live_managed_child_pids=child_pids,
+            bounded_lock_holder_pids=lock_holder_pids,
+        )
+
+    def live_managed_children(
+        self,
+        *,
+        name: str,
+        command: Sequence[str],
+        is_alive=None,
+    ) -> tuple[int, ...]:
+        if name not in restart_managed_daemon_names() and name != SUPERVISOR_DAEMON_COMMAND[0]:
+            return ()
+        alive = is_alive or pid_alive
+        pids = []
+        for process in self.processes:
+            if process.pid <= 0 or not alive(process.pid):
+                continue
+            if not ManagedChildCommandShape.matches(process.command, command):
+                continue
+            pids.append(process.pid)
+        return tuple(sorted(set(pids)))
+
+    def bounded_lock_holder_pids(
+        self,
+        *,
+        name: str,
+        command: Sequence[str],
+        lock_files: Sequence[Path],
+        is_alive=None,
+    ) -> tuple[int, ...]:
+        if name not in restart_managed_daemon_names() and name != SUPERVISOR_DAEMON_COMMAND[0]:
+            return ()
+        alive = is_alive or pid_alive
+        child_pids = set(self.live_managed_children(name=name, command=command, is_alive=alive))
+        holders = []
+        for lock_file in lock_files:
+            holder = _read_lock_holder_pid(lock_file)
+            if holder is None or holder not in child_pids or not alive(holder):
+                continue
+            holders.append(holder)
+        return tuple(sorted(set(holders)))
+
     def live_canonical_wrappers(
         self,
         *,
@@ -245,6 +354,13 @@ class DaemonProcessInventory:
             command=command,
             is_alive=is_alive,
         )
+
+
+@dataclass(frozen=True)
+class ManagedChildCommandShape:
+    @classmethod
+    def matches(cls, command_line: str, expected: Sequence[str]) -> bool:
+        return _restart_daemon_command_matches(command_line, expected)
 
 
 @dataclass(frozen=True)
@@ -280,6 +396,14 @@ def daemon_target(ctx: LoopContext, name: str, command_template: Sequence[str]) 
         fingerprint_file=ctx.paths.refactor_loop / "locks" / f"{name}.fingerprint.json",
         died_file=ctx.paths.logs / f"{name}.died",
     )
+
+
+def daemon_lock_files(ctx: LoopContext, name: str) -> tuple[Path, ...]:
+    relative_paths = {
+        "dev_sync_daemon": (Path(".refactor-loop/dev-sync-daemon.lock"),),
+        "phase9_router_daemon": (Path(".refactor-loop/phase9-router.lock"),),
+    }.get(name, ())
+    return tuple(ctx.repo_root / relative_path for relative_path in relative_paths)
 
 
 def daemon_targets(ctx: LoopContext, target: str = "all") -> tuple[DaemonTarget, ...]:
@@ -462,18 +586,19 @@ class RestartDaemons:
         command = list(target.command)
         current_fingerprint = self._current_fingerprint(name, command)
         inventory = self.runtime.collect_inventory()
-        live_wrappers = inventory.live_restart_wrappers(
+        instance = inventory.daemon_instance(
             name=name,
             repo_root=self.ctx.repo_root,
             pid_file=target.pid_file,
             died_file=died_file,
             command=target.command,
+            lock_files=daemon_lock_files(self.ctx, name),
             is_alive=self.runtime.pid_alive,
         )
-        if len(live_wrappers) == 1 and self._singleton_check_fresh(target, current_fingerprint, live_wrappers):
+        if instance.has_singleton_wrapper and self._singleton_check_fresh(target, current_fingerprint, instance):
             self._log(f"{name} skip: alive pid={pid_file.read_text(encoding='utf-8').strip()} heartbeat=fresh")
             return
-        self._stop_existing_daemon(target, live_wrappers=live_wrappers)
+        self._stop_existing_daemon(target, instance=instance)
         wrapper_code = WRAPPER_CODE
         env = accounting_env(
             self.ctx.env_for_subprocess(),
@@ -569,13 +694,13 @@ class RestartDaemons:
         self,
         target: DaemonTarget,
         current_fingerprint: DaemonLaunchFingerprint,
-        live_wrappers: Sequence[int],
+        instance: DaemonInstanceProjection,
     ) -> bool:
         pid = _read_pid(target.pid_file)
         stored_fingerprint = DaemonLaunchFingerprint.read(target.fingerprint_file)
         return (
             pid is not None
-            and tuple(live_wrappers) == (pid,)
+            and instance.live_wrapper_pids == (pid,)
             and self.runtime.pid_alive(pid)
             and self._heartbeat_is_fresh(target.name)
             and stored_fingerprint is not None
@@ -586,12 +711,8 @@ class RestartDaemons:
         target = daemon_target(self.ctx, name, ())
         return heartbeat_is_fresh(target, self.config, now=self.runtime.now())
 
-    def _stop_existing_daemon(self, target: DaemonTarget, *, live_wrappers: Sequence[int]) -> None:
-        pids = set(live_wrappers)
-        pid = _read_pid(target.pid_file)
-        if pid is not None:
-            pids.add(pid)
-        for existing_pid in sorted(pids):
+    def _stop_existing_daemon(self, target: DaemonTarget, *, instance: DaemonInstanceProjection) -> None:
+        for existing_pid in instance.repair_pids:
             if self.runtime.pid_alive(existing_pid):
                 self.runtime.terminate_pid(existing_pid, self.config.stop_grace_seconds)
         target.pid_file.unlink(missing_ok=True)
@@ -876,6 +997,23 @@ def _read_pid(path: Path) -> int | None:
     except OSError:
         return None
     return int(raw) if raw.isdigit() else None
+
+
+def _read_lock_holder_pid(path: Path) -> int | None:
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if raw.isdigit():
+        return int(raw)
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("pid="):
+            continue
+        value = stripped.removeprefix("pid=").strip()
+        if value.isdigit():
+            return int(value)
+    return None
 
 
 def _file_digest(path: Path) -> str:
