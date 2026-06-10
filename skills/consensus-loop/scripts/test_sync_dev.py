@@ -427,6 +427,27 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertFalse(any(command[:3] == ["git", "merge", "--continue"] for command in fake.commands))
         self.assertIn(["git", "rebase", "--continue"], fake.commands)
 
+    def test_resolved_adoption_rebase_takes_priority_over_merge_head(self) -> None:
+        fake = FakeGit(replay_count=2)
+        git_dir = self.worktree / ".git"
+        git_dir.mkdir(parents=True)
+        (git_dir / "MERGE_HEAD").write_text("merge\n", encoding="utf-8")
+        (git_dir / "rebase-merge").mkdir()
+        self.write_adoption_operation(ahead_count=2)
+
+        self.daemon(
+            fake,
+            merge_detector=lambda cwd: merge_in_progress(cwd, fake),
+            rebase_detector=lambda cwd: rebase_in_progress(cwd, fake),
+            resolver_in_flight=lambda: False,
+        ).tick()
+
+        operations = self.operation_jsons()
+        self.assertEqual(["adopt-merged-rollup", "continue-resolved-rollup-adoption-rebase"], [op["kind"] for op in operations])
+        self.assertNotIn("continue-resolved-merge", [op["kind"] for op in operations])
+        self.assertFalse(any(command[:3] == ["git", "merge", "--continue"] for command in fake.commands))
+        self.assertIn(["git", "rebase", "--continue"], fake.commands)
+
     def test_stale_or_missing_adoption_rebase_is_pending_only(self) -> None:
         for label, writer in (
             ("missing", lambda: None),

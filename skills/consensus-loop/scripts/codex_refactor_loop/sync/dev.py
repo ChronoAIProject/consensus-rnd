@@ -799,6 +799,23 @@ class IntegrationSyncDaemon:
 
         self.run(["git", "fetch", "origin", "--quiet"], cwd=cwd)
 
+        if self.rebase_in_progress(cwd):
+            if self.codex_resolve_in_flight():
+                self.log("skip: rebase in progress + codex resolving")
+                self.log("dev-sync: tick noop:rebase-resolution-in-flight")
+            else:
+                unresolved = self.run(["git", "diff", "--name-only", "--diff-filter=U"], cwd=cwd)
+                if unresolved.returncode == 0 and not unresolved.stdout.strip():
+                    if self.continue_resolved_rollup_adoption_rebase(cwd):
+                        self.log("dev-sync: tick dispatched continue-resolved-rollup-adoption-rebase")
+                    else:
+                        self.log("dev-sync: tick blocked:rollup-adoption-rebase-ambiguous")
+                else:
+                    self.log("WARN: rebase in progress but no codex running - dispatching")
+                    self.dispatch_codex_resolve()
+                    self.log("dev-sync: tick dispatched conflict-resolver")
+            return
+
         if self.merge_in_progress(cwd):
             if self.codex_resolve_in_flight():
                 self.log("skip: merge in progress + codex resolving")
@@ -825,23 +842,6 @@ class IntegrationSyncDaemon:
                         self.log("dev-sync: tick dispatched continue-resolved-merge")
                 else:
                     self.log("WARN: merge in progress but no codex running - dispatching")
-                    self.dispatch_codex_resolve()
-                    self.log("dev-sync: tick dispatched conflict-resolver")
-            return
-
-        if self.rebase_in_progress(cwd):
-            if self.codex_resolve_in_flight():
-                self.log("skip: rebase in progress + codex resolving")
-                self.log("dev-sync: tick noop:rebase-resolution-in-flight")
-            else:
-                unresolved = self.run(["git", "diff", "--name-only", "--diff-filter=U"], cwd=cwd)
-                if unresolved.returncode == 0 and not unresolved.stdout.strip():
-                    if self.continue_resolved_rollup_adoption_rebase(cwd):
-                        self.log("dev-sync: tick dispatched continue-resolved-rollup-adoption-rebase")
-                    else:
-                        self.log("dev-sync: tick blocked:rollup-adoption-rebase-ambiguous")
-                else:
-                    self.log("WARN: rebase in progress but no codex running - dispatching")
                     self.dispatch_codex_resolve()
                     self.log("dev-sync: tick dispatched conflict-resolver")
             return
