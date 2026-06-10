@@ -1573,6 +1573,54 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.action_id for result in results], ["spawn:duplicate", "spawn:later"])
         launch.assert_called_once()
 
+    def test_unsupported_applied_ledger_row_does_not_suppress_retry(self) -> None:
+        action = self.worker_output_action(action_id="safe-push:stale-applied-ledger")
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "unpushed-worker-output"})
+            + "\n",
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual([call[0] for call in actions.calls], ["safe_push"])
+
+    def test_consensus_implementation_applied_row_retries_without_dispatch_effect(self) -> None:
+        action = self.consensus_action(action_id="consensus-implementation:stale-applied")
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "completed-marker"})
+            + "\n",
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual([call[0] for call in actions.calls], ["dispatch_consensus_implementation"])
+
+    def test_consensus_implementation_applied_row_suppresses_after_dispatch_receipt(self) -> None:
+        action = self.consensus_action(action_id="consensus-implementation:receipt")
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "completed-marker"})
+            + "\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop/.controller-pending-events.log").write_text(
+            "WAKEUP_RUNNER_CONSENSUS_IMPLEMENTATION_DISPATCHED:20:issue-20:consensus-implementation:receipt\n",
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "duplicate")
+        self.assertEqual(actions.calls, [])
+
     def test_wakeup_runner_missing_or_invalid_budget_keeps_single_apply_compatibility(self) -> None:
         cases = (
             ("missing", self.base_plan),
@@ -3393,6 +3441,179 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(actions.calls[0][0], "safe_push")
         self.assertEqual(actions.calls[-1][0], "dispatch_reviewers")
 
+    def test_publish_review_fix_applied_row_retries_when_fix_worktree_dirty(self) -> None:
+        action = self.reviewer_dispatch_action(
+            action_id="publish-review-fix-output:77:dirty",
+            controller_action="publish_review_fix_output_from_action",
+            target_number=77,
+            head_sha="a" * 40,
+        )
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "completed-marker"})
+            + "\n",
+            encoding="utf-8",
+        )
+        worktree = self.repo / ".worktrees" / "iter77-worker"
+        worktree.mkdir(parents=True, exist_ok=True)
+        actions = FakeActions()
+
+        def command_runner(command):
+            if command[:2] == ["gh", "api"]:
+                endpoint = str(command[2]) if len(command) > 2 else ""
+                if endpoint == "user":
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"login": "current-user"}), "")
+                if endpoint.startswith("repos/owner/repo/collaborators/") and endpoint.endswith("/permission"):
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"permission": "write"}), "")
+                if "/pulls/" in endpoint:
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open"}), "")
+                return subprocess.CompletedProcess(command, 0, "{}", "")
+            if command[:3] == ["gh", "pr", "view"]:
+                if "headRefOid" in command or ".headRefOid" in command:
+                    return subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", "")
+                if "headRefName" in command:
+                    if "--jq" not in command:
+                        return subprocess.CompletedProcess(command, 0, json.dumps({"headRefName": "refactor/iter77-worker"}), "")
+                    return subprocess.CompletedProcess(command, 0, "refactor/iter77-worker\n", "")
+                return subprocess.CompletedProcess(command, 0, "OPEN\n", "")
+            if command[:2] == ["git", "-C"] and command[3:] == ["worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    f"worktree {self.repo}\nbranch refs/heads/auto-refact-dev\n\n"
+                    f"worktree {worktree}\nbranch refs/heads/refactor/iter77-worker\n\n",
+                    "",
+                )
+            if command[:2] == ["git", "-C"] and command[3:] == ["status", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, " M skills/x.py\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        runner = WakeupRunner(
+            self.ctx,
+            plan_loader=lambda _repo: self.base_plan(action),
+            actions=actions,
+            supervisor=self.supervisor,
+            command_runner=command_runner,
+        )
+
+        results = runner.run_once()
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual([call[0] for call in actions.calls], ["safe_push", "dispatch_reviewers"])
+
+    def test_publish_review_fix_applied_row_retries_when_live_pr_head_unknown(self) -> None:
+        action = self.reviewer_dispatch_action(
+            action_id="publish-review-fix-output:77:unknown-head",
+            controller_action="publish_review_fix_output_from_action",
+            target_number=77,
+            head_sha="a" * 40,
+        )
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "completed-marker"})
+            + "\n",
+            encoding="utf-8",
+        )
+        worktree = self.repo / ".worktrees" / "iter77-worker"
+        worktree.mkdir(parents=True, exist_ok=True)
+
+        def command_runner(command):
+            if command[:3] == ["gh", "pr", "view"]:
+                if "headRefOid" in command or ".headRefOid" in command:
+                    return subprocess.CompletedProcess(command, 1, "", "not found")
+                if "headRefName" in command:
+                    if "--jq" not in command:
+                        return subprocess.CompletedProcess(command, 0, json.dumps({"headRefName": "refactor/iter77-worker"}), "")
+                    return subprocess.CompletedProcess(command, 0, "refactor/iter77-worker\n", "")
+                return subprocess.CompletedProcess(command, 0, "OPEN\n", "")
+            if command[:2] == ["gh", "api"]:
+                endpoint = str(command[2]) if len(command) > 2 else ""
+                if endpoint == "user":
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"login": "current-user"}), "")
+                if endpoint.startswith("repos/owner/repo/collaborators/") and endpoint.endswith("/permission"):
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"permission": "write"}), "")
+                if "/pulls/" in endpoint:
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open"}), "")
+                return subprocess.CompletedProcess(command, 0, "{}", "")
+            if command[:2] == ["git", "-C"] and command[3:] == ["worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    f"worktree {self.repo}\nbranch refs/heads/auto-refact-dev\n\n"
+                    f"worktree {worktree}\nbranch refs/heads/refactor/iter77-worker\n\n",
+                    "",
+                )
+            if command[:2] == ["git", "-C"] and command[3:] == ["status", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, " M skills/x.py\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        actions = FakeActions()
+        runner = WakeupRunner(
+            self.ctx,
+            plan_loader=lambda _repo: self.base_plan(action),
+            actions=actions,
+            supervisor=self.supervisor,
+            command_runner=command_runner,
+        )
+
+        results = runner.run_once()
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual([call[0] for call in actions.calls], ["safe_push", "dispatch_reviewers"])
+
+    def test_publish_review_fix_applied_row_suppresses_after_clean_worktree(self) -> None:
+        action = self.reviewer_dispatch_action(
+            action_id="publish-review-fix-output:77:clean",
+            controller_action="publish_review_fix_output_from_action",
+            target_number=77,
+            head_sha="a" * 40,
+        )
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "completed-marker"})
+            + "\n",
+            encoding="utf-8",
+        )
+        worktree = self.repo / ".worktrees" / "iter77-worker"
+        worktree.mkdir(parents=True, exist_ok=True)
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(action), implementation_status="", actions=actions)
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "duplicate")
+        self.assertEqual(actions.calls, [])
+
+    def test_publish_review_fix_applied_row_suppresses_after_live_head_advanced(self) -> None:
+        action = self.reviewer_dispatch_action(
+            action_id="publish-review-fix-output:77:advanced",
+            controller_action="publish_review_fix_output_from_action",
+            target_number=77,
+            head_sha="a" * 40,
+        )
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "completed-marker"})
+            + "\n",
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        def command_runner(command):
+            if command[:3] == ["gh", "pr", "view"] and ("headRefOid" in command or ".headRefOid" in command):
+                return subprocess.CompletedProcess(command, 0, "b" * 40 + "\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        runner = WakeupRunner(
+            self.ctx,
+            plan_loader=lambda _repo: self.base_plan(action),
+            actions=actions,
+            supervisor=self.supervisor,
+            command_runner=command_runner,
+        )
+
+        results = runner.run_once()
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "duplicate")
+        self.assertEqual(actions.calls, [])
+
     def test_publish_implementation_output_routes_to_named_helper(self) -> None:
         actions = FakeActions()
 
@@ -4105,6 +4326,85 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "dispatch_reviewers")
         self.assertEqual(actions.calls[0][1]["stale_review_roles"], ["architect", "tests"])
+
+    def test_stale_review_dispatch_applied_row_retries_when_evidence_still_stale(self) -> None:
+        for role in ("architect", "tests"):
+            (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r1.md").write_text(
+                "reviewed-head-sha: " + "b" * 40 + "\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/runs" / f"review-pr77-{role}-r1.md").write_text(
+                f"---\nverdict: approve\n---\nREVIEW_DONE:77:{role}:approve\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/logs" / f"review-pr77-{role}-r1.log").write_text(
+                f"REVIEW_DONE:77:{role}:approve\nEXIT=0\n",
+                encoding="utf-8",
+            )
+        action = self.reviewer_dispatch_action(
+            kind="review-evidence-redispatch",
+            action_id="review-evidence-redispatch:77:" + "a" * 40,
+            source_artifact="wakeup-plan",
+            source_marker="review-evidence-redispatch",
+            head_sha="a" * 40,
+            stale_review_roles=["architect", "tests"],
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "missing_or_stale_reviewer_head_evidence",
+            ],
+        )
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "review-evidence-redispatch"})
+            + "\n",
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "dispatch_reviewers")
+
+    def test_stale_review_dispatch_applied_row_suppresses_after_target_roles_current(self) -> None:
+        for role in ("architect", "tests"):
+            (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r2.md").write_text(
+                "reviewed-head-sha: " + "a" * 40 + "\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/runs" / f"review-pr77-{role}-r2.md").write_text(
+                f"---\nverdict: approve\n---\nREVIEW_DONE:77:{role}:approve\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/logs" / f"review-pr77-{role}-r2.log").write_text(
+                f"REVIEW_DONE:77:{role}:approve\nEXIT=0\n",
+                encoding="utf-8",
+            )
+        action = self.reviewer_dispatch_action(
+            kind="review-evidence-redispatch",
+            action_id="review-evidence-redispatch:77:" + "a" * 40,
+            source_artifact="wakeup-plan",
+            source_marker="review-evidence-redispatch",
+            head_sha="a" * 40,
+            stale_review_roles=["architect", "tests"],
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "missing_or_stale_reviewer_head_evidence",
+            ],
+        )
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "review-evidence-redispatch"})
+            + "\n",
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "duplicate")
+        self.assertEqual(actions.calls, [])
 
     def test_dispatch_reviewers_blocks_missing_or_non_pr_target_before_helper(self) -> None:
         cases = (
