@@ -47,6 +47,10 @@ Refactor (iter364/issue364):
    git log -p --follow -S '<symbol>' -- <file>
    ```
 
+## Reference-frame harness
+
+Before deciding, run a lightweight reference-frame pass: identify the applicable mature theory, engineering principle, industry best practice, or constraint framework for this class of change, then compare your plan or abstain decision against that known-good shape. Surface one short free-form note naming the frame, or say `no applicable mature theory found`. This is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for an honest abstain, false-positive, or no-plan outcome.
+
 ## Procedure
 
 0. **Host production SSOT boundary**: design plans must not make `.refactor-loop/host.env` the host production SSOT for branch topology, machine paths, durable ledger authority, or host artifacts. `.refactor-loop/` is skill-private runtime/cache/log state. If the issue or audit asks for that direction, rewrite the plan to host-owned config/rules/artifacts or mark false-positive/abstain.

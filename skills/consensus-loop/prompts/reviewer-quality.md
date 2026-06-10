@@ -18,6 +18,10 @@ You are **one of N independent reviewers**.
 2. Surrounding context: open each touched file fully (not just the hunks) when needed to judge naming / scope.
 3. Implement summary if present.
 
+## Reference-frame harness
+
+Before approving, commenting, or rejecting, run a lightweight reference-frame pass: identify the applicable mature theory, engineering principle, industry best practice, or constraint framework for your review angle, then compare the PR evidence against that known-good shape. Surface one short free-form note naming the frame, or say `no applicable mature theory found`. This is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for an honest comment or reject outcome.
+
 ## Your checklist (quality angle only)
 
 - [ ] **Naming expresses business intent**: types and public methods avoid generic words (`Manager`, `Handler`, `Helper`) unless they map to a named pattern in `$PROJECT_RULES`, canon, surrounding layer/domain vocabulary, or touched diff evidence. If there is no evidence for a host convention, comment instead of inventing one.
