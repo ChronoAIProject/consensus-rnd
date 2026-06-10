@@ -42,6 +42,13 @@ class FakeWrapper:
     pid: int
 
 
+@dataclass
+class FakeCommandResult:
+    returncode: int
+    stdout: str = ""
+    stderr: str = ""
+
+
 class FakeChild:
     def __init__(
         self,
@@ -759,6 +766,81 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual((857,), projection.canonical_child_pids)
         self.assertEqual((), projection.orphan_child_pids)
         self.assertEqual((857,), projection.live_managed_child_pids)
+
+    def test_process_inventory_collect_parses_pid_ppid_and_command_rows(self) -> None:
+        calls: list[list[str]] = []
+
+        def runner(command: list[str]) -> FakeCommandResult:
+            calls.append(command)
+            return FakeCommandResult(
+                returncode=0,
+                stdout=(
+                    " 848     1 "
+                    "/usr/bin/python3 -c wrapper phase9_router_daemon /repo /pid /died python3 cli\n"
+                    " 857   848 python3 /tmp/consensus-rnd-cli "
+                    "phase9-router --daemon\n"
+                ),
+            )
+
+        inventory = DaemonProcessInventory.collect(command_runner=runner)
+
+        self.assertEqual([["ps", "-eo", "pid=,ppid=,command="]], calls)
+        self.assertEqual("available", inventory.status)
+        self.assertEqual("", inventory.error)
+        self.assertEqual(
+            (
+                DaemonProcess(
+                    848,
+                    "/usr/bin/python3 -c wrapper phase9_router_daemon /repo /pid /died python3 cli",
+                    1,
+                ),
+                DaemonProcess(
+                    857,
+                    "python3 /tmp/consensus-rnd-cli " + "phase9-router --daemon",
+                    848,
+                ),
+            ),
+            inventory.processes,
+        )
+
+    def test_process_inventory_collect_ignores_malformed_pid_or_ppid_rows(self) -> None:
+        def runner(_command: list[str]) -> FakeCommandResult:
+            return FakeCommandResult(
+                returncode=0,
+                stdout=(
+                    " 111 1 python3 good.py\n"
+                    "not-a-pid 1 python3 bad.py\n"
+                    "222 not-a-ppid python3 bad.py\n"
+                    "333\n"
+                    "444 1\n"
+                    "\n"
+                ),
+            )
+
+        inventory = DaemonProcessInventory.collect(command_runner=runner)
+
+        self.assertEqual((DaemonProcess(111, "python3 good.py", 1),), inventory.processes)
+        self.assertEqual("available", inventory.status)
+
+    def test_process_inventory_collect_nonzero_result_is_unavailable_with_diagnostic(self) -> None:
+        def runner(_command: list[str]) -> FakeCommandResult:
+            return FakeCommandResult(returncode=2, stderr="ps denied\n")
+
+        inventory = DaemonProcessInventory.collect(command_runner=runner)
+
+        self.assertEqual((), inventory.processes)
+        self.assertEqual("unavailable", inventory.status)
+        self.assertEqual("ps denied", inventory.error)
+
+    def test_process_inventory_collect_runner_exception_is_unavailable_with_diagnostic(self) -> None:
+        def runner(_command: list[str]) -> FakeCommandResult:
+            raise RuntimeError("ps exploded")
+
+        inventory = DaemonProcessInventory.collect(command_runner=runner)
+
+        self.assertEqual((), inventory.processes)
+        self.assertEqual("unavailable", inventory.status)
+        self.assertEqual("RuntimeError('ps exploded')", inventory.error)
 
     def test_restart_wrapper_matching_accepts_skill_root_and_command_normalization_variance(self) -> None:
         template = ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon", "--interval", "120")
