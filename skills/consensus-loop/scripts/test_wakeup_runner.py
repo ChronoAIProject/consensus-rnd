@@ -22,6 +22,7 @@ from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest
 from codex_refactor_loop import labels
 from codex_refactor_loop.cross_instance_stand_down import CrossInstanceAdmission
+from codex_refactor_loop.github_budget import reset_graphql_budget_cache
 from codex_refactor_loop.github_actor import GitHubActorAdmission
 from codex_refactor_loop.release.gate import canonical_digest, isoformat
 from codex_refactor_loop.wakeup_runner import (
@@ -277,6 +278,9 @@ class FakeReviewFixActions(FakeActions):
 
 class WakeupRunnerBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
+        reset_graphql_budget_cache()
+        self.graphql_headroom_patch = mock.patch("codex_refactor_loop.wakeup_runner.graphql_headroom_ok", return_value=True)
+        self.graphql_headroom_patch.start()
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         for rel in (".refactor-loop/state", ".refactor-loop/logs", ".refactor-loop/prompts", ".refactor-loop/runs"):
@@ -295,6 +299,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+        self.graphql_headroom_patch.stop()
+        reset_graphql_budget_cache()
 
     def test_run_command_injects_gh_repo_only_in_valid_subcommand_position(self) -> None:
         calls: list[list[str]] = []
@@ -4418,6 +4424,46 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         actions = FakeActions()
 
         results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "duplicate")
+        self.assertEqual(actions.calls, [])
+
+    def test_stale_review_dispatch_applied_row_suppresses_after_live_head_advanced(self) -> None:
+        action = self.reviewer_dispatch_action(
+            kind="review-evidence-redispatch",
+            action_id="review-evidence-redispatch:77:" + "a" * 40,
+            source_artifact="wakeup-plan",
+            source_marker="review-evidence-redispatch",
+            head_sha="a" * 40,
+            stale_review_roles=["architect", "tests"],
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "missing_or_stale_reviewer_head_evidence",
+            ],
+        )
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "review-evidence-redispatch"})
+            + "\n",
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        def command_runner(command):
+            if command[:3] == ["gh", "pr", "view"] and ".headRefOid" in command:
+                return subprocess.CompletedProcess(command, 0, "b" * 40 + "\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        runner = WakeupRunner(
+            self.ctx,
+            plan_loader=lambda _repo: self.base_plan(action),
+            actions=actions,
+            supervisor=self.supervisor,
+            command_runner=command_runner,
+        )
+
+        results = runner.run_once()
 
         self.assertEqual(results[0].status, "skipped")
         self.assertEqual(results[0].reason, "duplicate")
