@@ -12,7 +12,6 @@ from .runtime_copy import copy_for, current_work_language
 AUTO_LOOP_SENTINEL = "⟦AI:AUTO-LOOP⟧"
 AUTHORIZATION_ARTIFACT = "skills/consensus-loop/authorizations/runtime-exceptions.md#observability-comment-writers-53"
 OBSERVABILITY_COMMENT_WRITER = "observability-comment-writers"
-
 ROLE_NEXT_STEPS = copy_for("banner_role_next_steps", language="en")
 
 

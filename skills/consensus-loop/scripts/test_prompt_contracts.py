@@ -61,6 +61,13 @@ class PromptContractsTests(unittest.TestCase):
                 self.assertIn("post_exit_code=$?", rendered)
                 self.assertNotIn("status=$?", rendered)
 
+    def test_prompts_do_not_keep_hidden_legacy_contract_anchor_blocks(self) -> None:
+        for path in PROMPTS_DIR.glob("*.md"):
+            body = path.read_text(encoding="utf-8")
+            with self.subTest(prompt=path.name):
+                self.assertNotIn("Legacy contract anchors for source-regression compatibility", body)
+                self.assertNotIn("legacy-section-headings", body)
+
     def test_decomposition_apply_prompt_contract_requires_plan_level_judge_fields(self) -> None:
         meta_judge = (PROMPTS_DIR / "meta-judge.md").read_text(encoding="utf-8")
         implement = (PROMPTS_DIR / "implement.md").read_text(encoding="utf-8")

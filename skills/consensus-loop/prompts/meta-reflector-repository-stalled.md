@@ -23,7 +23,7 @@ The recommendation artifact is not side-effect authorization. It must not be con
 
 Forbidden actions: no `git`, no `gh`, no issue/PR create, close, edit, reopen, merge, or label mutation, no commit, no push, no tag/release, no dispatching codex, no direct code changes, no direct concrete implementation, no command fields, and no lifecycle authority.
 
-## Marker emission allowlist(强制)
+## Marker emission allowlist (required)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
