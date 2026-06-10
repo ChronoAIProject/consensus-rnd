@@ -57,7 +57,7 @@ class PromptContractsTests(unittest.TestCase):
                 rendered = inline_prompt_contracts(body, skill_root=SKILL_ROOT)
 
                 self.assertIn("zsh-safe exit-code variables", rendered)
-                self.assertIn("do not** use `status`", rendered)
+                self.assertIn("**do not** use `status`", rendered)
                 self.assertIn("post_exit_code=$?", rendered)
                 self.assertNotIn("status=$?", rendered)
 
@@ -88,9 +88,9 @@ class PromptContractsTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, meta_judge)
         for needle in (
-            "Worker output, validator success, `.refactor-loop/host.env`, prompt body, or the first `consensus:decompose` are not apply authorization sources.",
+            "Worker output, validator success, `.refactor-loop/host.env`, the prompt body, or the first `consensus:decompose` are not apply authorization sources",
             'controller_action="apply_issue_decomposition_plan"',
-            "plan-level judge artifact structured fields + validated plan digest/proof + #191 owner + live parent open/tracking + sentinel idempotency",
+            "plan-level judge artifact structure fields plus validated plan digest/proof plus #191 owner plus live parent open/tracking plus sentinel idempotency",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, implement)
@@ -109,17 +109,17 @@ class PromptContractsTests(unittest.TestCase):
                 "Issue-authorized feature, bug, doc, refactor, and governance work may proceed",
             ),
             "prompts/audit.md": (
-                "No unauthorized scope expansion",
-                "current audit/issue",
+                "No authority expansion",
+                "current audit/issue-authorized violation or work-unit scope",
             ),
             "prompts/implement.md": (
-                "No unauthorized scope expansion",
-                "source issue, consensus artifact, and `scope_paths`",
+                "Do not expand authority",
+                "current work unit authorized by the source issue, consensus artifact, and `scope_paths`",
                 "feature, bug, doc, refactor, and governance work",
             ),
             "prompts/triage-external-issue.md": (
-                "bounded `scope_paths` or repo-owned desired end state",
-                "category alone is not a reject reason",
+                "bounded `scope_paths`, desired end state / invariant, and verification hints",
+                "The category itself is not a reject reason",
                 "no-bounded-work-unit",
             ),
             "prompts/reviewer-architect.md": (

@@ -1881,8 +1881,8 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "No suite-level host-wide process-table daemon guard",
             "daemon leak / duplicate coverage belongs in the responsible helper's local fact source",
             "must not scan the current machine with `ps -eo pid=,command=`",
-            "Do not add suite-level host-wide process-table guards",
-            "Do not add or retain suite-level host-wide process-table guards",
+            "do not add suite-level host-wide process-table guards",
+            "Do not add or keep suite-level host-wide process-table guards",
             "helper-local fact source",
         ):
             with self.subTest(needle=needle):
@@ -1891,14 +1891,14 @@ class WakeupRunnerContractTests(unittest.TestCase):
 
     def test_implement_prompt_pr_artifact_writes_are_allowed_by_red_line(self) -> None:
         implement = read(SKILL_ROOT / "prompts" / "implement.md")
-        procedure = implement[implement.index("## Procedure") : implement.index("## Marker emission allowlist")]
-        red_line = implement[implement.index("## Red Lines") : implement.index("## Appendix")]
+        flow = implement[implement.index("## Workflow") : implement.index("## Marker emission allowlist")]
+        red_line = implement[implement.index("## Hard boundaries") : implement.index("## Appendix")]
         for artifact in (
             "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt",
             "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md",
         ):
             with self.subTest(artifact=artifact):
-                self.assertIn(artifact, procedure)
+                self.assertIn(artifact, flow)
                 self.assertIn(artifact, red_line)
 
     def test_headless_dogfood_e2e_anchors_router_plan_runner_without_real_external_dependencies(self) -> None:

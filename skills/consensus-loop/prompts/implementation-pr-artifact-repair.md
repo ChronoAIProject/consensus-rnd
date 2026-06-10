@@ -48,7 +48,7 @@ Write a self-contained PR body to the body output path. It must use these exact 
 - `## Test results`
 - `## Deviations`
 
-The prose/content under each heading follows `${HOST_WORK_LANGUAGE}`.
+The prose/content under each heading follows `${HOST_WORK_LANGUAGE}`; do not add a mandatory parallel English section.
 
 The body must contain exactly one matching closing link:
 

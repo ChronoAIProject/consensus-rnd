@@ -17,7 +17,7 @@ from codex_refactor_loop.cli import COMMANDS
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 
 DENIAL_OR_CONTROLLER_OWNER_RE = re.compile(
-    r"禁止|不可调|不得|不能|不要|Forbidden|forbidden|Do NOT|do not|must not|"
+    r"禁止|不可调|不得|不能|不要|Forbidden|forbidden|Do NOT|Do not|do not|must not|"
     r"not allowed|marker/artifact-only|lifecycle[^.\n]*label[^.\n]*controller|"
     r"controller[^.\n]*(owns|owner|拥有|归|创 PR)"
 )
@@ -65,8 +65,10 @@ AFFIRMATIVE_DIRECT_POST_SNIPPETS = (
 )
 
 LOCAL_COMMAND_ROSTER_SNIPPETS = (
-    "Allowed gh Commands",
-    "Disallowed Commands (Controller Boundary)",
+    "可调:",
+    "不可调:",
+    "你能调的 gh 命令",
+    "你不能调的(controller 边界)",
 )
 
 DIRECT_POST_COMMAND_ROSTER_SNIPPETS = (
@@ -226,8 +228,8 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
 
     def test_shared_github_post_rules_own_complete_command_roster(self) -> None:
         body = (PROMPTS_DIR / "_github-post-rules.md").read_text(encoding="utf-8")
-        allowed = re.search(r"(?ms)^## Allowed gh Commands.*?(?=^## |\Z)", body)
-        forbidden = re.search(r"(?ms)^## Disallowed Commands \(Controller Boundary\).*?(?=^## |\Z)", body)
+        allowed = re.search(r"(?ms)^## Allowed `gh` Commands.*?(?=^## |\Z)", body)
+        forbidden = re.search(r"(?ms)^## Forbidden Commands \(Controller Boundary\).*?(?=^## |\Z)", body)
         self.assertIsNotNone(allowed)
         self.assertIsNotNone(forbidden)
 

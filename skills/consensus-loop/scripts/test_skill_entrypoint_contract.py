@@ -130,7 +130,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt",
             "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md",
             "$REPO_ROOT/.refactor-loop/runs/scope-extend-${CLUSTER_ID}.log",
-            "Do not otherwise modify `.refactor-loop/`",
+            "Otherwise, do not modify `.refactor-loop/`",
         )
 
         for needle in required:
@@ -899,8 +899,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
         audit_prompt = read(SKILL_ROOT / "prompts" / "audit.md")
         section = section_between(
             audit_prompt,
-            r"^## Render Identity Fail-Closed \(Required\)$",
-            r"^## Required Flow",
+            r"^## Rendered identity fail-closed \(mandatory\)$",
+            r"^## Mandatory workflow",
         )
         self.assertTrue(section)
         for needle in (
@@ -908,7 +908,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "immediately output `AUDIT_INCOMPLETE:missing-iteration`",
             "Do not write `$REPO_ROOT/.refactor-loop/runs/audit-iter-.md`",
             "`$REPO_ROOT/.refactor-loop/runs/audit-iter--candidates.ndjson`",
-            "Audit fallback may have only one active `audit-iter-${ITERATION}`",
+            "Audit fallback may have only one active `audit-iter-${ITERATION}` at a time",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
@@ -916,9 +916,9 @@ class SkillEntrypointContractTests(unittest.TestCase):
     def test_audit_prompt_does_not_treat_single_file_skill_reference_as_r02_r03(self) -> None:
         audit_prompt = read(SKILL_ROOT / "prompts" / "audit.md")
         for needle in (
-            "Do not mechanically interpret PROJECT_RULES `SKILL.md`/`REFERENCE.md` clauses as requiring `REFERENCE.md` to exist.",
-            "unreachable anchors",
-            "A single-file `SKILL.md` with intra-file anchors is not itself a violation.",
+            "Do not mechanically interpret",
+            "anchors are unreachable",
+            "A single-file `SKILL.md` with intra-file anchors is not a violation by itself",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, audit_prompt)

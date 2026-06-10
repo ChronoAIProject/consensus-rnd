@@ -65,7 +65,7 @@ Verdict semantics:
 
 End with marker line: `REVIEW_DONE:${PR_NUMBER}:architect:<verdict>`
 
-## Marker emission allowlist (required)
+## Marker emission allowlist(强制)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
@@ -82,18 +82,18 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - Don't edit any file outside `${REVIEW_OUTPUT_PATH}`.
 - No bilingual requirement here (this is an internal artifact consumed by controller).
 
-## GitHub post (required)
+## GitHub post (mandatory)
 
-After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `${HOST_WORK_LANGUAGE}`**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 
 
 ---
 
-## AI Content Identifier (Required)
+## AI content identifier (mandatory)
 
-All AI-generated GitHub issue/PR comments, PR bodies, commit messages, and push notifications **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
+Every AI-authored GitHub issue/PR comment, PR body, commit message, or push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 

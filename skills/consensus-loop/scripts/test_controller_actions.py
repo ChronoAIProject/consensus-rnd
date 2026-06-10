@@ -2201,7 +2201,7 @@ class ControllerActionsTests(unittest.TestCase):
         cases = (
             ("outside-title-path", {"title_file": str(outside)}, None, "implementation PR title artifact outside runs"),
             ("outside-body-path", {"body_file": str(outside_body)}, None, "implementation PR body artifact outside runs"),
-            ("placeholder-title", {}, lambda: title.write_text("Implement issue #77\n", encoding="utf-8"), "implementation PR title is placeholder"),
+            ("placeholder-title", {}, lambda: title.write_text("实现 issue #77\n", encoding="utf-8"), "implementation PR title is placeholder"),
             ("english-placeholder-title", {}, lambda: title.write_text("implement issue #77\n", encoding="utf-8"), "implementation PR title is placeholder"),
             ("multiline-title", {}, lambda: title.write_text("完成 issue #77\n第二行\n", encoding="utf-8"), "implementation PR title must be exactly one non-empty line"),
             ("body-content-title", {}, lambda: title.write_text("Closes #77\n", encoding="utf-8"), "implementation PR title contains body-only content"),
@@ -4060,7 +4060,7 @@ class ControllerActionsTests(unittest.TestCase):
 
         rendered = output.read_text(encoding="utf-8")
         self.assertIn("# GitHub post rules", rendered)
-        self.assertIn("## Body Structure (Required)", rendered)
+        self.assertIn("## Body Structure", rendered)
         self.assertNotIn(GITHUB_POST_RULES_CONTRACT_TOKEN, rendered)
         self.assertNotIn("prompts/_github-post-rules.md", rendered)
 

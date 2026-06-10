@@ -24,7 +24,7 @@ You are **one of N independent reviewers**.
 - [ ] **No dead code introduced**: new private fields/methods are reachable; new public surface has at least one caller (test or production). Unused parameters → comment.
 - [ ] **No over-engineering**: new interfaces/abstractions justified by ≥2 concrete implementers or by a clearly documented "future plug-point" with a deadline. Single-implementer abstractions without rationale → comment.
 - [ ] **No under-engineering**: ≥3 near-identical inline copies of a snippet should be extracted. Inline duplication that violates DRY → comment.
-- [ ] **Method size & cyclomatic complexity**: a single new/modified method <= 80 lines and <= ~15 branches is preferred. Existing host complexity-analyzer warnings carried unchanged are not regressions; adding new ones should receive a comment.
+- [ ] **Method size & cyclomatic complexity**: a single new/modified method <= 80 lines and <= ~15 branches is preferred. Existing host project complexity-analyzer warnings carried unchanged are not regressions, but adding new ones means comment.
 - [ ] **Comments add value**: new comments explain *why* not *what* (the code already says what). Filler comments / commented-out code → comment.
 - [ ] **Refactor self-doc comment policy**: read `${HOST_REFACTOR_COMMENT_POLICY}`. missing/empty/default/`none` normalizes to `none`: missing/illegible self-doc must not be a reject reason, rationale belongs in external artifacts, and new Refactor/Old/New/iteration source comments are defects. Explicit `self-doc-comment` is downstream compatibility opt-in: English-only refactor self-doc comments must be present and clear, with Old/New blocks readable to a non-audit reader (no `see issue #X` placeholders, no truncated sentences). Non-canonical marker identity is a fixable process defect: reject with the exact expected canonical marker, not a redesign or human-decision request. Still comment/reject for naming, dead code, complexity, scope creep, or code whose intent cannot be reviewed from names/structure/external artifacts. Any other value is invalid and fail-closed; do not guess.
 - [ ] **No unrelated drive-by changes**: diff stays focused on the source issue, consensus artifact, PR diff intent, and declared `scope_paths`; issue-authorized feature or bug work is allowed inside that boundary, while one-line "fix typo over there" or "tidy this whitespace" sneaking into an unrelated behavior PR → comment.
@@ -61,14 +61,14 @@ Verdict semantics:
 <!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Consensus-rnd Phase review-gate 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
 
 - **approve**: code is readable, focused, no over/under-engineering smell, and refactor self-doc handling complies with `${HOST_REFACTOR_COMMENT_POLICY}`.
-- **comment**: small naming/clarity nits; unrelated drive-by changes worth surfacing; borderline host complexity-analyzer findings.
+- **comment**: small naming/clarity nits; unrelated drive-by changes worth surfacing; host project complexity-analyzer borderline.
 - **reject**: significant dead code, harmful single-implementer abstraction, unauthorized scope expansion into unrelated cleanup, or a major refactor that lacks/garbles self-doc only when `HOST_REFACTOR_COMMENT_POLICY=self-doc-comment`. Under missing/empty/default/`HOST_REFACTOR_COMMENT_POLICY=none`, missing/illegible self-doc alone is not a reject reason.
 - In-scope must-fix-before-merge findings must be `reject`.
 - Out-of-scope, non-flippable, or advisory findings must be `comment`.
 
 End with marker: `REVIEW_DONE:${PR_NUMBER}:quality:<verdict>`
 
-## Marker emission allowlist (required)
+## Marker emission allowlist(强制)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
@@ -84,18 +84,18 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - You DO post to GitHub directly per the rendered shared GitHub post rules (controller no longer relays — see "GitHub post" section below).
 - No bilingual requirement (internal artifact).
 
-## GitHub post (required)
+## GitHub post (mandatory)
 
-After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `${HOST_WORK_LANGUAGE}`**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 
 
 ---
 
-## AI Content Identifier (Required)
+## AI content identifier (mandatory)
 
-All AI-generated GitHub issue/PR comments, PR bodies, commit messages, and push notifications **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
+Every AI-authored GitHub issue/PR comment, PR body, commit message, or push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 

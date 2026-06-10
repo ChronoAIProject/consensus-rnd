@@ -14,7 +14,7 @@ You are **one of N independent reviewers**; you do not see other reviewers' verd
 2. Each touched production file according to `$SOURCE_GLOBS` and the actual diff → look for matching tests using `${HOST_TEST_FILE_GLOBS}` and `${HOST_TEST_NAMING_RULE}`. If either is empty, infer only from existing repo test conventions.
 3. Implement summary if present: `${IMPLEMENT_SUMMARY_PATH}`.
 4. `$REPO_ROOT/$CI_GUARDS` — for the polling allowlist + stability rules.
-5. Host-configured allowlist under `$REPO_ROOT`, or `$PROJECT_RULES` / `$CI_GUARDS` equivalent: current allowed unstable/polling test exceptions, if any.
+5. `$REPO_ROOT/<host-configured allowlist>` or `$PROJECT_RULES` / `$CI_GUARDS` equivalent — current allowed unstable/polling test exceptions, if any.
 6. Host schema policy `${HOST_PROTO_POLICY}` when non-empty; otherwise infer schema/test exemptions only from `$PROJECT_RULES` and the actual diff.
 
 ## Your checklist (tests angle only)
@@ -67,7 +67,7 @@ Verdict semantics:
 
 End with marker: `REVIEW_DONE:${PR_NUMBER}:tests:<verdict>`
 
-## Marker emission allowlist (required)
+## Marker emission allowlist(强制)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
@@ -83,18 +83,18 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - You DO post to GitHub directly per the rendered shared GitHub post rules (controller no longer relays — see "GitHub post" section below).
 - No bilingual requirement (internal artifact).
 
-## GitHub post (required)
+## GitHub post (mandatory)
 
-After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `${HOST_WORK_LANGUAGE}`**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 
 
 ---
 
-## AI Content Identifier (Required)
+## AI content identifier (mandatory)
 
-All AI-generated GitHub issue/PR comments, PR bodies, commit messages, and push notifications **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
+Every AI-authored GitHub issue/PR comment, PR body, commit message, or push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 

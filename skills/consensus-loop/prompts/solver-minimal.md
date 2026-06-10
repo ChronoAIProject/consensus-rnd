@@ -89,7 +89,7 @@ End with EXACTLY ONE marker line:
 - `SOLVER_DONE:minimal:escalate:no-plan:<reason>` — no concrete minimal plan can be produced
 - `SOLVER_DONE:minimal:false-positive:<reason>` — violation already fixed / misreported
 
-## Marker emission allowlist (required)
+## Marker emission allowlist(强制)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
@@ -121,18 +121,18 @@ Refactor (iter6/issue-118):
 - Follow ${HOST_WORK_LANGUAGE} per SKILL.md; do not add a mandatory parallel English section.
 - No filler / no marketing language. Numbers > adjectives.
 
-## GitHub post (required)
+## GitHub post (mandatory)
 
-After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `$HOST_WORK_LANGUAGE`**. Follow the render-time shared rules:
+After writing the internal artifact, **call `gh` yourself to post GitHub comments/PR bodies that follow `${HOST_WORK_LANGUAGE}`**. Follow the render-time shared rules:
 
 {{GITHUB_POST_RULES_CONTRACT}}
 
 
 ---
 
-## AI Content Identifier (Required)
+## AI content identifier (mandatory)
 
-All AI-generated GitHub issue/PR comments, PR bodies, commit messages, and push notifications **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
+Every AI-authored GitHub issue/PR comment, PR body, commit message, or push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 
