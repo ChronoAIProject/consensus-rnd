@@ -154,6 +154,8 @@ Run three biased perspectives before choosing a plan:
 - `structural`: architecture and contract integrity under future growth.
 - `delete`: whether the feature, abstraction, or work should be removed, collapsed, or avoided.
 
+Before proposing, revising, rejecting, or abstaining, each thinking perspective must first identify the applicable mature human theory, engineering principle, industry best practice, or constraint framework governing this class of problem. "No applicable mature theory found" is an acceptable explicit harness. The perspective must execute within that chosen harness and name the reference frame in `SshxResultEnvelope.conclusion`. Harness discovery does not override `GoalArtifact`, the assigned bias, the thinking truth table, or the allowed verdict set, and it must not block valid `abstain` or `reject` outcomes.
+
 Every perspective must frame `propose`, `revise`, `reject`, or `abstain` as an answer to the current `GoalArtifact`: what satisfies it, what still differs from it, or why it cannot be satisfied. `revise` must name the goal gap and a next iteration question; it must not open an unrelated design search.
 
 Each perspective returns one of:
@@ -193,6 +195,8 @@ After implementation, run three review perspectives:
 - `architecture`: boundaries, contracts, coupling, and maintainability.
 - `quality`: behavior, edge cases, failure modes, and user impact.
 - `tests`: coverage, determinism, and verification strength.
+
+Before approving, commenting, or rejecting, each reviewer must first identify the applicable mature human theory, engineering principle, industry best practice, or constraint framework governing this class of implementation. "No applicable mature theory found" is an acceptable explicit harness. The reviewer must judge within that chosen harness and name the reference frame in `SshxResultEnvelope.conclusion`. Harness discovery does not override `GoalArtifact`, the review focus, the review truth table, or the allowed verdict set, and it must not block valid `comment` or `reject` outcomes.
 
 Each reviewer returns one of:
 
