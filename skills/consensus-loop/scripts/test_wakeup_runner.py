@@ -442,14 +442,15 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             sort_keys=True,
         )
         self.ctx.paths.pending_events.write_text(raw_line + "\n", encoding="utf-8")
+        digest = harness_spawn_intent_line_digest(raw_line)
         action = {
             "kind": "harness-spawn-intent-invalid",
-            "action_id": "harness-spawn-intent-invalid:bad:colon:id",
+            "action_id": f"harness-spawn-intent-invalid:{digest}",
             "runner_authority": "wakeup-runner-396",
             "preconditions": ["source_artifact_contains_evidence"],
             "source_artifact": ".refactor-loop/.controller-pending-events.log",
             "source_marker": "HARNESS_SPAWN_INTENT",
-            "evidence_digest": harness_spawn_intent_line_digest(raw_line),
+            "evidence_digest": digest,
             "reason": "missing-queued_at",
             "no_lifecycle_authority": True,
             "no_generic_command": True,
@@ -467,7 +468,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([], actions.calls)
         launch.assert_not_called()
         pending = self.ctx.paths.pending_events.read_text(encoding="utf-8")
-        archived_marker = f"WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{harness_spawn_intent_line_digest(raw_line)}:missing-queued_at"
+        archived_marker = f"WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{digest}:missing-queued_at"
         self.assertIn(archived_marker, pending)
         self.assertEqual(1, pending.count(archived_marker))
         ledger_rows = [
@@ -477,13 +478,13 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(
             [
                 {
-                    "action_id": "harness-spawn-intent-invalid:bad:colon:id",
+                    "action_id": f"harness-spawn-intent-invalid:{digest}",
                     "kind": "harness-spawn-intent-invalid",
                     "reason": "archived_invalid_harness_spawn_intent:missing-queued_at",
                     "status": "skipped",
                 },
                 {
-                    "action_id": "harness-spawn-intent-invalid:bad:colon:id",
+                    "action_id": f"harness-spawn-intent-invalid:{digest}",
                     "kind": "harness-spawn-intent-invalid",
                     "reason": "duplicate",
                     "status": "skipped",
@@ -491,6 +492,63 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             ],
             ledger_rows,
         )
+
+    def test_runner_quarantines_distinct_invalid_harness_spawn_intents_with_same_id(self) -> None:
+        def raw_line(reason: str) -> str:
+            payload = {
+                "intent_id": "dispatch-reviewers:77:architect:r1",
+                "source": "controller-actions",
+                "route": "dispatch-reviewers",
+                "task_id": "review-pr77-architect-r1",
+                "priority": "p1",
+                "command": "spawn-codex",
+                "controller_action": "spawn_codex_harness_background",
+                "cd": str(self.repo),
+                "prompt": ".refactor-loop/prompts/review-pr77-architect-r1.md",
+                "log": ".refactor-loop/logs/review-pr77-architect-r1.log",
+                "stall": 5400,
+                "reason": reason,
+                "queued_at": None,
+                "run_in_background_required": True,
+                "no_lifecycle_authority": True,
+            }
+            return "2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT " + json.dumps(payload, sort_keys=True)
+
+        lines = [raw_line("first malformed"), raw_line("second malformed")]
+        actions = [
+            {
+                "kind": "harness-spawn-intent-invalid",
+                "action_id": f"harness-spawn-intent-invalid:{harness_spawn_intent_line_digest(line)}",
+                "runner_authority": "wakeup-runner-396",
+                "preconditions": ["source_artifact_contains_evidence"],
+                "source_artifact": ".refactor-loop/.controller-pending-events.log",
+                "source_marker": "HARNESS_SPAWN_INTENT",
+                "evidence_digest": harness_spawn_intent_line_digest(line),
+                "reason": "missing-queued_at",
+                "no_lifecycle_authority": True,
+                "no_generic_command": True,
+            }
+            for line in lines
+        ]
+        self.ctx.paths.pending_events.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", side_effect=AssertionError("must not spawn")) as launch:
+            results = self.run_result({**self.base_plan(actions[0]), "actions": [self.annotate_safe_progress(action) for action in actions]}, actions=FakeActions())
+
+        self.assertEqual(["skipped", "skipped"], [result.status for result in results])
+        self.assertEqual(
+            ["archived_invalid_harness_spawn_intent:missing-queued_at", "archived_invalid_harness_spawn_intent:missing-queued_at"],
+            [result.reason for result in results],
+        )
+        launch.assert_not_called()
+        pending = self.ctx.paths.pending_events.read_text(encoding="utf-8")
+        for line in lines:
+            marker = (
+                "WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:"
+                + harness_spawn_intent_line_digest(line)
+                + ":missing-queued_at"
+            )
+            self.assertEqual(1, pending.count(marker))
 
     def test_runner_applies_at_most_one_medium_non_spawn_per_tick(self) -> None:
         base = {

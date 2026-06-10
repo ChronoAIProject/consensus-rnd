@@ -2396,14 +2396,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 self.assertEqual(action["preconditions"], ["source_artifact_contains_evidence"])
                 self.assertTrue(action["no_generic_command"])
 
-    def test_harness_spawn_intent_rejects_missing_queued_at_with_stable_invalid_action(self) -> None:
+    def test_harness_spawn_intent_rejects_missing_queued_at_with_digest_invalid_action(self) -> None:
         self.append_harness_spawn_intent(intent_id="missing-queued-at", queued_at=None)
 
         plan = self.run_plan()
 
         action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent-invalid")
         self.assertEqual("missing-queued_at", action["reason"])
-        self.assertEqual("harness-spawn-intent-invalid:missing-queued-at", action["action_id"])
+        self.assertEqual(f"harness-spawn-intent-invalid:{harness_spawn_intent_line_digest(action['evidence'])}", action["action_id"])
         self.assertEqual(INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT, action["source_artifact"])
         self.assertEqual(INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER, action["source_marker"])
         self.assertEqual(harness_spawn_intent_line_digest(action["evidence"]), action["evidence_digest"])
@@ -2412,6 +2412,63 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(action["no_lifecycle_authority"])
         self.assertTrue(action["no_generic_command"])
         self.assertNotIn("controller_action", action)
+
+    def test_harness_spawn_intent_projects_valid_same_id_after_archived_invalid(self) -> None:
+        malformed_intent = {
+            "intent_id": "same-id-successor",
+            "controller_action": "spawn_codex_harness_background",
+        }
+        bad_line = "2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT " + json.dumps(malformed_intent, sort_keys=True)
+        archived_digest = harness_spawn_intent_line_digest(bad_line)
+        valid_intent = {
+            "intent_id": "same-id-successor",
+            "source": "controller-actions",
+            "route": "test-harness-spawn",
+            "task_id": "same-id-successor",
+            "priority": "p1",
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "cd": ".",
+            "prompt": ".refactor-loop/prompts/same-id-successor.md",
+            "log": ".refactor-loop/logs/same-id-successor.log",
+            "stall": 5400,
+            "reason": "test review intent",
+            "queued_at": "2026-05-31T00:00:00Z",
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
+        }
+        valid_line = "2026-05-31T00:00:02Z HARNESS_SPAWN_INTENT " + json.dumps(valid_intent, sort_keys=True)
+        (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text(
+            bad_line
+            + "\n"
+            + f"2026-05-31T00:00:01Z WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{archived_digest}:missing-queued_at\n"
+            + valid_line
+            + "\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan()
+        actions = self.harness_spawn_actions(plan)
+
+        self.assertEqual(1, len(actions))
+        self.assertEqual("same-id-successor", actions[0]["intent_id"])
+        self.assertEqual("harness-spawn-intent:same-id-successor", actions[0]["action_id"])
+        self.assertEqual(valid_line, actions[0]["evidence"])
+
+    def test_harness_spawn_intent_invalid_same_id_lines_are_digest_scoped(self) -> None:
+        self.append_harness_spawn_intent(intent_id="repeat-bad", queued_at=None, reason="first bad")
+        self.append_harness_spawn_intent(intent_id="repeat-bad", queued_at=None, reason="second bad")
+
+        plan = self.run_plan()
+        actions = [action for action in plan["actions"] if action["kind"] == "harness-spawn-intent-invalid"]
+
+        self.assertEqual(2, len(actions))
+        self.assertEqual(["missing-queued_at", "missing-queued_at"], [action["reason"] for action in actions])
+        self.assertEqual(
+            [f"harness-spawn-intent-invalid:{harness_spawn_intent_line_digest(action['evidence'])}" for action in actions],
+            [action["action_id"] for action in actions],
+        )
+        self.assertEqual(2, len({action["action_id"] for action in actions}))
 
     def test_harness_spawn_intent_rejects_missing_path_fields_and_bad_path(self) -> None:
         for field in ("cd", "prompt", "log"):

@@ -322,11 +322,14 @@ def harness_spawn_intent_actions(
     actions: list[dict[str, Any]] = []
     seen: set[str] = set()
     terminal_blocked_intent_ids = _terminal_blocked_harness_spawn_intent_ids(lines)
+    archived_invalid_markers = archived_invalid_harness_spawn_intent_markers(lines)
     open_items = gh_items or []
     open_targets = _open_managed_targets(open_items) if gh_items_loaded else set()
     terminal_design_targets = _terminal_design_consensus_targets(open_items) if gh_items_loaded else set()
     for line in lines:
         if " HARNESS_SPAWN_INTENT " not in line:
+            continue
+        if harness_spawn_intent_line_is_archived_invalid(line, None, archived_invalid_markers):
             continue
         raw_json = line.split(" HARNESS_SPAWN_INTENT ", 1)[1]
         try:
@@ -341,14 +344,14 @@ def harness_spawn_intent_actions(
         if not isinstance(intent_id, str) or not intent_id:
             actions.append(_invalid_harness_spawn_intent("missing-intent-id", line))
             continue
-        if intent_id in seen:
-            continue
-        seen.add(intent_id)
         try:
             validated = validate_harness_spawn_intent(ctx, intent)
         except ValueError as exc:
             actions.append(_invalid_harness_spawn_intent(str(exc), line, intent_id=intent_id))
             continue
+        if intent_id in seen:
+            continue
+        seen.add(intent_id)
         cd = validated.cd
         prompt = validated.prompt
         log_path = validated.log_path
@@ -904,7 +907,7 @@ def validate_harness_spawn_intent(ctx: LoopContext, intent: dict[str, Any]) -> H
 
 
 def _invalid_harness_spawn_intent(reason: str, evidence: str, *, intent_id: str | None = None) -> dict[str, Any]:
-    identity = intent_id if intent_id else harness_spawn_intent_line_digest(evidence)
+    identity = harness_spawn_intent_line_digest(evidence)
     return {
         "priority": 2,
         "kind": "harness-spawn-intent-invalid",
