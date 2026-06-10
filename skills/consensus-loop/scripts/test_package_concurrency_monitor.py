@@ -85,6 +85,9 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
         ts: str = "2026-05-26T07:25:00Z",
         intent_id: str | None = None,
         source: str = "phase9-router",
+        cd: str | None = None,
+        prompt: str | None = None,
+        log: str | None = None,
     ) -> None:
         payload = {
             "intent_id": intent_id or f"harness-spawn-intent:test:{task_id}",
@@ -93,8 +96,14 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
             "route": "test",
             "command": "spawn-codex",
             "controller_action": "spawn_codex_harness_background",
-            "log": f".refactor-loop/logs/{task_id}.log",
+            "cd": cd or str(self.repo),
+            "prompt": prompt or f".refactor-loop/prompts/{task_id}.md",
+            "log": log or f".refactor-loop/logs/{task_id}.log",
+            "stall": 5400,
             "reason": f"issue #{task_id.removeprefix('phase9-issue')} dispatch",
+            "queued_at": ts,
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
         }
         pending = self.refactor_loop / ".controller-pending-events.log"
         pending.parent.mkdir(parents=True, exist_ok=True)
@@ -294,6 +303,55 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
         payload = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
         self.assertEqual(payload["zero_codex_classification"]["classification"], "daemon-self-drive-transient")
         self.assertEqual(payload["p0_streak"], 0)
+
+    def test_zero_codex_with_repo_contained_absolute_harness_intent_is_transient_not_p0(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        task_id = "phase9-issue160-r1-minimal"
+        self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
+        self.append_pending_harness_intent(
+            task_id,
+            ts="2026-05-26T07:29:00Z",
+            cd=str(self.repo),
+            prompt=str(self.refactor_loop / "prompts" / f"{task_id}.md"),
+            log=str(self.refactor_loop / "logs" / f"{task_id}.log"),
+        )
+
+        with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+            with mock.patch.object(
+                self.monitor,
+                "list_auto_loop_issues",
+                return_value=[{"number": 160, "kind": "issue", "phase": labels.PHASE_DESIGN_SOLVING, "human": labels.HUMAN_AUTO}],
+            ):
+                with mock.patch.object(concurrency, "time") as fake_time:
+                    fake_time.time.return_value = now.timestamp()
+                    self.monitor.tick()
+
+        self.assertFalse((self.refactor_loop / ".concurrency-alert.log").exists())
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("ZERO_CODEX_CLASSIFICATION:daemon-self-drive-transient", events)
+
+    def test_zero_codex_with_repo_outside_harness_intent_fails_closed_to_p0(self) -> None:
+        now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)
+        self.write_daemon_self_drive_heartbeats(now=int(now.timestamp()), age=20)
+        self.append_pending_harness_intent(
+            "phase9-issue160-r1-minimal",
+            ts="2026-05-26T07:29:00Z",
+            prompt="/tmp/outside-consensus-rnd",
+        )
+
+        with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+            with mock.patch.object(
+                self.monitor,
+                "list_auto_loop_issues",
+                return_value=[{"number": 160, "kind": "issue", "phase": labels.PHASE_DESIGN_SOLVING, "human": labels.HUMAN_AUTO}],
+            ):
+                with mock.patch.object(concurrency, "time") as fake_time:
+                    fake_time.time.return_value = now.timestamp()
+                    self.monitor.tick()
+
+        alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+        self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
+        self.assertIn("malformed-harness-spawn-intent:invalid-path:prompt escapes REPO_ROOT", alert)
 
     def test_daemon_self_drive_heartbeat_uses_canonical_freshness_for_status(self) -> None:
         now = datetime(2026, 5, 26, 7, 30, 0, tzinfo=timezone.utc)

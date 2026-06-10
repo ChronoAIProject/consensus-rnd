@@ -154,6 +154,20 @@ def _contained_execution_cd(ctx: LoopContext, text: str) -> Path:
     except ValueError as exc:
         raise ValueError(f"cd escapes REPO_ROOT: {text!r}") from exc
     return resolved
+
+
+def _contained_artifact_execution_path(ctx: LoopContext, text: str, *, field: str) -> Path:
+    candidate = Path(text).expanduser()
+    if not candidate.is_absolute():
+        return ctx.artifact_execution_path(text)
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(ctx.repo_root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"{field} escapes REPO_ROOT: {text!r}") from exc
+    return resolved
+
+
 EXECUTABLE_ACTION_KINDS = {
     "harness-spawn-intent",
     "repository-stalled-meta-reflector",
@@ -227,6 +241,16 @@ class CompletedMarkerCandidate:
     marker: str
     action: dict[str, Any]
     mtime: float
+
+
+@dataclass(frozen=True)
+class HarnessSpawnIntentValidation:
+    intent: dict[str, Any]
+    intent_id: str
+    cd: Path
+    prompt: Path
+    log_path: Path
+    stall: int
 
 
 def run_json(cmd: list[str], *, cwd: Path) -> Any:
@@ -316,17 +340,14 @@ def harness_spawn_intent_actions(
         if intent_id in seen:
             continue
         seen.add(intent_id)
-        invalid_reason = _harness_spawn_intent_invalid_reason(intent)
-        if invalid_reason:
-            actions.append(_invalid_harness_spawn_intent(invalid_reason, line, intent_id=intent_id))
-            continue
         try:
-            cd = _contained_execution_cd(ctx, str(intent["cd"]))
-            prompt = ctx.artifact_execution_path(str(intent["prompt"]))
-            log_path = ctx.artifact_execution_path(str(intent["log"]))
-        except Exception as exc:
-            actions.append(_invalid_harness_spawn_intent(f"invalid-path:{exc}", line, intent_id=intent_id))
+            validated = validate_harness_spawn_intent(ctx, intent)
+        except ValueError as exc:
+            actions.append(_invalid_harness_spawn_intent(str(exc), line, intent_id=intent_id))
             continue
+        cd = validated.cd
+        prompt = validated.prompt
+        log_path = validated.log_path
         _revive_stale_redispatchable_implement_log(log_path, monitor=monitor)
         if _harness_spawn_intent_log_suppresses_retry(log_path) or _canonical_in_flight_for_log(log_path, monitor):
             continue
@@ -842,6 +863,33 @@ def _harness_spawn_intent_invalid_reason(intent: dict[str, Any]) -> str | None:
     if intent.get("no_lifecycle_authority") is not True:
         return "missing-no-lifecycle-authority"
     return None
+
+
+def validate_harness_spawn_intent(ctx: LoopContext, intent: dict[str, Any]) -> HarnessSpawnIntentValidation:
+    invalid_reason = _harness_spawn_intent_invalid_reason(intent)
+    if invalid_reason:
+        raise ValueError(invalid_reason)
+    intent_id = intent.get("intent_id")
+    if not isinstance(intent_id, str) or not intent_id:
+        raise ValueError("missing-intent-id")
+    try:
+        stall = int(intent.get("stall", 5400))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid-stall") from exc
+    try:
+        cd = _contained_execution_cd(ctx, str(intent["cd"]))
+        prompt = _contained_artifact_execution_path(ctx, str(intent["prompt"]), field="prompt")
+        log_path = _contained_artifact_execution_path(ctx, str(intent["log"]), field="log")
+    except Exception as exc:
+        raise ValueError(f"invalid-path:{exc}") from exc
+    return HarnessSpawnIntentValidation(
+        intent=intent,
+        intent_id=intent_id,
+        cd=cd,
+        prompt=prompt,
+        log_path=log_path,
+        stall=stall,
+    )
 
 
 def _invalid_harness_spawn_intent(reason: str, evidence: str, *, intent_id: str | None = None) -> dict[str, Any]:
