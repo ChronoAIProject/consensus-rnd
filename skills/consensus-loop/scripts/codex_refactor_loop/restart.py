@@ -896,7 +896,7 @@ class _RestartWrapperRuntime:
         self.clock = clock
         self.getpid = getpid
         self.child: RestartWrapperChild | None = None
-        self._startup_missing_heartbeat_grace_used = False
+        self.child_spawned_at: float | None = None
 
     def run(self, *, max_supervision_cycles: int | None) -> int:
         self.pid_file.parent.mkdir(parents=True, exist_ok=True)
@@ -919,27 +919,33 @@ class _RestartWrapperRuntime:
 
     def _supervise(self, *, max_supervision_cycles: int | None) -> None:
         poll_interval = max(1.0, min(float(self.heartbeat_interval), float(self.heartbeat_fresh_seconds) / 2.0))
-        self.child = self.popen(self.command)
+        self._launch_child()
         cycles = 0
         while max_supervision_cycles is None or cycles < max_supervision_cycles:
             cycles += 1
+            if self.child is None:
+                raise RuntimeError(f"{self.name} restart wrapper child is not running")
             exit_code = self.child.poll()
             if exit_code is not None:
                 self._log(f"child exited exit={exit_code}; restarting same command")
-                self.child = self.popen(self.command)
+                self.sleeper(poll_interval)
+                self._launch_child()
                 continue
             failure = self._heartbeat_failure_reason()
             if failure is not None:
-                if failure == "heartbeat-missing" and not self._startup_missing_heartbeat_grace_used:
-                    self._startup_missing_heartbeat_grace_used = True
+                if self._heartbeat_failure_has_generation_grace(failure):
                     self.sleeper(poll_interval)
                     continue
                 self._log(f"{failure}; terminating child and restarting same command")
                 self._terminate_child()
-                self.child = self.popen(self.command)
-                self._startup_missing_heartbeat_grace_used = False
+                self.sleeper(poll_interval)
+                self._launch_child()
                 continue
             self.sleeper(poll_interval)
+
+    def _launch_child(self) -> None:
+        self.child = self.popen(self.command)
+        self.child_spawned_at = self.clock()
 
     def _heartbeat_failure_reason(self) -> str | None:
         status = read_heartbeat_status(
@@ -955,6 +961,14 @@ class _RestartWrapperRuntime:
             now=int(self.clock()),
         )
         return None if status.fresh else status.reason
+
+    def _heartbeat_failure_has_generation_grace(self, failure: str) -> bool:
+        if failure != "heartbeat-missing" and not failure.startswith("heartbeat-stale:"):
+            return False
+        if self.child_spawned_at is None:
+            return False
+        child_age = self.clock() - self.child_spawned_at
+        return child_age < float(self.heartbeat_fresh_seconds)
 
     def _terminate_child(self) -> None:
         if self.child is None or self.child.poll() is not None:

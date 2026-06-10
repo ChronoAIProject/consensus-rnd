@@ -276,7 +276,7 @@ launchd user LaunchAgent example for a human host operator only. Replace `com.ex
 </plist>
 ```
 
-The helper remains the existing scheduler-backed anti-stop surface. Cron/launchd remains mandatory for wrapper death, boot/post-wake repair, fingerprint or host.env reload, duplicate cleanup, and #191 owner refresh. A live restart-managed wrapper may self-heal only its own static-allowlist child by reading the actor-owned heartbeat, terminating that child on exit or missing/malformed/stale heartbeat, and restarting the same resolved command. It has no lifecycle authority: it must not commit, push, merge, label, create, close, or edit issues/PRs.
+The helper remains the existing scheduler-backed anti-stop surface. Cron/launchd remains mandatory for wrapper death, boot/post-wake repair, fingerprint or host.env reload, duplicate cleanup, and #191 owner refresh. A live restart-managed wrapper may self-heal only its own static-allowlist child by reading the actor-owned heartbeat, terminating that child on exit or malformed/future heartbeat immediately, or on missing/stale numeric heartbeat only after the current child has had one heartbeat freshness window to write its own tick, then restarting the same resolved command after at least one wrapper poll interval. It has no lifecycle authority: it must not commit, push, merge, label, create, close, or edit issues/PRs.
 
 For operator inspection, read daemon state with `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json`. If the projection reports stale/dead owner daemons, run the existing scheduler command above or `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` to repair/reload; do not use a separate start/stop/restart/reload verb.
 
