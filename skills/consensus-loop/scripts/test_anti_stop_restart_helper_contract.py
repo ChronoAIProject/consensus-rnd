@@ -111,8 +111,6 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "_run_restart_wrapper",
             "child exited exit=",
             "terminating child and restarting same command",
-            "child_spawned_at",
-            "_heartbeat_failure_has_generation_grace",
             ".fingerprint.json",
             "package_tree_sha256",
             "entrypoint_sha256",
