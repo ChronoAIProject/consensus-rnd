@@ -3313,10 +3313,29 @@ def _release_rollup_live_pr_view(repo_root: Path, pr_number: int) -> dict[str, A
     return result if isinstance(result, dict) else None
 
 
+def _release_rollup_pr_matches_integration(
+    item: object,
+    *,
+    review_base_branch: str,
+    integration_sha: str,
+    expected_head: str,
+) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if str(item.get("baseRefName") or review_base_branch) != review_base_branch:
+        return False
+    head = safe_head_ref(str(item.get("headRefName") or ""))
+    if not head or not head.startswith("rollup/"):
+        return False
+    head_oid = str(item.get("headRefOid") or "").strip()
+    return head == expected_head or head_oid == integration_sha
+
+
 def _release_rollup_event_satisfied(repo_root: Path, event: dict[str, Any], integration_sha: str) -> bool:
     review_base_branch = safe_head_ref(str(event.get("review_base_branch") or ""))
     if not review_base_branch or not integration_sha:
         return False
+    expected_head = f"rollup/{integration_sha}"
     result = run_json(
         [
             "gh",
@@ -3336,19 +3355,46 @@ def _release_rollup_event_satisfied(repo_root: Path, event: dict[str, Any], inte
     )
     if not isinstance(result, list):
         return False
-    expected_head = f"rollup/{integration_sha}"
     for item in result:
+        if _release_rollup_pr_matches_integration(
+            item,
+            review_base_branch=review_base_branch,
+            integration_sha=integration_sha,
+            expected_head=expected_head,
+        ):
+            return True
+    merged_result = run_json(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "merged",
+            "--base",
+            review_base_branch,
+            "--head",
+            expected_head,
+            "--limit",
+            "5",
+            "--json",
+            "number,state,headRefName,headRefOid,baseRefName",
+        ],
+        cwd=repo_root,
+        timeout=RELEASE_ROLLUP_LIVE_PR_LIST_TIMEOUT_SECONDS,
+    )
+    if not isinstance(merged_result, list):
+        return False
+    for item in merged_result:
         if not isinstance(item, dict):
             continue
-        if str(item.get("baseRefName") or review_base_branch) != review_base_branch:
+        if str(item.get("state") or "").upper() != "MERGED":
             continue
-        head = safe_head_ref(str(item.get("headRefName") or ""))
-        if not head or not head.startswith("rollup/"):
-            continue
-        head_oid = str(item.get("headRefOid") or "").strip()
-        if head_oid != integration_sha:
-            continue
-        if head == expected_head or head.startswith("rollup/"):
+        if _release_rollup_pr_matches_integration(
+            item,
+            review_base_branch=review_base_branch,
+            integration_sha=integration_sha,
+            expected_head=expected_head,
+        ):
             return True
     return False
 
