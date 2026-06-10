@@ -4,19 +4,45 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from .active_controller import require_active_controller
 from .context import LoopContext, LoopContextError
+from .worker_markers import extract_standalone_marker
 
 
 RETENTION_TTL_HOURS = 24
 PENDING_EVENTS_MAX_LINES = 2000
 RETENTION_PLAN_PATH = Path(".refactor-loop") / "state" / "runtime-retention-plan.json"
+GENERATED_FILE_ROOTS = ("logs", "prompts", "runs")
+GENERATED_FILE_PROOF_TRUTHS = (
+    "generated_file",
+    "ttl_expired",
+    "no_in_flight",
+    "no_open_actionable",
+    "no_pending_intent",
+    "no_unconsumed_marker",
+    "no_recovery_surface",
+)
+WORKER_LOG_PREFIXES = (
+    "audit-iter-",
+    "fix-",
+    "implement-",
+    "meta-judge-",
+    "phase9-",
+    "remote-ci-fix-",
+    "review-",
+    "solver-",
+    "test-add-",
+    "triage-",
+    "verify-",
+)
 
 
 @dataclass(frozen=True)
@@ -30,6 +56,12 @@ class RuntimeRetentionResult:
     target: Path
     missing: bool
     diagnostics: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RuntimeRetentionPlan:
+    stale_worktrees: tuple[dict[str, Any], ...] = ()
+    generated_files: tuple[Any, ...] = ()
 
 
 def runtime_retention_enabled(ctx: LoopContext) -> bool:
@@ -51,13 +83,15 @@ def retain_runtime(
     if not refactor_loop.is_dir():
         return RuntimeRetentionResult(True, 0, 0, False, 0, False, refactor_loop, True)
 
-    del now
+    now_value = time.time() if now is None else now
     diagnostics: list[str] = []
     deleted = 0
     kept = 0
     compacted = _compact_pending_events(refactor_loop / ".controller-pending-events.log")
+    plan = _read_retention_plan(repo_real / RETENTION_PLAN_PATH, diagnostics=diagnostics)
+    deleted, kept = _delete_planner_generated_files(repo_real, plan.generated_files, now=now_value, diagnostics=diagnostics)
     runner = command_runner or _run_git
-    removed = _remove_planner_stale_worktrees(repo_real, command_runner=runner, diagnostics=diagnostics)
+    removed = _remove_planner_stale_worktrees(repo_real, plan.stale_worktrees, command_runner=runner, diagnostics=diagnostics)
     pruned = False
     if removed:
         prune = runner(["git", "-C", str(repo_real), "worktree", "prune"])
@@ -85,11 +119,11 @@ def _compact_pending_events(path: Path) -> bool:
 
 def _remove_planner_stale_worktrees(
     repo_root: Path,
+    plan: Sequence[dict[str, Any]],
     *,
     command_runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]],
     diagnostics: list[str],
 ) -> int:
-    plan = _read_retention_plan(repo_root / RETENTION_PLAN_PATH, diagnostics=diagnostics)
     if not plan:
         return 0
     removed = 0
@@ -107,34 +141,184 @@ def _remove_planner_stale_worktrees(
     return removed
 
 
-def _read_retention_plan(path: Path, *, diagnostics: list[str]) -> list[dict[str, Any]]:
+def _delete_planner_generated_files(
+    repo_root: Path,
+    generated_files: Sequence[Any],
+    *,
+    now: float,
+    diagnostics: list[str],
+) -> tuple[int, int]:
+    deleted = 0
+    kept = 0
+    for entry_no, item in enumerate(generated_files):
+        path = _eligible_generated_file_path(repo_root, item, entry_no=entry_no, now=now, diagnostics=diagnostics)
+        if path is None:
+            kept += 1
+            continue
+        try:
+            path.unlink()
+        except OSError as exc:
+            diagnostics.append(_diagnostic(path, "generated_file_delete_failed", entry=entry_no, error=exc))
+            kept += 1
+            continue
+        deleted += 1
+    return deleted, kept
+
+
+def _read_retention_plan(path: Path, *, diagnostics: list[str]) -> RuntimeRetentionPlan:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return []
+        return RuntimeRetentionPlan()
     except json.JSONDecodeError as exc:
         diagnostics.append(_diagnostic(path, "plan_json_invalid", line=exc.lineno, column=exc.colno))
-        return []
+        return RuntimeRetentionPlan()
     except OSError as exc:
         diagnostics.append(_diagnostic(path, "plan_read_failed", error=exc))
-        return []
+        return RuntimeRetentionPlan()
     if not isinstance(raw, dict):
         diagnostics.append(_diagnostic(path, "plan_shape_invalid", got=type(raw).__name__))
-        return []
+        return RuntimeRetentionPlan()
     if raw.get("kind") != "RuntimeRetentionPlan":
         diagnostics.append(_diagnostic(path, "plan_kind_invalid", got=raw.get("kind")))
-        return []
+        return RuntimeRetentionPlan()
     worktrees = raw.get("stale_worktrees")
+    if worktrees is None:
+        worktrees = []
     if not isinstance(worktrees, list):
         diagnostics.append(_diagnostic(path, "stale_worktrees_invalid", got=type(worktrees).__name__))
-        return []
-    plan: list[dict[str, Any]] = []
+        worktrees = []
+    generated_files = raw.get("generated_files")
+    if generated_files is None:
+        generated_files = []
+    if not isinstance(generated_files, list):
+        diagnostics.append(_diagnostic(path, "generated_files_invalid", got=type(generated_files).__name__))
+        generated_files = []
+    stale_worktrees: list[dict[str, Any]] = []
     for entry_no, item in enumerate(worktrees):
         if isinstance(item, dict):
-            plan.append(item)
+            stale_worktrees.append(item)
         else:
             diagnostics.append(_diagnostic(path, "invalid_item", entry=entry_no, got=type(item).__name__))
-    return plan
+    return RuntimeRetentionPlan(tuple(stale_worktrees), tuple(generated_files))
+
+
+def _eligible_generated_file_path(
+    repo_root: Path,
+    item: Any,
+    *,
+    entry_no: int,
+    now: float,
+    diagnostics: list[str],
+) -> Path | None:
+    target = item.get("path") if isinstance(item, dict) and isinstance(item.get("path"), str) else f"entry:{entry_no}"
+    if not isinstance(item, dict):
+        diagnostics.append(_diagnostic(target, "generated_file_item_invalid", entry=entry_no, got=type(item).__name__))
+        return None
+    if item.get("eligible") is not True:
+        diagnostics.append(_diagnostic(target, "generated_file_planner_not_eligible", entry=entry_no))
+        return None
+    proof = item.get("proof")
+    if not isinstance(proof, dict):
+        diagnostics.append(_diagnostic(target, "generated_file_invalid_proof", entry=entry_no, got=type(proof).__name__))
+        return None
+    for key in GENERATED_FILE_PROOF_TRUTHS:
+        if proof.get(key) is not True:
+            diagnostics.append(_diagnostic(target, f"generated_file_proof_{key}_not_true", entry=entry_no))
+            return None
+    path = _generated_file_path_from_item(repo_root, item, entry_no=entry_no, diagnostics=diagnostics)
+    if path is None:
+        return None
+    if path.is_symlink():
+        diagnostics.append(_diagnostic(path, "generated_file_symlink", entry=entry_no))
+        return None
+    try:
+        file_stat = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        diagnostics.append(_diagnostic(path, "generated_file_missing", entry=entry_no))
+        return None
+    except OSError as exc:
+        diagnostics.append(_diagnostic(path, "generated_file_stat_failed", entry=entry_no, error=exc))
+        return None
+    if not stat.S_ISREG(file_stat.st_mode):
+        diagnostics.append(_diagnostic(path, "generated_file_not_regular", entry=entry_no))
+        return None
+    cutoff = now - (RETENTION_TTL_HOURS * 60 * 60)
+    if file_stat.st_mtime > cutoff:
+        diagnostics.append(_diagnostic(path, "generated_file_ttl_not_expired", entry=entry_no))
+        return None
+    rel = path.relative_to(repo_root)
+    pending_reason = _pending_reference_reason(repo_root, rel)
+    if pending_reason:
+        diagnostics.append(_diagnostic(path, pending_reason, entry=entry_no))
+        return None
+    recovery_reason = _recovery_surface_reason(path, rel)
+    if recovery_reason:
+        diagnostics.append(_diagnostic(path, recovery_reason, entry=entry_no))
+        return None
+    return path
+
+
+def _generated_file_path_from_item(
+    repo_root: Path,
+    item: dict[str, Any],
+    *,
+    entry_no: int,
+    diagnostics: list[str],
+) -> Path | None:
+    raw_path = item.get("path")
+    if not isinstance(raw_path, str) or not raw_path:
+        diagnostics.append(_diagnostic(f"entry:{entry_no}", "generated_file_invalid_path", entry=entry_no, got=type(raw_path).__name__))
+        return None
+    rel = Path(raw_path)
+    if rel.is_absolute() or ".." in rel.parts or len(rel.parts) < 3:
+        diagnostics.append(_diagnostic(raw_path, "generated_file_invalid_path", entry=entry_no))
+        return None
+    if rel.parts[0] != ".refactor-loop" or rel.parts[1] not in GENERATED_FILE_ROOTS:
+        diagnostics.append(_diagnostic(raw_path, "generated_file_disallowed_path", entry=entry_no))
+        return None
+    path = repo_root / rel
+    if path.is_symlink():
+        return path
+    allowed_root = (repo_root / ".refactor-loop" / rel.parts[1]).resolve()
+    try:
+        path.resolve(strict=False).relative_to(allowed_root)
+    except ValueError:
+        diagnostics.append(_diagnostic(raw_path, "generated_file_path_escaped", entry=entry_no))
+        return None
+    return path
+
+
+def _pending_reference_reason(repo_root: Path, rel: Path) -> str:
+    pending = repo_root / ".refactor-loop" / ".controller-pending-events.log"
+    try:
+        text = pending.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return ""
+    except OSError:
+        return "generated_file_pending_events_unreadable"
+    return "generated_file_pending_reference" if rel.as_posix() in text else ""
+
+
+def _recovery_surface_reason(path: Path, rel: Path) -> str:
+    if rel.parts[1] != "logs" or path.suffix != ".log" or not path.name.startswith(WORKER_LOG_PREFIXES):
+        return ""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return "generated_file_recovery_log_unreadable"
+    exit_lines = [line.strip() for line in lines if line.strip().startswith("EXIT=")]
+    if not exit_lines:
+        return "generated_file_recovery_dead_worker_log"
+    if exit_lines[-1] != "EXIT=0":
+        return "generated_file_recovery_failed_worker_log"
+    try:
+        exit_no = max(entry_no for entry_no, line in enumerate(lines) if line.strip() == "EXIT=0")
+    except ValueError:
+        return "generated_file_recovery_failed_worker_log"
+    if not any(extract_standalone_marker(line) for line in lines[:exit_no]):
+        return "generated_file_recovery_markerless_log"
+    return ""
 
 
 def _eligible_worktree_path(

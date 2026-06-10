@@ -93,6 +93,29 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
     def write_plan(self, plan: object) -> None:
         (self.refactor_loop / "state" / "runtime-retention-plan.json").write_text(json.dumps(plan), encoding="utf-8")
 
+    def generated_file_plan_item(
+        self,
+        rel: str,
+        *,
+        eligible: bool = True,
+        proof_overrides: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        proof = {
+            "generated_file": True,
+            "ttl_expired": True,
+            "no_in_flight": True,
+            "no_open_actionable": True,
+            "no_pending_intent": True,
+            "no_unconsumed_marker": True,
+            "no_recovery_surface": True,
+        }
+        if proof_overrides:
+            proof.update(proof_overrides)
+        return {"path": rel, "eligible": eligible, "proof": proof}
+
+    def write_generated_files_plan(self, *items: object) -> None:
+        self.write_plan({"kind": "RuntimeRetentionPlan", "generated_files": list(items)})
+
     def git_recheck_runner(
         self,
         commands: list[tuple[str, ...]],
@@ -181,7 +204,119 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         self.assertTrue(old_non_generated.exists())
         self.assertTrue(state_artifact.exists())
 
-    def test_generated_path_symlink_and_non_regular_files_are_retained_without_counting(self) -> None:
+    def test_generated_file_gc_deletes_old_planner_proven_regular_files(self) -> None:
+        old_log = self.write_file(".refactor-loop/logs/old.log", "complete\nDONE_OK:real\nEXIT=0\n", 25)
+        old_prompt = self.write_file(".refactor-loop/prompts/old.md", "prompt\n", 25)
+        old_run = self.write_file(".refactor-loop/runs/old.json", "{}\n", 25)
+        self.write_generated_files_plan(
+            self.generated_file_plan_item(".refactor-loop/logs/old.log"),
+            self.generated_file_plan_item(".refactor-loop/prompts/old.md"),
+            self.generated_file_plan_item(".refactor-loop/runs/old.json"),
+        )
+
+        result = retain_runtime(self.repo, enabled=True)
+
+        self.assertEqual((result.deleted, result.kept, result.missing), (3, 0, False))
+        self.assertFalse(old_log.exists())
+        self.assertFalse(old_prompt.exists())
+        self.assertFalse(old_run.exists())
+
+    def test_generated_file_gc_legacy_stale_worktree_only_plan_keeps_compatibility(self) -> None:
+        old_log = self.write_file(".refactor-loop/logs/old.log", "done\n", 25)
+        stale = self.write_stale_worktree_plan()
+        commands: list[tuple[str, ...]] = []
+
+        result = retain_runtime(self.repo, enabled=True, command_runner=self.git_recheck_runner(commands))
+
+        self.assertEqual((result.deleted, result.kept), (0, 0))
+        self.assertEqual(1, result.removed_worktrees)
+        self.assertTrue(result.pruned_worktrees)
+        self.assertTrue(old_log.exists())
+        self.assertIn(("git", "-C", str(self.repo.resolve()), "worktree", "remove", str(stale.resolve())), commands)
+
+    def test_generated_file_gc_keeps_young_open_inflight_pending_unconsumed_recovery_and_unproven_files(self) -> None:
+        cases: list[tuple[str, str, float, dict[str, object], str]] = [
+            ("young", ".refactor-loop/logs/young.log", 1, {}, "generated_file_ttl_not_expired"),
+            ("open-target", ".refactor-loop/logs/open.log", 25, {"no_open_actionable": False}, "generated_file_proof_no_open_actionable_not_true"),
+            ("in-flight", ".refactor-loop/logs/inflight.log", 25, {"no_in_flight": False}, "generated_file_proof_no_in_flight_not_true"),
+            ("pending-intent", ".refactor-loop/prompts/pending.md", 25, {"no_pending_intent": False}, "generated_file_proof_no_pending_intent_not_true"),
+            (
+                "unconsumed-marker",
+                ".refactor-loop/runs/unconsumed.md",
+                25,
+                {"no_unconsumed_marker": False},
+                "generated_file_proof_no_unconsumed_marker_not_true",
+            ),
+            ("recovery-proof", ".refactor-loop/logs/recovery-proof.log", 25, {"no_recovery_surface": False}, "generated_file_proof_no_recovery_surface_not_true"),
+            ("unproven", ".refactor-loop/logs/unproven.log", 25, {"generated_file": False}, "generated_file_proof_generated_file_not_true"),
+        ]
+        for name, rel, age_hours, proof_overrides, reason in cases:
+            with self.subTest(name=name):
+                path = self.write_file(rel, "done\n", age_hours)
+                self.write_generated_files_plan(self.generated_file_plan_item(rel, proof_overrides=proof_overrides))
+
+                result = retain_runtime(self.repo, enabled=True)
+
+                self.assertEqual((result.deleted, result.kept), (0, 1))
+                self.assertTrue(path.exists())
+                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+
+    def test_generated_file_gc_keeps_pending_referenced_and_markerless_recovery_files(self) -> None:
+        pending_prompt = self.write_file(".refactor-loop/prompts/pending-ref.md", "prompt\n", 25)
+        markerless_log = self.write_file(".refactor-loop/logs/implement-issue-8.log", "done without marker\nEXIT=0\n", 25)
+        pending = self.refactor_loop / ".controller-pending-events.log"
+        pending.write_text("HARNESS_SPAWN_INTENT prompt=.refactor-loop/prompts/pending-ref.md\n", encoding="utf-8")
+        self.write_generated_files_plan(
+            self.generated_file_plan_item(".refactor-loop/prompts/pending-ref.md"),
+            self.generated_file_plan_item(".refactor-loop/logs/implement-issue-8.log"),
+        )
+
+        result = retain_runtime(self.repo, enabled=True)
+
+        self.assertEqual((result.deleted, result.kept), (0, 2))
+        self.assertTrue(pending_prompt.exists())
+        self.assertTrue(markerless_log.exists())
+        for reason in ("generated_file_pending_reference", "generated_file_recovery_markerless_log"):
+            with self.subTest(reason=reason):
+                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+
+    def test_generated_file_gc_keeps_malformed_path_escape_symlink_fifo_and_missing_entries(self) -> None:
+        old_target = self.write_file(".refactor-loop/logs/target.log", "target\n", 25)
+        symlink_log = self.refactor_loop / "logs" / "linked.log"
+        symlink_log.symlink_to(old_target)
+        fifo_log = self.refactor_loop / "logs" / "pipe.log"
+        os.mkfifo(fifo_log)
+        malformed = self.write_file(".refactor-loop/logs/malformed.log", "done\n", 25)
+        self.write_generated_files_plan(
+            "not-a-dict",
+            self.generated_file_plan_item(".refactor-loop/../escape.log"),
+            self.generated_file_plan_item(".refactor-loop/state/old.json"),
+            self.generated_file_plan_item(".refactor-loop/logs/linked.log"),
+            self.generated_file_plan_item(".refactor-loop/logs/pipe.log"),
+            {"path": ".refactor-loop/logs/malformed.log", "eligible": True, "proof": []},
+            self.generated_file_plan_item(".refactor-loop/logs/missing.log"),
+        )
+
+        result = retain_runtime(self.repo, enabled=True)
+
+        self.assertEqual((result.deleted, result.kept), (0, 7))
+        self.assertTrue(old_target.exists())
+        self.assertTrue(symlink_log.is_symlink())
+        self.assertTrue(fifo_log.exists())
+        self.assertTrue(malformed.exists())
+        for reason in (
+            "generated_file_item_invalid",
+            "generated_file_invalid_path",
+            "generated_file_disallowed_path",
+            "generated_file_symlink",
+            "generated_file_not_regular",
+            "generated_file_invalid_proof",
+            "generated_file_missing",
+        ):
+            with self.subTest(reason=reason):
+                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+
+    def test_generated_path_symlink_and_non_regular_files_are_retained_without_plan_entries(self) -> None:
         old_target = self.write_file(".refactor-loop/logs/target.log", "target\n", 25)
         symlink_log = self.refactor_loop / "logs" / "linked.log"
         symlink_log.symlink_to(old_target)
@@ -308,6 +443,7 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
             ("wrong-top-level", "[]", "plan_shape_invalid"),
             ("wrong-kind", json.dumps({"kind": "Other", "stale_worktrees": []}), "plan_kind_invalid"),
             ("wrong-worktrees", json.dumps({"kind": "RuntimeRetentionPlan", "stale_worktrees": {}}), "stale_worktrees_invalid"),
+            ("wrong-generated-files", json.dumps({"kind": "RuntimeRetentionPlan", "generated_files": {}}), "generated_files_invalid"),
             ("invalid-item", json.dumps({"kind": "RuntimeRetentionPlan", "stale_worktrees": ["bad"]}), "invalid_item"),
         ]
         for name, content, reason in cases:
@@ -461,6 +597,12 @@ class RuntimeRetentionSourceRegressionTests(unittest.TestCase):
             "PENDING_EVENTS_MAX_LINES",
             ".controller-pending-events.log",
             "same-inode",
+            "generated_files",
+            "GENERATED_FILE_PROOF_TRUTHS",
+            "no_open_actionable",
+            "no_pending_intent",
+            "no_unconsumed_marker",
+            "no_recovery_surface",
             "deleted = 0",
             "kept = 0",
             '"worktree", "remove"',
