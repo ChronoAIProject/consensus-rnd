@@ -2286,6 +2286,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["kind"], "harness-spawn-intent")
         self.assertEqual(action["cd"], str(self.repo.resolve()))
 
+    def test_harness_spawn_intent_accepts_absolute_repo_contained_prompt_and_log(self) -> None:
+        prompt = self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue330-r4-judge.md"
+        log = self.repo / ".refactor-loop" / "logs" / "phase9-issue330-r4-judge.log"
+        self.append_harness_spawn_intent(prompt=str(prompt), log=str(log))
+
+        plan = self.run_plan(fixture="open_issue_330")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent")
+        self.assertEqual(action["prompt"], str(prompt.resolve()))
+        self.assertEqual(action["log"], str(log.resolve()))
+
     def test_harness_spawn_intent_rejects_absolute_cd_outside_repo(self) -> None:
         self.append_harness_spawn_intent(cd="/tmp/outside-consensus-rnd")
 
@@ -2294,6 +2305,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         action = plan["actions"][0]
         self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
         self.assertIn("invalid-path:cd escapes REPO_ROOT", action["reason"])
+
+    def test_harness_spawn_intent_rejects_absolute_prompt_or_log_outside_repo(self) -> None:
+        for field in ("prompt", "log"):
+            with self.subTest(field=field):
+                self.assert_harness_spawn_intent_invalid(
+                    f"invalid-path:{field} escapes REPO_ROOT: '/tmp/outside-consensus-rnd'",
+                    **{field: "/tmp/outside-consensus-rnd"},
+                )
 
     def test_harness_spawn_intent_rejects_argv_command_array(self) -> None:
         self.append_harness_spawn_intent(command=["consensus-rnd-cli", "spawn-codex"])

@@ -1038,6 +1038,25 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("`MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS=900`", self.skill)
         self.assertIn("not GitHub live state fact source, not host production SSOT", self.skill)
         self.assertIn("`gh api repos/<slug>/issues/<N>`", self.skill)
+
+    def test_harness_spawn_intent_contract_documents_shared_consumer_validator_boundary(self) -> None:
+        contract = section_after_heading(self.skill, "Named runtime exception — concurrency_monitor auto-topup(per #57)")
+        for token in (
+            "repo-relative canonical `cd` / `prompt` / `log` writer paths",
+            "owner-local consumer validator also accepts existing repo-contained absolute `cd` / `prompt` / `log` compatibility input",
+            "relative paths resolve under `$REPO_ROOT`, absolute paths must remain inside `$REPO_ROOT`",
+            "does not add producer canonical-write migration or lifecycle authority",
+            "concurrency monitor calls the same validator after JSON object and timestamp parsing",
+            "rather than redefining malformed path or command semantics",
+            "Writers and host specs must not add",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, contract)
+
+        monitor_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "concurrency.py")
+        wakeup_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        self.assertIn("validate_harness_spawn_intent", wakeup_source)
+        self.assertIn("validate_harness_spawn_intent", monitor_source)
         self.assertIn("`gh api repos/<slug>/issues/<N>/comments?per_page=20`", self.skill)
         self.assertIn("The router-injected issue source snapshots are router-local prompt context, not durable schema, host production SSOT, or lifecycle authority", self.skill)
         self.assertIn("`gh api repos/<slug>/issues/<N> --jq .state`", self.skill)

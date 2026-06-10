@@ -31,6 +31,7 @@ from ..safe_progress_scheduler import (
 from ..state import read_json, write_json
 from ..task_spawn_claim import TaskSpawnClaimError, safe_task_id_from_task
 from ..update_check import parse_time
+from ..wakeup_plan import validate_harness_spawn_intent
 from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work, is_draft_release_rollup_pr
 from ..worker_markers import log_has_terminal_exit, read_worker_terminal_marker, read_worker_visible_terminal_marker
 
@@ -701,6 +702,9 @@ class ConcurrencyMonitor:
             created_at = self._line_time(ts)
             if created_at is None:
                 return False, "malformed-harness-spawn-intent-ts", []
+            validation_reason = self._harness_spawn_intent_validation_reason(payload)
+            if validation_reason:
+                return False, validation_reason, []
             if not self._intent_matches_active_target(payload, active_targets):
                 continue
             suppressed = self._intent_suppression_reason(payload, blocked_intents=blocked_intents)
@@ -742,11 +746,14 @@ class ConcurrencyMonitor:
                 return HardGateTransientSupply(0, (), (), "malformed-harness-spawn-intent")
             if not isinstance(payload, dict):
                 return HardGateTransientSupply(0, (), (), "malformed-harness-spawn-intent")
-            if payload.get("source") != "phase9-router":
-                continue
             created_at = self._line_time(ts)
             if created_at is None:
                 return HardGateTransientSupply(0, (), (), "malformed-harness-spawn-intent-ts")
+            validation_reason = self._harness_spawn_intent_validation_reason(payload)
+            if validation_reason:
+                return HardGateTransientSupply(0, (), (), validation_reason)
+            if payload.get("source") != "phase9-router":
+                continue
             target_key = self._intent_active_target_key(payload, active_targets)
             if target_key is None:
                 continue
@@ -759,6 +766,16 @@ class ConcurrencyMonitor:
             targets.append(target_key)
             evidence.append(f"pending:{payload.get('intent_id') or payload.get('task_id')}:{age}s")
         return HardGateTransientSupply(len(set(targets)), tuple(dict.fromkeys(targets)), tuple(evidence))
+
+    def _harness_spawn_intent_validation_reason(self, payload: dict[str, object]) -> str:
+        try:
+            validate_harness_spawn_intent(self.ctx, payload)
+        except ValueError as exc:
+            detail = str(exc)
+            if detail:
+                return f"malformed-harness-spawn-intent:{detail}"
+            return "malformed-harness-spawn-intent"
+        return ""
 
     def _phase9_ledger_intent_evidence(
         self,
