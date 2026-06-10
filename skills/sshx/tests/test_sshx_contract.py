@@ -159,6 +159,47 @@ class SshxContractTests(unittest.TestCase):
         )
         self.assertIn("next_iteration_question:", text)
 
+    def test_sshx_triplets_require_harness_discovery_in_conclusion(self) -> None:
+        text = read(SKILL)
+        thinking_start = text.index("## Thinking Triplet")
+        review_start = text.index("## Review Triplet")
+        design_truth_start = text.index("## Design Truth Table")
+        review_truth_start = text.index("## Review Truth Table")
+        thinking_section = text[thinking_start:design_truth_start]
+        review_section = text[review_start:review_truth_start]
+
+        self.assertIn(
+            "Before proposing, revising, rejecting, or abstaining, each thinking perspective must first identify the applicable mature human theory, engineering principle, industry best practice, or constraint framework governing this class of problem",
+            thinking_section,
+        )
+        self.assertIn('"No applicable mature theory found" is an acceptable explicit harness', thinking_section)
+        self.assertIn("name the reference frame in `SshxResultEnvelope.conclusion`", thinking_section)
+        self.assertIn(
+            "Harness discovery does not override `GoalArtifact`, the assigned bias, the thinking truth table, or the allowed verdict set",
+            thinking_section,
+        )
+        self.assertIn("must not block valid `abstain` or `reject` outcomes", thinking_section)
+        self.assertLess(
+            thinking_section.index("Before proposing, revising, rejecting, or abstaining"),
+            thinking_section.index("Each perspective returns one of:"),
+        )
+
+        self.assertIn(
+            "Before approving, commenting, or rejecting, each reviewer must first identify the applicable mature human theory, engineering principle, industry best practice, or constraint framework governing this class of implementation",
+            review_section,
+        )
+        self.assertIn('"No applicable mature theory found" is an acceptable explicit harness', review_section)
+        self.assertIn("name the reference frame in `SshxResultEnvelope.conclusion`", review_section)
+        self.assertIn(
+            "Harness discovery does not override `GoalArtifact`, the review focus, the review truth table, or the allowed verdict set",
+            review_section,
+        )
+        self.assertIn("must not block valid `comment` or `reject` outcomes", review_section)
+        self.assertLess(
+            review_section.index("Before approving, commenting, or rejecting"),
+            review_section.index("Each reviewer returns one of:"),
+        )
+
     def test_sshx_worker_modes(self) -> None:
         text = read(SKILL)
         contract_text = without_refactor_comments(text)
