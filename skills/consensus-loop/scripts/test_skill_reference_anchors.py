@@ -338,7 +338,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "plan path, digest, and proof",
             "wakeup_runner.py` then revalidates clean plan-level judge source marker",
             "live parent open/tracking",
-            "sentinel idempotency",
+            "exact helper-owned tracking grammar",
+            "without treating loose sentinel-looking prose as idempotency state",
             "wakeup_plan.py` is not the #403 read-model/status/authorization owner",
             "must not project any other decompose action/status",
             "`kind=\"issue-decomposition-apply\"`",
@@ -1386,7 +1387,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py", "worker_markers.py"},
             "review-pr": {"controller_actions.py", "monitors/progress.py", "monitors/concurrency.py", "peek.py", "wakeup_plan.py", "wakeup_runner.py"},
             "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py", "wakeup_runner.py"},
-            "crnd:": {"cross_instance_stand_down.py", "default_issue_intake.py", "labels.py", "triage.py"},
+            "crnd:": {"cross_instance_stand_down.py", "default_issue_intake.py", "issue_decomposition.py", "labels.py", "triage.py"},
             "refactor/iter": {"controller_actions.py", "git.py", "implement_lifecycle.py", "wakeup_runner.py"},
             "rollup/": {
                 "controller_actions.py",

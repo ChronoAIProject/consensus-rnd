@@ -26,11 +26,13 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         from codex_refactor_loop.context import LoopContext
         from codex_refactor_loop import labels as label_catalog
+        from codex_refactor_loop.issue_decomposition import issue_decomposition_child_fingerprint
         from codex_refactor_loop.monitors import concurrency as concurrency_module
         from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
         from codex_refactor_loop.wakeup_plan import harness_spawn_intent_line_digest
         self.module = concurrency_module
         self.harness_spawn_intent_line_digest = harness_spawn_intent_line_digest
+        self.issue_decomposition_child_fingerprint = issue_decomposition_child_fingerprint
         self.labels = label_catalog
         self.ctx = LoopContext.load(repo_root=self.repo, env=os.environ)
         self.monitor = ConcurrencyMonitor(self.ctx)
@@ -412,7 +414,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 return subprocess.CompletedProcess(
                     command,
                     0,
-                    json.dumps({"comments": [{"body": f"IssueDecompositionPlan digest: {digest}\n⟦AI:AUTO-LOOP⟧\n"}]}),
+                    json.dumps({"comments": [{"body": self.decomposition_tracking_comment(537, digest)}]}),
                     "",
                 )
             return subprocess.CompletedProcess(command, 1, "", "unexpected command")
@@ -450,7 +452,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 return subprocess.CompletedProcess(
                     command,
                     0,
-                    json.dumps({"comments": [{"body": f"IssueDecompositionPlan digest: {digest}\n⟦AI:AUTO-LOOP⟧\n"}]}),
+                    json.dumps({"comments": [{"body": self.decomposition_tracking_comment(537, digest)}]}),
                     "",
                 )
             return subprocess.CompletedProcess(command, 1, "", "unexpected command")
@@ -475,7 +477,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 return subprocess.CompletedProcess(
                     command,
                     0,
-                    json.dumps({"comments": [{"body": f"IssueDecompositionPlan digest: {digest}\n⟦AI:AUTO-LOOP⟧\n"}]}),
+                    json.dumps({"comments": [{"body": self.decomposition_tracking_comment(537, digest)}]}),
                     "",
                 )
             return subprocess.CompletedProcess(command, 1, "", "unexpected command")
@@ -489,6 +491,23 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertEqual(
             breakdown,
             [{"id": "#537", "kind": "issue", "phase": self.labels.PHASE_DESIGN_SOLVING, "expected": 1}],
+        )
+
+    def decomposition_tracking_comment(self, issue: int, digest: str) -> str:
+        first = self.issue_decomposition_child_fingerprint(issue, digest, "first-child")
+        second = self.issue_decomposition_child_fingerprint(issue, digest, "second-child")
+        return "\n".join(
+            [
+                "<!-- crnd:issue-decomposition-tracking -->",
+                f"Parent issue: #{issue}",
+                f"IssueDecompositionPlan digest: {digest}",
+                "Children:",
+                f"- first-child: #501 https://github.com/owner/repo/issues/501 fingerprint={first}",
+                f"- second-child: #502 https://github.com/owner/repo/issues/502 fingerprint={second}",
+                "<!-- /crnd:issue-decomposition-tracking -->",
+                "⟦AI:AUTO-LOOP⟧",
+                "",
+            ]
         )
 
     def test_compute_expected_keeps_unapplied_decomposition_parent_tracking_issue(self) -> None:

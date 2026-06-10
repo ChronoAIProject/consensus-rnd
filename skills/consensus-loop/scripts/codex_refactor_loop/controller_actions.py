@@ -30,7 +30,20 @@ from .implementation_pr_artifacts import (
     validate_implementation_pr_artifacts,
 )
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log
-from .issue_decomposition import issue_decomposition_plan_file_digest, load_issue_decomposition_plan
+from .issue_decomposition import (
+    IssueDecompositionChild,
+    IssueDecompositionError,
+    IssueDecompositionPlan,
+    IssueDecompositionTrackingChild,
+    append_issue_decomposition_tracking_block,
+    extract_issue_decomposition_child_fingerprint,
+    issue_decomposition_child_fingerprint,
+    issue_decomposition_expected_child_fingerprints,
+    issue_decomposition_plan_file_digest,
+    load_issue_decomposition_plan,
+    parse_issue_decomposition_tracking_comments,
+    reconcile_issue_decomposition_tracking_children,
+)
 from .managed_work_snapshot import invalidate_open_managed_work_snapshot
 from .prompt_rendering import render_prompt_text
 from .processes import launch_spawn_codex_supervisor
@@ -694,22 +707,50 @@ class ControllerActions:
         )
         if denied is not None:
             raise RuntimeError(f"apply_issue_decomposition_plan: cross-instance admission denied rc={denied}")
-        sentinel_count = self._issue_decomposition_parent_sentinel_count(parent_target, digest)
-        if sentinel_count == 1:
-            invalidate_open_managed_work_snapshot(self.ctx)
-            return tuple()
-        if sentinel_count > 1:
-            raise RuntimeError("apply_issue_decomposition_plan: multiple parent digest sentinels")
+        comments = self._issue_decomposition_parent_comments(parent_target)
+        projection = parse_issue_decomposition_tracking_comments(
+            comments,
+            expected_parent_issue=plan.parent_issue,
+            expected_digest=digest,
+        )
+        try:
+            tracked_children = reconcile_issue_decomposition_tracking_children(plan, digest, projection)
+        except IssueDecompositionError as exc:
+            raise RuntimeError(f"apply_issue_decomposition_plan: invalid parent tracking comments: {exc}") from exc
+        existing_children = self._issue_decomposition_existing_children_by_fingerprint(plan, digest)
+        children_by_slug: dict[str, IssueDecompositionTrackingChild] = dict(tracked_children)
+        children_by_slug.update({child.slug: child for child in existing_children.values()})
+        missing = [child for child in plan.children if child.slug not in children_by_slug]
         created: list[tuple[int, str]] = []
-        for child in plan.children:
-            created.append(self.open_design_issue_with_labels(child.title, child.body_artifact_path))
+        for child in missing:
+            fingerprint = issue_decomposition_child_fingerprint(plan.parent_issue, digest, child.slug)
+            self._write_issue_decomposition_child_body_fingerprint(child, fingerprint)
+            number, url = self.open_design_issue_with_labels(child.title, child.body_artifact_path)
+            created.append((number, url))
+            children_by_slug[child.slug] = IssueDecompositionTrackingChild(
+                slug=child.slug,
+                issue_number=number,
+                url=url,
+                fingerprint=fingerprint,
+            )
         if created:
             invalidate_open_managed_work_snapshot(self.ctx)
+        expected_slugs = {child.slug for child in plan.children}
+        if not created and set(tracked_children) == expected_slugs:
+            invalidate_open_managed_work_snapshot(self.ctx)
+            return tuple()
         parent_comment = (self.ctx.repo_root / plan.parent_comment_artifact_path).read_text(encoding="utf-8")
         final_sentinel = f"\n{FINAL_SENTINEL}\n"
-        if not parent_comment.endswith(final_sentinel):
-            raise RuntimeError("apply_issue_decomposition_plan: parent comment missing final sentinel")
-        parent_comment = parent_comment[: -len(final_sentinel)].rstrip() + f"\n\nIssueDecompositionPlan digest: {digest}{final_sentinel}"
+        try:
+            parent_comment = append_issue_decomposition_tracking_block(
+                parent_comment,
+                plan.parent_issue,
+                digest,
+                [children_by_slug[child.slug] for child in plan.children],
+                final_sentinel,
+            )
+        except IssueDecompositionError as exc:
+            raise RuntimeError(f"apply_issue_decomposition_plan: {exc}") from exc
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
             handle.write(parent_comment)
             comment_file = handle.name
@@ -736,7 +777,7 @@ class ControllerActions:
         admission = self._require_github_actor_or_raise("apply-default-issue-intake-claim")
         return DefaultIssueIntakeClaim(self.ctx, actor_login=admission.login).apply(issue_number)
 
-    def _issue_decomposition_parent_sentinel_count(self, parent_target: str, digest: str) -> int:
+    def _issue_decomposition_parent_comments(self, parent_target: str) -> list[Mapping[str, Any]]:
         result = self.gh(["issue", "view", parent_target, "--json", "comments"], check=False)
         if result.returncode != 0:
             raise RuntimeError(f"apply_issue_decomposition_plan: parent comments unavailable: {result.stderr.strip() or result.stdout.strip()}")
@@ -747,12 +788,78 @@ class ControllerActions:
         comments = payload.get("comments") if isinstance(payload, dict) else None
         if not isinstance(comments, list):
             raise RuntimeError("apply_issue_decomposition_plan: parent comments invalid JSON")
-        sentinel = f"IssueDecompositionPlan digest: {digest}"
-        return sum(
-            1
-            for comment in comments
-            if isinstance(comment, dict) and isinstance(comment.get("body"), str) and sentinel in comment["body"]
+        return [comment for comment in comments if isinstance(comment, Mapping)]
+
+    def _issue_decomposition_existing_children_by_fingerprint(
+        self,
+        plan: IssueDecompositionPlan,
+        digest: str,
+    ) -> dict[str, IssueDecompositionTrackingChild]:
+        result = self.gh(
+            [
+                "issue",
+                "list",
+                "--state",
+                "open",
+                "--label",
+                labels.MANAGED,
+                "--json",
+                "number,url,body,labels",
+                "--limit",
+                "200",
+            ],
+            check=False,
         )
+        if result.returncode != 0:
+            raise RuntimeError(f"apply_issue_decomposition_plan: child issue projection unavailable: {result.stderr.strip() or result.stdout.strip()}")
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("apply_issue_decomposition_plan: child issue projection invalid JSON") from exc
+        if not isinstance(payload, list):
+            raise RuntimeError("apply_issue_decomposition_plan: child issue projection invalid JSON")
+        expected = issue_decomposition_expected_child_fingerprints(plan, digest)
+        by_fingerprint = {fingerprint: slug for slug, fingerprint in expected.items()}
+        found: dict[str, IssueDecompositionTrackingChild] = {}
+        for item in payload:
+            if not isinstance(item, Mapping):
+                continue
+            body = item.get("body")
+            fingerprint = extract_issue_decomposition_child_fingerprint(body) if isinstance(body, str) else ""
+            slug = by_fingerprint.get(fingerprint)
+            if slug is None:
+                continue
+            labels_payload = item.get("labels")
+            label_names: set[str] = set()
+            if isinstance(labels_payload, list):
+                label_names = {str(label.get("name") or "") for label in labels_payload if isinstance(label, Mapping)}
+            if labels.MANAGED not in label_names:
+                continue
+            try:
+                issue_number = int(item.get("number"))
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("apply_issue_decomposition_plan: child issue projection missing number") from exc
+            url = str(item.get("url") or "")
+            if not url:
+                raise RuntimeError("apply_issue_decomposition_plan: child issue projection missing url")
+            existing = found.get(slug)
+            child = IssueDecompositionTrackingChild(slug=slug, issue_number=issue_number, url=url, fingerprint=fingerprint)
+            if existing is not None and existing != child:
+                raise RuntimeError(f"apply_issue_decomposition_plan: duplicate child fingerprint for slug {slug}")
+            found[slug] = child
+        return found
+
+    def _write_issue_decomposition_child_body_fingerprint(self, child: IssueDecompositionChild, fingerprint: str) -> None:
+        body_path = self.ctx.repo_root / child.body_artifact_path
+        text = body_path.read_text(encoding="utf-8")
+        if "IssueDecompositionChild fingerprint:" in text:
+            text = re.sub(r"(?m)^IssueDecompositionChild fingerprint: [0-9a-f]{64}$", f"IssueDecompositionChild fingerprint: {fingerprint}", text)
+        else:
+            final_sentinel = f"\n{FINAL_SENTINEL}\n"
+            if not text.endswith(final_sentinel):
+                raise RuntimeError("apply_issue_decomposition_plan: child body missing final sentinel")
+            text = text[: -len(final_sentinel)].rstrip() + f"\n\nIssueDecompositionChild fingerprint: {fingerprint}{final_sentinel}"
+        body_path.write_text(text, encoding="utf-8")
 
     def _validate_pr_body_file(self, body_file: str) -> None:
         body_path = Path(body_file)

@@ -35,6 +35,7 @@ from codex_refactor_loop.cross_instance_stand_down import CrossInstanceAdmission
 from codex_refactor_loop.git import Git
 from codex_refactor_loop.github_actor import GitHubActorAdmission
 from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest
+from codex_refactor_loop.issue_decomposition import issue_decomposition_child_fingerprint
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 from codex_refactor_loop.release.publisher import ReleasePublishResult
 from codex_refactor_loop.secondary_mutation_backoff import record_secondary_mutation_backoff
@@ -3737,6 +3738,8 @@ class ControllerActionsTests(unittest.TestCase):
             gh_calls.append(args)
             if args[:3] == ["issue", "view", "403"]:
                 return mock.Mock(returncode=0, stdout=json.dumps({"comments": []}), stderr="")
+            if args[:2] == ["issue", "list"]:
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
             if args[:2] == ["issue", "create"]:
                 number = 501 + len([call for call in gh_calls if call[:2] == ["issue", "create"]])
                 return mock.Mock(returncode=0, stdout=f"https://github.com/owner/repo/issues/{number}\n", stderr="")
@@ -3748,15 +3751,20 @@ class ControllerActionsTests(unittest.TestCase):
             created = self.actions.apply_issue_decomposition_plan(str(plan_path))
 
         self.assertEqual((502, "https://github.com/owner/repo/issues/502"), created[0])
-        self.assertEqual(4, len(gh_calls))
+        self.assertEqual(5, len(gh_calls))
         self.assertEqual(["issue", "view", "403", "--json", "comments"], gh_calls[0])
+        self.assertEqual(["issue", "list", "--state", "open", "--label", labels.MANAGED, "--json", "number,url,body,labels", "--limit", "200"], gh_calls[1])
         creates = [call for call in gh_calls if call[:2] == ["issue", "create"]]
         self.assertEqual(2, len(creates))
         for create in creates:
             self.assertEqual(",".join(labels.design_issue_label_bundle()), create[create.index("--label") + 1])
+            body_text = (self.tmp / create[create.index("--body-file") + 1]).read_text(encoding="utf-8")
+            self.assertIn("IssueDecompositionChild fingerprint:", body_text)
         self.assertEqual(["issue", "comment", "403", "--body-file"], gh_calls[-1][:4])
         self.assertIn("Parent issue: #403", comment_texts[-1])
         self.assertIn("IssueDecompositionPlan digest:", comment_texts[-1])
+        self.assertIn("<!-- crnd:issue-decomposition-tracking -->", comment_texts[-1])
+        self.assertIn("- first-child: #502 https://github.com/owner/repo/issues/502 fingerprint=", comment_texts[-1])
         self.assertTrue(comment_texts[-1].endswith("\n⟦AI:AUTO-LOOP⟧\n"))
         self.assertFalse(stale_snapshot.exists(), "child issue creation must invalidate stale open managed work snapshot")
         forbidden_calls = {("issue", "close"), ("issue", "reopen"), ("issue", "edit")}
@@ -3819,6 +3827,8 @@ class ControllerActionsTests(unittest.TestCase):
             gh_calls.append(args)
             if args[:3] == ["issue", "view", "403"]:
                 return mock.Mock(returncode=0, stdout=json.dumps({"comments": []}), stderr="")
+            if args[:2] == ["issue", "list"]:
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
             if args[:2] == ["issue", "create"]:
                 number = 600 + len([call for call in gh_calls if call[:2] == ["issue", "create"]])
                 return mock.Mock(returncode=0, stdout=f"https://github.com/owner/repo/issues/{number}\n", stderr="")
@@ -3834,7 +3844,7 @@ class ControllerActionsTests(unittest.TestCase):
             ):
                 self.actions.apply_issue_decomposition_plan(str(plan_path))
 
-        self.assertEqual(4, len(gh_calls))
+        self.assertEqual(5, len(gh_calls))
         creates = [call for call in gh_calls if call[:2] == ["issue", "create"]]
         self.assertEqual(2, len(creates))
         self.assertEqual(["issue", "comment", "403", "--body-file"], gh_calls[-1][:4])
@@ -3848,7 +3858,7 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual("issue-decomposition-parent-comment", backoff["contentCreation"]["operation"])
         self.assertEqual("secondary-content-creation-limit", backoff["contentCreation"]["reason"])
 
-    def test_apply_issue_decomposition_plan_reuses_single_parent_digest_sentinel_and_fails_on_multiple(self) -> None:
+    def test_apply_issue_decomposition_plan_reuses_complete_tracking_and_reconciles_duplicate_matching_comments(self) -> None:
         consensus = ".refactor-loop/runs/phase9-issue403-r6-judge.md"
         (self.tmp / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
         (self.tmp / consensus).write_text("consensus artifact\n", encoding="utf-8")
@@ -3899,10 +3909,23 @@ class ControllerActionsTests(unittest.TestCase):
             encoding="utf-8",
         )
         digest = issue_decomposition_plan_file_digest(self.actions.ctx, str(plan_path))
+        first_fingerprint = issue_decomposition_child_fingerprint(403, digest, "first-child")
+        second_fingerprint = issue_decomposition_child_fingerprint(403, digest, "second-child")
+        tracking = "\n".join(
+            [
+                "<!-- crnd:issue-decomposition-tracking -->",
+                "Parent issue: #403",
+                f"IssueDecompositionPlan digest: {digest}",
+                "Children:",
+                f"- first-child: #501 https://github.com/owner/repo/issues/501 fingerprint={first_fingerprint}",
+                f"- second-child: #502 https://github.com/owner/repo/issues/502 fingerprint={second_fingerprint}",
+                "<!-- /crnd:issue-decomposition-tracking -->",
+            ]
+        )
 
-        for name, comments, expected in (
-            ("single", [{"body": f"IssueDecompositionPlan digest: {digest}"}], tuple()),
-            ("multiple", [{"body": f"IssueDecompositionPlan digest: {digest}"}] * 2, RuntimeError),
+        for name, comments in (
+            ("single", [{"body": tracking}]),
+            ("duplicate-matching", [{"body": tracking}, {"body": "same tracking\n" + tracking}]),
         ):
             with self.subTest(name=name):
                 stale_snapshot = self.tmp / ".refactor-loop" / "state" / "managed-work-snapshot.json"
@@ -3921,19 +3944,253 @@ class ControllerActionsTests(unittest.TestCase):
                     gh_calls.append(args)
                     if args[:3] == ["issue", "view", "403"]:
                         return mock.Mock(returncode=0, stdout=json.dumps({"comments": comments}), stderr="")
+                    if args[:2] == ["issue", "list"]:
+                        return mock.Mock(returncode=0, stdout="[]", stderr="")
                     raise AssertionError(f"unexpected gh call: {args}")
 
                 with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
-                    if expected is RuntimeError:
-                        with self.assertRaisesRegex(RuntimeError, "multiple parent digest sentinels"):
-                            self.actions.apply_issue_decomposition_plan(str(plan_path))
-                    else:
-                        self.assertEqual(expected, self.actions.apply_issue_decomposition_plan(str(plan_path)))
-                self.assertEqual([["issue", "view", "403", "--json", "comments"]], gh_calls)
-                if expected is RuntimeError:
-                    self.assertTrue(stale_snapshot.exists())
-                else:
-                    self.assertFalse(stale_snapshot.exists(), "idempotent decomposition reentry must invalidate stale managed-work snapshot")
+                    self.assertEqual(tuple(), self.actions.apply_issue_decomposition_plan(str(plan_path)))
+                self.assertEqual(
+                    [
+                        ["issue", "view", "403", "--json", "comments"],
+                        ["issue", "list", "--state", "open", "--label", labels.MANAGED, "--json", "number,url,body,labels", "--limit", "200"],
+                    ],
+                    gh_calls,
+                )
+                self.assertFalse(stale_snapshot.exists(), "idempotent decomposition reentry must invalidate stale managed-work snapshot")
+
+    def test_apply_issue_decomposition_plan_fails_closed_on_conflicting_tracking_comment(self) -> None:
+        consensus = ".refactor-loop/runs/phase9-issue403-r6-judge.md"
+        (self.tmp / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
+        (self.tmp / consensus).write_text("consensus artifact\n", encoding="utf-8")
+
+        def write_child(name: str, scope: str, non_goals: str) -> str:
+            path = f".refactor-loop/runs/{name}.md"
+            (self.tmp / path).write_text(
+                "## child\n\n"
+                "Parent issue: #403\n"
+                f"Source consensus artifact: {Path(consensus).name}\n"
+                f"Scope: {scope}\n"
+                f"Non-goals: {non_goals}\n\n"
+                "<details>\n<summary>内联 artifact 1: decision.md</summary>\n\n"
+                "```markdown\nraw decision\n```\n\n</details>\n\n"
+                "⟦AI:AUTO-LOOP⟧\n",
+                encoding="utf-8",
+            )
+            return path
+
+        parent_comment = ".refactor-loop/runs/parent-comment.md"
+        (self.tmp / parent_comment).write_text("Parent issue: #403\n\nChildren opened.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        plan_path = self.tmp / ".refactor-loop" / "runs" / "decomposition-plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "schema": "IssueDecompositionPlan",
+                    "parent_issue": 403,
+                    "source_consensus_artifact": consensus,
+                    "children": [
+                        {
+                            "slug": "first-child",
+                            "title": "First child",
+                            "scope": "First bounded scope",
+                            "non_goals": "No parent close",
+                            "body_artifact_path": write_child("child-one", "First bounded scope", "No parent close"),
+                        },
+                        {
+                            "slug": "second-child",
+                            "title": "Second child",
+                            "scope": "Second bounded scope",
+                            "non_goals": "No public issue factory",
+                            "body_artifact_path": write_child("child-two", "Second bounded scope", "No public issue factory"),
+                        },
+                    ],
+                    "parent_update": {"comment_artifact_path": parent_comment},
+                }
+            ),
+            encoding="utf-8",
+        )
+        digest = issue_decomposition_plan_file_digest(self.actions.ctx, str(plan_path))
+        conflicting = "\n".join(
+            [
+                "<!-- crnd:issue-decomposition-tracking -->",
+                "Parent issue: #404",
+                f"IssueDecompositionPlan digest: {digest}",
+                "Children:",
+                "<!-- /crnd:issue-decomposition-tracking -->",
+            ]
+        )
+
+        with mock.patch.object(
+            self.actions,
+            "gh",
+            return_value=mock.Mock(returncode=0, stdout=json.dumps({"comments": [{"body": conflicting}]}), stderr=""),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "invalid parent tracking comments"):
+                self.actions.apply_issue_decomposition_plan(str(plan_path))
+
+    def test_apply_issue_decomposition_plan_ignores_sentinel_like_prose_and_creates_children(self) -> None:
+        consensus = ".refactor-loop/runs/phase9-issue403-r6-judge.md"
+        (self.tmp / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
+        (self.tmp / consensus).write_text("consensus artifact\n", encoding="utf-8")
+
+        def write_child(name: str, scope: str, non_goals: str) -> str:
+            path = f".refactor-loop/runs/{name}.md"
+            (self.tmp / path).write_text(
+                "## child\n\n"
+                "Parent issue: #403\n"
+                f"Source consensus artifact: {Path(consensus).name}\n"
+                f"Scope: {scope}\n"
+                f"Non-goals: {non_goals}\n\n"
+                "<details>\n<summary>内联 artifact 1: decision.md</summary>\n\n"
+                "```markdown\nraw decision\n```\n\n</details>\n\n"
+                "⟦AI:AUTO-LOOP⟧\n",
+                encoding="utf-8",
+            )
+            return path
+
+        parent_comment = ".refactor-loop/runs/parent-comment.md"
+        (self.tmp / parent_comment).write_text("Parent issue: #403\n\nChildren opened.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        plan_path = self.tmp / ".refactor-loop" / "runs" / "decomposition-plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "schema": "IssueDecompositionPlan",
+                    "parent_issue": 403,
+                    "source_consensus_artifact": consensus,
+                    "children": [
+                        {
+                            "slug": "first-child",
+                            "title": "First child",
+                            "scope": "First bounded scope",
+                            "non_goals": "No parent close",
+                            "body_artifact_path": write_child("child-one", "First bounded scope", "No parent close"),
+                        },
+                        {
+                            "slug": "second-child",
+                            "title": "Second child",
+                            "scope": "Second bounded scope",
+                            "non_goals": "No public issue factory",
+                            "body_artifact_path": write_child("child-two", "Second bounded scope", "No public issue factory"),
+                        },
+                    ],
+                    "parent_update": {"comment_artifact_path": parent_comment},
+                }
+            ),
+            encoding="utf-8",
+        )
+        digest = issue_decomposition_plan_file_digest(self.actions.ctx, str(plan_path))
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:3] == ["issue", "view", "403"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"comments": [{"body": f"judge prose IssueDecompositionPlan digest: {digest}"}]}), stderr="")
+            if args[:2] == ["issue", "list"]:
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
+            if args[:2] == ["issue", "create"]:
+                number = 700 + len([call for call in gh_calls if call[:2] == ["issue", "create"]])
+                return mock.Mock(returncode=0, stdout=f"https://github.com/owner/repo/issues/{number}\n", stderr="")
+            if args[:2] == ["issue", "comment"]:
+                return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/issues/403#issuecomment-1\n", stderr="")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            created = self.actions.apply_issue_decomposition_plan(str(plan_path))
+
+        self.assertEqual(2, len(created))
+        self.assertEqual(2, len([call for call in gh_calls if call[:2] == ["issue", "create"]]))
+
+    def test_apply_issue_decomposition_plan_retries_partial_child_state_without_duplicates(self) -> None:
+        consensus = ".refactor-loop/runs/phase9-issue403-r6-judge.md"
+        (self.tmp / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
+        (self.tmp / consensus).write_text("consensus artifact\n", encoding="utf-8")
+
+        def write_child(name: str, scope: str, non_goals: str) -> str:
+            path = f".refactor-loop/runs/{name}.md"
+            (self.tmp / path).write_text(
+                "## child\n\n"
+                "Parent issue: #403\n"
+                f"Source consensus artifact: {Path(consensus).name}\n"
+                f"Scope: {scope}\n"
+                f"Non-goals: {non_goals}\n\n"
+                "<details>\n<summary>内联 artifact 1: decision.md</summary>\n\n"
+                "```markdown\nraw decision\n```\n\n</details>\n\n"
+                "⟦AI:AUTO-LOOP⟧\n",
+                encoding="utf-8",
+            )
+            return path
+
+        parent_comment = ".refactor-loop/runs/parent-comment.md"
+        (self.tmp / parent_comment).write_text("Parent issue: #403\n\nChildren opened.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        first_body = write_child("child-one", "First bounded scope", "No parent close")
+        second_body = write_child("child-two", "Second bounded scope", "No public issue factory")
+        plan_path = self.tmp / ".refactor-loop" / "runs" / "decomposition-plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "schema": "IssueDecompositionPlan",
+                    "parent_issue": 403,
+                    "source_consensus_artifact": consensus,
+                    "children": [
+                        {
+                            "slug": "first-child",
+                            "title": "First child",
+                            "scope": "First bounded scope",
+                            "non_goals": "No parent close",
+                            "body_artifact_path": first_body,
+                        },
+                        {
+                            "slug": "second-child",
+                            "title": "Second child",
+                            "scope": "Second bounded scope",
+                            "non_goals": "No public issue factory",
+                            "body_artifact_path": second_body,
+                        },
+                    ],
+                    "parent_update": {"comment_artifact_path": parent_comment},
+                }
+            ),
+            encoding="utf-8",
+        )
+        digest = issue_decomposition_plan_file_digest(self.actions.ctx, str(plan_path))
+        first_fingerprint = issue_decomposition_child_fingerprint(403, digest, "first-child")
+        existing_body = f"Parent issue: #403\n\nIssueDecompositionChild fingerprint: {first_fingerprint}\n\n⟦AI:AUTO-LOOP⟧\n"
+        gh_calls: list[list[str]] = []
+        comment_texts: list[str] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:3] == ["issue", "view", "403"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"comments": []}), stderr="")
+            if args[:2] == ["issue", "list"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        [
+                            {
+                                "number": 501,
+                                "url": "https://github.com/owner/repo/issues/501",
+                                "body": existing_body,
+                                "labels": [{"name": labels.MANAGED}],
+                            }
+                        ]
+                    ),
+                    stderr="",
+                )
+            if args[:2] == ["issue", "create"]:
+                return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/issues/502\n", stderr="")
+            if args[:2] == ["issue", "comment"]:
+                comment_texts.append(Path(args[args.index("--body-file") + 1]).read_text(encoding="utf-8"))
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            created = self.actions.apply_issue_decomposition_plan(str(plan_path))
+
+        self.assertEqual(((502, "https://github.com/owner/repo/issues/502"),), created)
+        self.assertEqual(1, len([call for call in gh_calls if call[:2] == ["issue", "create"]]))
+        self.assertIn("- first-child: #501 https://github.com/owner/repo/issues/501 fingerprint=", comment_texts[-1])
+        self.assertIn("- second-child: #502 https://github.com/owner/repo/issues/502 fingerprint=", comment_texts[-1])
 
     def test_apply_issue_decomposition_plan_is_active_controller_only_and_not_public_cli(self) -> None:
         decision = mock.Mock(
@@ -4305,7 +4562,7 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
             "apply_issue_decomposition_plan": (
                 'self._require_owner_or_raise("apply-issue-decomposition-plan")',
                 'self._require_github_actor_or_raise("apply-issue-decomposition-plan")',
-                "for child in plan.children:",
+                "self.open_design_issue_with_labels(child.title, child.body_artifact_path)",
             ),
             "apply_triage_decision_marker": (
                 'self._require_owner_or_return("apply-triage", code=3)',

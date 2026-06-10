@@ -95,6 +95,18 @@ class PromptContractsTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, implement)
 
+    def test_decomposition_tracking_grammar_is_reserved_to_helper(self) -> None:
+        shared = (PROMPTS_DIR / "_github-post-rules.md").read_text(encoding="utf-8")
+        self.assertIn("Decomposition tracking grammar is helper-owned", shared)
+        self.assertIn("must not write `<!-- crnd:issue-decomposition-tracking -->`", shared)
+        self.assertIn("`IssueDecompositionChild fingerprint:`", shared)
+
+        for name in ("solver-minimal.md", "solver-structural.md", "solver-delete.md", "meta-judge.md"):
+            body = (PROMPTS_DIR / name).read_text(encoding="utf-8")
+            with self.subTest(prompt=name):
+                self.assertIn("must not emit parent tracking blocks or child fingerprint lines", body)
+                self.assertNotIn("<!-- crnd:issue-decomposition-tracking -->", body)
+
     def test_prompts_use_scope_authorization_not_blanket_work_type_rejection(self) -> None:
         forbidden_patterns = (
             r"No new " + r"features",

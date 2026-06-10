@@ -35,6 +35,8 @@ from .issue_decomposition import (
     IssueDecompositionError,
     issue_decomposition_plan_file_digest,
     load_issue_decomposition_plan,
+    parse_issue_decomposition_tracking_comments,
+    reconcile_issue_decomposition_tracking_children,
 )
 from .pr_checks import PrMergeReadinessProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
@@ -816,9 +818,9 @@ class WakeupRunner:
         proof = str(action.get("issue_decomposition_proof") or "")
         if digest not in proof or plan_path not in proof or consensus_artifact not in proof:
             return "issue_decomposition_proof_mismatch"
-        sentinel_error = self._issue_decomposition_sentinel_error(plan.parent_issue, digest)
-        if sentinel_error:
-            return sentinel_error
+        tracking_error = self._issue_decomposition_tracking_error(plan, digest)
+        if tracking_error:
+            return tracking_error
         return None
 
     def _validate_default_issue_intake_claim(self, action: Mapping[str, Any]) -> str | None:
@@ -867,8 +869,8 @@ class WakeupRunner:
             return "default_issue_intake_target_is_pr"
         return None
 
-    def _issue_decomposition_sentinel_error(self, parent_issue: int, digest: str) -> str | None:
-        parent_result = self.command_runner(["gh", "issue", "view", str(parent_issue), "--json", "comments"])
+    def _issue_decomposition_tracking_error(self, plan: Any, digest: str) -> str | None:
+        parent_result = self.command_runner(["gh", "issue", "view", str(plan.parent_issue), "--json", "comments"])
         if parent_result.returncode != 0:
             return "issue_decomposition_parent_comments_unavailable"
         try:
@@ -878,17 +880,17 @@ class WakeupRunner:
         comments = payload.get("comments") if isinstance(payload, dict) else None
         if not isinstance(comments, list):
             return "issue_decomposition_parent_comments_invalid_json"
-        hits = [
-            comment
-            for comment in comments
-            if isinstance(comment, dict)
-            and isinstance(comment.get("body"), str)
-            and f"IssueDecompositionPlan digest: {digest}" in comment["body"]
-        ]
-        if len(hits) == 1:
-            return "issue_decomposition_duplicate_sentinel"
-        if len(hits) > 1:
-            return "issue_decomposition_multiple_sentinels"
+        projection = parse_issue_decomposition_tracking_comments(
+            [comment for comment in comments if isinstance(comment, Mapping)],
+            expected_parent_issue=plan.parent_issue,
+            expected_digest=digest,
+        )
+        if projection.conflicts:
+            return "issue_decomposition_parent_tracking_conflict"
+        try:
+            reconcile_issue_decomposition_tracking_children(plan, digest, projection)
+        except IssueDecompositionError:
+            return "issue_decomposition_parent_tracking_conflict"
         return None
 
     def _validate_consensus_implementation(self, action: Mapping[str, Any]) -> str | None:
