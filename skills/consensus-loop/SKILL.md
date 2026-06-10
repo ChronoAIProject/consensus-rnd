@@ -2566,7 +2566,7 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强�
 
 结构性教训:曾出现多个 `escalate:stalled` 被直接 label 人,**没派 reflector**。现在 fresh judge 不再授权 stalled 输出;router predicate 从 clean converge 历史派生 stalled,legacy stalled marker 只读兼容且仍必须 reflector 优先。
 
-**stalled 判据铁律**:`stalled` 只能由 router 在 `CONVERGENCE_ROUND >= 3` 且 router-normalized no-progress signature 连续匹配时从 clean `converge` 派生；`source-location-missing-or-invalid`、`no-current-*target*`、以及窄匹配的 target/source/PR unreadable `propose:*` 归一为同一 no-actionable-source family，普通 implementation-bearing `propose:*` 阻止 stalled。round 1 / round 2 不可能 stalled;此时 solver 分歧应判 `converge` 并继续派下一轮,不能接受 meta-judge 在 r1/r2 输出的 `escalate:stalled` 作为事实。若 r1/r2 judge 输出 `escalate:stalled`,controller 必须按 legacy judge 异常处理:重派 judge(同输入,提示 fresh stalled 禁止),而不是派 reflector 或 label 人。
+**stalled 判据铁律**:`stalled` 只能由 router 在 `CONVERGENCE_ROUND >= 3` 且 router-normalized no-progress signature 连续匹配时从 clean `converge` 派生；`source-location-missing-or-invalid`、`no-current-*target*`、以及窄匹配的 target/source/PR unreadable `propose:*` 归一为同一 no-actionable-source family；普通 implementation-bearing `propose:*` 以保留 summary 的 router-normalized solver verdict text 参与 no-progress signature equality,仅当三轮 signature 发生变化时阻止 stalled。连续三轮相同 signature 的 implementation-bearing split 计入 no-progress 并触发 stalled reflector。round 1 / round 2 不可能 stalled;此时 solver 分歧应判 `converge` 并继续派下一轮,不能接受 meta-judge 在 r1/r2 输出的 `escalate:stalled` 作为事实。若 r1/r2 judge 输出 `escalate:stalled`,controller 必须按 legacy judge 异常处理:重派 judge(同输入,提示 fresh stalled 禁止),而不是派 reflector 或 label 人。
 
 **反面(❌ 严禁)**:
 - ❌ r1 三 solver 分歧,meta-judge 输出 `escalate:stalled`,controller 直接派 reflector。
@@ -3181,7 +3181,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 - CI same-check 失败 6 次(同 test 6 次 fix 仍红)
 - Cumulative PR diff size > 原 PR 200%(scope-runaway 信号)
 - Reviewer 同一类 evidence(test coverage / dead surface / self-doc)在 3 round 内反复出现 → meta-reflect "为什么 evidence 总是同类"
-- **Consensus-rnd Phase design-consensus design issue stall**:3 consecutive round 无 maintainer input AND router-normalized no-progress signature 匹配 → 也走 meta-layer
+- **Consensus-rnd Phase design-consensus design issue stall**:3 consecutive round 无 maintainer input AND router-normalized no-progress signature / solver verdict text 匹配 → 也走 meta-layer
 
 ### 派出 reflector codex
 
