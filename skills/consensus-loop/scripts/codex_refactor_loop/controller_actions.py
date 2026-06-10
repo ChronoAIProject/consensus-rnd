@@ -912,9 +912,11 @@ class ControllerActions:
         head = str(pr.get("headRefName") or "").strip()
         if not GITHUB_LIFECYCLE_TARGET_RE.fullmatch(pr_target) or not head.startswith(ROLLUP_HEAD_PREFIX):
             raise RuntimeError("update release rollup singleton: invalid live rollup PR")
-        pushed = self.git(["push", "--force-with-lease", "origin", f"{integration_sha}:refs/heads/{head}"], check=False)
-        if pushed.returncode != 0:
-            raise RuntimeError(pushed.stderr.strip() or pushed.stdout.strip() or f"failed to update {head}")
+        head_sha = str(pr.get("headRefOid") or "").strip()
+        if head_sha != integration_sha:
+            pushed = self.git(["push", "--force-with-lease", "origin", f"{integration_sha}:refs/heads/{head}"], check=False)
+            if pushed.returncode != 0:
+                raise RuntimeError(pushed.stderr.strip() or pushed.stdout.strip() or f"failed to update {head}")
         edited = self.gh(["pr", "edit", pr_target, "--title", title, "--body-file", body_file], check=False)
         if edited.returncode != 0:
             raise RuntimeError(edited.stderr.strip() or edited.stdout.strip() or f"failed to refresh rollup PR #{pr_target}")

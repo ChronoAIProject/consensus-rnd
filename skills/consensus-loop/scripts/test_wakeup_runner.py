@@ -641,6 +641,97 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertIn(f"WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{digest}:missing-queued_at", self.ctx.paths.pending_events.read_text(encoding="utf-8"))
         self.assertEqual(["open_release_rollup_pr_from_action"], [name for name, _payload in actions.calls])
 
+    def test_wakeup_runner_ordinary_tick_archives_bounded_invalid_harness_spawn_intent_batch(self) -> None:
+        raw_lines = [
+            "2026-06-10T11:48:39Z HARNESS_SPAWN_INTENT "
+            + json.dumps(
+                {
+                    "cd": str(self.repo),
+                    "command": "spawn-codex",
+                    "controller_action": "spawn_codex_harness_background",
+                    "intent_id": f"dispatch-reviewers:774:architect:r{index}",
+                    "log": f".refactor-loop/logs/review-pr774-architect-r{index}.log",
+                    "no_lifecycle_authority": True,
+                    "priority": "p1",
+                    "prompt": f".refactor-loop/prompts/review-pr774-architect-r{index}.md",
+                    "reason": "review PR #774 as architect",
+                    "route": "dispatch-reviewers",
+                    "run_in_background_required": True,
+                    "source": "controller-actions",
+                    "stall": 5400,
+                    "task_id": f"review-pr774-architect-r{index}",
+                },
+                sort_keys=True,
+            )
+            for index in range(55)
+        ]
+        self.ctx.paths.pending_events.write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
+        actions = [self.invalid_harness_spawn_intent_action(raw_line) for raw_line in raw_lines]
+        runner_actions = FakeActions()
+
+        first_tick = self.run_result(self.batch_plan(actions, dispatch_required=0, deficit=0, active=False), actions=runner_actions)
+        second_tick = self.run_result(self.batch_plan(actions[50:], dispatch_required=0, deficit=0, active=False), actions=runner_actions)
+
+        self.assertEqual(50, len(first_tick))
+        self.assertTrue(all(result.reason == "archived_invalid_harness_spawn_intent:missing-queued_at" for result in first_tick))
+        self.assertEqual(55, len(first_tick) + len(second_tick))
+        pending = self.ctx.paths.pending_events.read_text(encoding="utf-8")
+        for raw_line in raw_lines:
+            self.assertEqual(
+                1,
+                pending.count(
+                    "WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:"
+                    + harness_spawn_intent_line_digest(raw_line)
+                    + ":missing-queued_at"
+                ),
+            )
+        self.assertEqual([], runner_actions.calls)
+
+    def test_wakeup_runner_cleanup_batch_cap_preserves_single_lifecycle_apply(self) -> None:
+        raw_lines = [
+            "2026-06-10T11:48:39Z HARNESS_SPAWN_INTENT "
+            + json.dumps(
+                {
+                    "cd": str(self.repo),
+                    "command": "spawn-codex",
+                    "controller_action": "spawn_codex_harness_background",
+                    "intent_id": f"dispatch-reviewers:775:quality:r{index}",
+                    "log": f".refactor-loop/logs/review-pr775-quality-r{index}.log",
+                    "no_lifecycle_authority": True,
+                    "priority": "p1",
+                    "prompt": f".refactor-loop/prompts/review-pr775-quality-r{index}.md",
+                    "reason": "review PR #775 as quality",
+                    "route": "dispatch-reviewers",
+                    "run_in_background_required": True,
+                    "source": "controller-actions",
+                    "stall": 5400,
+                    "task_id": f"review-pr775-quality-r{index}",
+                },
+                sort_keys=True,
+            )
+            for index in range(50)
+        ]
+        self.ctx.paths.pending_events.write_text("\n".join(raw_lines) + "\n", encoding="utf-8")
+        cleanup_actions = [self.invalid_harness_spawn_intent_action(raw_line) for raw_line in raw_lines]
+        rollup_one = self.release_rollup_action(action_id="release-rollup-needed:first")
+        rollup_two = self.release_rollup_action(action_id="release-rollup-needed:second")
+        with self.ctx.paths.pending_events.open("a", encoding="utf-8") as handle:
+            handle.write("\n".join(raw_lines) + "\n")
+        actions = FakeActions()
+
+        results = self.run_result(
+            self.batch_plan([rollup_two, rollup_one, *cleanup_actions], dispatch_required=0, deficit=0, active=False),
+            actions=actions,
+        )
+
+        self.assertEqual(51, len(results))
+        self.assertEqual(
+            ["open_release_rollup_pr_from_action"],
+            [name for name, _payload in actions.calls],
+        )
+        self.assertEqual(50, sum(1 for result in results if result.reason == "archived_invalid_harness_spawn_intent:missing-queued_at"))
+        self.assertEqual(1, sum(1 for result in results if result.status == "applied"))
+
     def test_runner_applies_at_most_one_medium_non_spawn_per_tick(self) -> None:
         base = {
             "kind": "default-issue-intake-claim",
@@ -963,6 +1054,23 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         if "execution_policy" not in annotated:
             annotated["execution_policy"] = "cautious" if annotated["risk_tier"] == "medium" else "auto"
         return annotated
+
+    def invalid_harness_spawn_intent_action(self, raw_line: str, **overrides) -> dict:
+        digest = harness_spawn_intent_line_digest(raw_line)
+        action = {
+            "kind": "harness-spawn-intent-invalid",
+            "action_id": f"harness-spawn-intent-invalid:{digest}",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["source_artifact_contains_evidence"],
+            "source_artifact": ".refactor-loop/.controller-pending-events.log",
+            "source_marker": "HARNESS_SPAWN_INTENT",
+            "evidence_digest": digest,
+            "reason": "missing-queued_at",
+            "no_lifecycle_authority": True,
+            "no_generic_command": True,
+        }
+        action.update(overrides)
+        return action
 
     def spawn_action(self, **overrides) -> dict:
         prompt = self.repo / ".refactor-loop/prompts/task.md"

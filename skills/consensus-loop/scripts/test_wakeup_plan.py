@@ -35,6 +35,8 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     GhItem,
     INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT,
     INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER,
+    RELEASE_ROLLUP_LIVE_PR_LIST_TIMEOUT_SECONDS,
+    _release_rollup_event_satisfied,
     _revive_stale_redispatchable_implement_log,
     ci_red_actions,
     close_projection_actions,
@@ -893,6 +895,29 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "pr list" ]]; then
+                  if [[ "$args" == *"--base review"* && "$args" == *"--json number,headRefName,baseRefName,headRefOid"* ]]; then
+                    if [[ -n "${WAKEUP_PLAN_GH_RELEASE_ROLLUP_LOG:-}" ]]; then
+                      printf '%s\n' "$args" >> "$WAKEUP_PLAN_GH_RELEASE_ROLLUP_LOG"
+                    fi
+                    case "$fixture" in
+                      release_rollup_satisfied)
+                        printf '[{"number":572,"baseRefName":"review","headRefName":"rollup/integration-sha","headRefOid":"integration-sha"}]\n'
+                        ;;
+                      release_rollup_changed_sha)
+                        printf '[{"number":572,"baseRefName":"review","headRefName":"rollup/old-integration-sha","headRefOid":"old-integration-sha"}]\n'
+                        ;;
+                      release_rollup_invalid_live_json)
+                        printf '{"not":"a-list"}\n'
+                        ;;
+                      release_rollup_live_unavailable)
+                        exit 42
+                        ;;
+                      *)
+                        printf '[]\n'
+                        ;;
+                    esac
+                    exit 0
+                  fi
                   case "$fixture" in
                     gh_failure)
                       exit 42
@@ -5059,6 +5084,84 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(1, len(actions))
         self.assertEqual(actions[0]["event"]["integration_sha"], "integration-sha")
 
+    def test_wakeup_plan_release_rollup_suppresses_event_when_open_rollup_head_matches_integration_sha(self) -> None:
+        self.append_release_rollup_event()
+        body_file = self.repo / ".refactor-loop" / "runs" / "release-rollup-pr-body.md"
+        body_file.parent.mkdir(parents=True, exist_ok=True)
+        body_file.write_text(
+            "## rollup\n\nbody\n\n⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        live_probe_log = self.repo / "release-rollup-live-pr-list.log"
+
+        plan, _stdout = self.run_plan_with_env(
+            {"WAKEUP_PLAN_GH_RELEASE_ROLLUP_LOG": str(live_probe_log)},
+            fixture="release_rollup_satisfied",
+        )
+
+        self.assertFalse([action for action in plan["actions"] if action["kind"] == "release-rollup-needed"])
+        probe_calls = live_probe_log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(1, len(probe_calls))
+        self.assertIn("pr list --state open --base review", probe_calls[0])
+        self.assertIn("--json number,headRefName,baseRefName,headRefOid", probe_calls[0])
+
+        live_probe_log.write_text("", encoding="utf-8")
+        plan_without_matching_pr, _stdout = self.run_plan_with_env(
+            {"WAKEUP_PLAN_GH_RELEASE_ROLLUP_LOG": str(live_probe_log)},
+            fixture="release_rollup",
+        )
+
+        actions = [action for action in plan_without_matching_pr["actions"] if action["kind"] == "release-rollup-needed"]
+        self.assertEqual(1, len(actions))
+        self.assertEqual("open_release_rollup_pr_from_action", actions[0]["controller_action"])
+        self.assertEqual(1, len(live_probe_log.read_text(encoding="utf-8").splitlines()))
+
+    def test_release_rollup_satisfied_probe_timeout_fails_open(self) -> None:
+        event = {
+            "review_base_branch": "review",
+            "integration_sha": "integration-sha",
+        }
+        with mock.patch("codex_refactor_loop.wakeup_plan.subprocess.run") as run_mock:
+            run_mock.side_effect = subprocess.TimeoutExpired(["gh", "pr", "list"], timeout=0.01)
+
+            self.assertFalse(_release_rollup_event_satisfied(self.repo, event, "integration-sha"))
+
+        run_mock.assert_called_once()
+        self.assertEqual(RELEASE_ROLLUP_LIVE_PR_LIST_TIMEOUT_SECONDS, run_mock.call_args.kwargs["timeout"])
+
+    def test_wakeup_plan_release_rollup_projects_when_rollup_pr_missing_or_unavailable(self) -> None:
+        for fixture in ("release_rollup", "release_rollup_live_unavailable", "release_rollup_invalid_live_json"):
+            with self.subTest(fixture=fixture):
+                (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
+                self.append_release_rollup_event()
+                body_file = self.repo / ".refactor-loop" / "runs" / "release-rollup-pr-body.md"
+                body_file.parent.mkdir(parents=True, exist_ok=True)
+                body_file.write_text(
+                    "## rollup\n\nbody\n\n⟦AI:AUTO-LOOP⟧\n",
+                    encoding="utf-8",
+                )
+
+                plan = self.run_plan(fixture=fixture)
+
+                actions = [action for action in plan["actions"] if action["kind"] == "release-rollup-needed"]
+                self.assertEqual(1, len(actions))
+                self.assertEqual("open_release_rollup_pr_from_action", actions[0]["controller_action"])
+
+    def test_wakeup_plan_release_rollup_projects_when_integration_sha_changes(self) -> None:
+        self.append_release_rollup_event(integration_sha="integration-sha")
+        body_file = self.repo / ".refactor-loop" / "runs" / "release-rollup-pr-body.md"
+        body_file.parent.mkdir(parents=True, exist_ok=True)
+        body_file.write_text(
+            "## rollup\n\nbody\n\n⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="release_rollup_changed_sha")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "release-rollup-needed"]
+        self.assertEqual(1, len(actions))
+        self.assertEqual("release-rollup-needed:integration-sha", actions[0]["action_id"])
+
     def test_rollup_pr_is_excluded_from_reviewer_and_ci_fix_projection(self) -> None:
         item = GhItem(
             kind="PR",
@@ -5853,17 +5956,16 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             with self.subTest(snapshot_token=token):
                 self.assertIn(token, snapshot_source)
         caller_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
-        self.assertNotIn("issue list", caller_source)
-        self.assertNotIn("pr list", caller_source)
+        redispatch_source = caller_source[
+            caller_source.index("def review_evidence_redispatch_actions") : caller_source.index("\ndef phase_from_marker", caller_source.index("def review_evidence_redispatch_actions"))
+        ]
+        self.assertNotIn("issue list", redispatch_source)
+        self.assertNotIn("pr list", redispatch_source)
         self.assertIn("review_evidence_redispatch_actions", projection.function_names)
         self.assertIn("review-evidence-redispatch", projection.set_members["EXECUTABLE_ACTION_KINDS"])
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
-        function_source = source[
-            source.index("def review_evidence_redispatch_actions") : source.index("\ndef phase_from_marker", source.index("def review_evidence_redispatch_actions"))
-        ]
-        self.assertIn('"action_id": f"review-evidence-redispatch:{item.number}:{item.head_sha}"', function_source)
-        self.assertIn('"head_sha": item.head_sha', function_source)
-        self.assertIn("highest_complete_required_review_round", function_source)
+        self.assertIn('"action_id": f"review-evidence-redispatch:{item.number}:{item.head_sha}"', redispatch_source)
+        self.assertIn('"head_sha": item.head_sha', redispatch_source)
+        self.assertIn("highest_complete_required_review_round", redispatch_source)
 
     def test_wakeup_plan_source_locks_stale_unexecutable_status_only_suppression(self) -> None:
         projection = wakeup_plan_projection()
