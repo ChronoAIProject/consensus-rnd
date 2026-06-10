@@ -107,7 +107,7 @@ class FakeRestartDaemonRuntime:
         if self.inventory_override is not None:
             return self.inventory_override
         return DaemonProcessInventory(
-            tuple(DaemonProcess(pid, command) for pid, command in sorted(self.wrapper_commands.items()))
+            tuple(DaemonProcess(pid, command, 1) for pid, command in sorted(self.wrapper_commands.items()))
         )
 
     def terminate_pid(self, pid: int, grace: int) -> None:
@@ -643,7 +643,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         command = self.runtime.canonical_command(self.ctx, "concurrency_monitor", FAKE_COMMAND)
         self.runtime.live_pids.update(duplicate_pids)
         full_inventory = list(self.runtime.collect_inventory().processes)
-        full_inventory.extend(DaemonProcess(pid, command) for pid in duplicate_pids)
+        full_inventory.extend(DaemonProcess(pid, command, 1) for pid in duplicate_pids)
         self.runtime.inventory_override = DaemonProcessInventory(
             tuple(full_inventory)
         )
@@ -666,7 +666,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.runtime.live_pids.discard(old_wrapper_pid)
         self.runtime.wrapper_commands.pop(old_wrapper_pid, None)
         self.runtime.live_pids.add(orphan_child_pid)
-        self.runtime.inventory_override = DaemonProcessInventory((DaemonProcess(orphan_child_pid, " ".join(target.command)),))
+        self.runtime.inventory_override = DaemonProcessInventory((DaemonProcess(orphan_child_pid, " ".join(target.command), 1),))
 
         helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
         helper.start_daemon("phase9_router_daemon", FAKE_COMMAND)
@@ -682,9 +682,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         non_allowlist = self.runtime.canonical_command(self.ctx, "not_allowlisted", FAKE_COMMAND)
         inventory = DaemonProcessInventory(
             (
-                DaemonProcess(111, command),
-                DaemonProcess(222, other_repo),
-                DaemonProcess(333, non_allowlist),
+                DaemonProcess(111, command, 1),
+                DaemonProcess(222, other_repo, 1),
+                DaemonProcess(333, non_allowlist, 1),
             )
         )
         self.runtime.live_pids.update({111, 222, 333})
@@ -709,10 +709,10 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         other_lock.write_text("333\n", encoding="utf-8")
         inventory = DaemonProcessInventory(
             (
-                DaemonProcess(111, wrapper_command),
-                DaemonProcess(222, " ".join(target.command)),
-                DaemonProcess(333, " ".join(target.command)),
-                DaemonProcess(444, "python3 unrelated.py"),
+                DaemonProcess(111, wrapper_command, 1),
+                DaemonProcess(222, " ".join(target.command), 111),
+                DaemonProcess(333, " ".join(target.command), 1),
+                DaemonProcess(444, "python3 unrelated.py", 1),
             )
         )
         self.runtime.live_pids.update({111, 222, 333, 444})
@@ -728,9 +728,37 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual((111,), projection.live_wrapper_pids)
+        self.assertEqual((222,), projection.canonical_child_pids)
+        self.assertEqual((333,), projection.orphan_child_pids)
         self.assertEqual((222, 333), projection.live_managed_child_pids)
         self.assertEqual((222,), projection.bounded_lock_holder_pids)
         self.assertEqual((111, 222), projection.repair_pids)
+
+    def test_daemon_instance_detects_macos_shaped_wrapper_child_by_ppid(self) -> None:
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        wrapper_command = self.runtime.canonical_command(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        inventory = DaemonProcessInventory(
+            (
+                DaemonProcess(848, wrapper_command, 1),
+                DaemonProcess(857, " ".join(("python3", "/different/install/consensus-rnd-cli", "phase9-router", "--daemon")), 848),
+            )
+        )
+        self.runtime.live_pids.update({848, 857})
+
+        projection = inventory.daemon_instance(
+            name="phase9_router_daemon",
+            repo_root=self.ctx.repo_root,
+            pid_file=target.pid_file,
+            died_file=target.died_file,
+            command=target.command,
+            lock_files=(),
+            is_alive=self.runtime.pid_alive,
+        )
+
+        self.assertEqual((848,), projection.live_wrapper_pids)
+        self.assertEqual((857,), projection.canonical_child_pids)
+        self.assertEqual((), projection.orphan_child_pids)
+        self.assertEqual((857,), projection.live_managed_child_pids)
 
     def test_restart_wrapper_matching_accepts_skill_root_and_command_normalization_variance(self) -> None:
         template = ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon", "--interval", "120")
@@ -740,7 +768,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             "/opt/old-skill/scripts/consensus-rnd-cli",
         )
         spaced_command = f"  {old_skill_command.replace(' ', '   ')}  "
-        inventory = DaemonProcessInventory((DaemonProcess(444, spaced_command),))
+        inventory = DaemonProcessInventory((DaemonProcess(444, spaced_command, 1),))
         self.runtime.live_pids.add(444)
 
         live = inventory.live_restart_wrappers(
@@ -757,7 +785,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
     def test_restart_wrapper_matching_rejects_unknown_daemon_even_with_matching_shape(self) -> None:
         command = self.runtime.canonical_command(self.ctx, "not_allowlisted", FAKE_COMMAND)
         target = restart.daemon_target(self.ctx, "concurrency_monitor", FAKE_COMMAND)
-        inventory = DaemonProcessInventory((DaemonProcess(555, command),))
+        inventory = DaemonProcessInventory((DaemonProcess(555, command, 1),))
         self.runtime.live_pids.add(555)
 
         live = inventory.live_restart_wrappers(
@@ -867,8 +895,8 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.runtime.live_pids.add(duplicate_pid)
         inventory = DaemonProcessInventory(
             (
-                DaemonProcess(old_pid, command),
-                DaemonProcess(duplicate_pid, command),
+                DaemonProcess(old_pid, command, 1),
+                DaemonProcess(duplicate_pid, command, 1),
             )
         )
 
@@ -894,7 +922,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.runtime.live_pids.discard(old_pid)
         self.runtime.wrapper_commands.pop(old_pid, None)
         self.runtime.live_pids.add(orphan_child_pid)
-        inventory = DaemonProcessInventory((DaemonProcess(orphan_child_pid, " ".join(target.command)),))
+        inventory = DaemonProcessInventory((DaemonProcess(orphan_child_pid, " ".join(target.command), 1),))
 
         report = self.collect_status_with_fake_allowlist(inventory)
 
@@ -903,7 +931,10 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual("stale", daemon.status)
         self.assertEqual("orphan-lock-holders:1", daemon.stale_reason)
         self.assertEqual([orphan_child_pid], payload["managed_child_pids"])
+        self.assertEqual([], payload["canonical_child_pids"])
+        self.assertEqual([orphan_child_pid], payload["orphan_child_pids"])
         self.assertEqual([orphan_child_pid], payload["bounded_lock_holder_pids"])
+        self.assertNotIn("orphan_managed_child_pids", payload)
         self.assertEqual(old_pid, self.read_pid("phase9_router_daemon"))
         self.assert_start_count("phase9_router_daemon", 1)
 
@@ -949,7 +980,8 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             "expected_launch_fingerprint",
             "DaemonProcessInventory",
             "DaemonInstanceProjection",
-            "live_managed_children",
+            "canonical_child_pids",
+            "orphan_child_pids",
             "bounded_lock_holder_pids",
             "_run_restart_wrapper",
             "child exited exit=",

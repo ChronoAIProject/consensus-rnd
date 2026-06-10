@@ -184,6 +184,7 @@ class DaemonLaunchFingerprint:
 class DaemonProcess:
     pid: int
     command: str
+    ppid: int | None = None
 
 
 @dataclass(frozen=True)
@@ -191,8 +192,15 @@ class DaemonInstanceProjection:
     name: str
     pid_file_pid: int | None
     live_wrapper_pids: tuple[int, ...]
-    live_managed_child_pids: tuple[int, ...]
+    canonical_child_pids: tuple[int, ...]
+    orphan_child_pids: tuple[int, ...]
     bounded_lock_holder_pids: tuple[int, ...]
+    process_inventory_status: str = "available"
+    process_inventory_error: str = ""
+
+    @property
+    def live_managed_child_pids(self) -> tuple[int, ...]:
+        return tuple(sorted(set(self.canonical_child_pids).union(self.orphan_child_pids)))
 
     @property
     def duplicate_wrapper_count(self) -> int:
@@ -220,13 +228,19 @@ class DaemonInstanceProjection:
 @dataclass(frozen=True)
 class DaemonProcessInventory:
     processes: tuple[DaemonProcess, ...]
+    status: str = "available"
+    error: str = ""
 
     @classmethod
     def collect(cls, *, command_runner=None) -> "DaemonProcessInventory":
         runner = command_runner or run_process_inventory
-        result = runner(["ps", "-eo", "pid=,command="])
+        try:
+            result = runner(["ps", "-eo", "pid=,ppid=,command="])
+        except Exception as exc:
+            return cls((), status="unavailable", error=repr(exc))
         if result.returncode != 0:
-            return cls(())
+            reason = (result.stderr or result.stdout or f"exit={result.returncode}").strip()
+            return cls((), status="unavailable", error=reason or f"exit={result.returncode}")
         return cls(tuple(_parse_process_inventory(result.stdout)))
 
     def live_restart_wrappers(
@@ -278,14 +292,16 @@ class DaemonProcessInventory:
             command=command,
             is_alive=alive,
         )
-        child_pids = self.live_managed_children(
+        canonical_child_pids = self.canonical_child_pids(wrapper_pids=live_wrappers, is_alive=alive)
+        orphan_child_pids = self.orphan_child_pids(
             name=name,
             command=command,
+            canonical_child_pids=canonical_child_pids,
             is_alive=alive,
         )
         lock_holder_pids = self.bounded_lock_holder_pids(
             name=name,
-            command=command,
+            child_pids=tuple(sorted(set(canonical_child_pids).union(orphan_child_pids))),
             lock_files=lock_files,
             is_alive=alive,
         )
@@ -293,25 +309,54 @@ class DaemonProcessInventory:
             name=name,
             pid_file_pid=_read_pid(pid_file),
             live_wrapper_pids=live_wrappers,
-            live_managed_child_pids=child_pids,
+            canonical_child_pids=canonical_child_pids,
+            orphan_child_pids=orphan_child_pids,
             bounded_lock_holder_pids=lock_holder_pids,
+            process_inventory_status=self.status,
+            process_inventory_error=self.error,
         )
 
-    def live_managed_children(
+    def canonical_child_pids(
+        self,
+        *,
+        wrapper_pids: Sequence[int],
+        is_alive=None,
+    ) -> tuple[int, ...]:
+        alive = is_alive or pid_alive
+        wrappers = set(wrapper_pids)
+        if not wrappers:
+            return ()
+        return tuple(
+            sorted(
+                {
+                    process.pid
+                    for process in self.processes
+                    if process.pid > 0
+                    and process.ppid in wrappers
+                    and alive(process.pid)
+                }
+            )
+        )
+
+    def orphan_child_pids(
         self,
         *,
         name: str,
         command: Sequence[str],
+        canonical_child_pids: Sequence[int],
         is_alive=None,
     ) -> tuple[int, ...]:
         if name not in restart_managed_daemon_names() and name != SUPERVISOR_DAEMON_COMMAND[0]:
             return ()
         alive = is_alive or pid_alive
+        canonical = set(canonical_child_pids)
         pids = []
         for process in self.processes:
             if process.pid <= 0 or not alive(process.pid):
                 continue
-            if not ManagedChildCommandShape.matches(process.command, command):
+            if process.pid in canonical or process.ppid != 1:
+                continue
+            if not _restart_daemon_command_matches(process.command, command):
                 continue
             pids.append(process.pid)
         return tuple(sorted(set(pids)))
@@ -320,18 +365,18 @@ class DaemonProcessInventory:
         self,
         *,
         name: str,
-        command: Sequence[str],
+        child_pids: Sequence[int],
         lock_files: Sequence[Path],
         is_alive=None,
     ) -> tuple[int, ...]:
         if name not in restart_managed_daemon_names() and name != SUPERVISOR_DAEMON_COMMAND[0]:
             return ()
         alive = is_alive or pid_alive
-        child_pids = set(self.live_managed_children(name=name, command=command, is_alive=alive))
+        child_pid_set = set(child_pids)
         holders = []
         for lock_file in lock_files:
             holder = _read_lock_holder_pid(lock_file)
-            if holder is None or holder not in child_pids or not alive(holder):
+            if holder is None or holder not in child_pid_set or not alive(holder):
                 continue
             holders.append(holder)
         return tuple(sorted(set(holders)))
@@ -354,14 +399,6 @@ class DaemonProcessInventory:
             command=command,
             is_alive=is_alive,
         )
-
-
-@dataclass(frozen=True)
-class ManagedChildCommandShape:
-    @classmethod
-    def matches(cls, command_line: str, expected: Sequence[str]) -> bool:
-        return _restart_daemon_command_matches(command_line, expected)
-
 
 @dataclass(frozen=True)
 class RestartWrapperShape:
@@ -960,12 +997,12 @@ def _parse_process_inventory(stdout: str) -> list[DaemonProcess]:
         if not stripped:
             continue
         try:
-            raw_pid, command = stripped.split(None, 1)
+            raw_pid, raw_ppid, command = stripped.split(None, 2)
         except ValueError:
             continue
-        if not raw_pid.isdigit():
+        if not raw_pid.isdigit() or not raw_ppid.isdigit():
             continue
-        processes.append(DaemonProcess(int(raw_pid), command))
+        processes.append(DaemonProcess(int(raw_pid), command, int(raw_ppid)))
     return processes
 
 
