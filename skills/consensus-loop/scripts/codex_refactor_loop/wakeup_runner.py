@@ -490,6 +490,8 @@ class WakeupRunner:
             return "missing_no_generic_command"
         if action.get("no_lifecycle_authority") is not True:
             return "missing_no_lifecycle_authority"
+        if action.get("controller_action") != "archive_invalid_harness_spawn_intent":
+            return "invalid_harness_spawn_intent_controller_action_mismatch"
         if action.get("source_artifact") != INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT:
             return "invalid_harness_spawn_intent_source_artifact_mismatch"
         if action.get("source_marker") != INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER:
