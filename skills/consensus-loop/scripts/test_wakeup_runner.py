@@ -1602,6 +1602,23 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual([call[0] for call in actions.calls], ["dispatch_consensus_implementation"])
 
+    def test_consensus_implementation_success_records_dispatch_receipt_for_next_tick(self) -> None:
+        action = self.consensus_action(action_id="consensus-implementation:receipt-written")
+        actions = FakeActions()
+
+        first = self.run_result(self.base_plan(action), actions=actions)
+        second_actions = FakeActions()
+        second = self.run_result(self.base_plan(action), actions=second_actions)
+
+        receipt = "WAKEUP_RUNNER_CONSENSUS_IMPLEMENTATION_DISPATCHED:20:issue-20:consensus-implementation:receipt-written"
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertEqual(first[0].status, "applied")
+        self.assertIn(receipt, pending.splitlines())
+        self.assertEqual([call[0] for call in actions.calls], ["dispatch_consensus_implementation"])
+        self.assertEqual(second[0].status, "skipped")
+        self.assertEqual(second[0].reason, "duplicate")
+        self.assertEqual(second_actions.calls, [])
+
     def test_consensus_implementation_applied_row_suppresses_after_dispatch_receipt(self) -> None:
         action = self.consensus_action(action_id="consensus-implementation:receipt")
         (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
