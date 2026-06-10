@@ -95,12 +95,9 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "RestartWrapperShape",
             "ManagedChildCommandShape",
             "live_restart_wrappers",
-<<<<<<< HEAD
             "canonical_child_pids",
             "orphan_child_pids",
-=======
             "live_managed_children",
->>>>>>> origin/auto-refact-dev
             "bounded_lock_holder_pids",
             "daemon_lock_files",
             "daemon_targets",

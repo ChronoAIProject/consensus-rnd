@@ -152,11 +152,7 @@ class DaemonStatusProjectionTests(unittest.TestCase):
             json.dumps({"active_controller": "owner"}) + "\n",
             encoding="utf-8",
         )
-<<<<<<< HEAD
         inventory = restart.DaemonProcessInventory((restart.DaemonProcess(789, " ".join(target.command), 1),))
-=======
-        inventory = restart.DaemonProcessInventory((restart.DaemonProcess(789, " ".join(target.command)),))
->>>>>>> origin/auto-refact-dev
 
         with mock.patch.dict(os.environ, env, clear=True):
             with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=inventory):
@@ -168,7 +164,6 @@ class DaemonStatusProjectionTests(unittest.TestCase):
         self.assertEqual("stale", daemon["status"])
         self.assertEqual("orphan-lock-holders:1", daemon["stale_reason"])
         self.assertEqual([789], daemon["managed_child_pids"])
-<<<<<<< HEAD
         self.assertEqual([], daemon["canonical_child_pids"])
         self.assertEqual([789], daemon["orphan_child_pids"])
         self.assertEqual([789], daemon["bounded_lock_holder_pids"])
@@ -265,11 +260,6 @@ class DaemonStatusProjectionTests(unittest.TestCase):
         self.assertEqual("process-inventory-unavailable:ps denied", daemon["stale_reason"])
         self.assertEqual("unavailable", daemon["process_inventory_status"])
         self.assertEqual("ps denied", daemon["process_inventory_error"])
-=======
-        self.assertEqual([789], daemon["bounded_lock_holder_pids"])
-        self.assertEqual("999\n", pid.read_text(encoding="utf-8"))
-        self.assertEqual("pid=789\n", lock_file.read_text(encoding="utf-8"))
->>>>>>> origin/auto-refact-dev
 
 
 if __name__ == "__main__":
