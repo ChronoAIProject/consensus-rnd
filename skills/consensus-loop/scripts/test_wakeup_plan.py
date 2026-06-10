@@ -33,6 +33,8 @@ from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E4
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     GhItem,
+    INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT,
+    INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER,
     _revive_stale_redispatchable_implement_log,
     ci_red_actions,
     close_projection_actions,
@@ -42,6 +44,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     consensus_implementation_suppressed_reason,
     existing_issue_actions,
     has_dispatchable_action,
+    harness_spawn_intent_line_digest,
     load_github_items_with_status,
     marker_from_completed_log,
     meta_escalation_stuck_seconds,
@@ -2366,6 +2369,30 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent-invalid")
                 self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
                 self.assertEqual(action["reason"], expected_reason)
+                self.assertEqual(action["action_id"], f"harness-spawn-intent-invalid:{harness_spawn_intent_line_digest(action['evidence'])}")
+                self.assertEqual(action["source_artifact"], INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT)
+                self.assertEqual(action["source_marker"], INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER)
+                self.assertEqual(action["evidence_digest"], harness_spawn_intent_line_digest(action["evidence"]))
+                self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+                self.assertEqual(action["preconditions"], ["source_artifact_contains_evidence"])
+                self.assertTrue(action["no_generic_command"])
+
+    def test_harness_spawn_intent_rejects_missing_queued_at_with_stable_invalid_action(self) -> None:
+        self.append_harness_spawn_intent(intent_id="missing-queued-at", queued_at=None)
+
+        plan = self.run_plan()
+
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent-invalid")
+        self.assertEqual("missing-queued_at", action["reason"])
+        self.assertEqual("harness-spawn-intent-invalid:missing-queued-at", action["action_id"])
+        self.assertEqual(INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT, action["source_artifact"])
+        self.assertEqual(INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER, action["source_marker"])
+        self.assertEqual(harness_spawn_intent_line_digest(action["evidence"]), action["evidence_digest"])
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertEqual(["source_artifact_contains_evidence"], action["preconditions"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertTrue(action["no_generic_command"])
+        self.assertNotIn("controller_action", action)
 
     def test_harness_spawn_intent_rejects_missing_path_fields_and_bad_path(self) -> None:
         for field in ("cd", "prompt", "log"):

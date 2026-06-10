@@ -50,7 +50,11 @@ from .secondary_mutation_backoff import (
 )
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
-from .wakeup_plan import consensus_implementation_suppressed_reason, zero_code_implementation_completion_proven
+from .wakeup_plan import (
+    consensus_implementation_suppressed_reason,
+    validate_harness_spawn_intent,
+    zero_code_implementation_completion_proven,
+)
 from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 
 
@@ -2070,9 +2074,11 @@ class ControllerActions:
             "log": self.ctx.durable_artifact_path(log),
             "stall": stall,
             "reason": reason,
+            "queued_at": self._now(),
             "run_in_background_required": True,
             "no_lifecycle_authority": True,
         }
+        validate_harness_spawn_intent(self.ctx, intent)
         self._append_pending_event(
             f"{self._now()} HARNESS_SPAWN_INTENT {json.dumps(intent, ensure_ascii=False, sort_keys=True)}"
         )

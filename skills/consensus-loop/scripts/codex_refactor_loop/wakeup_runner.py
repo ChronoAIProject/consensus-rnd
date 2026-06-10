@@ -47,6 +47,9 @@ from .safe_progress_scheduler import MEDIUM_NON_SPAWN_LIMIT_PER_TICK, validate_r
 from .state import read_json
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import (
+    ARCHIVED_INVALID_HARNESS_SPAWN_INTENT_MARKER,
+    INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT,
+    INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER,
     build_plan,
     consensus_implementation_suppressed_reason,
     zero_code_implementation_completion_proven,
@@ -344,6 +347,8 @@ class WakeupRunner:
             return self._blocked(action, "missing_action_id")
         if self._ledger_suppresses_retry(action):
             return self._record(RunnerResult(action_id, "skipped", "duplicate"), action)
+        if action.get("kind") == "harness-spawn-intent-invalid":
+            return self._apply_invalid_harness_spawn_intent(action, action_id)
         error = self._validate_action(action)
         if error:
             if error == "issue_decomposition_duplicate_sentinel" or error in NON_BLOCKING_VALIDATION_REASONS:
@@ -434,6 +439,36 @@ class WakeupRunner:
             if source_marker not in text:
                 return "source_marker_missing"
         return None
+
+    def _apply_invalid_harness_spawn_intent(self, action: Mapping[str, Any], action_id: str) -> RunnerResult:
+        error = self._validate_invalid_harness_spawn_intent(action)
+        if error:
+            return self._blocked(action, error)
+        identity = action_id.removeprefix("harness-spawn-intent-invalid:")
+        reason = _single_line(str(action.get("reason") or "unknown"))
+        self._append_pending_event(f"{ARCHIVED_INVALID_HARNESS_SPAWN_INTENT_MARKER}:{identity}:{reason}")
+        return self._record(RunnerResult(action_id, "skipped", f"archived_invalid_harness_spawn_intent:{reason}"), action)
+
+    def _validate_invalid_harness_spawn_intent(self, action: Mapping[str, Any]) -> str | None:
+        safe_progress_error = validate_runner_action(action)
+        if safe_progress_error:
+            return safe_progress_error
+        forbidden = _forbidden_action_field_paths(action)
+        if forbidden:
+            return "forbidden_fields:" + ",".join(forbidden)
+        if action.get("runner_authority") != RUNNER_AUTHORITY:
+            return "runner_authority_mismatch"
+        if action.get("no_generic_command") is not True:
+            return "missing_no_generic_command"
+        if action.get("no_lifecycle_authority") is not True:
+            return "missing_no_lifecycle_authority"
+        if action.get("source_artifact") != INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT:
+            return "invalid_harness_spawn_intent_source_artifact_mismatch"
+        if action.get("source_marker") != INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER:
+            return "invalid_harness_spawn_intent_source_marker_mismatch"
+        if not isinstance(action.get("evidence_digest"), str) or not action.get("evidence_digest"):
+            return "missing_evidence_digest"
+        return self._validate_evidence(action)
 
     def _validate_target(self, action: Mapping[str, Any]) -> str | None:
         target = self._github_target(action)
@@ -1836,6 +1871,12 @@ class WakeupRunner:
                 if self._applied_row_current_effect_suppresses_retry(action):
                     return True
             if status == "blocked" and _terminal_blocked_reason(str(row.get("reason") or "")):
+                return True
+            if (
+                status == "skipped"
+                and action.get("kind") == "harness-spawn-intent-invalid"
+                and str(row.get("reason") or "").startswith("archived_invalid_harness_spawn_intent:")
+            ):
                 return True
         return False
 

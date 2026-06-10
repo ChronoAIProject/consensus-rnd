@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import importlib
 import json
 import os
@@ -210,6 +211,9 @@ DESIGN_CONSENSUS_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)
 IMPLEMENT_PENDING_INTENT_PREFIX = "dispatch-consensus-implementation:"
 IMPLEMENT_TASK_PREFIX = "implement-"
 REVIEW_PENDING_SECONDS = 90
+INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT = ".refactor-loop/.controller-pending-events.log"
+INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER = "HARNESS_SPAWN_INTENT"
+ARCHIVED_INVALID_HARNESS_SPAWN_INTENT_MARKER = "WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT"
 
 
 @dataclass(frozen=True)
@@ -383,6 +387,10 @@ def harness_spawn_intent_actions(
             _harness_spawn_intent_action(intent, intent_id, cd, prompt, log_path, line)
         )
     return actions
+
+
+def harness_spawn_intent_line_digest(line: str) -> str:
+    return hashlib.sha256(line.encode("utf-8")).hexdigest()[:16]
 
 
 def _harness_spawn_intent_action(
@@ -862,6 +870,9 @@ def _harness_spawn_intent_invalid_reason(intent: dict[str, Any]) -> str | None:
         return "missing-background-requirement"
     if intent.get("no_lifecycle_authority") is not True:
         return "missing-no-lifecycle-authority"
+    queued_at = intent.get("queued_at")
+    if not isinstance(queued_at, str) or not queued_at:
+        return "missing-queued_at"
     return None
 
 
@@ -893,16 +904,24 @@ def validate_harness_spawn_intent(ctx: LoopContext, intent: dict[str, Any]) -> H
 
 
 def _invalid_harness_spawn_intent(reason: str, evidence: str, *, intent_id: str | None = None) -> dict[str, Any]:
+    identity = intent_id if intent_id else harness_spawn_intent_line_digest(evidence)
     return {
         "priority": 2,
         "kind": "harness-spawn-intent-invalid",
+        "action_id": f"harness-spawn-intent-invalid:{identity}",
         "item": intent_id,
         "phase": "bootstrap",
         "actor": "controller",
         "route": "harness-spawn-intent",
         "reason": reason,
         "evidence": evidence,
+        "source_artifact": INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT,
+        "source_marker": INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER,
+        "evidence_digest": harness_spawn_intent_line_digest(evidence),
+        "runner_authority": RUNNER_AUTHORITY,
+        "preconditions": ["source_artifact_contains_evidence"],
         "no_lifecycle_authority": True,
+        "no_generic_command": True,
     }
 
 

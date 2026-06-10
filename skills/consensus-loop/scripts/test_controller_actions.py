@@ -2579,6 +2579,8 @@ class ControllerActionsTests(unittest.TestCase):
         pending = self.pending_events()
         self.assertRegex(pending, r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z HARNESS_SPAWN_INTENT ")
         self.assertIn(" HARNESS_SPAWN_INTENT ", pending)
+        raw_intent = json.loads(next(line.split(" HARNESS_SPAWN_INTENT ", 1)[1] for line in pending.splitlines() if " HARNESS_SPAWN_INTENT " in line))
+        self.assertRegex(raw_intent["queued_at"], r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
         ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp, read_only=True)
         projected = harness_spawn_intent_actions(self.tmp, ctx, monitor=None, gh_items=[], gh_items_loaded=False)
