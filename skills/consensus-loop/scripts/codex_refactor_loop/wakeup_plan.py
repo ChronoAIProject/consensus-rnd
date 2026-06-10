@@ -264,8 +264,16 @@ class ReviewRoundCompletion:
     heads_by_role: dict[str, str]
 
 
-def run_json(cmd: list[str], *, cwd: Path) -> Any:
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+RELEASE_ROLLUP_LIVE_PR_LIST_TIMEOUT_SECONDS = 15
+
+
+def run_json(cmd: list[str], *, cwd: Path, timeout: float | None = None) -> Any:
+    try:
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if timeout is None:
+            raise
+        return None
     if result.returncode != 0:
         return None
     text = result.stdout.strip()
@@ -3302,6 +3310,46 @@ def _release_rollup_live_pr_view(repo_root: Path, pr_number: int) -> dict[str, A
     return result if isinstance(result, dict) else None
 
 
+def _release_rollup_event_satisfied(repo_root: Path, event: dict[str, Any], integration_sha: str) -> bool:
+    review_base_branch = safe_head_ref(str(event.get("review_base_branch") or ""))
+    if not review_base_branch or not integration_sha:
+        return False
+    result = run_json(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--state",
+            "open",
+            "--base",
+            review_base_branch,
+            "--limit",
+            "100",
+            "--json",
+            "number,headRefName,baseRefName,headRefOid",
+        ],
+        cwd=repo_root,
+        timeout=RELEASE_ROLLUP_LIVE_PR_LIST_TIMEOUT_SECONDS,
+    )
+    if not isinstance(result, list):
+        return False
+    expected_head = f"rollup/{integration_sha}"
+    for item in result:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("baseRefName") or review_base_branch) != review_base_branch:
+            continue
+        head = safe_head_ref(str(item.get("headRefName") or ""))
+        if not head or not head.startswith("rollup/"):
+            continue
+        head_oid = str(item.get("headRefOid") or "").strip()
+        if head_oid != integration_sha:
+            continue
+        if head == expected_head or head.startswith("rollup/"):
+            return True
+    return False
+
+
 def _ci_check_action_token(check_name: str) -> str:
     token = re.sub(r"[^A-Za-z0-9._-]+", "-", check_name.strip()).strip("-")
     return token or "check"
@@ -3336,6 +3384,8 @@ def release_rollup_actions(repo_root: Path) -> list[dict[str, Any]]:
         latest_by_integration_sha[integration_sha] = (event, event_json, line)
     for integration_sha, (event, event_json, line) in latest_by_integration_sha.items():
         if not _release_rollup_event_is_fresh(repo_root, event, integration_sha):
+            continue
+        if _release_rollup_event_satisfied(repo_root, event, integration_sha):
             continue
         body_file = RELEASE_ROLLUP_BODY_FILE
         if not (repo_root / body_file).is_file():

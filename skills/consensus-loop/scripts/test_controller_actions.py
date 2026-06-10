@@ -359,6 +359,46 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn("Related issues: #12, #13", text)
         self.assertIn("⟦AI:RELEASE-ROLLUP⟧", text)
 
+    def test_update_existing_release_rollup_pr_skips_force_push_when_head_oid_matches(self) -> None:
+        body = self.tmp / ".refactor-loop" / "runs" / "release-rollup-pr-body.md"
+        event = {
+            "integration_branch": "canonical-integration",
+            "review_base_branch": "canonical-review",
+            "integration_sha": "abc123",
+            "review_base_sha": "def456",
+            "ahead_count": 3,
+        }
+        gh_calls: list[list[str]] = []
+        git_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:2] == ["pr", "list"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps([{"number": 88, "baseRefName": "canonical-review", "headRefName": "rollup/abc123", "headRefOid": "abc123"}]),
+                    stderr="",
+                )
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        def fake_git(args: list[str], *, check: bool = True) -> mock.Mock:
+            git_calls.append(args)
+            if args[:3] == ["ls-remote", "--exit-code", "--heads"]:
+                return mock.Mock(returncode=0, stdout="abc123\trefs/heads/canonical-integration\n", stderr="")
+            if args[:4] == ["log", "--no-merges", "--format=%s", "--max-count=25"]:
+                return mock.Mock(returncode=0, stdout="Fix #12 rollup singleton\n", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "_require_owner_or_raise", return_value=None):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh), mock.patch.object(self.actions, "git", side_effect=fake_git):
+                pr_number, head = self.actions.open_release_rollup_pr_from_pending_event(json.dumps(event), str(body))
+
+        self.assertEqual((88, "rollup/abc123"), (pr_number, head))
+        self.assertFalse(any(call[:2] == ["push", "--force-with-lease"] for call in git_calls))
+        edit_call = next(call for call in gh_calls if call[:2] == ["pr", "edit"])
+        self.assertEqual("88", edit_call[2])
+        self.assertIn("--body-file", edit_call)
+
     def test_explicit_zh_release_rollup_preserves_existing_body_copy(self) -> None:
         body = self.tmp / ".refactor-loop" / "runs" / "release-rollup-pr-body.md"
         self.actions.ctx.host_env["HOST_WORK_LANGUAGE"] = "zh"

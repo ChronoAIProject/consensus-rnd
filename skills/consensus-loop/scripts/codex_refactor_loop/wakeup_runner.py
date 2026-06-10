@@ -61,6 +61,7 @@ from .worker_markers import read_worker_terminal_marker
 
 RUNNER_AUTHORITY = "wakeup-runner-396"
 APPLY_AUTHORITY = "wakeup-runner-396-only"
+INVALID_HARNESS_CLEANUP_LIMIT_PER_TICK = 50
 FORBIDDEN_ACTION_FIELDS = {
     "argv",
     "args",
@@ -288,9 +289,13 @@ class WakeupRunner:
         results: list[RunnerResult] = []
         applied_spawns = 0
         applied_medium_non_spawns = 0
+        archived_invalid_harness_cleanups = 0
         worker_top_up_only = False
         for action in self._actions_for_apply(plan.get("actions", []), budget):
             if not isinstance(action, dict) or action.get("status_only") is True:
+                continue
+            is_invalid_harness_cleanup = _is_invalid_harness_cleanup(action)
+            if is_invalid_harness_cleanup and archived_invalid_harness_cleanups >= INVALID_HARNESS_CLEANUP_LIMIT_PER_TICK:
                 continue
             is_spawn_action = budget.is_spawn_action(action)
             consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)
@@ -306,6 +311,9 @@ class WakeupRunner:
                 continue
             result = self.apply_action(action)
             results.append(result)
+            if is_invalid_harness_cleanup and result.reason.startswith("archived_invalid_harness_spawn_intent:"):
+                archived_invalid_harness_cleanups += 1
+                continue
             if result.status == "skipped" and consumes_spawn_budget:
                 continue
             if result.status != "applied":
