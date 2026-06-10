@@ -115,6 +115,9 @@ class PatrolInspector:
             reason = str(exc)
             self._write_state(status="failed", findings=(), published=(), reason=reason)
             print(f"patrol-inspector failed: {reason}", file=sys.stderr)
+            if beat is not None:
+                beat()
+                return 0
             raise
         if beat is not None:
             beat()
@@ -136,7 +139,14 @@ class PatrolInspector:
     def collect_findings(self) -> tuple[PatrolFinding, ...]:
         findings: list[PatrolFinding] = []
         for signal in self.collect_candidate_signals():
-            decision = self.analysis_provider.analyze(signal)
+            try:
+                decision = self.analysis_provider.analyze(signal)
+            except RuntimeError as exc:
+                print(
+                    f"patrol-inspector analysis skipped: source={_single_line(signal.source)} reason={_single_line(str(exc))}",
+                    file=sys.stderr,
+                )
+                continue
             if not decision.is_real_issue:
                 continue
             findings.append(_finding_from_decision(signal, decision))
@@ -527,6 +537,10 @@ def _positive_int(raw: str | None, default: int) -> int:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _single_line(value: str) -> str:
+    return " ".join(str(value).split())[:240]
 
 
 def _patrol_daemon_heartbeat_lease(ctx: LoopContext) -> DaemonHeartbeatLease:

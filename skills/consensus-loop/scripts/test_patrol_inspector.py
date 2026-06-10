@@ -61,6 +61,21 @@ class ExplodingAnalysisProvider:
         raise AssertionError(f"analysis provider should not run for {signal.source}")
 
 
+class RuntimeErrorAnalysisProvider:
+    def __init__(self, decisions: list[PatrolAnalysisDecision | RuntimeError] | None = None) -> None:
+        self.decisions = decisions or []
+        self.signals: list[PatrolCandidateSignal] = []
+
+    def analyze(self, signal: PatrolCandidateSignal) -> PatrolAnalysisDecision:
+        self.signals.append(signal)
+        if self.decisions:
+            decision = self.decisions.pop(0)
+            if isinstance(decision, RuntimeError):
+                raise decision
+            return decision
+        raise RuntimeError(f"patrol analysis failed: source={signal.source} exit=1 log=.refactor-loop/logs/patrol-analysis-test.log")
+
+
 def false_decision() -> PatrolAnalysisDecision:
     return PatrolAnalysisDecision(
         is_real_issue=False,
@@ -627,6 +642,68 @@ class PatrolInspectorTests(unittest.TestCase):
         self.assertEqual(1, len(state["findings"]))
         self.assertEqual(1, len(state["published"]))
 
+    def test_analysis_spawn_failure_is_tick_local_and_renews_heartbeat(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("RuntimeError: persistent failure\n", encoding="utf-8")
+        publisher = FakePublisher()
+        beats: list[str] = []
+        inspector = PatrolInspector(
+            self.ctx,
+            config=PatrolInspectorConfig(enabled=True, interval_seconds=7200, max_findings=25),
+            publisher=publisher,
+            analysis_provider=RuntimeErrorAnalysisProvider(),
+            github_items=(),
+        )
+
+        stderr = StringIO()
+        with redirect_stderr(stderr):
+            result = inspector.run_once(beat=lambda: beats.append("beat"))
+
+        self.assertEqual(0, result)
+        self.assertEqual(["beat"], beats)
+        self.assertEqual([], publisher.published)
+        self.assertIn("patrol-inspector analysis skipped:", stderr.getvalue())
+        self.assertIn("exit=1", stderr.getvalue())
+        state = json.loads((self.tmp / ".refactor-loop" / "state" / "patrol-inspector.json").read_text(encoding="utf-8"))
+        self.assertEqual("ok", state["status"])
+        self.assertEqual([], state["findings"])
+        self.assertEqual([], state["published"])
+
+    def test_mixed_analysis_failure_does_not_publish_raw_failure_text(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "first.log").write_text("RuntimeError: first failure\n", encoding="utf-8")
+        (self.tmp / ".refactor-loop" / "logs" / "second.log").write_text("RuntimeError: second failure\n", encoding="utf-8")
+        decision = PatrolAnalysisDecision(
+            is_real_issue=True,
+            summary="structured second finding",
+            severity="high",
+            root_cause="structured root cause",
+            recommendation="structured recommendation",
+            rationale="structured rationale",
+        )
+        publisher = FakePublisher()
+        inspector = PatrolInspector(
+            self.ctx,
+            config=PatrolInspectorConfig(enabled=True, interval_seconds=7200, max_findings=25),
+            publisher=publisher,
+            analysis_provider=RuntimeErrorAnalysisProvider(
+                [
+                    RuntimeError("patrol analysis failed: source=.refactor-loop/logs/first.log exit=1 log=.refactor-loop/logs/patrol-analysis-first.log"),
+                    decision,
+                ]
+            ),
+            github_items=(),
+        )
+
+        stderr = StringIO()
+        with redirect_stderr(stderr):
+            result = inspector.run_once()
+
+        self.assertEqual(0, result)
+        self.assertEqual(1, len(publisher.published))
+        _fingerprint, _title, body = publisher.published[0]
+        self.assertIn("structured root cause", body)
+        self.assertNotIn("patrol analysis failed", body)
+        self.assertIn("patrol-inspector analysis skipped:", stderr.getvalue())
+
     def test_snapshot_load_failure_is_visible_and_blocks_publication(self) -> None:
         (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("EXIT=1\n", encoding="utf-8")
         publisher = FakePublisher()
@@ -833,7 +910,7 @@ class PatrolInspectorTests(unittest.TestCase):
         self.assertEqual([3, 3], FakeLease.instance.sleeps)
         self.assertIsNotNone(FakePublisher.instance)
         self.assertEqual([], FakePublisher.instance.published)
-        self.assertIn("patrol-inspector daemon tick failed: RuntimeError:", stderr.getvalue())
+        self.assertIn("patrol-inspector failed:", stderr.getvalue())
         self.assertIn("loaded_ok_false", stderr.getvalue())
 
 

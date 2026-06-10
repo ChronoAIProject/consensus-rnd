@@ -52,6 +52,8 @@ from .wakeup_plan import (
     INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER,
     build_plan,
     consensus_implementation_suppressed_reason,
+    archived_invalid_harness_spawn_intent_markers,
+    live_valid_harness_spawn_intent,
     zero_code_implementation_completion_proven,
 )
 from .worker_markers import read_worker_terminal_marker
@@ -238,6 +240,15 @@ class ReviewGateSnapshot:
         }
 
 
+@dataclass(frozen=True)
+class ReviewGateCandidate:
+    evidences_by_role: dict[str, ReviewEvidence]
+    invalid: list[str]
+    pending: list[str]
+    terminal_failed_roles: list[str]
+    complete_round: int | None = None
+
+
 class WakeupRunner:
     def __init__(
         self,
@@ -289,7 +300,7 @@ class WakeupRunner:
                 and applied_medium_non_spawns >= MEDIUM_NON_SPAWN_LIMIT_PER_TICK
             ):
                 continue
-            if worker_top_up_only and not consumes_spawn_budget:
+            if worker_top_up_only and not consumes_spawn_budget and not _is_invalid_harness_cleanup(action):
                 continue
             if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:
                 continue
@@ -323,13 +334,15 @@ class WakeupRunner:
     def _hard_gate_apply_priority(self, action: Any) -> tuple[int, int]:
         if not isinstance(action, Mapping):
             return (4, 0)
-        if _publishes_review_fix_output(action):
+        if _is_invalid_harness_cleanup(action):
             return (0, 0)
-        if _unblocks_pr_mergeability(action) or _unblocks_release_rollup(action):
+        if _publishes_review_fix_output(action):
             return (1, 0)
-        if _is_reviewer_harness_spawn_intent(action):
+        if _unblocks_pr_mergeability(action) or _unblocks_release_rollup(action):
             return (2, 0)
-        return (3, 0)
+        if _is_reviewer_harness_spawn_intent(action):
+            return (3, 0)
+        return (4, 0)
 
     def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:
         controller_action = str(action.get("controller_action") or "")
@@ -1632,53 +1645,106 @@ class WakeupRunner:
         return {"decision": decision, "reason": "", "gate": gate}
 
     def _review_gate(self, pr_number: int) -> dict[str, Any]:
-        evidences = self._latest_review_evidence_by_role(pr_number)
-        verdicts = {role: evidence.verdict for role, evidence in evidences.items() if evidence.valid}
-        invalid = [evidence.reason or f"invalid:{evidence.role}" for evidence in evidences.values() if not evidence.valid]
-        pending = [evidence.reason or f"pending:{evidence.role}" for evidence in evidences.values() if evidence.pending]
-        terminal_failed_roles = [evidence.role for evidence in evidences.values() if evidence.terminal_failed]
-        heads = {role: evidence.head_sha for role, evidence in evidences.items() if evidence.valid and evidence.head_sha}
         live_head = self._pr_head_sha(pr_number)
-        for role in REQUIRED_REVIEW_ROLES:
-            if role not in verdicts:
-                continue
-            role_head = heads.get(role, "")
-            if not role_head:
-                invalid.append(f"missing_reviewed_head_sha:{role}")
-            elif live_head and role_head != live_head:
-                invalid.append(f"stale_reviewed_head_sha:{role}")
+        candidate = self._review_gate_candidate_evidence(pr_number, live_head)
+        evidences = candidate.evidences_by_role
+        verdicts = {role: evidence.verdict for role, evidence in evidences.items() if evidence.valid}
+        heads = {role: evidence.head_sha for role, evidence in evidences.items() if evidence.valid and evidence.head_sha}
         return ReviewGateSnapshot(
             verdicts_by_role=verdicts,
             heads_by_role=heads,
             live_head_sha=live_head,
-            invalid=invalid,
-            pending=pending,
-            terminal_failed_roles=terminal_failed_roles,
+            invalid=candidate.invalid,
+            pending=candidate.pending,
+            terminal_failed_roles=candidate.terminal_failed_roles,
         ).as_dict()
 
-    def _latest_review_evidence_by_role(self, pr_number: int) -> dict[str, ReviewEvidence]:
-        latest: dict[str, ReviewEvidence] = {}
-        duplicate_keys: set[tuple[str, int]] = set()
+    def _review_gate_candidate_evidence(self, pr_number: int, live_head_sha: str) -> ReviewGateCandidate:
+        rounds: dict[int, dict[str, list[ReviewEvidence]]] = {}
         for evidence in self._review_evidences(pr_number):
-            key = (evidence.role, evidence.round_number)
-            if key in duplicate_keys:
+            rounds.setdefault(evidence.round_number, {}).setdefault(evidence.role, []).append(evidence)
+        for round_number in sorted(rounds, reverse=True):
+            by_role = rounds[round_number]
+            selected: dict[str, ReviewEvidence] = {}
+            complete = True
+            for role in REQUIRED_REVIEW_ROLES:
+                items = by_role.get(role, [])
+                if len(items) != 1:
+                    complete = False
+                    break
+                evidence = items[0]
+                if not evidence.valid or evidence.pending or evidence.terminal_failed or evidence.head_sha != live_head_sha:
+                    complete = False
+                    break
+                selected[role] = evidence
+            if complete:
+                return ReviewGateCandidate(selected, [], [], [], complete_round=round_number)
+        if not rounds:
+            return ReviewGateCandidate({}, [], [], [])
+        candidate_round = self._highest_relevant_review_candidate_round(rounds, live_head_sha)
+        return self._diagnostic_review_gate_candidate(rounds[candidate_round], live_head_sha)
+
+    def _highest_relevant_review_candidate_round(
+        self,
+        rounds: Mapping[int, Mapping[str, list[ReviewEvidence]]],
+        live_head_sha: str,
+    ) -> int:
+        def score(round_number: int) -> tuple[int, int, int]:
+            by_role = rounds[round_number]
+            valid_live_roles = {
+                role
+                for role, evidences in by_role.items()
+                if len(evidences) == 1
+                and evidences[0].valid
+                and not evidences[0].pending
+                and not evidences[0].terminal_failed
+                and evidences[0].head_sha == live_head_sha
+            }
+            live_evidence_count = sum(
+                1
+                for evidences in by_role.values()
+                for evidence in evidences
+                if evidence.head_sha == live_head_sha
+            )
+            return (len(valid_live_roles), live_evidence_count, round_number)
+
+        return max(rounds, key=score)
+
+    def _diagnostic_review_gate_candidate(
+        self,
+        by_role: Mapping[str, list[ReviewEvidence]],
+        live_head_sha: str,
+    ) -> ReviewGateCandidate:
+        selected: dict[str, ReviewEvidence] = {}
+        invalid: list[str] = []
+        pending: list[str] = []
+        terminal_failed_roles: list[str] = []
+        for role in REQUIRED_REVIEW_ROLES:
+            items = list(by_role.get(role, []))
+            if len(items) > 1:
+                invalid.append(f"duplicate_reviewer_evidence:{role}")
                 continue
-            existing = latest.get(evidence.role)
-            if existing is not None and existing.round_number == evidence.round_number:
-                latest[evidence.role] = ReviewEvidence(
-                    role=evidence.role,
-                    round_number=evidence.round_number,
-                    verdict="",
-                    head_sha="",
-                    source=evidence.source,
-                    valid=False,
-                    reason=f"duplicate_reviewer_evidence:{evidence.role}",
-                )
-                duplicate_keys.add(key)
+            if not items:
                 continue
-            if existing is None or evidence.round_number > existing.round_number:
-                latest[evidence.role] = evidence
-        return latest
+            evidence = items[0]
+            if evidence.pending:
+                pending.append(evidence.reason or f"pending:{role}")
+                continue
+            if evidence.terminal_failed:
+                terminal_failed_roles.append(role)
+                invalid.append(evidence.reason or f"terminal_failed:{role}")
+                continue
+            if not evidence.valid:
+                invalid.append(evidence.reason or f"invalid:{role}")
+                continue
+            if not evidence.head_sha:
+                invalid.append(f"missing_reviewed_head_sha:{role}")
+                continue
+            if live_head_sha and evidence.head_sha != live_head_sha:
+                invalid.append(f"stale_reviewed_head_sha:{role}")
+                continue
+            selected[role] = evidence
+        return ReviewGateCandidate(selected, invalid, pending, terminal_failed_roles)
 
     def _review_evidences(self, pr_number: int) -> list[ReviewEvidence]:
         evidences: list[ReviewEvidence] = []
@@ -1955,8 +2021,43 @@ class WakeupRunner:
             heads = gate.get("heads_by_role")
             if not isinstance(heads, Mapping):
                 return False
-            return all(str(heads.get(role) or "") == projected_head for role in roles)
+            return all(
+                str(heads.get(role) or "") == projected_head
+                or self._pending_review_spawn_intent_exists(target, role, projected_head)
+                for role in roles
+            )
         return False
+
+    def _pending_review_spawn_intent_exists(self, pr_number: int, role: str, projected_head: str) -> bool:
+        try:
+            lines = self.pending_events_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return False
+        archived_invalid_markers = archived_invalid_harness_spawn_intent_markers(lines)
+        prefix = f"dispatch-reviewers:{pr_number}:{role}:"
+        for line in lines:
+            if " HARNESS_SPAWN_INTENT " not in line:
+                continue
+            try:
+                intent = json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(intent, dict):
+                continue
+            if not live_valid_harness_spawn_intent(self.ctx, line, intent, archived_invalid_markers):
+                continue
+            if not str(intent.get("intent_id") or "").startswith(prefix):
+                continue
+            prompt_path = self._path_from_intent_value(intent.get("prompt"))
+            log_path = self._path_from_intent_value(intent.get("log"))
+            intent_head = self._review_head_sha_for(prompt_path, log_path, "")
+            if intent_head == projected_head:
+                return True
+        return False
+
+    def _path_from_intent_value(self, value: Any) -> Path:
+        path = Path(str(value or ""))
+        return path if path.is_absolute() else self.ctx.repo_root / path
 
     def _release_dispatch_stale_ledger_reason(self, action: Mapping[str, Any]) -> str:
         return self._current_release_dispatch_stale_reason(action)
@@ -2326,6 +2427,10 @@ def _log_tick_status(daemon: str, action: str) -> None:
 
 def _single_line(value: str) -> str:
     return " ".join(str(value).split())[:240]
+
+
+def _is_invalid_harness_cleanup(action: Mapping[str, Any]) -> bool:
+    return action.get("kind") == "harness-spawn-intent-invalid"
 
 
 def _reviewer_log_terminal_failed(path: Path) -> bool:

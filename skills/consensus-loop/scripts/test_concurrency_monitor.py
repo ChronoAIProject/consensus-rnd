@@ -991,6 +991,55 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
         self.assertIsNone(recovered.blocked_reason)
 
+    def test_archived_legacy_malformed_review_intent_no_longer_counts_as_transient_supply(self) -> None:
+        malformed_intent = {
+            "intent_id": "dispatch-reviewers:774:quality:r6",
+            "source": "dispatch-reviewers",
+            "route": "dispatch-reviewers",
+            "task_id": "review-pr774-quality-r6",
+            "priority": "p1",
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "cd": str(self.repo),
+            "prompt": ".refactor-loop/prompts/review-pr774-quality-r6.md",
+            "log": ".refactor-loop/logs/review-pr774-quality-r6.log",
+            "stall": 5400,
+            "reason": "review PR #774 as quality",
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
+        }
+        line = "2026-05-26T07:29:00Z HARNESS_SPAWN_INTENT " + json.dumps(malformed_intent, sort_keys=True)
+        pending = self.refactor_loop / ".controller-pending-events.log"
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        pending.write_text(line + "\n", encoding="utf-8")
+
+        blocked = self.monitor._fresh_unsuppressed_item_matching_intent(
+            active_targets={("pr", 774)},
+            now=1_779_780_600,
+            window=600,
+            zero_streak=1,
+        )
+
+        self.assertEqual((False, "malformed-harness-spawn-intent:missing-queued_at", []), blocked)
+
+        pending.write_text(
+            line
+            + "\n"
+            + "WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:"
+            + self.harness_spawn_intent_line_digest(line)
+            + ":missing-queued_at\n",
+            encoding="utf-8",
+        )
+
+        recovered = self.monitor._fresh_unsuppressed_item_matching_intent(
+            active_targets={("pr", 774)},
+            now=1_779_780_600,
+            window=600,
+            zero_streak=1,
+        )
+
+        self.assertNotEqual("malformed-harness-spawn-intent:missing-queued_at", recovered[1])
+
     def test_tick_terminal_implement_result_does_not_trigger_no_gap_expected_worker(self) -> None:
         items = [
             {
