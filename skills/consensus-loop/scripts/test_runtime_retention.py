@@ -281,20 +281,29 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
                 self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
 
     def test_generated_file_gc_keeps_dead_and_failed_worker_recovery_logs(self) -> None:
-        dead_log = self.write_file(".refactor-loop/logs/implement-issue-8.log", "started\n", 25)
-        failed_log = self.write_file(".refactor-loop/logs/review-pr8-tests-r1.log", "started\nREVIEW_DONE:8:tests:reject\nEXIT=1\n", 25)
-        self.write_generated_files_plan(
-            self.generated_file_plan_item(".refactor-loop/logs/implement-issue-8.log"),
-            self.generated_file_plan_item(".refactor-loop/logs/review-pr8-tests-r1.log"),
+        cases = (
+            (
+                "dead-worker",
+                ".refactor-loop/logs/implement-issue-8.log",
+                "started\n",
+                "generated_file_recovery_dead_worker_log",
+            ),
+            (
+                "failed-worker",
+                ".refactor-loop/logs/review-pr8-tests-r1.log",
+                "started\nREVIEW_DONE:8:tests:reject\nEXIT=1\n",
+                "generated_file_recovery_failed_worker_log",
+            ),
         )
+        for name, rel, text, reason in cases:
+            with self.subTest(name=name):
+                path = self.write_file(rel, text, 25)
+                self.write_generated_files_plan(self.generated_file_plan_item(rel))
 
-        result = retain_runtime(self.repo, enabled=True)
+                result = retain_runtime(self.repo, enabled=True)
 
-        self.assertEqual((result.deleted, result.kept), (0, 2))
-        self.assertTrue(dead_log.exists())
-        self.assertTrue(failed_log.exists())
-        for reason in ("generated_file_recovery_dead_worker_log", "generated_file_recovery_failed_worker_log"):
-            with self.subTest(reason=reason):
+                self.assertEqual((result.deleted, result.kept), (0, 1))
+                self.assertTrue(path.exists())
                 self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
 
     def test_generated_file_gc_keeps_malformed_path_escape_symlink_fifo_and_missing_entries(self) -> None:
