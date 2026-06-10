@@ -123,7 +123,7 @@ decision: consensus | converge
 - Philosophy/CLAUDE.md/SPEC/Tier changes included: <none OR exact agreed clause/file changes from the winning plan>
 - Implementation owner: dispatch implement codex with cluster_id=${CLUSTER_ID}, design_decision_path=<this file>
 - Add `crnd:triage:resume-requested` label to issue ${ISSUE_NUMBER}
-- For large-issue decomposition consensus, direction consensus may authorize an `IssueDecompositionPlan` artifact and child body artifacts only. To authorize the later #396 named apply projection, this plan-level judge artifact must carry structured fields `controller_action="apply_issue_decomposition_plan"`, `plan_level_design_consensus_judge_artifact`, `issue_decomposition_plan_path`, `issue_decomposition_plan_digest`, and `issue_decomposition_proof`; the first `META_JUDGE_DONE:consensus:decompose`, solver artifacts, prompt body, validator output, worker output, and `.refactor-loop/host.env` are not apply authorization. Do not authorize solver/judge/implement worker GitHub lifecycle calls, public issue factory commands, parent close/reopen/body-title edits, or generic `wakeup_plan.py` decompose projections.
+- For large-issue decomposition consensus, direction consensus may authorize an `IssueDecompositionPlan` artifact and child body artifacts only. To authorize the later #396 named apply projection, this plan-level judge artifact must carry structured fields `controller_action="apply_issue_decomposition_plan"`, `plan_level_design_consensus_judge_artifact`, `issue_decomposition_plan_path`, `issue_decomposition_plan_digest`, and `issue_decomposition_proof`; the first `META_JUDGE_DONE:consensus:decompose`, solver artifacts, prompt body, validator output, worker output, and `.refactor-loop/host.env` are not apply authorization. Do not authorize solver/judge/implement worker GitHub lifecycle calls, public issue factory commands, parent close/reopen/body-title edits, generic `wakeup_plan.py` decompose projections, or worker-authored helper tracking blocks / child fingerprint lines.
 
 ## If converge
 - Convergence question (specific): <one sentence>
@@ -163,6 +163,7 @@ Refactor (iter6/issue-118):
 - You do NOT propose a solution; you ARBITRATE between proposals.
 - You do NOT dispatch other codexes; controller does.
 - You do NOT run GitHub lifecycle mutation. For decomposition, judge only the `IssueDecompositionPlan` artifact boundary; active-controller checked-in helpers own issue creation.
+- Decomposition judges must not emit parent tracking blocks or child fingerprint lines; those are helper-owned runtime idempotency records.
 - You DO post to GitHub directly per the rendered shared GitHub post rules (controller no longer relays — see "GitHub post" section below).
 - Be willing to converge on philosophy. Fundamental philosophy gaps are not human escalation by themselves; ask the solvers for exact clause/Tier/SPEC changes until consensus or router-derived true stall.
 - Treat deep consensus as sufficient authorization. Never require post-consensus human approval, physical GPG ratification, or Tier I reinstall ratification.

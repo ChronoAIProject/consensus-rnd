@@ -91,6 +91,7 @@ verdict: propose | abstain | escalate
 - LOC delta: -N (deletion-positive number)
 - Philosophy/CLAUDE.md/SPEC/Tier changes (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
 - If deletion is unsafe because the issue is merely too large, you may propose a bounded `IssueDecompositionPlan` artifact path instead of deletion; do not propose direct GitHub lifecycle calls, public issue factories, or any `wakeup_plan.py` decompose action/projection.
+- Do not author helper-owned decomposition tracking comments or child fingerprint lines; the checked-in #403 helper is the only writer for the parent tracking grammar and per-child idempotency fingerprints.
 
 ## Reverse-evidence (why this is safe to delete)
 - No public API breaks (verified by `git grep` on public surface)
@@ -137,6 +138,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - You do NOT delete code in this run; controller decides whether to act on your plan.
 - You do NOT commit / push / open PRs.
 - You do NOT run or propose GitHub lifecycle mutation. Decomposition plans may output `IssueDecompositionPlan` and child body artifact requirements, but active-controller checked-in helpers own issue creation.
+- Decomposition solvers must not emit parent tracking blocks or child fingerprint lines; those are helper-owned runtime idempotency records.
 - You DO post to GitHub directly per the rendered shared GitHub post rules (controller no longer relays — see "GitHub post" section below).
 - Abstaining is honorable. Forcing a deletion that doesn't fit is worse than abstaining.
 - Philosophy is evolvable: touching CLAUDE.md/L0/L1/L2, Tier boundaries, SPEC, or architecture vocabulary is allowed when it is part of the best deletion/collapse plan.

@@ -433,7 +433,8 @@ class RestartWrapperShape:
     @classmethod
     def matches(cls, command_line: str, expected: "RestartWrapperShape") -> bool:
         normalized = _normalize_process_command(command_line)
-        if f"{sys.executable} -c " not in normalized:
+        actual_parts = normalized.split()
+        if len(actual_parts) < 6 or not _is_python_launcher(actual_parts[0]) or actual_parts[1] != "-c":
             return False
         expected_tail = _normalize_process_command(
             " ".join([expected.name, str(expected.repo_root), str(expected.pid_file), str(expected.died_file)])
@@ -1053,11 +1054,25 @@ def _restart_daemon_command_matches(actual_tail: str, expected: Sequence[str]) -
         return False
     for index, expected_part in enumerate(expected_parts):
         actual_part = actual_parts[index]
+        if index == 0 and _is_python_launcher(actual_part) and _is_python_launcher(expected_part):
+            continue
         if index == 1 and _is_consensus_cli_path(actual_part) and _is_consensus_cli_path(expected_part):
             continue
         if actual_part != expected_part:
             return False
     return True
+
+
+def _is_python_launcher(value: str) -> bool:
+    name = Path(value).name
+    if name == "Python":
+        return True
+    if name in {"python", "python3"}:
+        return True
+    if not name.startswith("python3."):
+        return False
+    suffix = name.removeprefix("python3.")
+    return bool(suffix) and suffix.isdigit()
 
 
 def _is_consensus_cli_path(value: str) -> bool:

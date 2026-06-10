@@ -8,7 +8,7 @@ import hashlib
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .context import LoopContext, LoopContextError
 from .github_body import GitHubBodyError, validate_self_contained_github_body
@@ -53,6 +53,15 @@ PLAN_FIELDS = frozenset({"schema", "parent_issue", "source_consensus_artifact", 
 PARENT_UPDATE_FIELDS = frozenset({"comment_artifact_path"})
 SLUG_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 ISSUE_RE = re.compile(r"^[1-9][0-9]*$")
+PLAN_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+TRACKING_BEGIN = "<!-- crnd:issue-decomposition-tracking -->"
+TRACKING_END = "<!-- /crnd:issue-decomposition-tracking -->"
+TRACKING_PARENT_RE = re.compile(r"^Parent issue: #([1-9][0-9]*)$")
+TRACKING_DIGEST_RE = re.compile(r"^IssueDecompositionPlan digest: ([0-9a-f]{64})$")
+TRACKING_CHILD_RE = re.compile(
+    r"^- ([a-z][a-z0-9]*(?:-[a-z0-9]+)*): #([1-9][0-9]*) (https://github\.com/[^ ]+/[^ ]+/issues/[1-9][0-9]*) fingerprint=([0-9a-f]{64})$"
+)
+CHILD_FINGERPRINT_RE = re.compile(r"(?m)^IssueDecompositionChild fingerprint: ([0-9a-f]{64})$")
 
 
 class IssueDecompositionError(ValueError):
@@ -75,6 +84,28 @@ class IssueDecompositionPlan:
     source_consensus_artifact: str
     children: tuple[IssueDecompositionChild, ...]
     parent_comment_artifact_path: str
+
+
+@dataclass(frozen=True)
+class IssueDecompositionTrackingChild:
+    slug: str
+    issue_number: int
+    url: str
+    fingerprint: str
+
+
+@dataclass(frozen=True)
+class IssueDecompositionTrackingComment:
+    parent_issue: int
+    digest: str
+    children: tuple[IssueDecompositionTrackingChild, ...]
+    source: str
+
+
+@dataclass(frozen=True)
+class IssueDecompositionTrackingProjection:
+    comments: tuple[IssueDecompositionTrackingComment, ...]
+    conflicts: tuple[str, ...]
 
 
 def load_issue_decomposition_plan(ctx: LoopContext, plan_path: str | Path) -> IssueDecompositionPlan:
@@ -162,6 +193,120 @@ def issue_decomposition_plan_file_digest(ctx: LoopContext, plan_path: str | Path
     return issue_decomposition_plan_digest(raw)
 
 
+def issue_decomposition_child_fingerprint(parent_issue: int, digest: str, slug: str) -> str:
+    if not PLAN_DIGEST_RE.fullmatch(digest):
+        raise IssueDecompositionError("IssueDecompositionPlan digest must be a sha256 hex string")
+    if not SLUG_RE.fullmatch(slug):
+        raise IssueDecompositionError("child slug must be kebab-case")
+    encoded = f"IssueDecompositionChild\nparent_issue={parent_issue}\nplan_digest={digest}\nslug={slug}\n".encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def issue_decomposition_child_fingerprint_line(parent_issue: int, digest: str, slug: str) -> str:
+    return f"IssueDecompositionChild fingerprint: {issue_decomposition_child_fingerprint(parent_issue, digest, slug)}"
+
+
+def issue_decomposition_expected_child_fingerprints(plan: IssueDecompositionPlan, digest: str) -> dict[str, str]:
+    return {child.slug: issue_decomposition_child_fingerprint(plan.parent_issue, digest, child.slug) for child in plan.children}
+
+
+def extract_issue_decomposition_child_fingerprint(body: str) -> str:
+    matches = CHILD_FINGERPRINT_RE.findall(body)
+    return matches[0] if len(matches) == 1 else ""
+
+
+def build_issue_decomposition_tracking_block(
+    parent_issue: int,
+    digest: str,
+    children: Sequence[IssueDecompositionTrackingChild],
+) -> str:
+    if not PLAN_DIGEST_RE.fullmatch(digest):
+        raise IssueDecompositionError("IssueDecompositionPlan digest must be a sha256 hex string")
+    lines = [
+        TRACKING_BEGIN,
+        f"Parent issue: #{parent_issue}",
+        f"IssueDecompositionPlan digest: {digest}",
+        "Children:",
+    ]
+    for child in sorted(children, key=lambda item: item.slug):
+        if not SLUG_RE.fullmatch(child.slug):
+            raise IssueDecompositionError("tracking child slug must be kebab-case")
+        if not PLAN_DIGEST_RE.fullmatch(child.fingerprint):
+            raise IssueDecompositionError("tracking child fingerprint must be a sha256 hex string")
+        lines.append(f"- {child.slug}: #{child.issue_number} {child.url} fingerprint={child.fingerprint}")
+    lines.append(TRACKING_END)
+    return "\n".join(lines)
+
+
+def append_issue_decomposition_tracking_block(
+    parent_comment: str,
+    parent_issue: int,
+    digest: str,
+    children: Sequence[IssueDecompositionTrackingChild],
+    final_sentinel: str,
+) -> str:
+    if not parent_comment.endswith(final_sentinel):
+        raise IssueDecompositionError("parent comment missing final sentinel")
+    block = build_issue_decomposition_tracking_block(parent_issue, digest, children)
+    return parent_comment[: -len(final_sentinel)].rstrip() + f"\n\n{block}{final_sentinel}"
+
+
+def parse_issue_decomposition_tracking_comments(
+    comments: Sequence[Mapping[str, Any]],
+    *,
+    expected_parent_issue: int,
+    expected_digest: str,
+) -> IssueDecompositionTrackingProjection:
+    parsed: list[IssueDecompositionTrackingComment] = []
+    conflicts: list[str] = []
+    for index, comment in enumerate(comments):
+        body = comment.get("body") if isinstance(comment, Mapping) else None
+        if not isinstance(body, str):
+            continue
+        if TRACKING_BEGIN not in body and TRACKING_END not in body:
+            continue
+        blocks, block_errors = _tracking_blocks(body, f"comments[{index}]")
+        conflicts.extend(block_errors)
+        for block_index, block in enumerate(blocks):
+            source = f"comments[{index}].tracking[{block_index}]"
+            try:
+                tracking = _parse_tracking_block(block, source)
+            except IssueDecompositionError as exc:
+                conflicts.append(str(exc))
+                continue
+            if tracking.parent_issue != expected_parent_issue:
+                conflicts.append(f"{source} parent mismatch: {tracking.parent_issue} != {expected_parent_issue}")
+                continue
+            if tracking.digest != expected_digest:
+                conflicts.append(f"{source} digest mismatch: {tracking.digest} != {expected_digest}")
+                continue
+            parsed.append(tracking)
+    return IssueDecompositionTrackingProjection(tuple(parsed), tuple(conflicts))
+
+
+def reconcile_issue_decomposition_tracking_children(
+    plan: IssueDecompositionPlan,
+    digest: str,
+    projection: IssueDecompositionTrackingProjection,
+) -> dict[str, IssueDecompositionTrackingChild]:
+    if projection.conflicts:
+        raise IssueDecompositionError("; ".join(projection.conflicts))
+    expected = issue_decomposition_expected_child_fingerprints(plan, digest)
+    by_slug: dict[str, IssueDecompositionTrackingChild] = {}
+    for comment in projection.comments:
+        for child in comment.children:
+            expected_fingerprint = expected.get(child.slug)
+            if expected_fingerprint is None:
+                raise IssueDecompositionError(f"tracking child has unknown slug: {child.slug}")
+            if child.fingerprint != expected_fingerprint:
+                raise IssueDecompositionError(f"tracking child fingerprint mismatch: {child.slug}")
+            existing = by_slug.get(child.slug)
+            if existing is not None and existing != child:
+                raise IssueDecompositionError(f"conflicting tracking child for slug: {child.slug}")
+            by_slug[child.slug] = child
+    return by_slug
+
+
 def applied_issue_decomposition_parent_suppresses_expected_worker(
     ctx: LoopContext,
     parent_issue: int,
@@ -224,13 +369,72 @@ def _parent_comment_has_plan_digest_sentinel(
     comments = payload.get("comments") if isinstance(payload, dict) else None
     if not isinstance(comments, list):
         return False
-    sentinel = f"IssueDecompositionPlan digest: {digest}"
-    hits = [
-        comment
-        for comment in comments
-        if isinstance(comment, dict) and isinstance(comment.get("body"), str) and sentinel in comment["body"]
-    ]
-    return len(hits) == 1
+    projection = parse_issue_decomposition_tracking_comments(comments, expected_parent_issue=parent_issue, expected_digest=digest)
+    return bool(projection.comments) and not projection.conflicts
+
+
+def _tracking_blocks(body: str, source: str) -> tuple[list[list[str]], list[str]]:
+    lines = body.splitlines()
+    blocks: list[list[str]] = []
+    conflicts: list[str] = []
+    index = 0
+    while index < len(lines):
+        if lines[index] != TRACKING_BEGIN:
+            if lines[index] == TRACKING_END:
+                conflicts.append(f"{source} unmatched tracking end")
+            index += 1
+            continue
+        start = index
+        index += 1
+        block: list[str] = []
+        while index < len(lines) and lines[index] != TRACKING_END:
+            if lines[index] == TRACKING_BEGIN:
+                conflicts.append(f"{source} nested tracking block at line {index + 1}")
+            block.append(lines[index])
+            index += 1
+        if index >= len(lines):
+            conflicts.append(f"{source} missing tracking end after line {start + 1}")
+            break
+        blocks.append(block)
+        index += 1
+    return blocks, conflicts
+
+
+def _parse_tracking_block(lines: Sequence[str], source: str) -> IssueDecompositionTrackingComment:
+    if len(lines) < 3:
+        raise IssueDecompositionError(f"{source} tracking block too short")
+    parent_match = TRACKING_PARENT_RE.fullmatch(lines[0])
+    if parent_match is None:
+        raise IssueDecompositionError(f"{source} invalid parent line")
+    digest_match = TRACKING_DIGEST_RE.fullmatch(lines[1])
+    if digest_match is None:
+        raise IssueDecompositionError(f"{source} invalid digest line")
+    if lines[2] != "Children:":
+        raise IssueDecompositionError(f"{source} missing Children line")
+    children: list[IssueDecompositionTrackingChild] = []
+    seen_slugs: set[str] = set()
+    for offset, line in enumerate(lines[3:], start=4):
+        match = TRACKING_CHILD_RE.fullmatch(line)
+        if match is None:
+            raise IssueDecompositionError(f"{source} invalid child line {offset}")
+        slug = match.group(1)
+        if slug in seen_slugs:
+            raise IssueDecompositionError(f"{source} duplicate child slug: {slug}")
+        seen_slugs.add(slug)
+        children.append(
+            IssueDecompositionTrackingChild(
+                slug=slug,
+                issue_number=int(match.group(2)),
+                url=match.group(3),
+                fingerprint=match.group(4),
+            )
+        )
+    return IssueDecompositionTrackingComment(
+        parent_issue=int(parent_match.group(1)),
+        digest=digest_match.group(1),
+        children=tuple(children),
+        source=source,
+    )
 
 
 def _wakeup_runner_has_applied_issue_decomposition_action(ctx: LoopContext, plan: IssueDecompositionPlan) -> bool:
