@@ -467,8 +467,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([], actions.calls)
         launch.assert_not_called()
         pending = self.ctx.paths.pending_events.read_text(encoding="utf-8")
-        self.assertIn("WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:bad:colon:id:missing-queued_at", pending)
-        self.assertEqual(1, pending.count("WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:bad:colon:id:missing-queued_at"))
+        archived_marker = f"WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{harness_spawn_intent_line_digest(raw_line)}:missing-queued_at"
+        self.assertIn(archived_marker, pending)
+        self.assertEqual(1, pending.count(archived_marker))
         ledger_rows = [
             json.loads(line)
             for line in (self.ctx.paths.state / "wakeup-runner-ledger.jsonl").read_text(encoding="utf-8").splitlines()

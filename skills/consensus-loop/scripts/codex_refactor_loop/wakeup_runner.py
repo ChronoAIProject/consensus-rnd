@@ -444,9 +444,11 @@ class WakeupRunner:
         error = self._validate_invalid_harness_spawn_intent(action)
         if error:
             return self._blocked(action, error)
-        identity = action_id.removeprefix("harness-spawn-intent-invalid:")
+        evidence_digest = str(action.get("evidence_digest") or "")
+        if not evidence_digest:
+            return self._blocked(action, "missing_evidence_digest")
         reason = _single_line(str(action.get("reason") or "unknown"))
-        self._append_pending_event(f"{ARCHIVED_INVALID_HARNESS_SPAWN_INTENT_MARKER}:{identity}:{reason}")
+        self._append_pending_event(f"{ARCHIVED_INVALID_HARNESS_SPAWN_INTENT_MARKER}:{evidence_digest}:{reason}")
         return self._record(RunnerResult(action_id, "skipped", f"archived_invalid_harness_spawn_intent:{reason}"), action)
 
     def _validate_invalid_harness_spawn_intent(self, action: Mapping[str, Any]) -> str | None:

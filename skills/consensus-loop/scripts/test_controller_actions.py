@@ -39,6 +39,7 @@ from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKE
 from codex_refactor_loop.release.publisher import ReleasePublishResult
 from codex_refactor_loop.secondary_mutation_backoff import record_secondary_mutation_backoff
 from codex_refactor_loop.wakeup_plan import harness_spawn_intent_actions
+from codex_refactor_loop.wakeup_plan import harness_spawn_intent_line_digest
 
 
 class AllowingGitHubActor:
@@ -2928,10 +2929,11 @@ class ControllerActionsTests(unittest.TestCase):
             "controller_action": "spawn_codex_harness_background",
         }
         line = "2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT " + json.dumps(malformed_intent, sort_keys=True)
+        archived_digest = harness_spawn_intent_line_digest(line)
         (self.tmp / ".refactor-loop" / ".controller-pending-events.log").write_text(
             line
             + "\n"
-            + f"2026-06-01T00:00:01Z WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{malformed_intent['intent_id']}:missing-queued_at\n",
+            + f"2026-06-01T00:00:01Z WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{archived_digest}:missing-queued_at\n",
             encoding="utf-8",
         )
         render_envs: list[dict[str, str]] = []
@@ -2969,6 +2971,7 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual([".refactor-loop/runs/review-pr77-architect-r1.md"], [env["REVIEW_OUTPUT_PATH"] for env in render_envs])
         pending = self.pending_events()
         self.assertEqual(2, pending.count('"intent_id": "dispatch-reviewers:77:architect:r1"'))
+        self.assertTrue(self.actions._pending_review_spawn_exists("77", "architect", 1))
 
     def test_dispatch_reviewers_redispatch_uses_next_round_after_completed_stale_logs(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")

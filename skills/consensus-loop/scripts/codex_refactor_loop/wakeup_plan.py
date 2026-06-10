@@ -942,12 +942,9 @@ def harness_spawn_intent_line_is_archived_invalid(
     payload: Mapping[str, Any] | None,
     archived_invalid_markers: tuple[str, ...],
 ) -> bool:
-    identities = {harness_spawn_intent_line_digest(line)}
-    if payload is not None:
-        intent_id = payload.get("intent_id")
-        if isinstance(intent_id, str) and intent_id:
-            identities.add(intent_id)
-    return any(marker.startswith(f"{identity}:") or marker == identity for marker in archived_invalid_markers for identity in identities)
+    del payload
+    line_digest = harness_spawn_intent_line_digest(line)
+    return any(marker.startswith(f"{line_digest}:") or marker == line_digest for marker in archived_invalid_markers)
 
 
 def live_valid_harness_spawn_intent(ctx: LoopContext, line: str, intent: dict[str, Any], archived_invalid_markers: tuple[str, ...]) -> bool:

@@ -5006,10 +5006,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "controller_action": "spawn_codex_harness_background",
         }
         line = "2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT " + json.dumps(malformed_intent, sort_keys=True)
+        archived_digest = harness_spawn_intent_line_digest(line)
         (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text(
             line
             + "\n"
-            + f"2026-05-31T00:00:01Z WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{malformed_intent['intent_id']}:missing-queued_at\n",
+            + f"2026-05-31T00:00:01Z WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{archived_digest}:missing-queued_at\n",
             encoding="utf-8",
         )
         (self.logs / "review-pr77-architect-r1.log").write_text(
@@ -5023,6 +5024,41 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(1, len(actions))
         self.assertEqual("dispatch_reviewers", actions[0]["controller_action"])
         self.assertEqual(["architect"], actions[0]["stale_review_roles"])
+
+    def test_valid_review_spawn_intent_after_archived_invalid_same_id_suppresses_review_redispatch(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale review",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="impl/pr77",
+            head_sha="a" * 40,
+        )
+        malformed_intent = {
+            "intent_id": "dispatch-reviewers:77:architect:r1",
+            "controller_action": "spawn_codex_harness_background",
+        }
+        bad_line = "2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT " + json.dumps(malformed_intent, sort_keys=True)
+        archived_digest = harness_spawn_intent_line_digest(bad_line)
+        valid_intent = self.valid_review_harness_spawn_intent(77, "architect", 1)
+        valid_line = "2026-05-31T00:00:02Z HARNESS_SPAWN_INTENT " + json.dumps(valid_intent, sort_keys=True)
+        (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text(
+            bad_line
+            + "\n"
+            + f"2026-05-31T00:00:01Z WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT:{archived_digest}:missing-queued_at\n"
+            + valid_line
+            + "\n",
+            encoding="utf-8",
+        )
+        (self.logs / "review-pr77-architect-r1.log").write_text(
+            f"head_sha: {'b' * 40}\nEXIT=1\n",
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.repo, read_only=True)
+
+        actions = review_evidence_redispatch_actions(self.repo, [item], ctx)
+
+        self.assertEqual([], actions)
 
     def test_live_valid_review_spawn_intent_suppresses_review_redispatch(self) -> None:
         item = GhItem(
