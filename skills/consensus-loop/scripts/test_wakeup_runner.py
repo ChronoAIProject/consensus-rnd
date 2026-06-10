@@ -1751,19 +1751,38 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.status for result in results], ["applied"])
         self.assertEqual([call[0] for call in actions.calls], ["commit_push_resolved_pr_rebase"])
 
-    def test_wakeup_runner_blocks_false_done_recovery_without_recovery_precondition(self) -> None:
+    def test_wakeup_runner_blocks_stale_base_dispatch_without_base_ahead_precondition(self) -> None:
+        action = self.rebase_dispatch_action(
+            action_id="dispatch-pr-rebase-resolve:77:abc123",
+            preconditions=["active_controller_owner", "live_managed_target"],
+        )
+        actions = FakeActions()
+        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
+        self.assertEqual([result.status for result in results], ["blocked"])
+        self.assertEqual("dispatch_pr_rebase_resolve_missing_precondition:base_ahead_pr_branch", results[0].reason)
+        self.assertEqual([], actions.calls)
+
+    def test_wakeup_runner_reports_missing_false_done_recovery_guard_for_recovery_shape(self) -> None:
         log = self.repo / ".refactor-loop/logs/rebase-resolve-pr77-r1.log"
         log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
         action = self.rebase_dispatch_action(
             action_id="dispatch-pr-rebase-resolve:false-done:77:refactor/iter77-worker:1",
             source_artifact=".refactor-loop/logs/rebase-resolve-pr77-r1.log",
             source_marker="REBASE_RESOLVE_DONE:77:ok",
-            preconditions=["active_controller_owner", "clean_exit_source_marker", "live_managed_target"],
+            preconditions=[
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_managed_target",
+                "base_ahead_pr_branch",
+            ],
         )
         actions = FakeActions()
         results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
         self.assertEqual([result.status for result in results], ["blocked"])
-        self.assertEqual("dispatch_pr_rebase_resolve_missing_precondition:base_ahead_pr_branch", results[0].reason)
+        self.assertEqual(
+            "dispatch_pr_rebase_resolve_missing_precondition:false_done_unresolved_or_not_commit_ready",
+            results[0].reason,
+        )
         self.assertEqual([], actions.calls)
 
     def test_wakeup_runner_blocked_lifecycle_action_does_not_dead_stop_later_spawn_batch(self) -> None:

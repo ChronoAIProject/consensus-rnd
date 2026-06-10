@@ -959,8 +959,15 @@ class WakeupRunner:
                 "false_done_unresolved_or_not_commit_ready",
             ),
         )
-        if not any(all(required in preconditions for required in required_set) for required_set in required_sets):
-            missing = [required for required in required_sets[0] if required not in preconditions]
+        recovery_marker = str(action.get("source_marker") or "")
+        is_false_done_recovery = (
+            str(action.get("action_id") or "").startswith("dispatch-pr-rebase-resolve:false-done:")
+            or action.get("reason") == "rebase_resolve_done_without_resolved_merge"
+            or recovery_marker.startswith("REBASE_RESOLVE_DONE:")
+        )
+        allowed_required_sets = (required_sets[1],) if is_false_done_recovery else (required_sets[0],)
+        if not any(all(required in preconditions for required in required_set) for required_set in allowed_required_sets):
+            missing = [required for required in allowed_required_sets[0] if required not in preconditions]
             return f"dispatch_pr_rebase_resolve_missing_precondition:{missing[0]}"
         target = int(action["target_number"])
         if not self._live_target_has_managed_label("pr", target):
