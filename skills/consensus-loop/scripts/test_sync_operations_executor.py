@@ -394,6 +394,24 @@ class PackagedIntegrationSyncExecutorTests(unittest.TestCase):
         self.assertIn(["git", "rebase", "--continue"], fake.commands)
         self.assertFalse(any(command[:2] == ["git", "push"] for command in fake.commands))
 
+    def test_continue_rollup_adoption_rebase_rejects_same_count_subject_mismatch_before_push(self) -> None:
+        operation = self.operation(kind="continue-resolved-rollup-adoption-rebase", old_rollup_head="old-head", old_rollup_ahead_count=2)
+        fake = FakeGit(
+            rebase_in_progress=True,
+            replay_count=2,
+            replayed_count=2,
+            old_subjects=["commit one", "commit two"],
+            new_subjects=["commit one", "rewritten commit two"],
+        )
+
+        result = self.execute(operation, fake)
+
+        self.assertFalse(result.ok)
+        self.assertIn("replay integrity mismatch", self.record("rejected").read_text(encoding="utf-8"))
+        self.assertIn(["git", "rebase", "--continue"], fake.commands)
+        self.assertIn(["git", "rev-list", "--count", "origin/dev..HEAD"], fake.commands)
+        self.assertFalse(any(command[:2] == ["git", "push"] for command in fake.commands))
+
     def test_non_continuation_operations_reject_in_progress_rebase_before_adoption(self) -> None:
         fake = FakeGit(rebase_in_progress=True)
 
