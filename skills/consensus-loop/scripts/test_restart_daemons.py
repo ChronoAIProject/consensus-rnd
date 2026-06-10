@@ -666,7 +666,11 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.runtime.live_pids.discard(old_wrapper_pid)
         self.runtime.wrapper_commands.pop(old_wrapper_pid, None)
         self.runtime.live_pids.add(orphan_child_pid)
+<<<<<<< HEAD
         self.runtime.inventory_override = DaemonProcessInventory((DaemonProcess(orphan_child_pid, " ".join(target.command), 1),))
+=======
+        self.runtime.inventory_override = DaemonProcessInventory((DaemonProcess(orphan_child_pid, " ".join(target.command)),))
+>>>>>>> origin/auto-refact-dev
 
         helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
         helper.start_daemon("phase9_router_daemon", FAKE_COMMAND)
@@ -709,10 +713,17 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         other_lock.write_text("333\n", encoding="utf-8")
         inventory = DaemonProcessInventory(
             (
+<<<<<<< HEAD
                 DaemonProcess(111, wrapper_command, 1),
                 DaemonProcess(222, " ".join(target.command), 111),
                 DaemonProcess(333, " ".join(target.command), 1),
                 DaemonProcess(444, "python3 unrelated.py", 1),
+=======
+                DaemonProcess(111, wrapper_command),
+                DaemonProcess(222, " ".join(target.command)),
+                DaemonProcess(333, " ".join(target.command)),
+                DaemonProcess(444, "python3 unrelated.py"),
+>>>>>>> origin/auto-refact-dev
             )
         )
         self.runtime.live_pids.update({111, 222, 333, 444})
@@ -728,12 +739,16 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual((111,), projection.live_wrapper_pids)
+<<<<<<< HEAD
         self.assertEqual((222,), projection.canonical_child_pids)
         self.assertEqual((333,), projection.orphan_child_pids)
+=======
+>>>>>>> origin/auto-refact-dev
         self.assertEqual((222, 333), projection.live_managed_child_pids)
         self.assertEqual((222,), projection.bounded_lock_holder_pids)
         self.assertEqual((111, 222), projection.repair_pids)
 
+<<<<<<< HEAD
     def test_daemon_instance_detects_macos_shaped_wrapper_child_by_ppid(self) -> None:
         target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
         wrapper_command = self.runtime.canonical_command(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
@@ -760,6 +775,8 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual((), projection.orphan_child_pids)
         self.assertEqual((857,), projection.live_managed_child_pids)
 
+=======
+>>>>>>> origin/auto-refact-dev
     def test_restart_wrapper_matching_accepts_skill_root_and_command_normalization_variance(self) -> None:
         template = ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon", "--interval", "120")
         target = restart.daemon_target(self.ctx, "phase9_router_daemon", template)
@@ -922,7 +939,11 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.runtime.live_pids.discard(old_pid)
         self.runtime.wrapper_commands.pop(old_pid, None)
         self.runtime.live_pids.add(orphan_child_pid)
+<<<<<<< HEAD
         inventory = DaemonProcessInventory((DaemonProcess(orphan_child_pid, " ".join(target.command), 1),))
+=======
+        inventory = DaemonProcessInventory((DaemonProcess(orphan_child_pid, " ".join(target.command)),))
+>>>>>>> origin/auto-refact-dev
 
         report = self.collect_status_with_fake_allowlist(inventory)
 
@@ -931,10 +952,14 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual("stale", daemon.status)
         self.assertEqual("orphan-lock-holders:1", daemon.stale_reason)
         self.assertEqual([orphan_child_pid], payload["managed_child_pids"])
+<<<<<<< HEAD
         self.assertEqual([], payload["canonical_child_pids"])
         self.assertEqual([orphan_child_pid], payload["orphan_child_pids"])
         self.assertEqual([orphan_child_pid], payload["bounded_lock_holder_pids"])
         self.assertNotIn("orphan_managed_child_pids", payload)
+=======
+        self.assertEqual([orphan_child_pid], payload["bounded_lock_holder_pids"])
+>>>>>>> origin/auto-refact-dev
         self.assertEqual(old_pid, self.read_pid("phase9_router_daemon"))
         self.assert_start_count("phase9_router_daemon", 1)
 
@@ -980,8 +1005,12 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             "expected_launch_fingerprint",
             "DaemonProcessInventory",
             "DaemonInstanceProjection",
+<<<<<<< HEAD
             "canonical_child_pids",
             "orphan_child_pids",
+=======
+            "live_managed_children",
+>>>>>>> origin/auto-refact-dev
             "bounded_lock_holder_pids",
             "_run_restart_wrapper",
             "child exited exit=",

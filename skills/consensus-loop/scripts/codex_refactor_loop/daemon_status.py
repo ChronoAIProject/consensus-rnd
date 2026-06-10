@@ -37,11 +37,15 @@ class DaemonStatusProjection:
     duplicate_canonical_wrappers: int
     active_controller: str
     managed_child_pids: tuple[int, ...] = ()
+<<<<<<< HEAD
     canonical_child_pids: tuple[int, ...] = ()
     orphan_child_pids: tuple[int, ...] = ()
     bounded_lock_holder_pids: tuple[int, ...] = ()
     process_inventory_status: str = "available"
     process_inventory_error: str = ""
+=======
+    bounded_lock_holder_pids: tuple[int, ...] = ()
+>>>>>>> origin/auto-refact-dev
     heartbeat_status: str = ""
     stale_reason: str = ""
     current_github_login: str = ""
@@ -59,11 +63,15 @@ class DaemonStatusProjection:
             "fingerprint_current": self.fingerprint_current,
             "duplicate_canonical_wrappers": self.duplicate_canonical_wrappers,
             "managed_child_pids": list(self.managed_child_pids),
+<<<<<<< HEAD
             "canonical_child_pids": list(self.canonical_child_pids),
             "orphan_child_pids": list(self.orphan_child_pids),
             "bounded_lock_holder_pids": list(self.bounded_lock_holder_pids),
             "process_inventory_status": self.process_inventory_status,
             "process_inventory_error": self.process_inventory_error,
+=======
+            "bounded_lock_holder_pids": list(self.bounded_lock_holder_pids),
+>>>>>>> origin/auto-refact-dev
             "active_controller": self.active_controller,
             "current_github_login": self.current_github_login,
             "identity_authority": self.identity_authority,
@@ -142,7 +150,10 @@ def _project_target(
         and fingerprint_current
         and duplicate_count == 0
         and orphan_lock_holder_count == 0
+<<<<<<< HEAD
         and instance.process_inventory_status == "available"
+=======
+>>>>>>> origin/auto-refact-dev
     )
     status = _daemon_status(
         active_status["active_controller"],
@@ -152,7 +163,10 @@ def _project_target(
         fingerprint_current,
         duplicate_count,
         orphan_lock_holder_count,
+<<<<<<< HEAD
         instance.process_inventory_status,
+=======
+>>>>>>> origin/auto-refact-dev
     )
     stale_reason = _stale_reason(
         status=status,
@@ -162,8 +176,11 @@ def _project_target(
         fingerprint_current=fingerprint_current,
         duplicate_count=duplicate_count,
         orphan_lock_holder_count=orphan_lock_holder_count,
+<<<<<<< HEAD
         process_inventory_status=instance.process_inventory_status,
         process_inventory_error=instance.process_inventory_error,
+=======
+>>>>>>> origin/auto-refact-dev
     )
     return DaemonStatusProjection(
         name=target.name,
@@ -174,11 +191,15 @@ def _project_target(
         fingerprint_current=fingerprint_current,
         duplicate_canonical_wrappers=duplicate_count,
         managed_child_pids=instance.live_managed_child_pids,
+<<<<<<< HEAD
         canonical_child_pids=instance.canonical_child_pids,
         orphan_child_pids=instance.orphan_child_pids,
         bounded_lock_holder_pids=instance.bounded_lock_holder_pids,
         process_inventory_status=instance.process_inventory_status,
         process_inventory_error=instance.process_inventory_error,
+=======
+        bounded_lock_holder_pids=instance.bounded_lock_holder_pids,
+>>>>>>> origin/auto-refact-dev
         active_controller=active_status["active_controller"],
         heartbeat_status=heartbeat.state,
         stale_reason=stale_reason,
@@ -195,14 +216,20 @@ def _daemon_status(
     fingerprint_current: bool,
     duplicate_count: int,
     orphan_lock_holder_count: int,
+<<<<<<< HEAD
     process_inventory_status: str,
+=======
+>>>>>>> origin/auto-refact-dev
 ) -> str:
     if active_controller.startswith("noop:not-owner"):
         return "not-owner"
     if running:
         return "running"
+<<<<<<< HEAD
     if process_inventory_status != "available":
         return "stale"
+=======
+>>>>>>> origin/auto-refact-dev
     if orphan_lock_holder_count:
         return "stale"
     if pid is None:
@@ -223,16 +250,22 @@ def _stale_reason(
     fingerprint_current: bool,
     duplicate_count: int,
     orphan_lock_holder_count: int,
+<<<<<<< HEAD
     process_inventory_status: str,
     process_inventory_error: str,
+=======
+>>>>>>> origin/auto-refact-dev
 ) -> str:
     if status == "running":
         return ""
     if status == "not-owner":
         return "not-owner"
+<<<<<<< HEAD
     if process_inventory_status != "available":
         reason = process_inventory_error or "unknown"
         return f"process-inventory-unavailable:{reason}"
+=======
+>>>>>>> origin/auto-refact-dev
     if orphan_lock_holder_count:
         return f"orphan-lock-holders:{orphan_lock_holder_count}"
     if pid is None:

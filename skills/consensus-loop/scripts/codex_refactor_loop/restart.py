@@ -226,6 +226,37 @@ class DaemonInstanceProjection:
 
 
 @dataclass(frozen=True)
+class DaemonInstanceProjection:
+    name: str
+    pid_file_pid: int | None
+    live_wrapper_pids: tuple[int, ...]
+    live_managed_child_pids: tuple[int, ...]
+    bounded_lock_holder_pids: tuple[int, ...]
+
+    @property
+    def duplicate_wrapper_count(self) -> int:
+        return max(0, len(self.live_wrapper_pids) - 1)
+
+    @property
+    def has_singleton_wrapper(self) -> bool:
+        return len(self.live_wrapper_pids) == 1
+
+    @property
+    def orphan_lock_holder_pids(self) -> tuple[int, ...]:
+        if self.has_singleton_wrapper:
+            return ()
+        return self.bounded_lock_holder_pids
+
+    @property
+    def repair_pids(self) -> tuple[int, ...]:
+        pids = set(self.live_wrapper_pids)
+        pids.update(self.bounded_lock_holder_pids)
+        if self.pid_file_pid is not None:
+            pids.add(self.pid_file_pid)
+        return tuple(sorted(pids))
+
+
+@dataclass(frozen=True)
 class DaemonProcessInventory:
     processes: tuple[DaemonProcess, ...]
     status: str = "available"
@@ -292,16 +323,26 @@ class DaemonProcessInventory:
             command=command,
             is_alive=alive,
         )
+<<<<<<< HEAD
         canonical_child_pids = self.canonical_child_pids(wrapper_pids=live_wrappers, is_alive=alive)
         orphan_child_pids = self.orphan_child_pids(
             name=name,
             command=command,
             canonical_child_pids=canonical_child_pids,
+=======
+        child_pids = self.live_managed_children(
+            name=name,
+            command=command,
+>>>>>>> origin/auto-refact-dev
             is_alive=alive,
         )
         lock_holder_pids = self.bounded_lock_holder_pids(
             name=name,
+<<<<<<< HEAD
             child_pids=tuple(sorted(set(canonical_child_pids).union(orphan_child_pids))),
+=======
+            command=command,
+>>>>>>> origin/auto-refact-dev
             lock_files=lock_files,
             is_alive=alive,
         )
@@ -309,6 +350,7 @@ class DaemonProcessInventory:
             name=name,
             pid_file_pid=_read_pid(pid_file),
             live_wrapper_pids=live_wrappers,
+<<<<<<< HEAD
             canonical_child_pids=canonical_child_pids,
             orphan_child_pids=orphan_child_pids,
             bounded_lock_holder_pids=lock_holder_pids,
@@ -339,24 +381,41 @@ class DaemonProcessInventory:
         )
 
     def orphan_child_pids(
+=======
+            live_managed_child_pids=child_pids,
+            bounded_lock_holder_pids=lock_holder_pids,
+        )
+
+    def live_managed_children(
+>>>>>>> origin/auto-refact-dev
         self,
         *,
         name: str,
         command: Sequence[str],
+<<<<<<< HEAD
         canonical_child_pids: Sequence[int],
+=======
+>>>>>>> origin/auto-refact-dev
         is_alive=None,
     ) -> tuple[int, ...]:
         if name not in restart_managed_daemon_names() and name != SUPERVISOR_DAEMON_COMMAND[0]:
             return ()
         alive = is_alive or pid_alive
+<<<<<<< HEAD
         canonical = set(canonical_child_pids)
+=======
+>>>>>>> origin/auto-refact-dev
         pids = []
         for process in self.processes:
             if process.pid <= 0 or not alive(process.pid):
                 continue
+<<<<<<< HEAD
             if process.pid in canonical or process.ppid != 1:
                 continue
             if not _restart_daemon_command_matches(process.command, command):
+=======
+            if not ManagedChildCommandShape.matches(process.command, command):
+>>>>>>> origin/auto-refact-dev
                 continue
             pids.append(process.pid)
         return tuple(sorted(set(pids)))
@@ -365,18 +424,30 @@ class DaemonProcessInventory:
         self,
         *,
         name: str,
+<<<<<<< HEAD
         child_pids: Sequence[int],
+=======
+        command: Sequence[str],
+>>>>>>> origin/auto-refact-dev
         lock_files: Sequence[Path],
         is_alive=None,
     ) -> tuple[int, ...]:
         if name not in restart_managed_daemon_names() and name != SUPERVISOR_DAEMON_COMMAND[0]:
             return ()
         alive = is_alive or pid_alive
+<<<<<<< HEAD
         child_pid_set = set(child_pids)
         holders = []
         for lock_file in lock_files:
             holder = _read_lock_holder_pid(lock_file)
             if holder is None or holder not in child_pid_set or not alive(holder):
+=======
+        child_pids = set(self.live_managed_children(name=name, command=command, is_alive=alive))
+        holders = []
+        for lock_file in lock_files:
+            holder = _read_lock_holder_pid(lock_file)
+            if holder is None or holder not in child_pids or not alive(holder):
+>>>>>>> origin/auto-refact-dev
                 continue
             holders.append(holder)
         return tuple(sorted(set(holders)))
@@ -399,6 +470,13 @@ class DaemonProcessInventory:
             command=command,
             is_alive=is_alive,
         )
+
+@dataclass(frozen=True)
+class ManagedChildCommandShape:
+    @classmethod
+    def matches(cls, command_line: str, expected: Sequence[str]) -> bool:
+        return _restart_daemon_command_matches(command_line, expected)
+
 
 @dataclass(frozen=True)
 class RestartWrapperShape:
