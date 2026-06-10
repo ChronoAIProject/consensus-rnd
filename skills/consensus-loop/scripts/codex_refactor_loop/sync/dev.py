@@ -21,7 +21,7 @@ from ..active_controller import require_active_controller, write_active_controll
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 from .executor import IntegrationSyncExecutor
-from .operations import IntegrationSyncOperation, load_operation, write_operation_artifact
+from .operations import IntegrationSyncOperation, IntegrationSyncOperationError, load_operation, write_operation_artifact
 
 
 DEFAULT_INTERVAL_SECONDS = 600
@@ -285,6 +285,10 @@ def rebase_in_progress(cwd: Path, command_runner=run) -> bool:
     return False
 
 
+def single_line_diagnostic(value: str, limit: int = 160) -> str:
+    return " ".join(value.split())[:limit] or "unknown"
+
+
 @dataclass(frozen=True)
 class RollupAdoption:
     pr_number: int | None
@@ -427,8 +431,10 @@ class IntegrationSyncDaemon:
         for path in sorted(runs.glob("integration-sync-operation-adopt-merged-rollup-*.json"), reverse=True):
             try:
                 operation = load_operation(path)
-            except Exception:
-                continue
+            except IntegrationSyncOperationError as exc:
+                detail = f"{path.name}:{type(exc).__name__}:{single_line_diagnostic(str(exc))}"
+                self.append_pending_event("rollup-adoption-operation-malformed", detail)
+                return None
             if operation.kind == "adopt-merged-rollup":
                 return operation
         return None

@@ -445,6 +445,48 @@ class SyncDevBehaviorTests(unittest.TestCase):
                 self.assertTrue(self.pending_events()[0].startswith("DEV_SYNC_PENDING:rollup-adoption-rebase-ambiguous:"))
                 self.assertFalse(any(command[:3] == ["git", "rebase", "--continue"] for command in fake.commands))
 
+    def test_malformed_newest_adoption_rebase_artifact_is_diagnostic_pending_only(self) -> None:
+        fake = FakeGit(replay_count=2)
+        (self.worktree / ".git" / "rebase-merge").mkdir(parents=True)
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (runs / "integration-sync-operation-adopt-merged-rollup-1000.json").write_text(
+            json.dumps(
+                {
+                    "authority": "integration-branch-git-allowlist",
+                    "created_at": "2026-05-27T00:00:00Z",
+                    "evidence": {"reason": "merged-rollup-adoption"},
+                    "executor": "dev_sync_daemon",
+                    "expected_remote_sha": "remote-sha",
+                    "integration_branch": "auto-refact-dev",
+                    "kind": "adopt-merged-rollup",
+                    "old_rollup_ahead_count": 2,
+                    "old_rollup_head": "old-head",
+                    "review_base_branch": "dev",
+                    "schema": "IntegrationSyncOperation",
+                    "worktree_head": "head-sha",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        newest = runs / "integration-sync-operation-adopt-merged-rollup-2000.json"
+        newest.write_text("{not-json\n", encoding="utf-8")
+
+        self.daemon(fake, rebase_detector=lambda cwd: rebase_in_progress(cwd, fake), resolver_in_flight=lambda: False).tick()
+
+        events = self.pending_events()
+        self.assertEqual(2, len(events))
+        self.assertEqual(
+            "DEV_SYNC_PENDING:rollup-adoption-operation-malformed:"
+            "integration-sync-operation-adopt-merged-rollup-2000.json:"
+            "IntegrationSyncOperationError:malformed json: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)",
+            events[0],
+        )
+        self.assertEqual("DEV_SYNC_PENDING:rollup-adoption-rebase-ambiguous:missing-adoption-operation", events[1])
+        self.assertEqual([], list(runs.glob("integration-sync-operation-continue-resolved-rollup-adoption-rebase-*.json")))
+        self.assertFalse(any(command[:3] == ["git", "rebase", "--continue"] for command in fake.commands))
+
     def test_daemon_continue_resolved_merge_pushes(self) -> None:
         fake = FakeGit()
         merge_head = self.worktree / ".git" / "MERGE_HEAD"
