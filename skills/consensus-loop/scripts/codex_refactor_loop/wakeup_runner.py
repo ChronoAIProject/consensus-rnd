@@ -328,8 +328,13 @@ class WakeupRunner:
 
     def _actions_for_apply(self, actions: Sequence[Any], budget: WakeupApplyBudget) -> list[Any]:
         if not budget.hard_gate_active:
-            return list(actions)
+            return sorted(actions, key=self._ordinary_apply_priority)
         return sorted(actions, key=self._hard_gate_apply_priority)
+
+    def _ordinary_apply_priority(self, action: Any) -> int:
+        if isinstance(action, Mapping) and _is_invalid_harness_cleanup(action):
+            return 0
+        return 1
 
     def _hard_gate_apply_priority(self, action: Any) -> tuple[int, int]:
         if not isinstance(action, Mapping):

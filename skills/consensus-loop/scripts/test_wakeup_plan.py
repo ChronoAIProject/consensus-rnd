@@ -5113,8 +5113,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
     def test_legacy_malformed_review_intent_for_merged_pr_projects_invalid_quarantine_once(self) -> None:
         malformed_intent = self.valid_review_harness_spawn_intent(774, "quality", 6)
+        malformed_intent["cd"] = "/Users/auric/consensus-rnd"
+        malformed_intent["reason"] = "review PR #774 as quality"
         malformed_intent.pop("queued_at")
-        line = "2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT " + json.dumps(malformed_intent, sort_keys=True)
+        line = "2026-06-10T11:48:43Z HARNESS_SPAWN_INTENT " + json.dumps(malformed_intent, sort_keys=True)
         pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
         pending.write_text(line + "\n", encoding="utf-8")
 
@@ -5124,6 +5126,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(1, len(actions))
         self.assertEqual("missing-queued_at", actions[0]["reason"])
         self.assertEqual(harness_spawn_intent_line_digest(line), actions[0]["evidence_digest"])
+        self.assertEqual("dispatch-reviewers:774:quality:r6", actions[0]["item"])
+        self.assertEqual(line, actions[0]["evidence"])
         self.assertFalse(
             [
                 action
