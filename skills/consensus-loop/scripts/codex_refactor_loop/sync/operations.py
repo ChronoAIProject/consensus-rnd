@@ -16,6 +16,7 @@ ALLOWED_KINDS = {
     "push-local-ahead",
     "reset-to-remote",
     "adopt-merged-rollup",
+    "continue-resolved-rollup-adoption-rebase",
     "forward-sync-review-base",
     "continue-resolved-merge",
 }
@@ -130,8 +131,11 @@ def validate_operation_dict(data: dict[str, Any]) -> IntegrationSyncOperation:
         if not isinstance(old_rollup_ahead_count, int) or old_rollup_ahead_count < 0:
             raise IntegrationSyncOperationError("invalid old_rollup_ahead_count")
 
-    if kind == "adopt-merged-rollup" and old_rollup_head is None:
-        raise IntegrationSyncOperationError("adopt-merged-rollup requires old_rollup_head")
+    if kind in {"adopt-merged-rollup", "continue-resolved-rollup-adoption-rebase"}:
+        if old_rollup_head is None:
+            raise IntegrationSyncOperationError(f"{kind} requires old_rollup_head")
+        if old_rollup_ahead_count is None:
+            raise IntegrationSyncOperationError(f"{kind} requires old_rollup_ahead_count")
 
     return IntegrationSyncOperation(
         kind=kind,

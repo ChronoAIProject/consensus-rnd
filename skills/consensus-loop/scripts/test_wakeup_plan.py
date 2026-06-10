@@ -273,6 +273,37 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("rebase_resolve_in_flight", actions[0]["reason"])
         self.assertTrue(actions[0]["status_only"])
 
+    def test_rebase_resolve_actions_ignore_historical_pending_spawn_intent(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+            mergeable="CONFLICTING",
+        )
+        pending = {
+            "intent_id": "dispatch-pr-rebase-resolve:77:old-head",
+            "controller_action": "dispatch_pr_rebase_resolve",
+        }
+        (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text(
+            f"2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(pending, sort_keys=True)}\n",
+            encoding="utf-8",
+        )
+        ctx = mock.Mock(host_env={"INTEGRATION_BRANCH": "auto-refact-dev"})
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text") as git_text_mock:
+            git_text_mock.side_effect = [
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="head\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="base\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="oldbase\n", stderr=""),
+            ]
+            actions = rebase_resolve_actions(self.repo, ctx, [item], monitor=None)
+
+        self.assertEqual("dispatch_pr_rebase_resolve", actions[0]["controller_action"])
+        self.assertFalse(actions[0].get("status_only", False))
+
     def test_rebase_resolve_completed_marker_projects_commit_push_action(self) -> None:
         log = self.logs / "rebase-resolve-pr77-r1.log"
         log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
@@ -298,6 +329,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, stdout=str(git_dir) + "\n", stderr="")
             if command == ["git", "-C", str(worktree), "diff", "--name-only", "--diff-filter=U"]:
                 return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            if command == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout="M  skills/example.py\n", stderr="")
             return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected")
 
         with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
@@ -306,6 +339,215 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("commit_push_resolved_pr_rebase", action["controller_action"])
         self.assertEqual("REBASE_RESOLVE_DONE:77:ok", action["source_marker"])
         self.assertEqual(str(worktree), action["worktree"])
+
+    def test_rebase_resolve_done_dirty_merge_projects_recovery_not_commit_push(self) -> None:
+        log = self.logs / "rebase-resolve-pr77-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+        worktree = self.repo / ".worktrees" / "iter77-stale"
+        worktree.mkdir(parents=True)
+        porcelain = f"worktree {worktree}\nbranch refs/heads/refactor/iter77-stale\n"
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+        )
+        git_dir = self.repo / ".git" / "worktrees" / "iter77-stale"
+        git_dir.mkdir(parents=True)
+        (git_dir / "MERGE_HEAD").write_text("base\n", encoding="utf-8")
+
+        def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(self.repo), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout=porcelain, stderr="")
+            if command == ["git", "-C", str(worktree), "rev-parse", "--git-dir"]:
+                return subprocess.CompletedProcess(command, 0, stdout=str(git_dir) + "\n", stderr="")
+            if command == ["git", "-C", str(worktree), "diff", "--name-only", "--diff-filter=U"]:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            if command == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout=" M skills/example.py\n", stderr="")
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected")
+
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+            actions = rebase_resolve_completed_marker_actions(self.repo, [item])
+
+        commit_pushes = [
+            action
+            for action in actions
+            if action.get("controller_action") == "commit_push_resolved_pr_rebase" and not action.get("status_only", False)
+        ]
+        self.assertEqual([], commit_pushes)
+        action = actions[0]
+        self.assertEqual("dispatch_pr_rebase_resolve", action["controller_action"])
+        self.assertEqual("rebase_resolve_done_without_resolved_merge", action["reason"])
+        self.assertEqual(".refactor-loop/logs/rebase-resolve-pr77-r1.log.false-done", action["source_artifact"])
+        self.assertEqual(
+            [
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_managed_target",
+                "false_done_unresolved_or_not_commit_ready",
+            ],
+            action["preconditions"],
+        )
+
+    def test_rebase_resolve_false_done_projects_recovery_dispatch_and_archives_log(self) -> None:
+        log = self.logs / "rebase-resolve-pr77-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+        worktree = self.repo / ".worktrees" / "iter77-stale"
+        worktree.mkdir(parents=True)
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+        )
+        porcelain = f"worktree {worktree}\nbranch refs/heads/refactor/iter77-stale\n"
+
+        def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(self.repo), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout=porcelain, stderr="")
+            if command == ["git", "-C", str(worktree), "rev-parse", "--git-dir"]:
+                return subprocess.CompletedProcess(command, 0, stdout=str(worktree / ".git") + "\n", stderr="")
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected")
+
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+            actions = rebase_resolve_completed_marker_actions(self.repo, [item])
+
+        action = actions[0]
+        self.assertEqual("dispatch_pr_rebase_resolve", action["controller_action"])
+        self.assertEqual("rebase_resolve_done_without_resolved_merge", action["reason"])
+        self.assertEqual(".refactor-loop/logs/rebase-resolve-pr77-r1.log.false-done", action["source_artifact"])
+        self.assertEqual("REBASE_RESOLVE_DONE:77:ok", action["source_marker"])
+        self.assertEqual(str(worktree), action["worktree"])
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(77, action["target_number"])
+        self.assertEqual("refactor/iter77-stale", action["head_ref"])
+        self.assertNotIn("mode", action)
+        self.assertEqual(
+            [
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_managed_target",
+                "false_done_unresolved_or_not_commit_ready",
+            ],
+            action["preconditions"],
+        )
+        self.assertFalse(log.exists())
+        self.assertTrue((self.logs / "rebase-resolve-pr77-r1.log.false-done").exists())
+
+    def test_rebase_resolve_false_done_retry_limit_is_status_only(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+        )
+        worktree = self.repo / ".worktrees" / "iter77-stale"
+        worktree.mkdir(parents=True)
+        porcelain = f"worktree {worktree}\nbranch refs/heads/refactor/iter77-stale\n"
+        state = {"PR:77:refactor/iter77-stale": {"count": 2}}
+        (self.repo / ".refactor-loop" / "state" / "rebase-resolve-false-done-recovery.json").write_text(
+            json.dumps(state), encoding="utf-8"
+        )
+        log = self.logs / "rebase-resolve-pr77-r3.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+
+        def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(self.repo), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout=porcelain, stderr="")
+            if command == ["git", "-C", str(worktree), "rev-parse", "--git-dir"]:
+                return subprocess.CompletedProcess(command, 0, stdout=str(worktree / ".git") + "\n", stderr="")
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected")
+
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+            actions = rebase_resolve_completed_marker_actions(self.repo, [item])
+
+        self.assertEqual("rebase_resolve_false_done_retry_limit_exceeded", actions[0]["reason"])
+        self.assertTrue(actions[0]["status_only"])
+        self.assertNotIn("controller_action", actions[0])
+        self.assertTrue((self.logs / "rebase-resolve-pr77-r3.log.false-done").exists())
+
+    def test_rebase_resolve_false_done_corrupt_retry_state_is_diagnostic_status_only(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+        )
+        worktree = self.repo / ".worktrees" / "iter77-stale"
+        worktree.mkdir(parents=True)
+        porcelain = f"worktree {worktree}\nbranch refs/heads/refactor/iter77-stale\n"
+        state_path = self.repo / ".refactor-loop" / "state" / "rebase-resolve-false-done-recovery.json"
+        state_path.write_text("{bad json", encoding="utf-8")
+        log = self.logs / "rebase-resolve-pr77-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+
+        def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(self.repo), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout=porcelain, stderr="")
+            if command == ["git", "-C", str(worktree), "rev-parse", "--git-dir"]:
+                return subprocess.CompletedProcess(command, 0, stdout=str(worktree / ".git") + "\n", stderr="")
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected")
+
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+            actions = rebase_resolve_completed_marker_actions(self.repo, [item])
+
+        action = actions[0]
+        self.assertEqual("rebase_resolve_false_done_state_unreadable", action["reason"])
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
+        self.assertIn("pr=77", action["diagnostic"])
+        self.assertIn("head_ref=refactor/iter77-stale", action["diagnostic"])
+        self.assertIn("state_path=.refactor-loop/state/rebase-resolve-false-done-recovery.json", action["diagnostic"])
+        self.assertIn("log_path=.refactor-loop/logs/rebase-resolve-pr77-r1.log.false-done", action["diagnostic"])
+        self.assertTrue((self.logs / "rebase-resolve-pr77-r1.log.false-done").exists())
+        self.assertEqual("{bad json", state_path.read_text(encoding="utf-8"))
+
+    def test_rebase_resolve_false_done_archive_failure_is_diagnostic_status_only(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+        )
+        worktree = self.repo / ".worktrees" / "iter77-stale"
+        worktree.mkdir(parents=True)
+        porcelain = f"worktree {worktree}\nbranch refs/heads/refactor/iter77-stale\n"
+        log = self.logs / "rebase-resolve-pr77-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+
+        def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(self.repo), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout=porcelain, stderr="")
+            if command == ["git", "-C", str(worktree), "rev-parse", "--git-dir"]:
+                return subprocess.CompletedProcess(command, 0, stdout=str(worktree / ".git") + "\n", stderr="")
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected")
+
+        with (
+            mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git),
+            mock.patch.object(Path, "replace", side_effect=OSError("archive denied")),
+        ):
+            actions = rebase_resolve_completed_marker_actions(self.repo, [item])
+
+        action = actions[0]
+        self.assertEqual("rebase_resolve_false_done_archive_failed", action["reason"])
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
+        self.assertIn("pr=77", action["diagnostic"])
+        self.assertIn("head_ref=refactor/iter77-stale", action["diagnostic"])
+        self.assertIn("log_path=.refactor-loop/logs/rebase-resolve-pr77-r1.log", action["diagnostic"])
+        self.assertIn("archive_path=.refactor-loop/logs/rebase-resolve-pr77-r1.log.false-done", action["diagnostic"])
+        self.assertTrue(log.exists())
 
     def test_wakeup_plan_projects_conflicting_stale_base_pr_dispatch_as_executable(self) -> None:
         plan = self.run_plan(fixture="stale_base_conflicting_pr")
@@ -341,10 +583,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             for item in plan["actions"]
             if item.get("controller_action") == "dispatch_pr_rebase_resolve"
             and item.get("target_number") == 177
+            and item.get("source_artifact") == ".refactor-loop/logs/rebase-resolve-pr177-r1.log.false-done"
             and not item.get("status_only", False)
         )
         self.assertEqual("stale-base-conflicting-pr", action["kind"])
-        self.assertEqual("CONFLICTING", action["mergeable"])
+        self.assertEqual("rebase_resolve_done_without_resolved_merge", action["reason"])
+        self.assertIn("false_done_unresolved_or_not_commit_ready", action["preconditions"])
 
     def test_wakeup_plan_projects_rebase_done_only_for_resolved_in_progress_merge(self) -> None:
         log = self.logs / "rebase-resolve-pr177-r1.log"
@@ -383,6 +627,33 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             and not item.get("status_only", False)
         ]
         self.assertEqual([], commit_pushes)
+
+    def test_wakeup_plan_rebase_done_with_dirty_porcelain_projects_recovery_dispatch(self) -> None:
+        log = self.logs / "rebase-resolve-pr177-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:177:ok\nEXIT=0\n", encoding="utf-8")
+        self.write_rebase_resolve_worktree_state(merge_head=True, unmerged_paths=(), porcelain=" M skills/example.py\n")
+
+        plan = self.run_plan(fixture="stale_base_done_dirty_status")
+
+        commit_pushes = [
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "commit_push_resolved_pr_rebase"
+            and item.get("target_number") == 177
+            and not item.get("status_only", False)
+        ]
+        self.assertEqual([], commit_pushes)
+        action = next(
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "dispatch_pr_rebase_resolve"
+            and item.get("target_number") == 177
+            and item.get("source_artifact") == ".refactor-loop/logs/rebase-resolve-pr177-r1.log.false-done"
+            and not item.get("status_only", False)
+        )
+        self.assertEqual("rebase_resolve_done_without_resolved_merge", action["reason"])
+        self.assertEqual(".refactor-loop/logs/rebase-resolve-pr177-r1.log.false-done", action["source_artifact"])
+        self.assertIn("false_done_unresolved_or_not_commit_ready", action["preconditions"])
 
     def test_wakeup_plan_keeps_branch_current_rebase_resolve_status_only(self) -> None:
         plan = self.run_plan(fixture="stale_base_branch_current")
@@ -679,7 +950,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
-                    stale_base_conflicting_pr|stale_base_branch_current|stale_base_done_clean|stale_base_done_resolved_merge|stale_base_done_unmerged)
+                    stale_base_conflicting_pr|stale_base_branch_current|stale_base_done_clean|stale_base_done_resolved_merge|stale_base_done_unmerged|stale_base_done_dirty_status)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":177,"title":"stale-base PR","headRefName":"refactor/iter177-stale","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
@@ -1046,6 +1317,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "stale_base_done_unmerged": [
                 pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
             ],
+            "stale_base_done_dirty_status": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
             "stale_base_branch_current": [
                 pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
             ],
@@ -1171,7 +1445,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     printf 'worktree %s/.worktrees/iter581-issue-581\nbranch refs/heads/refactor/iter581-issue-581\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                     exit 0
                   fi
-                  if [[ "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]]; then
+                  if [[ "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" || "$fixture" == "stale_base_done_dirty_status" ]]; then
                     printf 'worktree %s/.worktrees/iter177-stale\nbranch refs/heads/refactor/iter177-stale\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                     exit 0
                   fi
@@ -1204,17 +1478,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify origin/refactor/iter177-stale"* ]]; then
-                  [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]] && printf 'stale-head-sha\n' && exit 0
+                  [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" || "$fixture" == "stale_base_done_dirty_status" ]] && printf 'stale-head-sha\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify origin/auto-refact-dev"* ]]; then
-                  if [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]]; then
+                  if [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" || "$fixture" == "stale_base_done_dirty_status" ]]; then
                     printf 'base-sha\n'
                     exit 0
                   fi
                 fi
                 if [[ "$*" == *"merge-base origin/refactor/iter177-stale origin/auto-refact-dev"* ]]; then
-                  if [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]]; then
+                  if [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" || "$fixture" == "stale_base_done_dirty_status" ]]; then
                     printf 'old-base-sha\n'
                     exit 0
                   fi
@@ -1231,6 +1505,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 if [[ "$*" == *".worktrees/iter177-stale"* && "$*" == *"diff --name-only --diff-filter=U"* ]]; then
                   if [[ -f "$WAKEUP_PLAN_REPO_ROOT/.refactor-loop/state/rebase-unmerged-paths.txt" ]]; then
                     cat "$WAKEUP_PLAN_REPO_ROOT/.refactor-loop/state/rebase-unmerged-paths.txt"
+                  fi
+                  exit 0
+                fi
+                if [[ "$*" == *".worktrees/iter177-stale"* && "$*" == *"status --porcelain"* ]]; then
+                  if [[ -f "$WAKEUP_PLAN_REPO_ROOT/.refactor-loop/state/rebase-status-porcelain.txt" ]]; then
+                    cat "$WAKEUP_PLAN_REPO_ROOT/.refactor-loop/state/rebase-status-porcelain.txt"
+                  else
+                    printf 'M  skills/example.py\n'
                   fi
                   exit 0
                 fi
@@ -1515,6 +1797,29 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def write_review_evidence(
+        self,
+        *,
+        role: str,
+        verdict: str,
+        pr_number: int = 480,
+        head_sha: str = "a" * 40,
+        round_number: int = 1,
+        exit_text: str = "EXIT=0",
+    ) -> None:
+        (self.repo / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".refactor-loop" / "runs" / f"review-pr{pr_number}-{role}-r{round_number}.md").write_text(
+            f"---\nhead_sha: {head_sha}\nverdict: {verdict}\n---\nREVIEW_DONE:{pr_number}:{role}:{verdict}\n",
+            encoding="utf-8",
+        )
+        log_lines = [f"head_sha: {head_sha}", f"REVIEW_DONE:{pr_number}:{role}:{verdict}"]
+        if exit_text:
+            log_lines.append(exit_text)
+        (self.logs / f"review-pr{pr_number}-{role}-r{round_number}.log").write_text(
+            "\n".join(log_lines) + "\n",
+            encoding="utf-8",
+        )
+
     def write_issue_decomposition_artifacts(self, *, issue: int = 403, round_no: int = 6) -> tuple[str, str]:
         runs = self.repo / ".refactor-loop" / "runs"
         runs.mkdir(parents=True, exist_ok=True)
@@ -1657,7 +1962,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         path.write_text("worker chatter with no standalone marker\nEXIT=0\n", encoding="utf-8")
         return path
 
-    def write_rebase_resolve_worktree_state(self, *, merge_head: bool, unmerged_paths: tuple[str, ...] = ()) -> None:
+    def write_rebase_resolve_worktree_state(
+        self,
+        *,
+        merge_head: bool,
+        unmerged_paths: tuple[str, ...] = (),
+        porcelain: str = "M  skills/example.py\n",
+    ) -> None:
         worktree = self.repo / ".worktrees" / "iter177-stale"
         worktree.mkdir(parents=True, exist_ok=True)
         git_dir = self.repo / ".git" / "worktrees" / "iter177-stale"
@@ -1669,6 +1980,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         unmerged = self.repo / ".refactor-loop" / "state" / "rebase-unmerged-paths.txt"
         unmerged.parent.mkdir(parents=True, exist_ok=True)
         unmerged.write_text("".join(f"{path}\n" for path in unmerged_paths), encoding="utf-8")
+        status = self.repo / ".refactor-loop" / "state" / "rebase-status-porcelain.txt"
+        status.write_text(porcelain, encoding="utf-8")
 
     def write_run_artifact(self, stem: str, *lines: str) -> Path:
         path = self.repo / ".refactor-loop" / "runs" / f"{stem}.md"
@@ -1973,6 +2286,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["kind"], "harness-spawn-intent")
         self.assertEqual(action["cd"], str(self.repo.resolve()))
 
+    def test_harness_spawn_intent_accepts_absolute_repo_contained_prompt_and_log(self) -> None:
+        prompt = self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue330-r4-judge.md"
+        log = self.repo / ".refactor-loop" / "logs" / "phase9-issue330-r4-judge.log"
+        self.append_harness_spawn_intent(prompt=str(prompt), log=str(log))
+
+        plan = self.run_plan(fixture="open_issue_330")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent")
+        self.assertEqual(action["prompt"], str(prompt.resolve()))
+        self.assertEqual(action["log"], str(log.resolve()))
+
     def test_harness_spawn_intent_rejects_absolute_cd_outside_repo(self) -> None:
         self.append_harness_spawn_intent(cd="/tmp/outside-consensus-rnd")
 
@@ -1981,6 +2305,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         action = plan["actions"][0]
         self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
         self.assertIn("invalid-path:cd escapes REPO_ROOT", action["reason"])
+
+    def test_harness_spawn_intent_rejects_absolute_prompt_or_log_outside_repo(self) -> None:
+        for field in ("prompt", "log"):
+            with self.subTest(field=field):
+                self.assert_harness_spawn_intent_invalid(
+                    f"invalid-path:{field} escapes REPO_ROOT: '/tmp/outside-consensus-rnd'",
+                    **{field: "/tmp/outside-consensus-rnd"},
+                )
 
     def test_harness_spawn_intent_rejects_argv_command_array(self) -> None:
         self.append_harness_spawn_intent(command=["consensus-rnd-cli", "spawn-codex"])
@@ -4058,6 +4390,57 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["stale_review_roles"], ["architect"])
         self.assertNotIn("status_only", action)
 
+    def test_reviewing_pr_with_fresh_pending_reviewer_log_does_not_redispatch(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "approve")):
+            self.write_review_evidence(role=role, verdict=verdict)
+        (self.logs / "review-pr480-quality-r1.log").write_text(
+            f"head_sha: {'a' * 40}\nREVIEW_DONE:480:quality:comment\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+
+    def test_reviewing_pr_with_terminal_failed_reviewer_log_redispatches_only_that_role(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "approve")):
+            self.write_review_evidence(role=role, verdict=verdict)
+        (self.logs / "review-pr480-quality-r1.log").write_text(
+            f"head_sha: {'a' * 40}\nREVIEW_DONE:480:quality:comment\nEXIT=1\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["stale_review_roles"], ["quality"])
+        self.assertNotIn("status_only", action)
+
+    def test_reviewing_pr_with_stale_pending_reviewer_log_redispatches_only_that_role(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "approve")):
+            self.write_review_evidence(role=role, verdict=verdict)
+        stale_log = self.logs / "review-pr480-quality-r1.log"
+        stale_log.write_text(
+            f"head_sha: {'a' * 40}\nREVIEW_DONE:480:quality:comment\n",
+            encoding="utf-8",
+        )
+        old_mtime = time.time() - 120
+        os.utime(stale_log, (old_mtime, old_mtime))
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["stale_review_roles"], ["quality"])
+        self.assertNotIn("status_only", action)
+
+    def test_reviewing_pr_with_complete_same_head_round_suppresses_duplicate_redispatch(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
+            self.write_review_evidence(role=role, verdict=verdict)
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+
     def test_review_redispatch_next_round_intent_projects_despite_stale_exit_zero_r1_log(self) -> None:
         stale = "b" * 40
         for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
@@ -5873,7 +6256,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["action_id"], "release-gate-dispatch:1.0.0-beta.10->1.0.0-beta.11")
-        self.assertIn("release_candidate_already_published", actions[0]["preconditions"])
+        self.assertIn("release_candidate_consumed_by_publish_result", actions[0]["preconditions"])
         self.assertEqual(release_publish_actions(self.repo), [])
 
     def test_release_gate_dispatch_refreshes_decision_mismatched_candidate(self) -> None:
@@ -5901,7 +6284,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["controller_action"], "dispatch_release_candidate")
         self.assertEqual(actions[0]["action_id"], "release-gate-dispatch:1.0.0-beta.8->1.0.0-beta.9")
-        self.assertIn("release_candidate_target_ref_invalid", actions[0]["preconditions"])
+        self.assertIn("release_candidate_decision_mismatch", actions[0]["preconditions"])
         self.assertEqual(release_publish_actions(self.repo), [])
 
     def test_release_gate_dispatch_refreshes_expired_candidate(self) -> None:
@@ -5927,7 +6310,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["controller_action"], "dispatch_release_candidate")
-        self.assertIn("release_candidate_target_ref_invalid", actions[0]["preconditions"])
+        self.assertIn("release_candidate_expired", actions[0]["preconditions"])
         self.assertEqual(release_publish_actions(self.repo), [])
 
     def test_release_gate_dispatch_recovers_ready_gate_when_candidate_target_ref_is_empty(self) -> None:
@@ -5959,6 +6342,30 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(action.get("status_only", False))
         self.assertTrue(has_dispatchable_action(actions))
         self.assertEqual(release_publish_actions(self.repo), [])
+
+    def test_release_gate_dispatch_refreshes_generated_stale_candidate(self) -> None:
+        current = release_decision("1.2.3-beta.4", "1.2.3-beta.5")
+        stale = release_candidate(current)
+        stale["generated_at"] = isoformat(datetime.now(timezone.utc) - timedelta(minutes=121))
+        stale["expires_at"] = isoformat(datetime.now(timezone.utc) + timedelta(minutes=30))
+        (self.repo / ".refactor-loop/state/release-decision.json").write_text(json.dumps(current), encoding="utf-8")
+        (self.repo / ".refactor-loop/state/release-candidate.json").write_text(json.dumps(stale), encoding="utf-8")
+
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "true"}):
+            actions = release_gate_dispatch_actions(
+                self.repo,
+                scorer=lambda _: {
+                    "from_version": "1.2.3-beta.4",
+                    "to_version": "1.2.3-beta.5",
+                    "stability_score": 100,
+                    "ready": True,
+                    "signals": {},
+                    "blocked_reasons": [],
+                },
+            )
+
+        self.assertEqual(len(actions), 1)
+        self.assertIn("release_candidate_generated_stale", actions[0]["preconditions"])
 
     def test_release_gate_dispatch_requires_host_opt_in(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):

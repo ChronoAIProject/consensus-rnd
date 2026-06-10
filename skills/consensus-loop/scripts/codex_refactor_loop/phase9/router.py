@@ -22,8 +22,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from string import Template
-from typing import Any, Callable, Iterable, Literal, cast
+from typing import Any, Callable, Iterable, Literal, Mapping, cast
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext
@@ -31,7 +30,7 @@ from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..managed_work_snapshot import ManagedWorkSnapshotItem
-from ..prompt_contracts import inline_prompt_contracts
+from ..prompt_rendering import render_prompt_text
 from ..transition_assessment import TransitionAssessment, TransitionAssessmentReader, projection_lines
 from ..worker_markers import log_has_clean_exit, read_worker_terminal_marker
 from ..workflow_stages import format_stage
@@ -194,25 +193,9 @@ class DesignConsensusIssue:
 
 
 class MetaJudgePromptRenderer:
-    PLACEHOLDERS = {
-        "ISSUE_NUMBER",
-        "WORK_UNIT_ID",
-        "CLUSTER_ID",
-        "WORK_UNIT_PRODUCER",
-        "WORK_UNIT_SOURCE_REF",
-        "CONVERGENCE_ROUND",
-        "CONVERGENCE_ROUND_PLUS_ONE",
-        "SOLVER_MINIMAL_PATH",
-        "SOLVER_STRUCTURAL_PATH",
-        "SOLVER_DELETE_PATH",
-        "META_JUDGE_OUTPUT_PATH",
-        "TRANSITION_TYPE",
-        "TRANSITION_CONFIDENCE",
-        "TRANSITION_EVIDENCE_REFS",
-    }
-
-    def __init__(self, template_path: Path) -> None:
+    def __init__(self, template_path: Path, *, host_env: Mapping[str, str] | None = None) -> None:
         self.template_path = template_path
+        self.host_env = host_env
 
     def render(self, context: MetaJudgePromptContext) -> str:
         template = self.template_path.read_text(encoding="utf-8")
@@ -232,10 +215,12 @@ class MetaJudgePromptRenderer:
             "TRANSITION_CONFIDENCE": f"{context.transition_assessment.confidence:g}",
             "TRANSITION_EVIDENCE_REFS": context.transition_assessment.evidence_refs_text,
         }
-        rendered = template
-        for key in self.PLACEHOLDERS:
-            rendered = rendered.replace("${" + key + "}", values[key])
-        return inline_prompt_contracts(rendered, skill_root=self.template_path.parents[1])
+        return render_prompt_text(
+            template,
+            skill_root=self.template_path.parents[1],
+            values=values,
+            host_env=self.host_env,
+        )
 
 
 PHASE9_LOG_RE = re.compile(
@@ -814,7 +799,7 @@ class Phase9Router:
         if payload.startswith("propose:") and self._propose_unreadable_source_signature(payload) is not None:
             return "source-unreachable/no-actionable-source"
         if payload.startswith("propose:"):
-            return None
+            return payload
         return self._solver_verdict_text(marker)
 
     def _propose_unreadable_source_signature(self, payload: str) -> str | None:
@@ -1735,7 +1720,7 @@ class Phase9Router:
             return None
         template_path = self.skill_root / "prompts" / "meta-judge.md"
         try:
-            prompt = MetaJudgePromptRenderer(template_path).render(context)
+            prompt = MetaJudgePromptRenderer(template_path, host_env=self.ctx.host_env).render(context)
         except OSError:
             self._append_meta_judge_prompt_fallback_event(
                 issue,
@@ -1827,7 +1812,12 @@ class Phase9Router:
             "CONVERGENCE_ROUND": str(round_no),
             "SOLVER_OUTPUT_PATH": f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-{role}.md",
         }
-        return inline_prompt_contracts(Template(template).safe_substitute(values), skill_root=self.skill_root)
+        return render_prompt_text(
+            template,
+            skill_root=self.skill_root,
+            values=values,
+            host_env=self.ctx.host_env,
+        )
 
     def _solver_work_unit_header(self, issue: str, round_no: int, role: str) -> str:
         output_path = f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-{role}.md"

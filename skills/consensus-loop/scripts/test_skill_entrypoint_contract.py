@@ -114,7 +114,9 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "must first read the concurrency monitor/status zero-codex classification",
             "may defer to the next daemon tick only when the monitor reports `daemon-self-drive-transient`",
             "fresh `phase9_router_daemon` and `wakeup_runner_daemon` heartbeats plus fresh item-matching unsuppressed dispatch intent evidence",
-            "missing, stale, malformed, read-error, terminal-blocked, target-log-suppressed, or spawn-claim-suppressed evidence remains same-turn P0",
+            "monitor-proven `completed-marker-awaiting-consumption` target-log evidence only under fresh heartbeat and consumption-window gates",
+            "monitor-proven `target-log-awaiting-terminal-flush` tick only under fresh heartbeat, fresh target-log mtime, strict visible marker, no terminal exit, and zero-streak gates",
+            "target-log-suppressed without fresh completed-marker/terminal-flush evidence, or spawn-claim-suppressed evidence remains same-turn P0",
             "maintainer-blocked exception above remains independent",
         )
         for needle in required:
@@ -128,7 +130,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt",
             "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md",
             "$REPO_ROOT/.refactor-loop/runs/scope-extend-${CLUSTER_ID}.log",
-            "除此之外 `.refactor-loop/` 一律禁改",
+            "Otherwise, do not modify `.refactor-loop/`",
         )
 
         for needle in required:
@@ -747,7 +749,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
 
         for needle in (
             "Touched-module test ratchet",
-            "测试 ratchet",
+            "Test ratchet",
             "fast / hermetic / behavior-first",
             "owner-local fact source",
             "mock/fake/stub",
@@ -897,16 +899,16 @@ class SkillEntrypointContractTests(unittest.TestCase):
         audit_prompt = read(SKILL_ROOT / "prompts" / "audit.md")
         section = section_between(
             audit_prompt,
-            r"^## 渲染身份 fail-closed\(强制\)$",
-            r"^## 强制流程",
+            r"^## Rendered identity fail-closed \(mandatory\)$",
+            r"^## Mandatory workflow",
         )
         self.assertTrue(section)
         for needle in (
-            "`ITERATION` 为空",
-            "立即输出 `AUDIT_INCOMPLETE:missing-iteration`",
-            "禁止写入 `$REPO_ROOT/.refactor-loop/runs/audit-iter-.md`",
+            "`ITERATION` is empty",
+            "immediately output `AUDIT_INCOMPLETE:missing-iteration`",
+            "Do not write `$REPO_ROOT/.refactor-loop/runs/audit-iter-.md`",
             "`$REPO_ROOT/.refactor-loop/runs/audit-iter--candidates.ndjson`",
-            "audit fallback 同一时刻只能有一个 active `audit-iter-${ITERATION}`",
+            "Audit fallback may have only one active `audit-iter-${ITERATION}` at a time",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
@@ -914,9 +916,9 @@ class SkillEntrypointContractTests(unittest.TestCase):
     def test_audit_prompt_does_not_treat_single_file_skill_reference_as_r02_r03(self) -> None:
         audit_prompt = read(SKILL_ROOT / "prompts" / "audit.md")
         for needle in (
-            "不得被机械解释成 `REFERENCE.md` 必须存在",
-            "anchor 不可达",
-            "单文件 `SKILL.md` + intra-file anchors 本身不是 violation",
+            "Do not mechanically interpret",
+            "anchors are unreachable",
+            "A single-file `SKILL.md` with intra-file anchors is not a violation by itself",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, audit_prompt)

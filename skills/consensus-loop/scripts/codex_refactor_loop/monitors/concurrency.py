@@ -31,7 +31,9 @@ from ..safe_progress_scheduler import (
 from ..state import read_json, write_json
 from ..task_spawn_claim import TaskSpawnClaimError, safe_task_id_from_task
 from ..update_check import parse_time
+from ..wakeup_plan import validate_harness_spawn_intent
 from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work, is_draft_release_rollup_pr
+from ..worker_markers import log_has_terminal_exit, read_worker_terminal_marker, read_worker_visible_terminal_marker
 
 
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
@@ -233,6 +235,21 @@ class ConcurrencyMonitor:
                 result[name] = {"age_seconds": None, "stale": True}
         return result
 
+    def stale_daemon_projection(self, daemons: dict[str, dict]) -> list[dict[str, object]]:
+        stale: list[dict[str, object]] = []
+        for name, heartbeat in sorted(daemons.items()):
+            if heartbeat.get("stale") is not True:
+                continue
+            age = heartbeat.get("age_seconds")
+            stale.append(
+                {
+                    "name": name,
+                    "age_seconds": age if isinstance(age, int) else None,
+                    "reason": "heartbeat-stale" if isinstance(age, int) else "heartbeat-malformed",
+                }
+            )
+        return stale
+
     def write_statusline_snapshot(
         self,
         *,
@@ -251,6 +268,7 @@ class ConcurrencyMonitor:
         if daemons is None:
             daemons = self.read_daemon_heartbeats(now=now.timestamp())
         healthy = sum(1 for daemon in daemons.values() if not daemon["stale"])
+        stale_daemons = self.stale_daemon_projection(daemons)
         payload = {
             "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "actual": actual,
@@ -264,6 +282,7 @@ class ConcurrencyMonitor:
             "daemons": daemons,
             "daemons_healthy": healthy,
             "daemons_total": len(daemons),
+            "stale_daemons": stale_daemons,
         }
         if zero_codex_classification is not None:
             payload["zero_codex_classification"] = zero_codex_classification
@@ -478,6 +497,7 @@ class ConcurrencyMonitor:
         *,
         breakdown: list[dict],
         now: float | None = None,
+        zero_streak: int = 0,
     ) -> DaemonSelfDriveClassification:
         if now is None:
             now = time.time()
@@ -493,6 +513,7 @@ class ConcurrencyMonitor:
             active_targets=active_targets,
             now=now,
             window=window,
+            zero_streak=zero_streak,
         )
         return DaemonSelfDriveClassification(
             "daemon-self-drive-transient" if intent_result[0] else "p0",
@@ -549,6 +570,7 @@ class ConcurrencyMonitor:
         active_targets: set[tuple[str, int]],
         now: float,
         window: int,
+        zero_streak: int,
     ) -> tuple[bool, str, list[str]]:
         try:
             pending_lines = self.pending_events.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -564,6 +586,7 @@ class ConcurrencyMonitor:
             now=now,
             window=window,
             blocked_intents=blocked_intents,
+            zero_streak=zero_streak,
         )
         if pending_result[0] is False:
             return pending_result
@@ -573,8 +596,19 @@ class ConcurrencyMonitor:
             window=window,
             blocked_intents=blocked_intents,
             blocked_targets=blocked_targets,
+            zero_streak=zero_streak,
         )
         if ledger_result[0] is False:
+            return ledger_result
+        if pending_result[1] in {
+            "completed-marker-awaiting-consumption",
+            "target-log-awaiting-terminal-flush",
+        }:
+            return pending_result
+        if ledger_result[1] in {
+            "completed-marker-awaiting-consumption",
+            "target-log-awaiting-terminal-flush",
+        }:
             return ledger_result
         evidence = [*pending_result[2], *ledger_result[2]]
         if evidence:
@@ -652,6 +686,7 @@ class ConcurrencyMonitor:
         now: float,
         window: int,
         blocked_intents: set[str],
+        zero_streak: int,
     ) -> tuple[bool, str, list[str]]:
         evidence: list[str] = []
         for line in lines:
@@ -667,11 +702,23 @@ class ConcurrencyMonitor:
             created_at = self._line_time(ts)
             if created_at is None:
                 return False, "malformed-harness-spawn-intent-ts", []
+            validation_reason = self._harness_spawn_intent_validation_reason(payload)
+            if validation_reason:
+                return False, validation_reason, []
             if not self._intent_matches_active_target(payload, active_targets):
                 continue
             suppressed = self._intent_suppression_reason(payload, blocked_intents=blocked_intents)
             age = int(now - created_at)
             if suppressed:
+                if suppressed == "target-log":
+                    completion = self._target_log_completion_evidence(
+                        payload,
+                        now=now,
+                        window=window,
+                        zero_streak=zero_streak,
+                    )
+                    if completion is not None:
+                        return completion
                 return False, f"suppressed-intent:{suppressed}", []
             if age > window:
                 return False, f"stale-unconsumed-intent:{age}s", []
@@ -699,11 +746,14 @@ class ConcurrencyMonitor:
                 return HardGateTransientSupply(0, (), (), "malformed-harness-spawn-intent")
             if not isinstance(payload, dict):
                 return HardGateTransientSupply(0, (), (), "malformed-harness-spawn-intent")
-            if payload.get("source") != "phase9-router":
-                continue
             created_at = self._line_time(ts)
             if created_at is None:
                 return HardGateTransientSupply(0, (), (), "malformed-harness-spawn-intent-ts")
+            validation_reason = self._harness_spawn_intent_validation_reason(payload)
+            if validation_reason:
+                return HardGateTransientSupply(0, (), (), validation_reason)
+            if payload.get("source") != "phase9-router":
+                continue
             target_key = self._intent_active_target_key(payload, active_targets)
             if target_key is None:
                 continue
@@ -717,6 +767,16 @@ class ConcurrencyMonitor:
             evidence.append(f"pending:{payload.get('intent_id') or payload.get('task_id')}:{age}s")
         return HardGateTransientSupply(len(set(targets)), tuple(dict.fromkeys(targets)), tuple(evidence))
 
+    def _harness_spawn_intent_validation_reason(self, payload: dict[str, object]) -> str:
+        try:
+            validate_harness_spawn_intent(self.ctx, payload)
+        except ValueError as exc:
+            detail = str(exc)
+            if detail:
+                return f"malformed-harness-spawn-intent:{detail}"
+            return "malformed-harness-spawn-intent"
+        return ""
+
     def _phase9_ledger_intent_evidence(
         self,
         *,
@@ -725,6 +785,7 @@ class ConcurrencyMonitor:
         window: int,
         blocked_intents: set[str],
         blocked_targets: set[Phase9DispatchTarget],
+        zero_streak: int,
     ) -> tuple[bool, str, list[str]]:
         ledger = self.ctx.paths.refactor_loop / "phase9-router-ledger.jsonl"
         if not ledger.exists():
@@ -757,6 +818,15 @@ class ConcurrencyMonitor:
             )
             age = int(now - created_at)
             if suppressed:
+                if suppressed == "target-log":
+                    completion = self._target_log_completion_evidence(
+                        entry,
+                        now=now,
+                        window=window,
+                        zero_streak=zero_streak,
+                    )
+                    if completion is not None:
+                        return completion
                 return False, f"suppressed-intent:{suppressed}", []
             if age > window:
                 return False, f"stale-unconsumed-intent:{age}s", []
@@ -894,13 +964,58 @@ class ConcurrencyMonitor:
         return targets
 
     def _target_log_suppresses_intent(self, payload: dict[str, object]) -> bool:
+        log_path = self._intent_target_log_path(payload)
+        return log_path is not None and log_path.exists()
+
+    def _intent_target_log_path(self, payload: dict[str, object]) -> Path | None:
         log_value = payload.get("log") or payload.get("log_path")
         if not isinstance(log_value, str) or not log_value:
-            return False
+            return None
         log_path = Path(log_value)
         if not log_path.is_absolute():
             log_path = self.repo_root / log_path
-        return log_path.exists()
+        return log_path
+
+    def _target_log_completion_evidence(
+        self,
+        payload: dict[str, object],
+        *,
+        now: float,
+        window: int,
+        zero_streak: int,
+    ) -> tuple[bool, str, list[str]] | None:
+        log_path = self._intent_target_log_path(payload)
+        if log_path is None:
+            return None
+        try:
+            stat_result = log_path.stat()
+        except OSError:
+            return None
+        age = max(0, int(now - stat_result.st_mtime))
+        marker_read = read_worker_terminal_marker(log_path)
+        if marker_read.found:
+            if age <= window:
+                return (
+                    True,
+                    "completed-marker-awaiting-consumption",
+                    [f"completed-target-log:{log_path.name}:{marker_read.marker}:{age}s"],
+                )
+            return False, f"stale-completed-marker:{age}s", []
+        if (
+            marker_read.reason != "missing_exit_zero"
+            or log_has_terminal_exit(log_path)
+            or zero_streak != 0
+            or age > min(window, HEARTBEAT_STALE_SECONDS)
+        ):
+            return None
+        visible_marker = read_worker_visible_terminal_marker(log_path)
+        if not visible_marker.found:
+            return None
+        return (
+            True,
+            "target-log-awaiting-terminal-flush",
+            [f"target-log-flush:{log_path.name}:{visible_marker.marker}:{age}s"],
+        )
 
     def _intent_matches_active_target(self, payload: dict[str, object], active_targets: set[tuple[str, int]]) -> bool:
         return self._intent_active_target_key(payload, active_targets) is not None
@@ -1120,7 +1235,7 @@ class ConcurrencyMonitor:
         log(f"actual={actual} expected={expected} floor={floor} zero_streak={zero_streak}")
 
         if expected > 0 and actual == 0:
-            self_drive = self.classify_zero_codex_self_drive(breakdown=breakdown)
+            self_drive = self.classify_zero_codex_self_drive(breakdown=breakdown, zero_streak=zero_streak)
             classification_payload: dict[str, object] = {
                 "classification": self_drive.classification,
                 "reason": self_drive.reason,
@@ -1130,7 +1245,10 @@ class ConcurrencyMonitor:
                 "evidence": self_drive.evidence,
             }
             if self_drive.fresh:
-                state["zero_streak"] = 0
+                if self_drive.reason == "target-log-awaiting-terminal-flush":
+                    state["zero_streak"] = zero_streak + 1
+                else:
+                    state["zero_streak"] = 0
                 event = (
                     "ZERO_CODEX_CLASSIFICATION:daemon-self-drive-transient:"
                     f"expected={expected}:reason={self_drive.reason}:evidence={','.join(self_drive.evidence)}"

@@ -42,6 +42,43 @@ class FakeWrapper:
     pid: int
 
 
+class FakeChild:
+    def __init__(
+        self,
+        polls: list[int | None],
+        *,
+        terminate_error: Exception | None = None,
+        kill_error: Exception | None = None,
+    ) -> None:
+        self.polls = list(polls)
+        self.terminate_error = terminate_error
+        self.kill_error = kill_error
+        self.terminated = 0
+        self.killed = 0
+        self.wait_timeouts: list[float | None] = []
+
+    def poll(self) -> int | None:
+        if self.polls:
+            return self.polls.pop(0)
+        return None
+
+    def terminate(self) -> None:
+        self.terminated += 1
+        if self.terminate_error is not None:
+            raise self.terminate_error
+        self.polls = [0]
+
+    def wait(self, timeout: float | None = None) -> int | None:
+        self.wait_timeouts.append(timeout)
+        return 0
+
+    def kill(self) -> None:
+        self.killed += 1
+        if self.kill_error is not None:
+            raise self.kill_error
+        self.polls = [137]
+
+
 class FakeRestartDaemonRuntime:
     def __init__(self, now: int = 1_700_000_000) -> None:
         self._now = now
@@ -458,6 +495,140 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.run_helper()
         self.assertEqual(2, self.start_count("phase9_router_daemon"))
 
+    def test_wrapper_self_heals_child_exit_with_same_resolved_command(self) -> None:
+        heartbeat = self.heartbeat_path("comment-monitor")
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+        heartbeat.write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+        launches: list[tuple[str, ...]] = []
+        children = [FakeChild([7]), FakeChild([None])]
+
+        def popen(command: tuple[str, ...]) -> FakeChild:
+            launches.append(command)
+            return children[len(launches) - 1]
+
+        restart._run_restart_wrapper(
+            [
+                "comment-monitor",
+                str(self.repo),
+                str(self.repo / ".refactor-loop" / "locks" / "comment-monitor.pid"),
+                str(self.repo / ".refactor-loop" / "logs" / "comment-monitor.died"),
+                *FAKE_COMMAND,
+            ],
+            env={
+                "RESTART_DAEMON_HEARTBEAT_FILE": str(heartbeat),
+                "RESTART_DAEMON_HEARTBEAT_INTERVAL": "1",
+                "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": "30",
+                "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
+            },
+            popen=popen,
+            sleeper=lambda _seconds: None,
+            clock=lambda: self.runtime.now(),
+            getpid=lambda: 12345,
+            max_supervision_cycles=2,
+        )
+
+        self.assertEqual([FAKE_COMMAND, FAKE_COMMAND], launches)
+        died = (self.repo / ".refactor-loop" / "logs" / "comment-monitor.died").read_text(encoding="utf-8")
+        self.assertIn("child exited exit=7; restarting same command", died)
+        self.assertEqual(0, children[0].terminated)
+        self.assertEqual(f"{self.runtime.now()}\n", heartbeat.read_text(encoding="utf-8"))
+
+    def test_wrapper_self_heals_stale_missing_and_malformed_heartbeat_without_writing_it(self) -> None:
+        cases = {
+            "stale": f"{self.runtime.now() - 120}\n",
+            "missing": None,
+            "malformed": "not-a-timestamp\n",
+        }
+        for case, heartbeat_text in cases.items():
+            with self.subTest(case=case):
+                target_root = self.repo / case
+                heartbeat = target_root / ".refactor-loop" / "heartbeats" / "phase9_router_daemon.ts"
+                if heartbeat_text is not None:
+                    heartbeat.parent.mkdir(parents=True, exist_ok=True)
+                    heartbeat.write_text(heartbeat_text, encoding="utf-8")
+                launches: list[tuple[str, ...]] = []
+                children = [FakeChild([None]), FakeChild([None])]
+
+                def popen(command: tuple[str, ...]) -> FakeChild:
+                    launches.append(command)
+                    if len(launches) == 2:
+                        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+                        heartbeat.write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+                    return children[len(launches) - 1]
+
+                restart._run_restart_wrapper(
+                    [
+                        "phase9_router_daemon",
+                        str(target_root),
+                        str(target_root / ".refactor-loop" / "locks" / "phase9_router_daemon.pid"),
+                        str(target_root / ".refactor-loop" / "logs" / "phase9_router_daemon.died"),
+                        *FAKE_COMMAND,
+                    ],
+                    env={
+                        "RESTART_DAEMON_HEARTBEAT_FILE": str(heartbeat),
+                        "RESTART_DAEMON_HEARTBEAT_INTERVAL": "1",
+                        "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": "30",
+                        "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
+                    },
+                    popen=popen,
+                    sleeper=lambda _seconds: None,
+                    clock=lambda: self.runtime.now(),
+                    getpid=lambda: 22222,
+                    max_supervision_cycles=3 if case == "missing" else 2,
+                )
+
+                self.assertEqual([FAKE_COMMAND, FAKE_COMMAND], launches)
+                self.assertEqual(1, children[0].terminated)
+                self.assertEqual([1], children[0].wait_timeouts)
+                died = (target_root / ".refactor-loop" / "logs" / "phase9_router_daemon.died").read_text(encoding="utf-8")
+                self.assertIn("terminating child and restarting same command", died)
+                self.assertEqual(f"{self.runtime.now()}\n", heartbeat.read_text(encoding="utf-8"))
+
+    def test_wrapper_logs_and_aborts_when_child_cannot_be_killed(self) -> None:
+        heartbeat = self.heartbeat_path("phase9_router_daemon")
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+        heartbeat.write_text(f"{self.runtime.now() - 120}\n", encoding="utf-8")
+        launches: list[tuple[str, ...]] = []
+        child = FakeChild(
+            [None],
+            terminate_error=RuntimeError("term denied"),
+            kill_error=RuntimeError("kill denied"),
+        )
+
+        def popen(command: tuple[str, ...]) -> FakeChild:
+            launches.append(command)
+            return child
+
+        with self.assertRaisesRegex(RuntimeError, "child termination failed after kill"):
+            restart._run_restart_wrapper(
+                [
+                    "phase9_router_daemon",
+                    str(self.repo),
+                    str(self.repo / ".refactor-loop" / "locks" / "phase9_router_daemon.pid"),
+                    str(self.repo / ".refactor-loop" / "logs" / "phase9_router_daemon.died"),
+                    *FAKE_COMMAND,
+                ],
+                env={
+                    "RESTART_DAEMON_HEARTBEAT_FILE": str(heartbeat),
+                    "RESTART_DAEMON_HEARTBEAT_INTERVAL": "1",
+                    "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": "30",
+                    "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
+                },
+                popen=popen,
+                sleeper=lambda _seconds: None,
+                clock=lambda: self.runtime.now(),
+                getpid=lambda: 33333,
+                max_supervision_cycles=1,
+            )
+
+        self.assertEqual([FAKE_COMMAND], launches)
+        self.assertEqual(1, child.terminated)
+        self.assertEqual(1, child.killed)
+        died = (self.repo / ".refactor-loop" / "logs" / "phase9_router_daemon.died").read_text(encoding="utf-8")
+        self.assertIn("heartbeat-stale:120s; terminating child and restarting same command", died)
+        self.assertIn("child terminate failed reason=RuntimeError('term denied'); attempting kill", died)
+        self.assertIn("child kill failed reason=RuntimeError('kill denied'); aborting wrapper restart", died)
+
     def test_restarts_when_pid_dead(self) -> None:
         self.runtime.live_pids.discard(999999)
         (self.repo / ".refactor-loop" / "locks" / "dev_sync_daemon.pid").write_text("999999\n", encoding="utf-8")
@@ -486,6 +657,25 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assert_start_count("concurrency_monitor", 2)
         self.assertNotEqual(old_pid, self.read_pid("concurrency_monitor"))
 
+    def test_orphan_managed_child_lock_holder_is_reaped_and_restarted_once(self) -> None:
+        self.run_helper()
+        old_wrapper_pid = self.read_pid("phase9_router_daemon")
+        orphan_child_pid = 515151
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        (self.repo / ".refactor-loop" / "phase9-router.lock").write_text(f"pid={orphan_child_pid}\n", encoding="utf-8")
+        self.runtime.live_pids.discard(old_wrapper_pid)
+        self.runtime.wrapper_commands.pop(old_wrapper_pid, None)
+        self.runtime.live_pids.add(orphan_child_pid)
+        self.runtime.inventory_override = DaemonProcessInventory((DaemonProcess(orphan_child_pid, " ".join(target.command)),))
+
+        helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
+        helper.start_daemon("phase9_router_daemon", FAKE_COMMAND)
+
+        new_pid = self.read_pid("phase9_router_daemon")
+        self.assertEqual([(orphan_child_pid, self.config.stop_grace_seconds)], self.runtime.terminated)
+        self.assertNotEqual(old_wrapper_pid, new_pid)
+        self.assert_start_count("phase9_router_daemon", 2)
+
     def test_duplicate_canonical_matching_ignores_other_repo_and_non_allowlist_commands(self) -> None:
         command = self.runtime.canonical_command(self.ctx, "concurrency_monitor", FAKE_COMMAND)
         other_repo = command.replace(str(self.ctx.repo_root), "/tmp/other-repo")
@@ -509,6 +699,38 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         )
 
         self.assertEqual((111,), live)
+
+    def test_daemon_instance_projects_wrappers_children_and_bounded_lock_holders(self) -> None:
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        wrapper_command = self.runtime.canonical_command(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        lock_holder = self.repo / ".refactor-loop" / "phase9-router.lock"
+        lock_holder.write_text("pid=222\n", encoding="utf-8")
+        other_lock = self.repo / ".refactor-loop" / "other.lock"
+        other_lock.write_text("333\n", encoding="utf-8")
+        inventory = DaemonProcessInventory(
+            (
+                DaemonProcess(111, wrapper_command),
+                DaemonProcess(222, " ".join(target.command)),
+                DaemonProcess(333, " ".join(target.command)),
+                DaemonProcess(444, "python3 unrelated.py"),
+            )
+        )
+        self.runtime.live_pids.update({111, 222, 333, 444})
+
+        projection = inventory.daemon_instance(
+            name="phase9_router_daemon",
+            repo_root=self.ctx.repo_root,
+            pid_file=target.pid_file,
+            died_file=target.died_file,
+            command=target.command,
+            lock_files=(lock_holder,),
+            is_alive=self.runtime.pid_alive,
+        )
+
+        self.assertEqual((111,), projection.live_wrapper_pids)
+        self.assertEqual((222, 333), projection.live_managed_child_pids)
+        self.assertEqual((222,), projection.bounded_lock_holder_pids)
+        self.assertEqual((111, 222), projection.repair_pids)
 
     def test_restart_wrapper_matching_accepts_skill_root_and_command_normalization_variance(self) -> None:
         template = ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon", "--interval", "120")
@@ -658,6 +880,33 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual(old_pid, self.read_pid("concurrency_monitor"))
         self.assert_start_count("concurrency_monitor", 1)
 
+    def test_daemon_status_reports_orphan_child_lock_holder_stale_without_repair(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("phase9_router_daemon")
+        orphan_child_pid = 616161
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        (self.repo / ".refactor-loop" / "state").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop" / "phase9-router.lock").write_text(f"pid={orphan_child_pid}\n", encoding="utf-8")
+        self.runtime.live_pids.discard(old_pid)
+        self.runtime.wrapper_commands.pop(old_pid, None)
+        self.runtime.live_pids.add(orphan_child_pid)
+        inventory = DaemonProcessInventory((DaemonProcess(orphan_child_pid, " ".join(target.command)),))
+
+        report = self.collect_status_with_fake_allowlist(inventory)
+
+        daemon = next(item for item in report.daemons if item.name == "phase9_router_daemon")
+        payload = daemon.to_json()
+        self.assertEqual("stale", daemon.status)
+        self.assertEqual("orphan-lock-holders:1", daemon.stale_reason)
+        self.assertEqual([orphan_child_pid], payload["managed_child_pids"])
+        self.assertEqual([orphan_child_pid], payload["bounded_lock_holder_pids"])
+        self.assertEqual(old_pid, self.read_pid("phase9_router_daemon"))
+        self.assert_start_count("phase9_router_daemon", 1)
+
     def test_daemon_status_resolves_static_allowlist_targets(self) -> None:
         targets = daemon_targets(self.ctx)
         self.assertEqual(DAEMON_NAMES, tuple(target.name for target in targets))
@@ -695,8 +944,16 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             "daemon_targets",
             "read_daemon_pid",
             "read_heartbeat_age_seconds",
+            "read_heartbeat_status",
+            "DaemonHeartbeatStatus",
             "expected_launch_fingerprint",
             "DaemonProcessInventory",
+            "DaemonInstanceProjection",
+            "live_managed_children",
+            "bounded_lock_holder_pids",
+            "_run_restart_wrapper",
+            "child exited exit=",
+            "terminating child and restarting same command",
             ".fingerprint.json",
             "package_tree_sha256",
             "entrypoint_sha256",

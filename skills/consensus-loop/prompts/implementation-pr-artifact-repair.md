@@ -27,7 +27,7 @@ Input evidence:
 - Do not decide router peer isolation, meta-judge dispatch, review truth tables, merge gates, release preflight, or governance policy.
 - Do not create a fallback decision artifact or generic command/action schema.
 
-## Marker emission allowlist(强制)
+## Marker emission allowlist (required)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
@@ -48,7 +48,7 @@ Write a self-contained PR body to the body output path. It must use these exact 
 - `## Test results`
 - `## Deviations`
 
-The prose/content under each heading follows `${HOST_WORK_LANGUAGE}`.
+The prose/content under each heading follows `${HOST_WORK_LANGUAGE}`; do not add a mandatory parallel English section.
 
 The body must contain exactly one matching closing link:
 

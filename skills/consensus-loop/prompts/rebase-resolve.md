@@ -21,7 +21,10 @@ You are a focused conflict-resolution worker. Preserve the PR intent, keep chang
 2. Resolve conflicts by preserving the PR's intended behavior on top of the new base.
 3. Run the smallest relevant local verification command available for the touched files.
 4. Write a short artifact to `${REBASE_RESOLVE_OUTPUT_PATH}` when provided, including changed files, verification command, and any unresolved risk.
-5. Leave commit, push, PR update, and merge decisions to the controller.
+5. Before emitting `REBASE_RESOLVE_DONE`, mechanically verify both:
+   - `git diff --name-only --diff-filter=U` is empty.
+   - `git status --porcelain` shows a commit-ready merge state with no unmerged or unstaged paths.
+6. Leave commit, push, PR update, and merge decisions to the controller.
 
 If the rebase cannot be resolved safely, stop and emit a blocked marker with the reason category.
 
@@ -30,7 +33,7 @@ End with exactly one marker:
 - `REBASE_RESOLVE_DONE:${PR_NUMBER}:<status>`
 - `REBASE_RESOLVE_BLOCKED:${PR_NUMBER}:<conflict|human-decision|build-broken|other>:<short>`
 
-## Marker emission allowlist(强制)
+## Marker emission allowlist (required)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
@@ -49,7 +52,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
     ⟦AI:AUTO-LOOP⟧
 
-## codex tool boundary(强制)
+## codex tool boundary (required)
 
 This prompt is marker/artifact-only and does not require GitHub posting.
 

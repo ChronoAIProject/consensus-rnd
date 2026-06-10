@@ -42,8 +42,9 @@ from codex_refactor_loop.issue_decomposition import (
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.phase9.progress import issue_has_terminal_consensus_judge
 from codex_refactor_loop.pr_checks import PrMergeReadinessProjection
+from codex_refactor_loop.release.candidate_liveness import classify_release_candidate_liveness
 from codex_refactor_loop.release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
-from codex_refactor_loop.release.gate import canonical_digest, decide_release_artifact, parse_time
+from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
 from codex_refactor_loop.safe_progress_scheduler import (
     project_wakeup_actions,
@@ -106,6 +107,7 @@ HARNESS_SPAWN_TARGET_TEXT_PATTERNS = (
 )
 TERMINAL_HARNESS_SPAWN_INTENT_BLOCKED_REASONS = {"target_not_open:CLOSED", "target_not_open:MERGED"}
 RUNNER_AUTHORITY = "wakeup-runner-396"
+REBASE_RESOLVE_FALSE_DONE_RETRY_LIMIT = 2
 PLAN_AUTHORIZATION = "skills/consensus-loop/authorizations/runtime-exceptions.md#wakeup-runner-396"
 READ_ONLY_PLAN_AUTHORIZATION = "skills/consensus-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script"
 RUNNER_NAMED_HELPER_ACTIONS = {
@@ -152,6 +154,20 @@ def _contained_execution_cd(ctx: LoopContext, text: str) -> Path:
     except ValueError as exc:
         raise ValueError(f"cd escapes REPO_ROOT: {text!r}") from exc
     return resolved
+
+
+def _contained_artifact_execution_path(ctx: LoopContext, text: str, *, field: str) -> Path:
+    candidate = Path(text).expanduser()
+    if not candidate.is_absolute():
+        return ctx.artifact_execution_path(text)
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(ctx.repo_root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"{field} escapes REPO_ROOT: {text!r}") from exc
+    return resolved
+
+
 EXECUTABLE_ACTION_KINDS = {
     "harness-spawn-intent",
     "repository-stalled-meta-reflector",
@@ -193,6 +209,7 @@ CONSENSUS_JUDGE_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-
 DESIGN_CONSENSUS_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-(minimal|structural|delete|judge|reflector)\.log$")
 IMPLEMENT_PENDING_INTENT_PREFIX = "dispatch-consensus-implementation:"
 IMPLEMENT_TASK_PREFIX = "implement-"
+REVIEW_PENDING_SECONDS = 90
 
 
 @dataclass(frozen=True)
@@ -224,6 +241,16 @@ class CompletedMarkerCandidate:
     marker: str
     action: dict[str, Any]
     mtime: float
+
+
+@dataclass(frozen=True)
+class HarnessSpawnIntentValidation:
+    intent: dict[str, Any]
+    intent_id: str
+    cd: Path
+    prompt: Path
+    log_path: Path
+    stall: int
 
 
 def run_json(cmd: list[str], *, cwd: Path) -> Any:
@@ -313,17 +340,14 @@ def harness_spawn_intent_actions(
         if intent_id in seen:
             continue
         seen.add(intent_id)
-        invalid_reason = _harness_spawn_intent_invalid_reason(intent)
-        if invalid_reason:
-            actions.append(_invalid_harness_spawn_intent(invalid_reason, line, intent_id=intent_id))
-            continue
         try:
-            cd = _contained_execution_cd(ctx, str(intent["cd"]))
-            prompt = ctx.artifact_execution_path(str(intent["prompt"]))
-            log_path = ctx.artifact_execution_path(str(intent["log"]))
-        except Exception as exc:
-            actions.append(_invalid_harness_spawn_intent(f"invalid-path:{exc}", line, intent_id=intent_id))
+            validated = validate_harness_spawn_intent(ctx, intent)
+        except ValueError as exc:
+            actions.append(_invalid_harness_spawn_intent(str(exc), line, intent_id=intent_id))
             continue
+        cd = validated.cd
+        prompt = validated.prompt
+        log_path = validated.log_path
         _revive_stale_redispatchable_implement_log(log_path, monitor=monitor)
         if _harness_spawn_intent_log_suppresses_retry(log_path) or _canonical_in_flight_for_log(log_path, monitor):
             continue
@@ -839,6 +863,33 @@ def _harness_spawn_intent_invalid_reason(intent: dict[str, Any]) -> str | None:
     if intent.get("no_lifecycle_authority") is not True:
         return "missing-no-lifecycle-authority"
     return None
+
+
+def validate_harness_spawn_intent(ctx: LoopContext, intent: dict[str, Any]) -> HarnessSpawnIntentValidation:
+    invalid_reason = _harness_spawn_intent_invalid_reason(intent)
+    if invalid_reason:
+        raise ValueError(invalid_reason)
+    intent_id = intent.get("intent_id")
+    if not isinstance(intent_id, str) or not intent_id:
+        raise ValueError("missing-intent-id")
+    try:
+        stall = int(intent.get("stall", 5400))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid-stall") from exc
+    try:
+        cd = _contained_execution_cd(ctx, str(intent["cd"]))
+        prompt = _contained_artifact_execution_path(ctx, str(intent["prompt"]), field="prompt")
+        log_path = _contained_artifact_execution_path(ctx, str(intent["log"]), field="log")
+    except Exception as exc:
+        raise ValueError(f"invalid-path:{exc}") from exc
+    return HarnessSpawnIntentValidation(
+        intent=intent,
+        intent_id=intent_id,
+        cd=cd,
+        prompt=prompt,
+        log_path=log_path,
+        stall=stall,
+    )
 
 
 def _invalid_harness_spawn_intent(reason: str, evidence: str, *, intent_id: str | None = None) -> dict[str, Any]:
@@ -1358,14 +1409,163 @@ def rebase_resolve_completed_marker_actions(repo_root: Path, gh_items: list[GhIt
         if worktree is not None:
             action["worktree"] = str(worktree)
         if not _worktree_merge_in_progress_resolved(repo_root, worktree):
-            action["status_only"] = True
-            action["no_lifecycle_authority"] = True
-            action["reason"] = "rebase_resolve_done_without_resolved_merge"
-            action.pop("controller_action", None)
-            action.pop("runner_authority", None)
-            action.pop("no_generic_command", None)
+            recovery = _record_rebase_resolve_false_done(repo_root, log_path, pr_number, head_ref, marker)
+            if recovery.error_reason is not None:
+                action["status_only"] = True
+                action["no_lifecycle_authority"] = True
+                action["reason"] = recovery.error_reason
+                action["diagnostic"] = recovery.diagnostic
+                action["evidence"] = recovery.archived_artifact
+                action["source_artifact"] = recovery.archived_artifact
+                print(recovery.diagnostic, file=sys.stderr)
+                action.pop("controller_action", None)
+                action.pop("runner_authority", None)
+                action.pop("no_generic_command", None)
+                actions.append(action)
+                continue
+            retry_count = recovery.retry_count
+            archived_artifact = recovery.archived_artifact
+            action["evidence"] = archived_artifact
+            action["source_artifact"] = archived_artifact
+            if retry_count > REBASE_RESOLVE_FALSE_DONE_RETRY_LIMIT:
+                action["status_only"] = True
+                action["no_lifecycle_authority"] = True
+                action["reason"] = "rebase_resolve_false_done_retry_limit_exceeded"
+                action.pop("controller_action", None)
+                action.pop("runner_authority", None)
+                action.pop("no_generic_command", None)
+            else:
+                action.update(
+                    {
+                        "kind": "stale-base-conflicting-pr",
+                        "action_id": f"dispatch-pr-rebase-resolve:false-done:{pr_number}:{head_ref}:{retry_count}",
+                        "phase": "review-gate",
+                        "route": "dispatch-pr-rebase-resolve",
+                        "reason": "rebase_resolve_done_without_resolved_merge",
+                        "controller_action": "dispatch_pr_rebase_resolve",
+                        "preconditions": [
+                            "active_controller_owner",
+                            "clean_exit_source_marker",
+                            "live_managed_target",
+                            "false_done_unresolved_or_not_commit_ready",
+                        ],
+                        "runner_authority": RUNNER_AUTHORITY,
+                        "no_generic_command": True,
+                    }
+                )
         actions.append(action)
     return actions
+
+
+@dataclass(frozen=True)
+class RebaseResolveFalseDoneRecovery:
+    retry_count: int
+    archived_artifact: str
+    error_reason: str | None = None
+    diagnostic: str | None = None
+
+
+def _record_rebase_resolve_false_done(
+    repo_root: Path, log_path: Path, pr_number: int, head_ref: str, marker: str
+) -> RebaseResolveFalseDoneRecovery:
+    state_dir = repo_root / ".refactor-loop" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_path = state_dir / "rebase-resolve-false-done-recovery.json"
+    archived_log, archive_error = _archive_rebase_resolve_false_done_log(log_path)
+    archived_artifact = str(archived_log.relative_to(repo_root))
+    if archive_error is not None:
+        reason = "rebase_resolve_false_done_archive_failed"
+        archive_path = log_path.with_name(f"{log_path.name}.false-done")
+        return RebaseResolveFalseDoneRecovery(
+            retry_count=0,
+            archived_artifact=archived_artifact,
+            error_reason=reason,
+            diagnostic=(
+                f"{reason}: pr={pr_number} head_ref={head_ref} log_path={log_path.relative_to(repo_root)} "
+                f"archive_path={archive_path.relative_to(repo_root)} error={archive_error}"
+            ),
+        )
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        state = {}
+    except (OSError, json.JSONDecodeError) as exc:
+        reason = "rebase_resolve_false_done_state_unreadable"
+        return RebaseResolveFalseDoneRecovery(
+            retry_count=0,
+            archived_artifact=archived_artifact,
+            error_reason=reason,
+            diagnostic=(
+                f"{reason}: pr={pr_number} head_ref={head_ref} state_path={state_path.relative_to(repo_root)} "
+                f"log_path={archived_artifact} error={type(exc).__name__}:{exc}"
+            ),
+        )
+    if not isinstance(state, dict):
+        reason = "rebase_resolve_false_done_state_invalid"
+        return RebaseResolveFalseDoneRecovery(
+            retry_count=0,
+            archived_artifact=archived_artifact,
+            error_reason=reason,
+            diagnostic=(
+                f"{reason}: pr={pr_number} head_ref={head_ref} state_path={state_path.relative_to(repo_root)} "
+                f"log_path={archived_artifact} error=top-level-json-is-not-object"
+            ),
+        )
+    key = f"PR:{pr_number}:{head_ref}"
+    record = state.get(key)
+    if record is None:
+        record = {"count": 0}
+    elif not isinstance(record, dict):
+        reason = "rebase_resolve_false_done_state_invalid"
+        return RebaseResolveFalseDoneRecovery(
+            retry_count=0,
+            archived_artifact=archived_artifact,
+            error_reason=reason,
+            diagnostic=(
+                f"{reason}: pr={pr_number} head_ref={head_ref} state_path={state_path.relative_to(repo_root)} "
+                f"log_path={archived_artifact} error=retry-record-is-not-object"
+            ),
+        )
+    try:
+        retry_count = int(record.get("count") or 0) + 1
+    except (TypeError, ValueError) as exc:
+        reason = "rebase_resolve_false_done_state_invalid"
+        return RebaseResolveFalseDoneRecovery(
+            retry_count=0,
+            archived_artifact=archived_artifact,
+            error_reason=reason,
+            diagnostic=(
+                f"{reason}: pr={pr_number} head_ref={head_ref} state_path={state_path.relative_to(repo_root)} "
+                f"log_path={archived_artifact} error=count:{type(exc).__name__}:{exc}"
+            ),
+        )
+    record["count"] = retry_count
+    record["source_artifact"] = archived_artifact
+    record["source_marker"] = marker
+    state[key] = record
+    try:
+        state_path.write_text(json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        reason = "rebase_resolve_false_done_state_write_failed"
+        return RebaseResolveFalseDoneRecovery(
+            retry_count=0,
+            archived_artifact=archived_artifact,
+            error_reason=reason,
+            diagnostic=(
+                f"{reason}: pr={pr_number} head_ref={head_ref} state_path={state_path.relative_to(repo_root)} "
+                f"log_path={archived_artifact} error={type(exc).__name__}:{exc}"
+            ),
+        )
+    return RebaseResolveFalseDoneRecovery(retry_count=int(record["count"]), archived_artifact=archived_artifact)
+
+
+def _archive_rebase_resolve_false_done_log(log_path: Path) -> tuple[Path, str | None]:
+    archive = log_path.with_name(f"{log_path.name}.false-done")
+    try:
+        log_path.replace(archive)
+    except OSError as exc:
+        return log_path, f"{type(exc).__name__}:{exc}"
+    return archive, None
 
 
 def _rebase_resolve_marker_from_log(log_path: Path) -> str:
@@ -1976,6 +2176,22 @@ def _reviewer_log_has_exit_zero(path: Path) -> bool:
     return any(line.strip() == "EXIT=0" for line in lines)
 
 
+def _reviewer_log_terminal_failed(path: Path) -> bool:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    for line in reversed(lines):
+        text = line.strip()
+        if not text.startswith("EXIT="):
+            continue
+        try:
+            return int(text.removeprefix("EXIT=")) != 0
+        except ValueError:
+            return True
+    return False
+
+
 def _reviewer_log_has_valid_marker(path: Path, pr_number: int, role: str) -> bool:
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -2025,6 +2241,93 @@ def latest_reviewer_heads(repo_root: Path, pr_number: int) -> dict[str, str]:
     return {role: head_sha for role, (_round_number, head_sha) in by_role.items()}
 
 
+def latest_valid_reviewer_rounds(repo_root: Path, pr_number: int) -> dict[str, tuple[int, str]]:
+    by_role: dict[str, tuple[int, str]] = {}
+    artifact_keys: set[tuple[str, int]] = set()
+    runs_dir = repo_root / ".refactor-loop" / "runs"
+    logs_dir = repo_root / ".refactor-loop" / "logs"
+    prompts_dir = repo_root / ".refactor-loop" / "prompts"
+    for path in sorted(runs_dir.glob(f"review-pr{pr_number}-*-r*.md")):
+        match = REVIEW_ARTIFACT_RE.match(path.name)
+        if not match or int(match.group(1)) != pr_number:
+            continue
+        role = match.group(2)
+        round_number = int(match.group(3))
+        artifact_keys.add((role, round_number))
+        log_path = logs_dir / f"review-pr{pr_number}-{role}-r{round_number}.log"
+        if not _reviewer_log_has_exit_zero(log_path):
+            continue
+        head_sha = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompts_dir / path.name) or _reviewed_head_sha_from_file(log_path)
+        if head_sha and _reviewer_log_has_valid_marker(log_path, pr_number, role):
+            existing = by_role.get(role)
+            if existing is None or round_number >= existing[0]:
+                by_role[role] = (round_number, head_sha)
+    for path in sorted(logs_dir.glob(f"review-pr{pr_number}-*-r*.log")):
+        match = REVIEW_LOG_RE.match(path.name)
+        if not match or int(match.group(1)) != pr_number:
+            continue
+        role = match.group(2)
+        round_number = int(match.group(3))
+        if (role, round_number) in artifact_keys:
+            continue
+        if not _reviewer_log_has_exit_zero(path) or not _reviewer_log_has_valid_marker(path, pr_number, role):
+            continue
+        prompt_path = prompts_dir / path.with_suffix(".md").name
+        head_sha = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompt_path)
+        if head_sha:
+            existing = by_role.get(role)
+            if existing is None or round_number >= existing[0]:
+                by_role[role] = (round_number, head_sha)
+    return by_role
+
+
+def pending_or_fresh_review_evidence_exists(repo_root: Path, pr_number: int) -> bool:
+    now = time.time()
+    for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
+        match = REVIEW_LOG_RE.match(path.name)
+        if not match or int(match.group(1)) != pr_number:
+            continue
+        if _reviewer_log_has_exit_zero(path) or _reviewer_log_terminal_failed(path):
+            continue
+        if now - path.stat().st_mtime < REVIEW_PENDING_SECONDS:
+            return True
+    return False
+
+
+def dead_reviewer_roles(repo_root: Path, pr_number: int) -> set[str]:
+    dead: set[str] = set()
+    now = time.time()
+    for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
+        match = REVIEW_LOG_RE.match(path.name)
+        if not match or int(match.group(1)) != pr_number:
+            continue
+        role = match.group(2)
+        if _reviewer_log_terminal_failed(path):
+            dead.add(role)
+            continue
+        if not _reviewer_log_has_exit_zero(path) and now - path.stat().st_mtime >= REVIEW_PENDING_SECONDS:
+            dead.add(role)
+    return dead
+
+
+def reviewer_roles_with_evidence(repo_root: Path, pr_number: int) -> set[str]:
+    roles: set[str] = set()
+    for path in sorted((repo_root / ".refactor-loop" / "runs").glob(f"review-pr{pr_number}-*-r*.md")):
+        match = REVIEW_ARTIFACT_RE.match(path.name)
+        if match and int(match.group(1)) == pr_number:
+            roles.add(match.group(2))
+    for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
+        match = REVIEW_LOG_RE.match(path.name)
+        if match and int(match.group(1)) == pr_number:
+            roles.add(match.group(2))
+    return roles
+
+
+def valid_required_review_round_complete(repo_root: Path, pr_number: int, head_sha: str) -> bool:
+    rounds = latest_valid_reviewer_rounds(repo_root, pr_number)
+    return all(rounds.get(role, (0, ""))[1] == head_sha for role in REQUIRED_REVIEW_ROLES)
+
+
 def pending_review_spawn_exists(repo_root: Path, pr_number: int) -> bool:
     pending_path = repo_root / ".refactor-loop" / ".controller-pending-events.log"
     try:
@@ -2067,8 +2370,18 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem], 
             continue
         if not item.head_sha or pending_review_spawn_exists(repo_root, item.number):
             continue
+        if valid_required_review_round_complete(repo_root, item.number, item.head_sha):
+            continue
+        if pending_or_fresh_review_evidence_exists(repo_root, item.number):
+            continue
         heads = latest_reviewer_heads(repo_root, item.number)
-        stale_roles = [role for role in REQUIRED_REVIEW_ROLES if heads.get(role, "") != item.head_sha]
+        dead_roles = dead_reviewer_roles(repo_root, item.number)
+        evidence_roles = reviewer_roles_with_evidence(repo_root, item.number)
+        stale_roles = [
+            role
+            for role in REQUIRED_REVIEW_ROLES
+            if heads.get(role, "") != item.head_sha and (heads.get(role, "") or role in dead_roles or role in evidence_roles)
+        ]
         if not stale_roles:
             continue
         actions.append(
@@ -2454,7 +2767,22 @@ def _worktree_merge_in_progress_resolved(repo_root: Path, worktree: Path | None)
     unmerged = git_text(["git", "-C", str(worktree), "diff", "--name-only", "--diff-filter=U"], cwd=repo_root)
     if unmerged.returncode != 0:
         return False
-    return not any(line.strip() for line in unmerged.stdout.splitlines())
+    if any(line.strip() for line in unmerged.stdout.splitlines()):
+        return False
+    status = git_text(["git", "-C", str(worktree), "status", "--porcelain"], cwd=repo_root)
+    if status.returncode != 0:
+        return False
+    rows = [line for line in status.stdout.splitlines() if line.strip()]
+    if not rows:
+        return False
+    for row in rows:
+        if len(row) < 3:
+            return False
+        index_status = row[0]
+        worktree_status = row[1]
+        if index_status == "?" or worktree_status not in {" ", "?"}:
+            return False
+    return True
 
 
 def safe_head_ref(value: str | None) -> str | None:
@@ -2573,21 +2901,6 @@ def _rebase_resolve_in_flight(repo_root: Path, pr_number: int, monitor: Any | No
         if _rebase_resolve_marker_from_log(log):
             continue
         if _harness_spawn_intent_log_suppresses_retry(log) or _canonical_in_flight_for_log(log, monitor):
-            return True
-    pending = repo_root / ".refactor-loop" / ".controller-pending-events.log"
-    try:
-        lines = pending.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
-    prefix = f"dispatch-pr-rebase-resolve:{pr_number}:"
-    for line in lines:
-        if " HARNESS_SPAWN_INTENT " not in line:
-            continue
-        try:
-            intent = json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(intent, dict) and str(intent.get("intent_id") or "").startswith(prefix):
             return True
     return False
 
@@ -3628,12 +3941,11 @@ def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) ->
     precondition_reasons: list[str] = []
     if candidate_path.exists():
         candidate = read_json(candidate_path, {})
-        if release_candidate_consumed_by_publish_result(repo_root, candidate):
-            precondition_reasons.append("release_candidate_already_published")
-        elif not release_candidate_target_ref_invalid(candidate, decision):
+        liveness = classify_release_candidate_liveness(repo_root, candidate, decision)
+        if liveness.blocks_dispatch:
             return []
-        else:
-            precondition_reasons.append("release_candidate_target_ref_invalid")
+        if liveness.stale_reason:
+            precondition_reasons.append(liveness.stale_reason)
     score = _release_countdown_score(repo_root, scorer=scorer)
     if not score.get("ready"):
         return []
@@ -3673,43 +3985,13 @@ def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) ->
 
 
 def release_candidate_target_ref_invalid(candidate: Any, decision: Any | None = None) -> bool:
-    if not isinstance(candidate, dict):
-        return False
-    if "target_ref" not in candidate:
-        return True
-    target_ref = candidate.get("target_ref")
-    if not isinstance(target_ref, str) or not target_ref.strip():
-        return True
-    generated_at = parse_time(candidate.get("generated_at"))
-    expires_at = parse_time(candidate.get("expires_at"))
-    now = datetime.now(timezone.utc)
-    if generated_at is not None and (now - generated_at).total_seconds() > 120 * 60:
-        return True
-    if expires_at is not None and expires_at <= now:
-        return True
-    if not isinstance(decision, dict) or not decision:
-        return False
-    if candidate.get("ready") is not True:
-        return True
-    for field in ("from_version", "to_version", "bump_type", "coordinate_policy"):
-        if candidate.get(field) != decision.get(field):
-            return True
-    expected_digest = candidate.get("decision_digest")
-    return not isinstance(expected_digest, str) or canonical_digest(decision) != expected_digest
+    liveness = classify_release_candidate_liveness(Path(), candidate, decision or {})
+    return liveness.stale_reason == "release_candidate_target_ref_invalid"
 
 
 def release_candidate_consumed_by_publish_result(repo_root: Path, candidate: Any) -> bool:
-    if not isinstance(candidate, dict):
-        return False
-    to_version = str(candidate.get("to_version") or "").strip()
-    if not to_version:
-        return False
-    result = read_json(repo_root / ".refactor-loop" / "state" / "release-publish-result.json", {})
-    if not isinstance(result, dict):
-        return False
-    version = str(result.get("version") or "").strip()
-    tag = str(result.get("tag") or "").strip()
-    return version == to_version or tag == f"v{to_version}"
+    liveness = classify_release_candidate_liveness(repo_root, candidate, {})
+    return liveness.stale_reason == "release_candidate_consumed_by_publish_result"
 
 
 def release_publish_actions(repo_root: Path) -> list[dict[str, Any]]:
@@ -3720,7 +4002,8 @@ def release_publish_actions(repo_root: Path) -> list[dict[str, Any]]:
     if release_candidate_consumed_by_publish_result(repo_root, candidate):
         return []
     decision = read_json(repo_root / ".refactor-loop" / "state" / "release-decision.json", {})
-    if release_candidate_target_ref_invalid(candidate, decision):
+    liveness = classify_release_candidate_liveness(repo_root, candidate, decision)
+    if not liveness.blocks_dispatch:
         return []
     target_ref = str(candidate.get("target_ref") or "").strip()
     to_version = str(candidate.get("to_version") or "").strip()

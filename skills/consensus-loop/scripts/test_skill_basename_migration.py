@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,6 +20,39 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.restart import DAEMON_COMMANDS, daemon_target
+
+
+OLD_SKILL_PATH_LITERAL = "skills/codex-refactor-loop"
+
+
+def _git_tracked_files(repo_root: Path) -> list[Path]:
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), "ls-files", "-z"],
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+    return [
+        repo_root / path.decode("utf-8")
+        for path in result.stdout.split(b"\0")
+        if path
+    ]
+
+
+def _old_skill_path_literal_offenders(repo_root: Path, allowed: set[str]) -> list[str]:
+    offenders: list[str] = []
+    for path in _git_tracked_files(repo_root):
+        if path.is_dir():
+            continue
+        relative = path.relative_to(repo_root).as_posix()
+        if relative in allowed:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if OLD_SKILL_PATH_LITERAL in text:
+            offenders.append(relative)
+    return offenders
 
 
 class SkillBasenameMigrationTests(unittest.TestCase):
@@ -60,21 +95,31 @@ class SkillBasenameMigrationTests(unittest.TestCase):
             "skills/consensus-loop/migrations/2026-06-09-skill-basename-rename.json",
             "skills/consensus-loop/scripts/test_skill_basename_migration.py",
         }
-        offenders: list[str] = []
-        for path in REPO_ROOT.rglob("*"):
-            if path.is_dir() or ".git" in path.parts:
-                continue
-            relative = path.relative_to(REPO_ROOT).as_posix()
-            if relative in allowed:
-                continue
-            try:
-                text = path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                continue
-            if "skills/codex-refactor-loop" in text:
-                offenders.append(relative)
+        self.assertEqual([], _old_skill_path_literal_offenders(REPO_ROOT, allowed))
 
-        self.assertEqual([], offenders)
+    def test_old_skill_path_scan_ignores_untracked_runtime_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            subprocess.run(["git", "-C", str(repo_root), "init", "-q"], check=True)
+            runtime_file = repo_root / ".refactor-loop" / "runs" / "scratch.md"
+            runtime_file.parent.mkdir(parents=True)
+            runtime_file.write_text(OLD_SKILL_PATH_LITERAL, encoding="utf-8")
+
+            self.assertEqual([], _old_skill_path_literal_offenders(repo_root, set()))
+
+    def test_old_skill_path_scan_reports_tracked_source_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            subprocess.run(["git", "-C", str(repo_root), "init", "-q"], check=True)
+            source_file = repo_root / "docs" / "source.md"
+            source_file.parent.mkdir(parents=True)
+            source_file.write_text(OLD_SKILL_PATH_LITERAL, encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo_root), "add", "docs/source.md"], check=True)
+
+            self.assertEqual(
+                ["docs/source.md"],
+                _old_skill_path_literal_offenders(repo_root, set()),
+            )
 
     def test_daemon_commands_render_new_skill_cli_entrypoint(self) -> None:
         ctx = LoopContext.load(repo_root=REPO_ROOT, skill_root=SKILL_ROOT, env={})

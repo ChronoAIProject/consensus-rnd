@@ -1614,6 +1614,27 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.status for result in results], ["applied"])
         self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
 
+    def test_wakeup_runner_routes_false_done_rebase_recovery_dispatch(self) -> None:
+        log = self.repo / ".refactor-loop/logs/rebase-resolve-pr77-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+        action = self.rebase_dispatch_action(
+            action_id="dispatch-pr-rebase-resolve:false-done:77:refactor/iter77-worker:1",
+            source_artifact=".refactor-loop/logs/rebase-resolve-pr77-r1.log",
+            source_marker="REBASE_RESOLVE_DONE:77:ok",
+            reason="rebase_resolve_done_without_resolved_merge",
+            preconditions=[
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_managed_target",
+                "false_done_unresolved_or_not_commit_ready",
+            ],
+        )
+        actions = FakeActions()
+        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
+        self.assertEqual([result.status for result in results], ["applied"])
+        self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
+        self.assertNotIn("mode", actions.calls[0][1])
+
     def test_hard_gate_dispatch_pr_rebase_resolve_is_not_starved_by_spawn_budget(self) -> None:
         spawns = [
             self.spawn_action(
@@ -1729,6 +1750,40 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
         self.assertEqual([result.status for result in results], ["applied"])
         self.assertEqual([call[0] for call in actions.calls], ["commit_push_resolved_pr_rebase"])
+
+    def test_wakeup_runner_blocks_stale_base_dispatch_without_base_ahead_precondition(self) -> None:
+        action = self.rebase_dispatch_action(
+            action_id="dispatch-pr-rebase-resolve:77:abc123",
+            preconditions=["active_controller_owner", "live_managed_target"],
+        )
+        actions = FakeActions()
+        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
+        self.assertEqual([result.status for result in results], ["blocked"])
+        self.assertEqual("dispatch_pr_rebase_resolve_missing_precondition:base_ahead_pr_branch", results[0].reason)
+        self.assertEqual([], actions.calls)
+
+    def test_wakeup_runner_reports_missing_false_done_recovery_guard_for_recovery_shape(self) -> None:
+        log = self.repo / ".refactor-loop/logs/rebase-resolve-pr77-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+        action = self.rebase_dispatch_action(
+            action_id="dispatch-pr-rebase-resolve:false-done:77:refactor/iter77-worker:1",
+            source_artifact=".refactor-loop/logs/rebase-resolve-pr77-r1.log",
+            source_marker="REBASE_RESOLVE_DONE:77:ok",
+            preconditions=[
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_managed_target",
+                "base_ahead_pr_branch",
+            ],
+        )
+        actions = FakeActions()
+        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
+        self.assertEqual([result.status for result in results], ["blocked"])
+        self.assertEqual(
+            "dispatch_pr_rebase_resolve_missing_precondition:false_done_unresolved_or_not_commit_ready",
+            results[0].reason,
+        )
+        self.assertEqual([], actions.calls)
 
     def test_wakeup_runner_blocked_lifecycle_action_does_not_dead_stop_later_spawn_batch(self) -> None:
         blocked = self.implementation_output_action(
@@ -2482,6 +2537,11 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertTrue(candidate["ready"])
         self.assertEqual(candidate["target_ref"], "origin/dev")
         self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(
+            f"WAKEUP_RUNNER_RELEASE_DISPATCH_STALE_CANDIDATE:{self.release_dispatch_action()['action_id']}:release_candidate_target_ref_invalid",
+            pending,
+        )
 
     def test_release_dispatch_recovers_existing_candidate_for_previous_decision(self) -> None:
         self.write_release_dispatch_fixtures()
@@ -2517,7 +2577,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                         "release_auto_opt_in",
                         "release_gate_ready",
                         "decision_artifact_only",
-                        "release_candidate_target_ref_invalid",
+                        "release_candidate_decision_mismatch",
                     ],
                 )
             ),
@@ -2529,6 +2589,60 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(candidate["target_ref"], "origin/dev")
         self.assertEqual(candidate["from_version"], "1.2.3-beta.4")
         self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
+
+    def test_release_dispatch_recovers_consumed_candidate(self) -> None:
+        self.write_release_dispatch_fixtures()
+        current_decision = release_decision("1.2.3-beta.4", "1.2.3-beta.5")
+        (self.repo / ".refactor-loop/state/release-decision.json").write_text(
+            json.dumps(current_decision),
+            encoding="utf-8",
+        )
+        existing = self.repo / ".refactor-loop/state/release-candidate.json"
+        existing.write_text(
+            json.dumps(
+                {
+                    "ready": True,
+                    "target_ref": "origin/dev",
+                    "from_version": "1.2.3-beta.4",
+                    "to_version": "1.2.3-beta.5",
+                    "bump_type": "patch",
+                    "coordinate_policy": None,
+                    "generated_at": isoformat(datetime.now(timezone.utc)),
+                    "expires_at": isoformat(datetime.now(timezone.utc) + timedelta(minutes=120)),
+                    "decision_digest": canonical_digest(current_decision),
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop/state/release-publish-result.json").write_text(
+            json.dumps({"version": "1.2.3-beta.5", "tag": "v1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+
+        results = self.run_result(
+            self.base_plan(
+                self.release_dispatch_action(
+                    preconditions=[
+                        "active_controller_owner",
+                        "release_auto_opt_in",
+                        "release_gate_ready",
+                        "decision_artifact_only",
+                        "release_candidate_consumed_by_publish_result",
+                    ],
+                )
+            ),
+            actions=FakeActions(),
+        )
+
+        self.assertEqual(results[0].status, "applied")
+        candidate = json.loads(existing.read_text(encoding="utf-8"))
+        self.assertEqual(candidate["from_version"], "1.2.3-beta.4")
+        self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(
+            f"WAKEUP_RUNNER_RELEASE_DISPATCH_STALE_CANDIDATE:{self.release_dispatch_action()['action_id']}:release_candidate_consumed_by_publish_result",
+            pending,
+        )
 
     def test_release_dispatch_recovers_stale_applied_ledger_with_empty_target_ref(self) -> None:
         self.write_release_dispatch_fixtures()
@@ -2560,7 +2674,55 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(candidate["target_ref"], "origin/dev")
         pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn(
-            f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action['action_id']}:target_ref_invalid",
+            f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action['action_id']}:release_candidate_target_ref_invalid",
+            pending,
+        )
+
+    def test_release_dispatch_recovers_stale_applied_ledger_with_consumed_candidate(self) -> None:
+        self.write_release_dispatch_fixtures()
+        current_decision = release_decision("1.2.3-beta.4", "1.2.3-beta.5")
+        (self.repo / ".refactor-loop/state/release-decision.json").write_text(json.dumps(current_decision), encoding="utf-8")
+        candidate = self.repo / ".refactor-loop/state/release-candidate.json"
+        candidate.write_text(
+            json.dumps(
+                {
+                    "ready": True,
+                    "target_ref": "origin/dev",
+                    "from_version": "1.2.3-beta.4",
+                    "to_version": "1.2.3-beta.5",
+                    "bump_type": "patch",
+                    "coordinate_policy": None,
+                    "generated_at": isoformat(datetime.now(timezone.utc)),
+                    "expires_at": isoformat(datetime.now(timezone.utc) + timedelta(minutes=120)),
+                    "decision_digest": canonical_digest(current_decision),
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop/state/release-publish-result.json").write_text(
+            json.dumps({"tag": "v1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+        action = self.release_dispatch_action(
+            preconditions=[
+                "active_controller_owner",
+                "release_auto_opt_in",
+                "release_gate_ready",
+                "decision_artifact_only",
+                "release_candidate_consumed_by_publish_result",
+            ],
+        )
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": ""}) + "\n",
+            encoding="utf-8",
+        )
+
+        results = self.run_result(self.base_plan(action), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "applied")
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(
+            f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action['action_id']}:release_candidate_consumed_by_publish_result",
             pending,
         )
 
@@ -2629,6 +2791,45 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                         "release_gate_ready",
                         "decision_artifact_only",
                         "release_candidate_target_ref_invalid",
+                    ],
+                )
+            ),
+            actions=FakeActions(),
+        )
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "release_candidate_already_exists")
+
+    def test_release_dispatch_rejects_forged_stale_precondition(self) -> None:
+        self.write_release_dispatch_fixtures()
+        current_decision = release_decision("1.2.3-beta.4", "1.2.3-beta.5")
+        existing = self.repo / ".refactor-loop/state/release-candidate.json"
+        existing.write_text(
+            json.dumps(
+                {
+                    "ready": True,
+                    "target_ref": "origin/dev",
+                    "from_version": "1.2.3-beta.4",
+                    "to_version": "1.2.3-beta.5",
+                    "bump_type": "patch",
+                    "coordinate_policy": None,
+                    "generated_at": isoformat(datetime.now(timezone.utc)),
+                    "expires_at": isoformat(datetime.now(timezone.utc) + timedelta(minutes=120)),
+                    "decision_digest": canonical_digest(current_decision),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        results = self.run_result(
+            self.base_plan(
+                self.release_dispatch_action(
+                    preconditions=[
+                        "active_controller_owner",
+                        "release_auto_opt_in",
+                        "release_gate_ready",
+                        "decision_artifact_only",
+                        "release_candidate_expired",
                     ],
                 )
             ),
@@ -2742,7 +2943,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         prompt = Path(launch.call_args.kwargs["prompt"])
         self.assertEqual(prompt.name, f"remote-ci-fix-pr77-contract-tests-{'a' * 12}-a1.md")
         self.assertIn("PR: `77`", prompt.read_text(encoding="utf-8"))
-        self.assertIn("failed check: `contract-tests`", prompt.read_text(encoding="utf-8").replace("失败 check", "failed check"))
+        self.assertIn("failing check: `contract-tests`", prompt.read_text(encoding="utf-8"))
         attempts = json.loads((self.repo / ".refactor-loop/state/remote-ci-fix-attempts.json").read_text(encoding="utf-8"))
         self.assertEqual(attempts[f"pr77:{'a' * 40}:contract-tests"], 1)
         self.assertEqual(actions.calls, [])

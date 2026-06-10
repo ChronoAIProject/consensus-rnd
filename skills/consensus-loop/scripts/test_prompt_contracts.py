@@ -56,10 +56,17 @@ class PromptContractsTests(unittest.TestCase):
                 body = (PROMPTS_DIR / name).read_text(encoding="utf-8")
                 rendered = inline_prompt_contracts(body, skill_root=SKILL_ROOT)
 
-                self.assertIn("zsh-safe 退出码变量", rendered)
-                self.assertIn("禁止**用 `status`", rendered)
+                self.assertIn("zsh-safe exit-code variables", rendered)
+                self.assertIn("**do not** use `status`", rendered)
                 self.assertIn("post_exit_code=$?", rendered)
                 self.assertNotIn("status=$?", rendered)
+
+    def test_prompts_do_not_keep_hidden_legacy_contract_anchor_blocks(self) -> None:
+        for path in PROMPTS_DIR.glob("*.md"):
+            body = path.read_text(encoding="utf-8")
+            with self.subTest(prompt=path.name):
+                self.assertNotIn("Legacy contract anchors for source-regression compatibility", body)
+                self.assertNotIn("legacy-section-headings", body)
 
     def test_decomposition_apply_prompt_contract_requires_plan_level_judge_fields(self) -> None:
         meta_judge = (PROMPTS_DIR / "meta-judge.md").read_text(encoding="utf-8")
@@ -81,9 +88,9 @@ class PromptContractsTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, meta_judge)
         for needle in (
-            "worker 输出、validator 通过、`.refactor-loop/host.env`、prompt body 或第一次 `consensus:decompose` 均不是 apply 授权来源",
+            "Worker output, validator success, `.refactor-loop/host.env`, the prompt body, or the first `consensus:decompose` are not apply authorization sources",
             'controller_action="apply_issue_decomposition_plan"',
-            "plan-level judge artifact 结构字段 + validated plan digest/proof + #191 owner + live parent open/tracking + sentinel idempotency",
+            "plan-level judge artifact structure fields plus validated plan digest/proof plus #191 owner plus live parent open/tracking plus sentinel idempotency",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, implement)
@@ -102,17 +109,17 @@ class PromptContractsTests(unittest.TestCase):
                 "Issue-authorized feature, bug, doc, refactor, and governance work may proceed",
             ),
             "prompts/audit.md": (
-                "不越权扩展范围",
-                "当前 audit/issue 授权的 violation 或 work-unit scope",
+                "No authority expansion",
+                "current audit/issue-authorized violation or work-unit scope",
             ),
             "prompts/implement.md": (
-                "不越权扩展范围",
-                "source issue、consensus artifact 和 `scope_paths` 授权的当前 work-unit",
-                "feature、bug、doc、refactor、governance 工作",
+                "Do not expand authority",
+                "current work unit authorized by the source issue, consensus artifact, and `scope_paths`",
+                "feature, bug, doc, refactor, and governance work",
             ),
             "prompts/triage-external-issue.md": (
-                "bounded `scope_paths`、desired end state / invariant 和 verification hints",
-                "类别本身不是 reject 理由",
+                "bounded `scope_paths`, desired end state / invariant, and verification hints",
+                "The category itself is not a reject reason",
                 "no-bounded-work-unit",
             ),
             "prompts/reviewer-architect.md": (

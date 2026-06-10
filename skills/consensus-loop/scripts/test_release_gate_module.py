@@ -21,6 +21,7 @@ sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop import restart
+from codex_refactor_loop.release.candidate_liveness import classify_release_candidate_liveness
 from codex_refactor_loop.release import gate
 
 
@@ -80,6 +81,31 @@ def write_live_state(repo: Path) -> None:
     write_json(state / "meta-resolutions.json", {"unresolved_escalate_human": []})
     write_json(state / "recent-pr-merges.json", {"count": 1})
     write_json(repo / ".refactor-loop/.concurrency-monitor-state.json", {"zero_streak": 0})
+
+
+def release_liveness_decision() -> dict[str, object]:
+    return {
+        "from_version": "1.0.0-beta.1",
+        "to_version": "1.0.0-beta.2",
+        "bump_type": "patch",
+        "coordinate_policy": None,
+        "ready": True,
+    }
+
+
+def release_liveness_candidate(
+    decision: dict[str, object],
+    *,
+    generated_at: str | None = None,
+    expires_at: str | None = None,
+) -> dict[str, object]:
+    return {
+        **decision,
+        "target_ref": "origin/review",
+        "generated_at": generated_at or gate.isoformat(NOW),
+        "expires_at": expires_at or gate.isoformat(NOW + timedelta(minutes=120)),
+        "decision_digest": gate.canonical_digest(decision),
+    }
 
 
 class FakeRunner:
@@ -152,6 +178,55 @@ class ReleaseGateModuleTests(unittest.TestCase):
             self.assertNotIn("release.yml", candidate["next_step_hint"])
             self.assertFalse((repo / ".refactor-loop/.controller-pending-events.log").exists())
             self.assertFalse((repo / ".refactor-loop/dispatch-queue").exists())
+
+    def test_candidate_liveness_classifies_consumed_candidate_as_replaceable(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            decision = release_liveness_decision()
+            candidate = release_liveness_candidate(decision)
+            write_json(repo / ".refactor-loop/state/release-publish-result.json", {"tag": "v1.0.0-beta.2"})
+
+            liveness = classify_release_candidate_liveness(repo, candidate, decision, now=NOW)
+
+            self.assertFalse(liveness.blocks_dispatch)
+            self.assertEqual(liveness.stale_reason, "release_candidate_consumed_by_publish_result")
+
+    def test_candidate_liveness_blocks_live_candidate(self) -> None:
+        decision = release_liveness_decision()
+        candidate = release_liveness_candidate(decision)
+
+        liveness = classify_release_candidate_liveness(Path(), candidate, decision, now=NOW)
+
+        self.assertTrue(liveness.blocks_dispatch)
+        self.assertIsNone(liveness.stale_reason)
+
+    def test_candidate_liveness_blocks_malformed_expiry(self) -> None:
+        decision = release_liveness_decision()
+        candidate = release_liveness_candidate(decision, expires_at="not-a-time")
+
+        liveness = classify_release_candidate_liveness(Path(), candidate, decision, now=NOW)
+
+        self.assertTrue(liveness.blocks_dispatch)
+        self.assertIsNone(liveness.stale_reason)
+
+    def test_candidate_liveness_blocks_malformed_generated_at(self) -> None:
+        decision = release_liveness_decision()
+        candidate = release_liveness_candidate(decision, generated_at="not-a-time")
+
+        liveness = classify_release_candidate_liveness(Path(), candidate, decision, now=NOW)
+
+        self.assertTrue(liveness.blocks_dispatch)
+        self.assertIsNone(liveness.stale_reason)
+
+    def test_candidate_liveness_blocks_future_generated_at(self) -> None:
+        decision = release_liveness_decision()
+        future_generated_at = gate.isoformat(NOW + timedelta(minutes=1))
+        candidate = release_liveness_candidate(decision, generated_at=future_generated_at)
+
+        liveness = classify_release_candidate_liveness(Path(), candidate, decision, now=NOW)
+
+        self.assertTrue(liveness.blocks_dispatch)
+        self.assertIsNone(liveness.stale_reason)
 
     def test_dispatch_candidate_uses_review_base_target_ref_when_release_target_ref_is_unset(self) -> None:
         with copy_repo_fixture() as tmp:

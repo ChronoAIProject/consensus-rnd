@@ -12,7 +12,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-CANONICAL_BODY = """## 共识研发不动点（由 consensus-rnd 管理）
+CANONICAL_BODY = """## Consensus R&D Foundational Invariants (managed by consensus-rnd)
+
+- FI-001 AI-authored artifacts are untrusted by default; before entering mainline, they must pass independent checks, including the applicable mix of consensus, review, or automated verification.
+- FI-002 Host facts must be injected by host configuration or host rules; generic skills and engines must not hardcode project, organization, path, branch, or personnel facts; skill-private runtime directories such as `.refactor-loop/` must not become host production configuration or ledger SSOT.
+- FI-003 The stable core stays small and auditable; high-change material belongs in host rules, prompts, scripts, or extension layers instead of becoming core invariants.
+- FI-004 Facts that cross processes, turns, or nodes must have an authoritative record; in-process memory, caches, and temporary variables must not masquerade as fact sources.
+- FI-005 Boundaries take precedence over convenience; responsibility, layering, protocol, and state ownership must be clear, and shortcut layers must not bypass the main path.
+- FI-006 Changes must be verifiable and evidence-based; failures, gaps, and out-of-scope promises must be exposed explicitly, and tests must not be disabled to force a pass.
+- FI-007 Prefer deletion; remove deprecated paths directly unless host rules explicitly require migration-period compatibility.
+"""
+
+ZH_COMPATIBILITY_BODY = """## 共识研发不动点（由 consensus-rnd 管理）
 
 - FI-001 AI 产物默认不可信；进入主线前必须经过独立检查，至少包含共识、review 或自动验证中的适用组合。
 - FI-002 Host 事实必须由 host 配置或 host 规则注入；通用 skill / engine 不硬编码具体项目、组织、路径、分支或人员事实；skill-private runtime directories such as `.refactor-loop/` must not become host production configuration or ledger SSOT.
@@ -42,7 +53,35 @@ def sha256_text(text: str) -> str:
 
 
 CANONICAL_HASH = sha256_text(CANONICAL_BODY)
-KNOWN_CANONICAL_HASHES = frozenset({sha256_text(OLD_CANONICAL_BODY)})
+ZH_COMPATIBILITY_HASH = sha256_text(ZH_COMPATIBILITY_BODY)
+OLD_CANONICAL_HASH = sha256_text(OLD_CANONICAL_BODY)
+
+
+@dataclass(frozen=True)
+class FixedPointPayload:
+    language: str
+    body: str
+    legacy_bodies: tuple[str, ...] = ()
+
+    @property
+    def current_hash(self) -> str:
+        return sha256_text(self.body)
+
+    @property
+    def known_hashes(self) -> frozenset[str]:
+        return frozenset({self.current_hash, *(sha256_text(body) for body in self.legacy_bodies)})
+
+
+PAYLOAD_CATALOG = {
+    "en": FixedPointPayload("en", CANONICAL_BODY, (ZH_COMPATIBILITY_BODY, OLD_CANONICAL_BODY)),
+    "zh": FixedPointPayload("zh", ZH_COMPATIBILITY_BODY, (OLD_CANONICAL_BODY, CANONICAL_BODY)),
+}
+KNOWN_CANONICAL_HASHES = frozenset(
+    hash_value
+    for payload in PAYLOAD_CATALOG.values()
+    for hash_value in payload.known_hashes
+    if hash_value != CANONICAL_HASH
+)
 
 
 class FixedPointError(Exception):
@@ -51,7 +90,7 @@ class FixedPointError(Exception):
 
 @dataclass(frozen=True)
 class ProjectRulesFixedPointReport:
-    """refactor helper, no behavior change: immutable probe result payload."""
+    """Immutable project-rules fixed-point probe result."""
 
     status: str
     reason: str
@@ -98,14 +137,24 @@ class ProjectRulesPatchArtifact:
 
 
 class ProjectRulesFixedPointProbe:
-    def __init__(self, repo_root: str, project_rules: str | None = None) -> None:
+    def __init__(
+        self,
+        repo_root: str,
+        project_rules: str | None = None,
+        host_work_language: str | None = None,
+    ) -> None:
         self.repo_root = self._resolve_repo_root(repo_root)
         self.target = self._resolve_target(project_rules if project_rules else "CLAUDE.md")
         self.target_relative = self.target.relative_to(self.repo_root)
+        self.payload = self._select_payload(host_work_language)
 
     @classmethod
     def from_env(cls) -> "ProjectRulesFixedPointProbe":
-        return cls(os.environ.get("REPO_ROOT", ""), os.environ.get("PROJECT_RULES"))
+        return cls(
+            os.environ.get("REPO_ROOT", ""),
+            os.environ.get("PROJECT_RULES"),
+            os.environ.get("HOST_WORK_LANGUAGE"),
+        )
 
     def inspect(self) -> ProjectRulesFixedPointReport:
         original = self._read_target()
@@ -127,6 +176,15 @@ class ProjectRulesFixedPointProbe:
         if not target.is_relative_to(self.repo_root):
             raise FixedPointError(f"PROJECT_RULES escapes REPO_ROOT: {project_rules}")
         return target
+
+    def _select_payload(self, host_work_language: str | None) -> FixedPointPayload:
+        language = (host_work_language or "").strip()
+        if not language or language == "default":
+            language = "en"
+        try:
+            return PAYLOAD_CATALOG[language]
+        except KeyError as exc:
+            raise FixedPointError(f"invalid HOST_WORK_LANGUAGE: {language}") from exc
 
     def _read_target(self) -> str:
         try:
@@ -159,7 +217,7 @@ class ProjectRulesFixedPointProbe:
         marker_hash = start.group(1)
         if marker_hash != enclosed_hash:
             return self._blocked_report(text, "tampered", "managed block hash mismatch; refusing to apply repair")
-        if enclosed_hash == CANONICAL_HASH:
+        if enclosed_hash == self.payload.current_hash:
             return ProjectRulesFixedPointReport(
                 status="current",
                 reason="current",
@@ -167,7 +225,7 @@ class ProjectRulesFixedPointProbe:
                 target_relative=self.target_relative,
                 original_text=text,
             )
-        if enclosed_hash not in KNOWN_CANONICAL_HASHES:
+        if enclosed_hash not in self._known_payload_hashes():
             return self._blocked_report(text, "unknown-old", "unknown managed block version; refusing to apply repair")
 
         proposed = text[: start.start()] + self._managed_block() + text[end_index + len(END_MARKER):]
@@ -195,9 +253,16 @@ class ProjectRulesFixedPointProbe:
 
     def _managed_block(self) -> str:
         return (
-            f"<!-- consensus-rnd:foundational-invariants:start version=1 sha256={CANONICAL_HASH} -->\n"
-            f"{CANONICAL_BODY}"
+            f"<!-- consensus-rnd:foundational-invariants:start version=1 sha256={self.payload.current_hash} -->\n"
+            f"{self.payload.body}"
             f"{END_MARKER}"
+        )
+
+    def _known_payload_hashes(self) -> frozenset[str]:
+        return frozenset(
+            hash_value
+            for payload in PAYLOAD_CATALOG.values()
+            for hash_value in payload.known_hashes
         )
 
 

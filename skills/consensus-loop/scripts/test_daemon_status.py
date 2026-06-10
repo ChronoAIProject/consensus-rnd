@@ -17,6 +17,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import daemon_status
+from codex_refactor_loop import restart
+from codex_refactor_loop.context import LoopContext
 
 
 class DaemonStatusProjectionTests(unittest.TestCase):
@@ -60,6 +62,111 @@ class DaemonStatusProjectionTests(unittest.TestCase):
         self.assertEqual("not-owner", payload["daemons"][0]["status"])
         self.assertEqual("octocat", payload["daemons"][0]["current_github_login"])
         self.assertEqual("display-only", payload["daemons"][0]["identity_authority"])
+        self.assertIn("heartbeat_status", payload["daemons"][0])
+        self.assertIn("stale_reason", payload["daemons"][0])
+
+    def test_stale_heartbeat_reason_and_age_are_read_only(self) -> None:
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+        heartbeat = self.tmp / ".refactor-loop" / "heartbeats" / "concurrency_monitor.ts"
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+        heartbeat.write_text("1000\n", encoding="utf-8")
+        pid = self.tmp / ".refactor-loop" / "locks" / "concurrency_monitor.pid"
+        pid.parent.mkdir(parents=True, exist_ok=True)
+        pid.write_text("123\n", encoding="utf-8")
+        (self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect") as collect_inventory:
+                collect_inventory.return_value = daemon_status.DaemonProcessInventory(())
+                with mock.patch("codex_refactor_loop.restart.time.time", return_value=1120):
+                    with mock.patch("codex_refactor_loop.daemon_status.pid_alive", return_value=True):
+                        report = daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        daemon = next(item for item in report.to_json()["daemons"] if item["name"] == "concurrency_monitor")
+        self.assertEqual("stale", daemon["status"])
+        self.assertEqual("stale", daemon["heartbeat_status"])
+        self.assertEqual(120, daemon["heartbeat_age_seconds"])
+        self.assertEqual("heartbeat-stale:120s", daemon["stale_reason"])
+        self.assertEqual("123\n", pid.read_text(encoding="utf-8"))
+        self.assertEqual("1000\n", heartbeat.read_text(encoding="utf-8"))
+
+    def test_future_heartbeat_is_malformed_stale_projection_without_writing_it(self) -> None:
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+        heartbeat = self.tmp / ".refactor-loop" / "heartbeats" / "comment-monitor.ts"
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+        heartbeat.write_text("1200\n", encoding="utf-8")
+        pid = self.tmp / ".refactor-loop" / "locks" / "comment-monitor.pid"
+        pid.parent.mkdir(parents=True, exist_ok=True)
+        pid.write_text("456\n", encoding="utf-8")
+        (self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect") as collect_inventory:
+                collect_inventory.return_value = daemon_status.DaemonProcessInventory(())
+                with mock.patch("codex_refactor_loop.restart.time.time", return_value=1120):
+                    with mock.patch("codex_refactor_loop.daemon_status.pid_alive", return_value=True):
+                        report = daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        daemon = next(item for item in report.to_json()["daemons"] if item["name"] == "comment-monitor")
+        self.assertEqual("stale", daemon["status"])
+        self.assertEqual("malformed", daemon["heartbeat_status"])
+        self.assertIsNone(daemon["heartbeat_age_seconds"])
+        self.assertEqual("heartbeat-future", daemon["stale_reason"])
+        self.assertEqual("456\n", pid.read_text(encoding="utf-8"))
+        self.assertEqual("1200\n", heartbeat.read_text(encoding="utf-8"))
+
+    def test_orphan_child_lock_holder_is_stale_read_only_projection(self) -> None:
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+        ctx = LoopContext.load(
+            repo_root=self.tmp,
+            skill_root=SCRIPT_DIR.parent,
+            read_only=True,
+            env=env,
+        )
+        target = restart.daemon_target(
+            ctx,
+            "phase9_router_daemon",
+            ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon", "--interval", "120"),
+        )
+        heartbeat = self.tmp / ".refactor-loop" / "heartbeats" / "phase9_router_daemon.ts"
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+        heartbeat.write_text("1000\n", encoding="utf-8")
+        pid = self.tmp / ".refactor-loop" / "locks" / "phase9_router_daemon.pid"
+        pid.parent.mkdir(parents=True, exist_ok=True)
+        pid.write_text("999\n", encoding="utf-8")
+        fingerprint = restart.DaemonLaunchFingerprint.current(
+            ctx,
+            "phase9_router_daemon",
+            target.command,
+        )
+        fingerprint.write(self.tmp / ".refactor-loop" / "locks" / "phase9_router_daemon.fingerprint.json")
+        lock_file = self.tmp / ".refactor-loop" / "phase9-router.lock"
+        lock_file.write_text("pid=789\n", encoding="utf-8")
+        (self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+        inventory = restart.DaemonProcessInventory((restart.DaemonProcess(789, " ".join(target.command)),))
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=inventory):
+                with mock.patch("codex_refactor_loop.restart.time.time", return_value=1001):
+                    with mock.patch("codex_refactor_loop.daemon_status.pid_alive", side_effect=lambda candidate: candidate == 789):
+                        report = daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        daemon = next(item for item in report.to_json()["daemons"] if item["name"] == "phase9_router_daemon")
+        self.assertEqual("stale", daemon["status"])
+        self.assertEqual("orphan-lock-holders:1", daemon["stale_reason"])
+        self.assertEqual([789], daemon["managed_child_pids"])
+        self.assertEqual([789], daemon["bounded_lock_holder_pids"])
+        self.assertEqual("999\n", pid.read_text(encoding="utf-8"))
+        self.assertEqual("pid=789\n", lock_file.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

@@ -71,9 +71,6 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
         self.checker_module = load_checker_module()
         self.smoke_module = load_host_fixture_smoke_module()
 
-    # Refactor (iter259/issue-259):
-    #   Old pattern: check-degradation --static 把 downstream/plugin host root 当 source tree 扫描,吐 skills/consensus-loop/... required-file false-positive(每 tick rc=1)
-    #   New principle: degradation.py 内加私有 not-source-repo guard:无 source sentinels 时 rc=0 + reason not-source-repo;source repo candidate 仍 fail-closed;不新增 SourceRepoValidationContext,不改 manifest.py
     def test_static_checker_treats_plugin_host_root_as_not_source_repo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             host = Path(tmp) / "host"

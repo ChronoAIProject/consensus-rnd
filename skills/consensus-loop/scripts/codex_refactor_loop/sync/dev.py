@@ -21,7 +21,7 @@ from ..active_controller import require_active_controller, write_active_controll
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 from .executor import IntegrationSyncExecutor
-from .operations import IntegrationSyncOperation, write_operation_artifact
+from .operations import IntegrationSyncOperation, IntegrationSyncOperationError, load_operation, write_operation_artifact
 
 
 DEFAULT_INTERVAL_SECONDS = 600
@@ -276,6 +276,19 @@ def merge_in_progress(cwd: Path, command_runner=run) -> bool:
     return result.returncode == 0 and Path(result.stdout.strip()).exists()
 
 
+def rebase_in_progress(cwd: Path, command_runner=run) -> bool:
+    """Detect an in-progress rebase in normal checkouts and linked worktrees."""
+    for state_dir in ("rebase-merge", "rebase-apply"):
+        result = command_runner(["git", "-C", str(cwd), "rev-parse", "--git-path", state_dir])
+        if result.returncode == 0 and Path(result.stdout.strip()).exists():
+            return True
+    return False
+
+
+def single_line_diagnostic(value: str, limit: int = 160) -> str:
+    return " ".join(value.split())[:limit] or "unknown"
+
+
 @dataclass(frozen=True)
 class RollupAdoption:
     pr_number: int | None
@@ -308,6 +321,7 @@ class IntegrationSyncDaemon:
         logger=log,
         ensure_worktree_fn: Callable[[], bool] | None = None,
         merge_detector: Callable[[Path], bool] | None = None,
+        rebase_detector: Callable[[Path], bool] | None = None,
         dirty_detector: Callable[[Path], bool] | None = None,
         resolver_in_flight: Callable[[], bool] | None = None,
         resolver_dispatcher: Callable[[], None] | None = None,
@@ -332,6 +346,7 @@ class IntegrationSyncDaemon:
             logger=self.log,
         ))
         self.merge_in_progress = merge_detector or (lambda cwd: merge_in_progress(cwd, self.run))
+        self.rebase_in_progress = rebase_detector or (lambda cwd: rebase_in_progress(cwd, self.run))
         self.working_tree_dirty = dirty_detector or (lambda cwd: working_tree_dirty(cwd, self.run))
         self.codex_resolve_in_flight = resolver_in_flight or (lambda: codex_resolve_in_flight(
             main_repo=self.main_repo,
@@ -410,6 +425,50 @@ class IntegrationSyncDaemon:
         )
         self.log(f"integration sync {operation.kind}: {result.status}:{result.reason}")
         return path
+
+    def latest_rollup_adoption_operation(self) -> IntegrationSyncOperation | None:
+        runs = self.main_repo / ".refactor-loop" / "runs"
+        for path in sorted(runs.glob("integration-sync-operation-adopt-merged-rollup-*.json"), reverse=True):
+            try:
+                operation = load_operation(path)
+            except IntegrationSyncOperationError as exc:
+                detail = f"{path.name}:{type(exc).__name__}:{single_line_diagnostic(str(exc))}"
+                self.append_pending_event("rollup-adoption-operation-malformed", detail)
+                return None
+            if operation.kind == "adopt-merged-rollup":
+                return operation
+        return None
+
+    def continue_resolved_rollup_adoption_rebase(self, cwd: Path) -> bool:
+        adoption = self.latest_rollup_adoption_operation()
+        if adoption is None or not adoption.old_rollup_head or adoption.old_rollup_ahead_count is None:
+            self.append_pending_event("rollup-adoption-rebase-ambiguous", "missing-adoption-operation")
+            return False
+        expected = self.remote_integration_sha(cwd)
+        head = self.run(["git", "rev-parse", "HEAD"], cwd=cwd)
+        if head.returncode != 0 or not expected:
+            self.append_pending_event("rollup-adoption-rebase-ambiguous", "missing-head-or-remote")
+            return False
+        if expected != adoption.expected_remote_sha:
+            self.append_pending_event("rollup-adoption-rebase-ambiguous", "stale-adoption-operation")
+            return False
+        self.execute_sync_operation(
+            IntegrationSyncOperation(
+                kind="continue-resolved-rollup-adoption-rebase",
+                integration_branch=self.integration,
+                review_base_branch=self.review_base,
+                worktree_head=head.stdout.strip(),
+                expected_remote_sha=adoption.expected_remote_sha,
+                old_rollup_head=adoption.old_rollup_head,
+                old_rollup_ahead_count=adoption.old_rollup_ahead_count,
+                pr_number=adoption.pr_number,
+                evidence={
+                    "reason": "resolved-rollup-adoption-rebase-continuation",
+                    "source_operation": "adopt-merged-rollup",
+                },
+            )
+        )
+        return True
 
     def local_ahead_count(self, cwd: Path) -> int:
         result = self.run(["git", "rev-list", "--count", f"origin/{self.integration}..HEAD"], cwd=cwd)
@@ -740,6 +799,23 @@ class IntegrationSyncDaemon:
 
         self.run(["git", "fetch", "origin", "--quiet"], cwd=cwd)
 
+        if self.rebase_in_progress(cwd):
+            if self.codex_resolve_in_flight():
+                self.log("skip: rebase in progress + codex resolving")
+                self.log("dev-sync: tick noop:rebase-resolution-in-flight")
+            else:
+                unresolved = self.run(["git", "diff", "--name-only", "--diff-filter=U"], cwd=cwd)
+                if unresolved.returncode == 0 and not unresolved.stdout.strip():
+                    if self.continue_resolved_rollup_adoption_rebase(cwd):
+                        self.log("dev-sync: tick dispatched continue-resolved-rollup-adoption-rebase")
+                    else:
+                        self.log("dev-sync: tick blocked:rollup-adoption-rebase-ambiguous")
+                else:
+                    self.log("WARN: rebase in progress but no codex running - dispatching")
+                    self.dispatch_codex_resolve()
+                    self.log("dev-sync: tick dispatched conflict-resolver")
+            return
+
         if self.merge_in_progress(cwd):
             if self.codex_resolve_in_flight():
                 self.log("skip: merge in progress + codex resolving")
@@ -863,6 +939,7 @@ __all__ = [
     "local_ahead_count",
     "main",
     "merge_in_progress",
+    "rebase_in_progress",
     "run_dev_sync_reconcile_tick",
     "singleton_lock",
     "tick",

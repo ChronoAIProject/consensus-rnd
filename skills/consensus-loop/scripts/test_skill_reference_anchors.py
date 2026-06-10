@@ -290,6 +290,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(needle, claude)
                 self.assertIn(needle, integration)
         self.assertIn("LOCAL_AHEAD_PENDING_ONLY", daemon_body)
+        self.assertIn("CHECK_REBASE", daemon_body)
+        self.assertIn("continue-resolved-rollup-adoption-rebase", daemon_body)
+        self.assertIn("replay-integrity mismatch fails closed before push", daemon_body)
         self.assertIn("DEV_SYNC_PENDING:local-ahead-managed-adoption-required:<json>", daemon_body)
         self.assertNotIn("push-local-ahead", daemon_body)
         self.assertNotIn("direct push", integration)
@@ -1038,6 +1041,25 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("`MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS=900`", self.skill)
         self.assertIn("not GitHub live state fact source, not host production SSOT", self.skill)
         self.assertIn("`gh api repos/<slug>/issues/<N>`", self.skill)
+
+    def test_harness_spawn_intent_contract_documents_shared_consumer_validator_boundary(self) -> None:
+        contract = section_after_heading(self.skill, "Named runtime exception — concurrency_monitor auto-topup(per #57)")
+        for token in (
+            "repo-relative canonical `cd` / `prompt` / `log` writer paths",
+            "owner-local consumer validator also accepts existing repo-contained absolute `cd` / `prompt` / `log` compatibility input",
+            "relative paths resolve under `$REPO_ROOT`, absolute paths must remain inside `$REPO_ROOT`",
+            "does not add producer canonical-write migration or lifecycle authority",
+            "concurrency monitor calls the same validator after JSON object and timestamp parsing",
+            "rather than redefining malformed path or command semantics",
+            "Writers and host specs must not add",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, contract)
+
+        monitor_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "concurrency.py")
+        wakeup_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        self.assertIn("validate_harness_spawn_intent", wakeup_source)
+        self.assertIn("validate_harness_spawn_intent", monitor_source)
         self.assertIn("`gh api repos/<slug>/issues/<N>/comments?per_page=20`", self.skill)
         self.assertIn("The router-injected issue source snapshots are router-local prompt context, not durable schema, host production SSOT, or lifecycle authority", self.skill)
         self.assertIn("`gh api repos/<slug>/issues/<N> --jq .state`", self.skill)
@@ -1881,8 +1903,8 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "No suite-level host-wide process-table daemon guard",
             "daemon leak / duplicate coverage belongs in the responsible helper's local fact source",
             "must not scan the current machine with `ps -eo pid=,command=`",
-            "不得新增 suite-level host-wide process-table guard",
-            "不得新增或保留 suite-level host-wide process-table guard",
+            "do not add suite-level host-wide process-table guards",
+            "Do not add or keep suite-level host-wide process-table guards",
             "helper-local fact source",
         ):
             with self.subTest(needle=needle):
@@ -1891,8 +1913,8 @@ class WakeupRunnerContractTests(unittest.TestCase):
 
     def test_implement_prompt_pr_artifact_writes_are_allowed_by_red_line(self) -> None:
         implement = read(SKILL_ROOT / "prompts" / "implement.md")
-        flow = implement[implement.index("## 流程") : implement.index("## Marker emission allowlist")]
-        red_line = implement[implement.index("## 红线") : implement.index("## 附录")]
+        flow = implement[implement.index("## Workflow") : implement.index("## Marker emission allowlist")]
+        red_line = implement[implement.index("## Hard boundaries") : implement.index("## Appendix")]
         for artifact in (
             "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt",
             "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md",

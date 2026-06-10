@@ -18,12 +18,15 @@ from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
 from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
 from codex_refactor_loop.phase9.router import (
+    MetaJudgePromptContext,
+    MetaJudgePromptRenderer,
     Phase9Router,
     Phase9SourceIssueDecision,
     main,
     parse_phase9_log_identity,
 )
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
+from codex_refactor_loop.transition_assessment import TransitionAssessment
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -130,6 +133,14 @@ class Phase9RouterPackageTests(unittest.TestCase):
             data["roles"][0]["command"] = "gh pr merge 224"
         (self.repo / "workflow.json").write_text(json.dumps(data), encoding="utf-8")
         return LoopContext.load(repo_root=self.repo, env={"REPO_ROOT": str(self.repo), "HOST_WORKFLOW_SPEC": "workflow.json"})
+
+    def context_with_host_language(self, language: str) -> LoopContext:
+        host_env = self.repo / "host.env"
+        host_env.write_text(f'export HOST_WORK_LANGUAGE="{language}"\n', encoding="utf-8")
+        return LoopContext.load(
+            repo_root=self.repo,
+            env={"REPO_ROOT": str(self.repo), "CONSENSUS_RND_HOST_ENV": str(host_env)},
+        )
 
     def test_package_router_uses_loop_context_paths(self) -> None:
         self.assertEqual(self.router.loop_dir, self.ctx.paths.refactor_loop)
@@ -464,6 +475,27 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertIn("708-3-reflector", ledger_keys)
         self.assertNotIn("708-4-minimal", ledger_keys)
 
+    def test_package_router_repeated_ordinary_propose_routes_stalled_reflector(self) -> None:
+        for round_no in (1, 2, 3):
+            for role in ("minimal", "structural", "delete"):
+                self.write_log(
+                    f"phase9-issue756-r{round_no}-{role}.log",
+                    f"SOLVER_DONE:{role}:propose:same-implementation-framing",
+                )
+        self.write_log("phase9-issue756-r3-judge.log", "META_JUDGE_DONE:converge:round-3:same-framing")
+
+        self.router.tick()
+
+        reflector_commands = [
+            command for command in self.commands if "phase9-issue756-r3-reflector.log" in self.intent_text(command)
+        ]
+        self.assertEqual(len(reflector_commands), 1)
+        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
+        self.assertIn("756-3-reflector", ledger_keys)
+        self.assertNotIn("756-4-minimal", ledger_keys)
+        self.assertNotIn("756-4-structural", ledger_keys)
+        self.assertNotIn("756-4-delete", ledger_keys)
+
     def test_package_router_implementation_bearing_propose_blocks_stalled(self) -> None:
         verdicts = {
             1: "propose:add-router-helper",
@@ -576,6 +608,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
             "prompts/meta-judge.md",
             "MetaJudgePromptContext",
             "MetaJudgePromptRenderer",
+            "render_prompt_text",
             "phase9-meta-judge-template-unavailable",
             "phase9-meta-judge-scope-invalid",
             "phase9-triplet-evidence-invalid",
@@ -635,6 +668,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         for required in (
             "prompts/meta-judge.md",
             "MetaJudgePromptRenderer",
+            "render_prompt_text",
             "full `prompts/meta-judge.md`",
             "Router template bindings",
             '"WORK_UNIT_PRODUCER"',
@@ -647,6 +681,46 @@ class Phase9RouterPackageTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, combined)
         self.assertNotIn("Read the three completed solver logs and emit META_JUDGE_DONE", src)
+
+    def test_phase9_solver_prompt_uses_shared_host_work_language_rendering(self) -> None:
+        router = Phase9Router(ctx=self.context_with_host_language("zh"), command_runner=self.commands.append)
+
+        rendered = router._render_solver_template("740", 3, "minimal")
+
+        self.assertIn("Follow zh per SKILL.md", rendered)
+        self.assertIn("follow `zh`", rendered)
+        self.assertNotIn("${HOST_WORK_LANGUAGE}", rendered)
+        self.assertNotIn("$HOST_WORK_LANGUAGE", rendered)
+
+    def test_phase9_meta_judge_prompt_uses_shared_host_work_language_rendering(self) -> None:
+        ctx = self.context_with_host_language("zh")
+        context = MetaJudgePromptContext(
+            issue="740",
+            round=3,
+            solver_paths={
+                "minimal": ".refactor-loop/logs/phase9-issue740-r3-minimal.log",
+                "structural": ".refactor-loop/logs/phase9-issue740-r3-structural.log",
+                "delete": ".refactor-loop/logs/phase9-issue740-r3-delete.log",
+            },
+            output_path=".refactor-loop/runs/phase9-issue740-r3-judge.md",
+            transition_assessment=TransitionAssessment(transition_type="unknown", confidence=0.0),
+        )
+
+        rendered = MetaJudgePromptRenderer(
+            REPO_ROOT / "skills" / "consensus-loop" / "prompts" / "meta-judge.md",
+            host_env=ctx.host_env,
+        ).render(context)
+
+        self.assertIn("Follow zh per SKILL.md", rendered)
+        self.assertIn("follow `zh`", rendered)
+        self.assertNotIn("${HOST_WORK_LANGUAGE}", rendered)
+        self.assertNotIn("$HOST_WORK_LANGUAGE", rendered)
+
+    def test_phase9_invalid_host_work_language_fails_closed_through_shared_render_path(self) -> None:
+        router = Phase9Router(ctx=self.context_with_host_language("fr"), command_runner=self.commands.append)
+
+        with self.assertRaisesRegex(RuntimeError, "invalid HOST_WORK_LANGUAGE"):
+            router._render_solver_template("740", 3, "minimal")
 
     def test_router_source_uses_standalone_marker_matching(self) -> None:
         src = PACKAGE_ROUTER.read_text(encoding="utf-8")

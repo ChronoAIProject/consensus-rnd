@@ -249,6 +249,14 @@ class MarkerEmissionContractTests(unittest.TestCase):
                         f"{filename} allowlist must not list other role marker token {token}",
                     )
 
+    def test_rebase_resolve_done_requires_mechanical_readiness_checks(self) -> None:
+        body = (PROMPTS_DIR / "rebase-resolve.md").read_text(encoding="utf-8")
+
+        self.assertIn("Before emitting `REBASE_RESOLVE_DONE`", body)
+        self.assertIn("git diff --name-only --diff-filter=U", body)
+        self.assertIn("git status --porcelain", body)
+        self.assertIn("commit-ready merge state", body)
+
     def test_no_prompt_missing_from_contract(self) -> None:
         role_prompt_files = {
             path.name for path in PROMPTS_DIR.glob("*.md")

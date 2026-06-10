@@ -1,20 +1,20 @@
-# GitHub post rules (shared 共享规则,各 codex prompt 引用本文件)
+# GitHub post rules (shared contract used by codex prompts)
 
 Artifact profile: github-ai-post-body
 
-任何 codex(solver / meta-judge / fix / reviewer / clarifier / investigator / analyst 等)产出 user-facing 内容时,**自己直接调 `gh`** post 到 GitHub,不需要 controller 中转、不需要 dedicated writer-codex。
+When any codex worker (solver, meta-judge, fix, reviewer, clarifier, investigator, analyst, or similar role) produces user-facing content, **the worker calls `gh` directly** to post to GitHub. Do not route the post through the controller and do not invent a dedicated writer codex.
 
-## Body 结构(强制)
+## Body Structure (Mandatory)
 
 ```markdown
-## 🤖 <一行 headline 抓状态>
+## 🤖 <one-line status headline>
 
 ### TL;DR
-- 这是什么:1 句
-- 现在到哪一步 / 结论是什么:1 句
-- 需要 maintainer 做什么 OR controller 下一步:1 句
+- What this is: one sentence
+- Current state or conclusion: one sentence
+- What the maintainer should do OR what the controller does next: one sentence
 
-(可选)📢 cc 原作者:@h1 @h2 [一句中文请 sanity-check]
+(Optional) 📢 cc original authors: @h1 @h2 [one sentence asking them to sanity-check, following `${HOST_WORK_LANGUAGE}`]
 
 ---
 
@@ -26,46 +26,46 @@ Escalation / consensus picks **must** include a clear option table with one-line
 ---
 
 <details>
-<summary>📎 完整 codex 原始输出(存档备查)</summary>
+<summary>📎 Full raw codex output (archival)</summary>
 
-(verbatim raw output 全部塞这里,折叠默认隐藏)
+(Put the full verbatim raw output here; keep it collapsed by default.)
 
 </details>
 ```
 
-## 硬约束
+## Hard Constraints
 
-- **第一行 `## 🤖 ` 开头**:本 skill 的 `scripts/consensus-rnd-cli comment-monitor` 据此识别 controller-post 跳过 👀 react。漏 🤖 → monitor 会把你的 post 当成 maintainer 评论 react 自己 → 误循环。
-- **Language**: follow `${HOST_WORK_LANGUAGE}` per [SKILL.md 工作语言规则]; do not add a parallel EN section. Code identifiers, file paths, schema field names, and CLAUDE/AGENTS verbatim quotes are not translated.
-- **TL;DR ≤ 6 行**(3 bullet + 可选 cc 行)。
-- **raw artifact 必折叠**:不要让 TL;DR 之后立刻出现 raw YAML / verbatim spec dump。先用人话讲,raw 都进 `<details>`。
-- **GitHub body 必须自包含**:凡 GitHub-facing body 引用授权、共识、solver/judge 结论、escalation 或 design/triage 判断,必须内联完整 raw artifact；本地 `.refactor-loop/runs/*.md` 路径只能出现在 `<details><summary>本机调试线索</summary>` 中,且永远不是唯一授权来源。
-- **No jargon dumps**:每个技术词(如 `IActorDispatchPort`)首次出现要一句话解释("actor 之间发命令的标准通道")。
-- **Numbers > adjectives**:"delete -180 LOC" 优于 "substantial cleanup"。
-- **No filler**:"我们会分析…"、"various improvements"、"comprehensive review" 禁用。
-- **No "见上面"/"详见英文"** 等跨段引用。
-- **zsh-safe 退出码变量**:如果你用 shell 保存 `gh` 退出码,变量名必须用 `post_exit_code` / `gh_exit_code` 等安全名,**禁止**用 `status`。`status` 是 zsh 只读特殊变量,给它赋值保存 `$?` 会让 worker 自身失败。
+- **First line starts with `## 🤖 `**: `scripts/consensus-rnd-cli comment-monitor` uses this prefix to identify controller/worker posts and avoid reacting to them. Missing the prefix can make the monitor treat the worker post as maintainer input.
+- **Language**: follow `${HOST_WORK_LANGUAGE}` per the SKILL.md work-language rule; do not add a parallel English or Chinese section. Code identifiers, file paths, schema field names, and CLAUDE/AGENTS verbatim quotes are not translated.
+- **TL;DR <= 6 lines**: three bullets plus the optional cc line.
+- **Raw artifacts must be collapsed**: do not put raw YAML or a verbatim spec dump immediately after the TL;DR. Explain the result in prose first; put raw material in `<details>`.
+- **GitHub bodies must be self-contained**: when a GitHub-facing body references authorization, consensus, solver/judge conclusions, escalation, or design/triage judgment, inline the complete raw artifact. Local `.refactor-loop/runs/*.md` paths may appear only in `<details><summary>Local debug context</summary>` and must never be the sole authority source.
+- **No jargon dumps**: explain each technical term on first use, for example `IActorDispatchPort` as "the standard command channel between actors".
+- **Numbers > adjectives**: prefer "delete -180 LOC" over "substantial cleanup".
+- **No filler**: avoid empty phrases such as "we will analyze", "various improvements", or "comprehensive review".
+- **No cross-section deferrals**: do not write "see above", "see the English section", or equivalent references.
+- **zsh-safe exit-code variables**: if shell code captures a `gh` exit code, use variable names such as `post_exit_code` or `gh_exit_code`; **do not** use `status`. `status` is a zsh read-only special variable and assignment will fail the worker.
 
-## 你能调的 gh 命令
+## Allowed `gh` Commands
 
-- `gh issue view / gh issue comment`
-- `gh pr view / gh pr comment / gh pr edit --body-file`
-- `gh api ...` 读 / `gh api ... -X POST -f content=eyes` react
-- `mktemp /tmp/codex-post.XXXXXXXX` 写临时 body file
+- `gh issue view` / `gh issue comment`
+- `gh pr view` / `gh pr comment` / `gh pr edit --body-file`
+- `gh api ...` for reads / `gh api ... -X POST -f content=eyes` for reactions
+- `mktemp /tmp/codex-post.XXXXXXXX` to write a temporary body file
 
-## 你不能调的(controller 边界)
+## Forbidden Commands (Controller Boundary)
 
-- 任何 git topology / history mutation: `git commit` / `git push` / `git checkout` / `git branch` / `git merge` / `git reset` / `git rebase`
-- `gh pr create`(controller 创 PR;你只 comment / edit body)
-- `gh pr merge` / `gh pr close` / `gh issue create` / `gh issue close`(lifecycle 决策归 controller)
-- `gh issue edit --add-label` / `gh issue edit --remove-label` / `gh pr edit --add-label` / `gh pr edit --remove-label`(label 决策归 controller)
-- 改源码 / scope_paths(若你是 reviewer 你只看;若 fix-codex 见自己 prompt)
-- 调度其他 codex
+- Any git topology or history mutation: `git commit`, `git push`, `git checkout`, `git branch`, `git merge`, `git reset`, or `git rebase`
+- `gh pr create`; the controller creates PRs, while workers only comment or edit bodies when authorized
+- `gh pr merge`, `gh pr close`, `gh issue create`, or `gh issue close`; lifecycle decisions belong to the controller
+- `gh issue edit --add-label`, `gh issue edit --remove-label`, `gh pr edit --add-label`, or `gh pr edit --remove-label`; label decisions belong to the controller
+- Source edits or `scope_paths` changes unless your role prompt explicitly authorizes them
+- Dispatching other codex workers
 
-## Post 流程
+## Post Workflow
 
-1. 写完内部 artifact(internal output)
-2. 写 GitHub body(per 上面"Body 结构")到 mktemp:
+1. Finish writing the internal artifact.
+2. Write the GitHub body, following the body structure above, to `mktemp`:
    ```bash
    BODY=$(mktemp /tmp/codex-post.XXXXXXXX)
    cat > "$BODY" <<'POST_EOF'
@@ -74,32 +74,32 @@ Escalation / consensus picks **must** include a clear option table with one-line
    POST_EOF
    ```
 3. Post:
-   - issue 评论:`gh issue comment <N> --body-file "$BODY"`
-   - PR 评论:`gh pr comment <N> --body-file "$BODY"`
-   - PR description 改写:`gh pr edit <N> --body-file "$BODY"`(覆盖,不是评论)
-4. 抓 URL 并保留退出码(变量名不要用 `status`):
+   - Issue comment: `gh issue comment <N> --body-file "$BODY"`
+   - PR comment: `gh pr comment <N> --body-file "$BODY"`
+   - PR description rewrite: `gh pr edit <N> --body-file "$BODY"`; this overwrites the body and is not a comment
+4. Capture the URL and preserve the exit code, without using `status` as a variable name:
    ```bash
    POST_OUTPUT=$(gh issue/pr comment ... 2>&1)
    post_exit_code=$?
    POSTED_URL=$(printf '%s\n' "$POST_OUTPUT" | tail -1)
    ```
-5. 成功 log 打印:`POSTED:<post-type>:<N>:<URL>:<one-line headline>`
-6. 失败:`POST_FAILED:<post-type>:<N>:<gh stderr 概要>` 不重试,controller 介入
+5. On success, print: `POSTED:<post-type>:<N>:<URL>:<one-line headline>`
+6. On failure, print: `POST_FAILED:<post-type>:<N>:<gh stderr summary>` without retrying; the controller intervenes.
 
-## @-mention 原作者
+## @-Mention Original Authors
 
-如果 situation context 给了 `original_authors:` 列表(GitHub handles 形如 `@<maintainer-handle>`),body 在 TL;DR 之后插 `📢 cc 原作者:@h1 @h2` 加一行短中文请他们 sanity-check。
+If the situation context includes an `original_authors:` list with GitHub handles shaped as `@<maintainer-handle>`, add `📢 cc original authors: @h1 @h2` after the TL;DR plus one short sentence asking for a sanity-check in `${HOST_WORK_LANGUAGE}`.
 
-handle map 来自 host 配置的 `$MAINTAINER_WHITELIST`；未在 whitelist 中验证的作者不写入 cc。
+The handle map comes from the host-configured `$MAINTAINER_WHITELIST`; do not cc authors that are not verified by the whitelist.
 
-未给则 skip。
+If no original authors are provided, skip this section.
 
-## 反模式(self-check before posting)
+## Anti-Patterns (Self-Check Before Posting)
 
-- ❌ 第一行不是 `## 🤖`(monitor false-positive react)
-- ❌ TL;DR > 6 行
-- ❌ raw YAML / verbatim spec 在 TL;DR 之后(没折叠)
-- ❌ 用 `授权:.refactor-loop/runs/phase9-issueN-rM-judge.md` 这类本地路径当唯一来源
-- ❌ 写"将彻底改造"/"comprehensive review" 等空话
-- ❌ Code identifier 直接出现没解释一句
-- ❌ TL;DR 没说"下一步 / 需要 maintainer 做什么"
+- ❌ First line is not `## 🤖`; this can cause monitor false-positive reactions
+- ❌ TL;DR exceeds 6 lines
+- ❌ Raw YAML or a verbatim spec appears immediately after the TL;DR instead of being collapsed
+- ❌ A local path such as `authority:.refactor-loop/runs/phase9-issueN-rM-judge.md` is used as the sole authority source
+- ❌ Empty promises such as "complete overhaul" or "comprehensive review"
+- ❌ Code identifiers appear without a one-sentence explanation
+- ❌ TL;DR omits the next step or what the maintainer should do

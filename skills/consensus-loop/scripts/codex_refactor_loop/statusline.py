@@ -52,13 +52,29 @@ def render_snapshot(data: Mapping[str, Any]) -> str:
     freeze_seg = f" [STUCK {freeze}m]" if freeze > 5 else ""
     p0_seg = f" P0×{p0}" if p0 > 2 else ""
     d_seg = f" d:{d_healthy}/{d_total}" if d_total > 0 else ""
+    stale_seg = _stale_daemon_segment(data.get("stale_daemons"))
     update_seg = ""
     if data.get("update_available") is True and data.get("update_latest_version"):
         update_seg = f" up:v{data['update_latest_version']}"
     login_seg = ""
     if data.get("identity_authority") == "display-only" and data.get("current_github_login"):
         login_seg = f" gh:{data['current_github_login']}"
-    return f"{color}{icon} {actual}/{floor} PR:{prs} issue:{issues}{d_seg}{update_seg}{login_seg}{p0_seg}{freeze_seg}\033[0m"
+    return f"{color}{icon} {actual}/{floor} PR:{prs} issue:{issues}{d_seg}{stale_seg}{update_seg}{login_seg}{p0_seg}{freeze_seg}\033[0m"
+
+
+def _stale_daemon_segment(value: object) -> str:
+    if not isinstance(value, list) or not value:
+        return ""
+    names: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        age = item.get("age_seconds")
+        if not isinstance(name, str) or not name:
+            continue
+        names.append(f"{name}:{age}s" if isinstance(age, int) else f"{name}:?")
+    return f" stale:{','.join(names[:3])}" if names else ""
 
 
 def main(argv: Sequence[str] | None = None) -> int:

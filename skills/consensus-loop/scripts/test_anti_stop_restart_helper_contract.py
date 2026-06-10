@@ -44,10 +44,15 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "## Named runtime exception — anti-stop restart helper(per #49)",
             "Narrow allowlist",
             "singleton wrapper + actor-owned heartbeat lease",
+            "self-heal only its own static-allowlist child",
             "helper-private launch fingerprint",
             "DaemonProcessInventory",
+            "DaemonInstanceProjection",
             "repo_root plus daemon name plus restart wrapper shape",
             "static allowlist command",
+            "managed child command instances",
+            "bounded lock-holder evidence",
+            "orphan-lock-holders:N",
             ".refactor-loop/locks/<daemon>.fingerprint.json",
             "host_env_path",
             "host_env_sha256",
@@ -61,6 +66,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "$REPO_ROOT",
             "consensus-rnd-cli runtime-retention",
             "daemon-status",
+            "cron/launchd remains mandatory",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
@@ -75,7 +81,8 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
         self.assertIn("launchctl bootstrap gui/$(id -u)", self.skill)
         self.assertIn("launchctl bootout gui/$(id -u)", self.skill)
         self.assertIn("Do not add a second watchdog or installer", self.skill)
-        self.assertIn("cron/launchd-only", self.skill)
+        self.assertIn("scheduler-backed anti-stop surface", self.skill)
+        self.assertIn("mandatory cron/launchd outer repair surface", self.skill)
 
     def test_restart_module_contains_singleton_and_heartbeat_checks(self) -> None:
         for needle in (
@@ -84,11 +91,21 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "DaemonLaunchFingerprint",
             "DaemonTarget",
             "DaemonProcessInventory",
+            "DaemonInstanceProjection",
             "RestartWrapperShape",
+            "ManagedChildCommandShape",
             "live_restart_wrappers",
+            "live_managed_children",
+            "bounded_lock_holder_pids",
+            "daemon_lock_files",
             "daemon_targets",
             "read_daemon_pid",
             "read_heartbeat_age_seconds",
+            "read_heartbeat_status",
+            "DaemonHeartbeatStatus",
+            "_run_restart_wrapper",
+            "child exited exit=",
+            "terminating child and restarting same command",
             ".fingerprint.json",
             "package_tree_sha256",
             "entrypoint_sha256",
@@ -153,6 +170,8 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "same resolved static allowlist command",
             "read-only daemon-status projection",
             "repair/reload remains restart-daemons",
+            "self-heal only its own static-allowlist child",
+            "Cron/launchd remains mandatory",
             "runs canonical RuntimeRetention before daemon freshness checks",
             "no host-defined daemon registry",
             "generic process supervisor",

@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -314,10 +315,33 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual("88", edit_call[2])
         self.assertIn("--body-file", edit_call)
         text = body.read_text(encoding="utf-8")
-        self.assertIn("集成分支领先 review-base: `3` commits", text)
+        self.assertIn("Integration branch ahead of review-base: `3` commits", text)
         self.assertIn("Fix #12 rollup singleton", text)
-        self.assertIn("涉及 issue: #12, #13", text)
+        self.assertIn("Related issues: #12, #13", text)
         self.assertIn("⟦AI:RELEASE-ROLLUP⟧", text)
+
+    def test_explicit_zh_release_rollup_preserves_existing_body_copy(self) -> None:
+        body = self.tmp / ".refactor-loop" / "runs" / "release-rollup-pr-body.md"
+        self.actions.ctx.host_env["HOST_WORK_LANGUAGE"] = "zh"
+        event = {
+            "integration_branch": "canonical-integration",
+            "review_base_branch": "canonical-review",
+            "integration_sha": "abc123",
+            "review_base_sha": "def456",
+            "ahead_count": 3,
+        }
+
+        with mock.patch.object(
+            self.actions,
+            "git",
+            return_value=mock.Mock(returncode=0, stdout="Fix #12 rollup singleton\nUpdate release gate #13\n", stderr=""),
+        ):
+            self.actions._write_release_rollup_body(str(body), event)
+
+        text = body.read_text(encoding="utf-8")
+        self.assertIn("发布 rollup", text)
+        self.assertIn("集成分支领先 review-base: `3` commits", text)
+        self.assertIn("涉及 issue: #12, #13", text)
 
     def test_rollup_auto_merge_squashes_only_live_rollup_with_green_required_checks(self) -> None:
         gh_calls: list[list[str]] = []
@@ -674,6 +698,20 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual([], push.mock_calls)
         self.assertTrue(self.actions._merge_in_progress(worktree))
 
+    def test_commit_push_resolved_pr_rebase_blocks_non_merge_dirty_state(self) -> None:
+        worktree, head_ref = self.init_rebase_repo(conflict=True)
+        owner_patch, gh_patch = self.patch_rebase_owner_and_gh(head_ref)
+        self.run_git(worktree, ["fetch", "origin"])
+        subprocess.run(["git", "-C", str(worktree), "merge", "--no-commit", "--no-ff", "origin/canonical-integration"], capture_output=True, text=True, check=False)
+        (worktree / "file.txt").write_text("resolved but unstaged\n", encoding="utf-8")
+        with owner_patch, gh_patch, mock.patch.object(self.actions, "safe_push") as push:
+            rc = self.actions.commit_push_resolved_pr_rebase(
+                {"target_kind": "PR", "target_number": 77, "head_ref": head_ref, "worktree": str(worktree), "source_marker": "REBASE_RESOLVE_DONE:77:ok"}
+            )
+        self.assertEqual(2, rc)
+        self.assertEqual([], push.mock_calls)
+        self.assertTrue(self.actions._merge_in_progress(worktree))
+
     def test_commit_push_resolved_pr_rebase_blocked_marker_aborts_and_surfaces_event(self) -> None:
         worktree, head_ref = self.init_rebase_repo(conflict=True)
         owner_patch, gh_patch = self.patch_rebase_owner_and_gh(head_ref)
@@ -886,9 +924,6 @@ class ControllerActionsTests(unittest.TestCase):
                     self.pending_events(),
                 )
 
-    # Refactor (iter276/issue-276): Old pattern: controller lifecycle targets
-    # accepted empty or non-canonical GitHub ids before gh calls. New principle:
-    # fail closed on non-canonical GitHub ids and leave a pending-event audit.
     def test_merge_pr_rejects_invalid_pr_targets_before_gh_or_git(self) -> None:
         invalid_targets = ("", " ", "0", "-1", "abc", "01", "https://github.com/owner/repo/pull/77")
         for target in invalid_targets:
@@ -1334,9 +1369,6 @@ class ControllerActionsTests(unittest.TestCase):
             self.pending_events(),
         )
 
-    # Refactor (impl/issue191-single-active-controller): Old pattern:
-    # lifecycle helpers could mutate GitHub/git from any controller device. New
-    # principle: non-owner helpers fail closed before gh/git mutations.
     def test_non_owner_lifecycle_helpers_fail_closed_before_gh_or_git(self) -> None:
         decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="controller", lease_id="", expires_at="")
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
@@ -1509,6 +1541,23 @@ class ControllerActionsTests(unittest.TestCase):
         )
 
         self.assertEqual("", self.run_git(worktree, ["status", "--porcelain"]).stdout)
+        self.assertEqual("Implement issue #77", self.run_git(worktree, ["log", "-1", "--format=%s"]).stdout.strip())
+
+    def test_publish_implementation_diff_uses_zh_commit_message_when_configured(self) -> None:
+        self.actions.ctx.host_env["HOST_WORK_LANGUAGE"] = "zh"
+        worktree = self.publish_implementation_git_worktree()
+        (worktree / "README.md").write_text("base\nimplementation\n", encoding="utf-8")
+
+        self.assertEqual(
+            0,
+            self.actions._commit_publish_implementation_diff(
+                {"source_marker": "IMPLEMENT_DONE:issue-77:ok"},
+                "77",
+                "refactor/iter77-issue-77",
+                worktree,
+            ),
+        )
+
         self.assertEqual("实现 issue #77", self.run_git(worktree, ["log", "-1", "--format=%s"]).stdout.strip())
 
     def test_publish_implementation_diff_accepts_already_committed_changes_without_second_commit(self) -> None:
@@ -1584,7 +1633,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "fetch", "origin"]:
@@ -1806,7 +1855,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected subprocess call: {args!r}")
@@ -1879,7 +1928,7 @@ class ControllerActionsTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout=" M implementation.txt\n", stderr="")
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 return mock.Mock(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected subprocess call: {args!r}")
 
@@ -2011,7 +2060,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected subprocess call: {args!r}")
@@ -2080,7 +2129,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "fetch", "origin"]:
@@ -2266,7 +2315,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "fetch", "origin"]:
@@ -2350,7 +2399,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "fetch", "origin"]:
@@ -2898,6 +2947,103 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(tests_intent["log"], ".refactor-loop/logs/review-pr77-tests-r2.log")
         self.assertEqual(tests_intent["cd"], str(self.tmp.resolve()))
         self.assertTrue(Path(str(tests_intent["cd"])).is_absolute())
+
+    def test_dispatch_reviewers_does_not_advance_round_while_same_role_log_is_pending(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
+        (self.tmp / ".refactor-loop" / "prompts").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".refactor-loop" / "logs").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".refactor-loop" / "prompts" / "review-pr77-architect-r1.md").write_text(
+            f"head_sha: {'a' * 40}\n",
+            encoding="utf-8",
+        )
+        (self.tmp / ".refactor-loop" / "logs" / "review-pr77-architect-r1.log").write_text(
+            f"head_sha: {'a' * 40}\nREVIEW_DONE:77:architect:approve\n",
+            encoding="utf-8",
+        )
+        render_envs: list[dict[str, str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["pr", "view", "77", "--json", "title,baseRefName,headRefName,headRefOid"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"title": "Fix wakeup runner", "baseRefName": "dev", "headRefName": "refactor/issue735", "headRefOid": "a" * 40}),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_render(_template: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
+            assert env is not None
+            render_envs.append(dict(env))
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_text("review prompt\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
+                    self.assertEqual(
+                        0,
+                        self.actions.dispatch_reviewers(
+                            {
+                                "target_kind": "PR",
+                                "target_number": 77,
+                                "stale_review_roles": ["architect", "tests"],
+                            }
+                        ),
+                    )
+
+        self.assertEqual([".refactor-loop/runs/review-pr77-tests-r1.md"], [env["REVIEW_OUTPUT_PATH"] for env in render_envs])
+        pending = self.pending_events()
+        self.assertNotIn('"intent_id": "dispatch-reviewers:77:architect:r2"', pending)
+        self.assertIn('"intent_id": "dispatch-reviewers:77:tests:r1"', pending)
+
+    def test_dispatch_reviewers_advances_round_for_stale_same_role_log_without_exit(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
+        (self.tmp / ".refactor-loop" / "prompts").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".refactor-loop" / "logs").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".refactor-loop" / "prompts" / "review-pr77-quality-r1.md").write_text(
+            f"head_sha: {'a' * 40}\n",
+            encoding="utf-8",
+        )
+        stale_log = self.tmp / ".refactor-loop" / "logs" / "review-pr77-quality-r1.log"
+        stale_log.write_text(
+            f"head_sha: {'a' * 40}\nREVIEW_DONE:77:quality:comment\n",
+            encoding="utf-8",
+        )
+        old_mtime = time.time() - 120
+        os.utime(stale_log, (old_mtime, old_mtime))
+        render_envs: list[dict[str, str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["pr", "view", "77", "--json", "title,baseRefName,headRefName,headRefOid"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"title": "Fix wakeup runner", "baseRefName": "dev", "headRefName": "refactor/issue735", "headRefOid": "a" * 40}),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_render(_template: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
+            assert env is not None
+            render_envs.append(dict(env))
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_text("review prompt\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
+                    self.assertEqual(
+                        0,
+                        self.actions.dispatch_reviewers(
+                            {
+                                "target_kind": "PR",
+                                "target_number": 77,
+                                "stale_review_roles": ["quality"],
+                            }
+                        ),
+                    )
+
+        self.assertEqual([".refactor-loop/runs/review-pr77-quality-r2.md"], [env["REVIEW_OUTPUT_PATH"] for env in render_envs])
+        self.assertIn('"intent_id": "dispatch-reviewers:77:quality:r2"', self.pending_events())
 
     def test_dispatch_reviewers_fails_closed_when_pr_head_missing(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
@@ -3928,7 +4074,7 @@ class ControllerActionsTests(unittest.TestCase):
 
         rendered = output.read_text(encoding="utf-8")
         self.assertIn("# GitHub post rules", rendered)
-        self.assertIn("## Body 结构", rendered)
+        self.assertIn("## Body Structure", rendered)
         self.assertNotIn(GITHUB_POST_RULES_CONTRACT_TOKEN, rendered)
         self.assertNotIn("prompts/_github-post-rules.md", rendered)
 
@@ -3980,7 +4126,7 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
             'self._require_owner_or_raise("post-banner")',
             "_normalize_lifecycle_target_or_raise(",
             'self._require_github_actor_or_raise("post-banner")',
-            "build_status_banner(normalized)",
+            "build_status_banner(normalized, env=self.ctx.env_for_subprocess())",
             "tempfile.NamedTemporaryFile",
             "gh_comment_command(normalized, Path(tmp))",
             "self.gh(",

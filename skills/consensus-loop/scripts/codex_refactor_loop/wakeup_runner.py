@@ -40,6 +40,7 @@ from .pr_checks import PrMergeReadinessProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.gate import AutoReleaseGate
 from .release.commits import write_release_commits
+from .release.candidate_liveness import classify_release_candidate_liveness
 from .release.publish_preflight import ReleasePublishPreflight
 from .release.publisher import ReleasePublisher
 from .safe_progress_scheduler import MEDIUM_NON_SPAWN_LIMIT_PER_TICK, validate_runner_action
@@ -48,7 +49,6 @@ from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import (
     build_plan,
     consensus_implementation_suppressed_reason,
-    release_candidate_target_ref_invalid,
     zero_code_implementation_completion_proven,
 )
 from .worker_markers import read_worker_terminal_marker
@@ -181,6 +181,8 @@ class ReviewEvidence:
     source: str
     valid: bool = True
     reason: str = ""
+    terminal_failed: bool = False
+    pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -189,6 +191,8 @@ class ReviewGateSnapshot:
     heads_by_role: dict[str, str]
     live_head_sha: str
     invalid: list[str]
+    pending: list[str]
+    terminal_failed_roles: list[str]
 
     @property
     def all_present(self) -> bool:
@@ -226,6 +230,8 @@ class ReviewGateSnapshot:
             "reviewed_head_sha": self.reviewed_head_sha,
             "live_head_sha": self.live_head_sha,
             "invalid": self.invalid,
+            "pending": self.pending,
+            "terminal_failed_roles": self.terminal_failed_roles,
         }
 
 
@@ -410,7 +416,7 @@ class WakeupRunner:
             and action.get("controller_action") != "publish_release_candidate"
         ):
             path = self.ctx.repo_root / source_artifact
-            if action.get("controller_action") == "commit_push_resolved_pr_rebase":
+            if action.get("controller_action") in {"commit_push_resolved_pr_rebase", "dispatch_pr_rebase_resolve"}:
                 if _source_log_has_clean_rebase_resolve_marker(path, source_marker):
                     return None
                 return "clean_exit_marker_missing"
@@ -681,10 +687,10 @@ class WakeupRunner:
         candidate = self.ctx.paths.state / "release-candidate.json"
         if candidate.exists():
             decision = read_json(self.ctx.paths.state / "release-decision.json", {})
-            if (
-                "release_candidate_target_ref_invalid" not in preconditions
-                or not release_candidate_target_ref_invalid(read_json(candidate, {}), decision)
-            ):
+            liveness = classify_release_candidate_liveness(self.ctx.repo_root, read_json(candidate, {}), decision)
+            if liveness.blocks_dispatch:
+                return "release_candidate_already_exists"
+            if not liveness.stale_reason or liveness.stale_reason not in preconditions:
                 return "release_candidate_already_exists"
         if not str(action.get("from_version") or "").strip() or not str(action.get("to_version") or "").strip():
             return "release_dispatch_version_missing"
@@ -944,9 +950,25 @@ class WakeupRunner:
         preconditions = action.get("preconditions")
         if not isinstance(preconditions, list):
             return "dispatch_pr_rebase_resolve_missing_preconditions"
-        for required in ("active_controller_owner", "live_managed_target", "base_ahead_pr_branch"):
-            if required not in preconditions:
-                return f"dispatch_pr_rebase_resolve_missing_precondition:{required}"
+        required_sets = (
+            ("active_controller_owner", "live_managed_target", "base_ahead_pr_branch"),
+            (
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_managed_target",
+                "false_done_unresolved_or_not_commit_ready",
+            ),
+        )
+        recovery_marker = str(action.get("source_marker") or "")
+        is_false_done_recovery = (
+            str(action.get("action_id") or "").startswith("dispatch-pr-rebase-resolve:false-done:")
+            or action.get("reason") == "rebase_resolve_done_without_resolved_merge"
+            or recovery_marker.startswith("REBASE_RESOLVE_DONE:")
+        )
+        allowed_required_sets = (required_sets[1],) if is_false_done_recovery else (required_sets[0],)
+        if not any(all(required in preconditions for required in required_set) for required_set in allowed_required_sets):
+            missing = [required for required in allowed_required_sets[0] if required not in preconditions]
+            return f"dispatch_pr_rebase_resolve_missing_precondition:{missing[0]}"
         target = int(action["target_number"])
         if not self._live_target_has_managed_label("pr", target):
             return "dispatch_pr_rebase_resolve_target_not_managed"
@@ -1261,6 +1283,11 @@ class WakeupRunner:
             ):
                 self._append_pending_event("WAKEUP_RUNNER_RELEASE_DISPATCH_BLOCKED:version-mismatch")
                 return 3
+            stale_reason = self._current_release_dispatch_stale_reason(action)
+            if stale_reason:
+                self._append_pending_event(
+                    f"WAKEUP_RUNNER_RELEASE_DISPATCH_STALE_CANDIDATE:{action.get('action_id')}:{stale_reason}"
+                )
             gate.dispatch_release(decision)
             return 0
         finally:
@@ -1538,6 +1565,8 @@ class WakeupRunner:
         if not isinstance(target, int):
             return {"decision": "WAIT_OR_REDISPATCH", "reason": "review_target_missing"}
         gate = self._review_gate(target)
+        if gate.get("pending"):
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": f"pending_reviewer_evidence:{gate['pending'][0]}", "gate": gate}
         if gate["invalid"]:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": f"invalid_reviewer_evidence:{gate['invalid'][0]}", "gate": gate}
         if not gate["all_present"]:
@@ -1567,6 +1596,8 @@ class WakeupRunner:
         evidences = self._latest_review_evidence_by_role(pr_number)
         verdicts = {role: evidence.verdict for role, evidence in evidences.items() if evidence.valid}
         invalid = [evidence.reason or f"invalid:{evidence.role}" for evidence in evidences.values() if not evidence.valid]
+        pending = [evidence.reason or f"pending:{evidence.role}" for evidence in evidences.values() if evidence.pending]
+        terminal_failed_roles = [evidence.role for evidence in evidences.values() if evidence.terminal_failed]
         heads = {role: evidence.head_sha for role, evidence in evidences.items() if evidence.valid and evidence.head_sha}
         live_head = self._pr_head_sha(pr_number)
         for role in REQUIRED_REVIEW_ROLES:
@@ -1582,6 +1613,8 @@ class WakeupRunner:
             heads_by_role=heads,
             live_head_sha=live_head,
             invalid=invalid,
+            pending=pending,
+            terminal_failed_roles=terminal_failed_roles,
         ).as_dict()
 
     def _latest_review_evidence_by_role(self, pr_number: int) -> dict[str, ReviewEvidence]:
@@ -1638,7 +1671,9 @@ class WakeupRunner:
         if marker_read.reason == "log_unreadable":
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"log_unreadable:{role}")
         if marker_read.reason == "missing_exit_zero":
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"missing_exit_zero:{role}")
+            if _reviewer_log_terminal_failed(companion_log):
+                return ReviewEvidence(role, round_number, "", "", str(path), False, f"terminal_failed:{role}", terminal_failed=True)
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"pending_exit_zero:{role}", pending=True)
         verdict_lines = re.findall(r"(?m)^verdict:\s*([A-Za-z][A-Za-z0-9_-]*)\s*$", text)
         if len(verdict_lines) != 1:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_verdict_count:{role}")
@@ -1658,7 +1693,9 @@ class WakeupRunner:
         if marker_read.reason == "log_unreadable":
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"log_unreadable:{role}")
         if marker_read.reason == "missing_exit_zero":
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"missing_exit_zero:{role}")
+            if _reviewer_log_terminal_failed(path):
+                return ReviewEvidence(role, round_number, "", "", str(path), False, f"terminal_failed:{role}", terminal_failed=True)
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"pending_exit_zero:{role}", pending=True)
         if marker_read.reason in {"duplicate_or_conflicting_log_marker", "duplicate_or_conflicting_artifact_marker"}:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker:{role}")
         match = REVIEW_DONE_RE.match(marker_read.marker)
@@ -1788,7 +1825,7 @@ class WakeupRunner:
                     continue
                 if self._release_dispatch_stale_ledger_reason(action):
                     self._append_pending_event(
-                        f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action_id}:target_ref_invalid"
+                        f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action_id}:{self._release_dispatch_stale_ledger_reason(action)}"
                     )
                     continue
                 stale_spawn_reason = self._applied_spawn_stale_reason(action)
@@ -1801,18 +1838,24 @@ class WakeupRunner:
         return False
 
     def _release_dispatch_stale_ledger_reason(self, action: Mapping[str, Any]) -> str:
+        return self._current_release_dispatch_stale_reason(action)
+
+    def _current_release_dispatch_stale_reason(self, action: Mapping[str, Any]) -> str:
         if action.get("kind") != "release-gate-dispatch":
             return ""
         if action.get("controller_action") != "dispatch_release_candidate":
             return ""
         preconditions = action.get("preconditions")
-        if not isinstance(preconditions, list) or "release_candidate_target_ref_invalid" not in preconditions:
+        if not isinstance(preconditions, list):
             return ""
         candidate = self.ctx.paths.state / "release-candidate.json"
         decision = read_json(self.ctx.paths.state / "release-decision.json", {})
-        if not release_candidate_target_ref_invalid(read_json(candidate, {}), decision):
+        liveness = classify_release_candidate_liveness(self.ctx.repo_root, read_json(candidate, {}), decision)
+        if liveness.blocks_dispatch or not liveness.stale_reason:
             return ""
-        return "target_ref_invalid"
+        if liveness.stale_reason not in preconditions:
+            return ""
+        return liveness.stale_reason
 
     @property
     def remote_ci_fix_attempts_path(self) -> Path:
@@ -2162,6 +2205,22 @@ def _log_tick_status(daemon: str, action: str) -> None:
 
 def _single_line(value: str) -> str:
     return " ".join(str(value).split())[:240]
+
+
+def _reviewer_log_terminal_failed(path: Path) -> bool:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    for line in reversed(lines):
+        text = line.strip()
+        if not text.startswith("EXIT="):
+            continue
+        try:
+            return int(text.removeprefix("EXIT=")) != 0
+        except ValueError:
+            return True
+    return False
 
 
 if __name__ == "__main__":
