@@ -28,8 +28,8 @@ from ..active_controller import require_active_controller, write_active_controll
 from ..context import LoopContext
 from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
-from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..managed_work_snapshot import ManagedWorkSnapshotItem
+from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..prompt_rendering import render_prompt_text
 from ..transition_assessment import TransitionAssessment, TransitionAssessmentReader, projection_lines
 from ..worker_markers import log_has_clean_exit, read_worker_terminal_marker
@@ -298,6 +298,8 @@ class Phase9Router:
         self._issue_source_snapshots: dict[str, IssueSourceSnapshot] = {}
         self._terminal_decisions: dict[str, Phase9TerminalDecision] = {}
         self._managed_work_items_by_number: dict[str, ManagedWorkSnapshotItem] | None = None
+        self._managed_work_snapshot_loaded_ok: bool | None = None
+        self._managed_work_snapshot_unavailable_reason: str | None = None
         self._pending_spawn_intent_logs: set[str] = set()
         self._ledger_entries_by_key: dict[str, list[dict[str, object]]] = {}
         self._tick_dispatch_count = 0
@@ -320,6 +322,8 @@ class Phase9Router:
         self._issue_source_snapshots = {}
         self._terminal_decisions = {}
         self._managed_work_items_by_number = None
+        self._managed_work_snapshot_loaded_ok = None
+        self._managed_work_snapshot_unavailable_reason = None
         self._pending_spawn_intent_logs = self._read_pending_spawn_intent_logs()
         self._ledger_entries_by_key = self._read_ledger_entries_by_key()
         ledger = set(self._ledger_entries_by_key)
@@ -549,6 +553,11 @@ class Phase9Router:
 
     def _open_design_consensus_issues(self) -> list[DesignConsensusIssue]:
         snapshot = load_open_managed_work_snapshot(self.ctx)
+        self._managed_work_snapshot_loaded_ok = snapshot.loaded_ok
+        self._managed_work_snapshot_unavailable_reason = snapshot.reason
+        self._managed_work_items_by_number = {
+            str(item.number): item for item in snapshot.items if snapshot.loaded_ok and item.kind == "issue"
+        }
         if not snapshot.loaded_ok:
             print(
                 snapshot.unavailable_diagnostic(
@@ -1182,13 +1191,13 @@ class Phase9Router:
         return self._source_issue_decisions[issue]
 
     def _read_source_issue_decision(self, issue: str) -> Phase9SourceIssueDecision:
-        if not self.ctx.gh_repo_slug:
+        if not self._ensure_managed_work_items_loaded():
             return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
-        issue_result = self._gh_api_json(f"repos/{self.ctx.gh_repo_slug}/issues/{issue}")
-        if not isinstance(issue_result, dict):
-            return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
-        state = str(issue_result.get("state") or "")
-        if not isinstance(state, str) or not state.strip():
+        item = self._managed_work_items_by_number.get(str(issue)) if self._managed_work_items_by_number is not None else None
+        if item is None:
+            return Phase9SourceIssueDecision(False, "ABSENT_FROM_OPEN_MANAGED_SNAPSHOT", "phase9-source-not-open")
+        state = str(item.state or "open")
+        if not state.strip():
             return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
         normalized = state.strip().upper()
         if normalized == "OPEN":
@@ -1309,23 +1318,13 @@ class Phase9Router:
                 updated_at=item.updated_at,
                 truncated=body_truncated,
             )
-        issue_result = self._gh_api_json(f"repos/{self.ctx.gh_repo_slug}/issues/{issue}")
-        if not isinstance(issue_result, dict):
-            return self._unavailable_issue_source_snapshot(issue, read_at, "issue-read-failed")
-        title = str(issue_result.get("title") or "")
-        body, body_truncated = self._bounded_text(str(issue_result.get("body") or ""), 20_000)
-        state = str(issue_result.get("state") or "")
-        updated_at = str(issue_result.get("updated_at") or issue_result.get("updatedAt") or "")
-        return IssueSourceSnapshot(
-            number=str(issue),
-            title=title,
-            body=body,
-            comments=(),
-            read_at=read_at,
-            source=state,
-            updated_at=updated_at,
-            truncated=body_truncated,
-        )
+        if self._managed_work_snapshot_loaded_ok is False:
+            return self._unavailable_issue_source_snapshot(
+                issue,
+                read_at,
+                self._managed_work_snapshot_unavailable_reason or "managed-work-snapshot-unavailable",
+            )
+        return self._unavailable_issue_source_snapshot(issue, read_at, "not-in-open-managed-snapshot")
 
     def _unavailable_issue_source_snapshot(
         self,
@@ -1348,14 +1347,20 @@ class Phase9Router:
         )
 
     def _managed_work_item(self, issue: str) -> ManagedWorkSnapshotItem | None:
+        self._ensure_managed_work_items_loaded()
+        return self._managed_work_items_by_number.get(str(issue)) if self._managed_work_items_by_number is not None else None
+
+    def _ensure_managed_work_items_loaded(self) -> bool:
         if self._managed_work_items_by_number is None:
             snapshot = load_open_managed_work_snapshot(self.ctx)
             self._managed_work_items_by_number = {}
+            self._managed_work_snapshot_loaded_ok = snapshot.loaded_ok
+            self._managed_work_snapshot_unavailable_reason = snapshot.reason
             if snapshot.loaded_ok:
                 for item in snapshot.items:
                     if item.kind == "issue":
                         self._managed_work_items_by_number[str(item.number)] = item
-        return self._managed_work_items_by_number.get(str(issue))
+        return bool(self._managed_work_snapshot_loaded_ok)
 
     def _issue_comments_projection(self, issue: str, updated_at: str) -> tuple[list[dict[str, object]] | None, str]:
         cache = self._read_comments_cache()

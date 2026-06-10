@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 import tempfile
 import unittest
@@ -56,31 +55,43 @@ class Phase9RouterOpenStateGateTests(unittest.TestCase):
         }
         self.assertFalse(set(command) & forbidden)
 
-    def test_open_state_allows_dispatch_using_exact_state_only_issue_read(self) -> None:
-        result = mock.Mock(returncode=0, stdout=json.dumps({"state": "open", "title": "issue", "body": ""}), stderr="")
-        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=result) as run:
+    def test_open_state_allows_dispatch_using_open_managed_snapshot_without_live_issue_read(self) -> None:
+        snapshot = ManagedWorkSnapshotResult(
+            (
+                ManagedWorkSnapshotItem(
+                    kind="issue",
+                    number=37,
+                    title="issue",
+                    labels=(label_catalog.MANAGED,),
+                    state="open",
+                ),
+            ),
+            True,
+            "cache:fresh",
+        )
+        with (
+            mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=snapshot),
+            mock.patch("codex_refactor_loop.phase9.router.subprocess.run") as run,
+        ):
             decision = self.router(gh_repo_slug="owner/repo")._read_source_issue_decision("37")
 
         self.assertTrue(decision.allowed)
         self.assertEqual("OPEN", decision.state)
         self.assertEqual("phase9-source-open", decision.reason)
-        run.assert_called_once()
-        command = run.call_args.args[0]
-        self.assert_state_only_read(command, issue="37", repo_slug="owner/repo")
-        self.assertEqual(str(self.repo.resolve()), run.call_args.kwargs["cwd"])
-        self.assertEqual(15, run.call_args.kwargs["timeout"])
-        self.assertFalse(run.call_args.kwargs["check"])
+        run.assert_not_called()
 
-    def test_closed_state_fails_closed_using_repo_scoped_state_only_issue_read(self) -> None:
-        result = mock.Mock(returncode=0, stdout=json.dumps({"state": "CLOSED"}), stderr="")
-        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=result) as run:
+    def test_absent_snapshot_target_fails_closed_without_live_issue_read(self) -> None:
+        snapshot = ManagedWorkSnapshotResult((), True, "cache:fresh")
+        with (
+            mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=snapshot),
+            mock.patch("codex_refactor_loop.phase9.router.subprocess.run") as run,
+        ):
             decision = self.router(gh_repo_slug="owner/repo")._read_source_issue_decision("245")
 
         self.assertFalse(decision.allowed)
-        self.assertEqual("CLOSED", decision.state)
+        self.assertEqual("ABSENT_FROM_OPEN_MANAGED_SNAPSHOT", decision.state)
         self.assertEqual("phase9-source-not-open", decision.reason)
-        run.assert_called_once()
-        self.assert_state_only_read(run.call_args.args[0], issue="245", repo_slug="owner/repo")
+        run.assert_not_called()
 
     def test_design_issue_intake_uses_open_managed_list_without_lifecycle_commands(self) -> None:
         rows = [

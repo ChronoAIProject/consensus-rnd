@@ -908,43 +908,57 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(events[0]["reason"], "phase9-source-state-unavailable")
         self.assertIsNone(events[0]["state"])
 
-    def test_phase9_router_issue_state_reader_fails_closed_on_bad_gh_results(self) -> None:
-        cases = (
-            mock.Mock(returncode=1, stdout="", stderr="missing"),
-            mock.Mock(returncode=0, stdout=json.dumps({}), stderr=""),
-            mock.Mock(returncode=0, stdout=json.dumps({"state": ""}), stderr=""),
+    def test_phase9_router_issue_state_reader_fails_closed_when_snapshot_unavailable(self) -> None:
+        with (
+            mock.patch(
+                "codex_refactor_loop.phase9.router.load_open_managed_work_snapshot",
+                return_value=unavailable_managed_snapshot("fetch-failed"),
+            ),
+            mock.patch("codex_refactor_loop.phase9.router.subprocess.run") as run,
+        ):
+            decision = self.original_source_issue_reader(self.router, "37")
+
+        self.assertFalse(decision.allowed)
+        self.assertIsNone(decision.state)
+        self.assertEqual(decision.reason, "phase9-source-state-unavailable")
+        run.assert_not_called()
+
+    def test_phase9_router_issue_state_reader_uses_snapshot_not_rest_issue_view(self) -> None:
+        snapshot = managed_snapshot(
+            [
+                {
+                    "number": 37,
+                    "title": "Issue title",
+                    "body": "",
+                    "labels": [{"name": "crnd:lifecycle:managed"}],
+                }
+            ]
         )
-        for result in cases:
-            with self.subTest(stdout=result.stdout, returncode=result.returncode):
-                with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=result):
-                    decision = self.original_source_issue_reader(self.router, "37")
-                self.assertFalse(decision.allowed)
-                self.assertIsNone(decision.state)
-                self.assertEqual(decision.reason, "phase9-source-state-unavailable")
-
-    def test_phase9_router_issue_state_reader_uses_rest_api_not_graphql_view(self) -> None:
-        calls: list[list[str]] = []
-
-        def fake_run(command, **kwargs):
-            calls.append(list(command))
-            if str(command[2]).endswith("/comments?per_page=20"):
-                return mock.Mock(returncode=0, stdout=json.dumps([]), stderr="")
-            return mock.Mock(returncode=0, stdout=json.dumps({"state": "open", "title": "Issue title", "body": ""}), stderr="")
-
-        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+        with (
+            mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=snapshot),
+            mock.patch("codex_refactor_loop.phase9.router.subprocess.run") as run,
+        ):
             decision = self.original_source_issue_reader(self.router, "37")
 
         self.assertTrue(decision.allowed)
         self.assertEqual(decision.state, "OPEN")
-        self.assertEqual(calls[0][:2], ["gh", "api"])
-        self.assertRegex(calls[0][2], r"^repos/[^/]+/[^/]+/issues/37$")
-        self.assertNotIn("view", calls[0])
-        self.assertEqual(len(calls), 1)
+        run.assert_not_called()
 
-    def test_phase9_router_issue_source_snapshot_reuses_one_rest_read_per_route(self) -> None:
+    def test_phase9_router_issue_source_snapshot_uses_snapshot_plus_comments_without_issue_read(self) -> None:
         calls: list[str] = []
         self.router._read_source_issue_decision = self.original_source_issue_reader.__get__(self.router, Phase9Router)  # type: ignore[method-assign]
         self.solver_triplet(issue=427, round_no=4)
+        snapshot = managed_snapshot(
+            [
+                {
+                    "number": 427,
+                    "title": "Snapshot title",
+                    "body": "Snapshot body",
+                    "updated_at": "2026-06-01T00:00:00Z",
+                    "labels": [{"name": "crnd:lifecycle:managed"}],
+                }
+            ]
+        )
 
         def fake_run(command, **kwargs):
             calls.append(command[2])
@@ -963,16 +977,13 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                     ),
                     stderr="",
                 )
-            return mock.Mock(
-                returncode=0,
-                stdout=json.dumps({"state": "open", "title": "Snapshot title", "body": "Snapshot body"}),
-                stderr="",
-            )
+            return mock.Mock(returncode=1, stdout="", stderr="unexpected live issue read")
 
-        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
-            self.router.tick()
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=snapshot):
+            with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+                self.router.tick()
 
-        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427"), 2)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427"), 0)
         self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427/comments?per_page=20"), 1)
         prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue427-r4-judge.md").read_text(encoding="utf-8")
         self.assertIn("## Issue source snapshot", prompt)
@@ -1021,7 +1032,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
                 self.router.tick()
 
-        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427"), 1)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427"), 0)
         self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427/comments?per_page=20"), 1)
         cache_path = self.repo / ".refactor-loop/state/phase9-router-comments-cache.json"
         cache = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -1049,21 +1060,29 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         calls: list[str] = []
         self.router._read_source_issue_decision = self.original_source_issue_reader.__get__(self.router, Phase9Router)  # type: ignore[method-assign]
         self.solver_triplet(issue=429, round_no=4)
+        snapshot = managed_snapshot(
+            [
+                {
+                    "number": 429,
+                    "title": "Snapshot title",
+                    "body": "Snapshot body",
+                    "updated_at": "2026-06-01T00:00:00Z",
+                    "labels": [{"name": "crnd:lifecycle:managed"}],
+                }
+            ]
+        )
 
         def fake_run(command, **kwargs):
             calls.append(command[2])
             if command[2].endswith("/comments?per_page=20"):
                 return mock.Mock(returncode=1, stdout="", stderr="comments rate limited")
-            return mock.Mock(
-                returncode=0,
-                stdout=json.dumps({"state": "open", "title": "Snapshot title", "body": "Snapshot body"}),
-                stderr="",
-            )
+            return mock.Mock(returncode=1, stdout="", stderr="unexpected live issue read")
 
-        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
-            self.router.tick()
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=snapshot):
+            with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+                self.router.tick()
 
-        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/429"), 2)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/429"), 0)
         self.assertEqual(calls.count("repos/example/consensus-rnd/issues/429/comments?per_page=20"), 1)
         self.assertEqual(len(self.commands), 1)
         prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue429-r4-judge.md").read_text(encoding="utf-8")
@@ -1100,7 +1119,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue428-r2-minimal.md").read_text(encoding="utf-8")
         self.assertIn("Snapshot unavailable.", prompt)
-        self.assertIn("unavailable_reason: issue-read-failed", prompt)
+        self.assertIn("unavailable_reason: not-in-open-managed-snapshot", prompt)
         self.assertIn("Fallback only: run `gh issue view 428` if the injected snapshot is unavailable.", prompt)
 
     def test_phase9_router_triplet_dispatch_writes_row_level_ledger_provenance(self) -> None:
