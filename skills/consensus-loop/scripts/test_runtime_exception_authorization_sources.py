@@ -407,8 +407,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "RUNTIME_RETENTION_ENABLE=true",
             "only canonical owner",
             "$REPO_ROOT/.refactor-loop/{logs,prompts,runs}",
-            "fails closed until a file-level planner proof surface and producer exist",
-            "deleted=0 kept=0",
+            "generated_files",
+            "TTL-expired",
+            "regular non-symlink files",
+            "no_open_actionable",
+            "no_pending_intent",
+            "no_unconsumed_marker",
+            "no_recovery_surface",
+            "markerless recovery",
             "same-inode compact",
             ".refactor-loop/state/runtime-retention-plan.json",
             "no_in_flight",
@@ -421,7 +427,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "no GitHub write",
             "no `git fetch`",
             "no branch deletion",
-            "no worktree cleanup without planner proof",
+            "no generated-file or worktree cleanup without planner proof",
             "no generic lifecycle actor",
         ):
             with self.subTest(needle=needle):
@@ -440,8 +446,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertNotIn('"' + "log" + '-retention": CommandSpec(', cli_source)
         self.assertIn("runtime_retention_main", cli_source)
         self.assertIn("RuntimeRetentionPlan", runtime_source)
-        self.assertIn("deleted = 0", runtime_source)
-        self.assertIn("kept = 0", runtime_source)
+        self.assertIn("generated_files", runtime_source)
+        self.assertIn("GENERATED_FILE_PROOF_TRUTHS", runtime_source)
 
     def test_issue_504_global_dashboard_card_is_fixed_issue_comment_patch_only(self) -> None:
         entry = mirror_entry(self.mirror, "global-dashboard-status-card-504")
