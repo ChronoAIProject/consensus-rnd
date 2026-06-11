@@ -19,10 +19,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
-<<<<<<< HEAD
-=======
 from codex_refactor_loop.consensus_gate import consensus_gate_digest, consensus_gate_file_digest
->>>>>>> origin/auto-refact-dev
 from codex_refactor_loop.issue_decomposition import (
     IssueDecompositionBackoff,
     issue_decomposition_child_fingerprint,
