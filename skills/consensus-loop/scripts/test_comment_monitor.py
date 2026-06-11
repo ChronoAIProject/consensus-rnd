@@ -22,6 +22,9 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
 from codex_refactor_loop.monitors.comment import CommentMonitor, is_controller_post, main as comment_monitor_main, run_comment_monitor_reconcile_tick
+from codex_refactor_loop.supervisor import CommentMonitorTickHandler
+from codex_refactor_loop.workqueue import TickWorkItem
+from codex_refactor_loop.projections import ProjectionRequest, SharedControllerProjection, _FreshnessSource
 from test_support.authorization_projection import project_python
 
 
@@ -384,6 +387,30 @@ class CommentMonitorTests(unittest.TestCase):
         load_context.assert_called_once()
         monitor_class.assert_called_once_with(self.ctx)
         wrapper.assert_called_once_with(monitor)
+
+    def test_supervisor_comment_monitor_handler_delegates_same_reconcile_tick(self) -> None:
+        monitor = mock.Mock(spec=CommentMonitor)
+        projection = SharedControllerProjection(
+            repo_root=str(self.tmp),
+            generated_at="2026-06-06T00:00:00Z",
+            request=ProjectionRequest(),
+            managed_work=None,
+            daemon_fleet=None,
+            statusline={},
+            workqueue_keys=(),
+            freshness_sources=(
+                _FreshnessSource("managed_work_snapshot", True, "cache:fresh", 1.0, 299.0),
+            ),
+        )
+
+        result = CommentMonitorTickHandler(monitor).handle(
+            item=TickWorkItem.create(handler="comment-monitor", key="maintainer-comments"),
+            projection=projection,
+        )
+
+        monitor.tick.assert_called_once_with()
+        self.assertEqual("handled", result.status)
+        self.assertEqual("run_comment_monitor_reconcile_tick", result.reason)
 
     def test_last_updated_at_persists_and_reload_skips_unchanged_item(self) -> None:
         calls: list[str] = []
