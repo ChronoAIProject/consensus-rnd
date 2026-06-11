@@ -1642,7 +1642,14 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "plan_level_design_consensus_judge_artifact": consensus,
             "issue_decomposition_plan_path": plan_path,
             "issue_decomposition_plan_digest": digest,
-            "issue_decomposition_proof": f"plan-level judge {consensus} validated plan {plan_path} digest {digest} reached consensus",
+            "issue_decomposition_proof": "\n".join(
+                [
+                    f"plan_level_design_consensus_judge_artifact={consensus}",
+                    f"issue_decomposition_plan_path={plan_path}",
+                    f"issue_decomposition_plan_digest={digest}",
+                    "parent_issue=403",
+                ]
+            ),
         }
         action.update(overrides)
         return action
@@ -3279,16 +3286,52 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "blocked")
         self.assertEqual(results[0].reason, "forbidden_fields:proof_payload.executor,proof_payload.nested[0].env")
 
-    def test_nested_forbidden_fields_fail_closed(self) -> None:
-        action = self.issue_decomposition_action(
-            action_id="decompose:nested-forbidden",
-            proof_payload={"executor": "shell", "nested": [{"env": {"TOKEN": "x"}}]},
+    def test_issue_decomposition_structured_proof_must_match_exact_fields(self) -> None:
+        base = self.issue_decomposition_action()
+        cases = (
+            ("missing_parent", "\n".join(str(base["issue_decomposition_proof"]).splitlines()[:-1])),
+            (
+                "wrong_parent",
+                str(base["issue_decomposition_proof"]).replace("parent_issue=403", "parent_issue=404"),
+            ),
+            (
+                "extra_field",
+                str(base["issue_decomposition_proof"]) + "\nexecutor=shell",
+            ),
+            (
+                "substring_only",
+                f"proof text mentions {base['plan_level_design_consensus_judge_artifact']} "
+                f"and {base['issue_decomposition_plan_path']} and {base['issue_decomposition_plan_digest']} "
+                "but is not structured proof",
+            ),
         )
+        for name, proof in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                action = self.issue_decomposition_action(
+                    action_id=f"decompose:proof:{name}",
+                    issue_decomposition_proof=proof,
+                )
 
-        results = self.run_result(self.base_plan(action), actions=FakeActions())
+                results = self.run_result(self.base_plan(action), actions=actions)
 
-        self.assertEqual(results[0].status, "blocked")
-        self.assertEqual(results[0].reason, "forbidden_fields:proof_payload.executor,proof_payload.nested[0].env")
+                self.assert_blocked_before_dispatch(results, f"decompose:proof:{name}", "issue_decomposition_proof_mismatch", actions)
+
+    def test_issue_decomposition_legacy_exact_proof_sentence_remains_compatible(self) -> None:
+        base = self.issue_decomposition_action()
+        proof = (
+            f"plan-level judge {base['plan_level_design_consensus_judge_artifact']} "
+            f"validated plan {base['issue_decomposition_plan_path']} "
+            f"digest {base['issue_decomposition_plan_digest']} "
+            "reached consensus for parent issue #403"
+        )
+        actions = FakeActions()
+        action = self.issue_decomposition_action(action_id="decompose:legacy-proof", issue_decomposition_proof=proof)
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
 
     def test_malformed_plan_envelope_blocks_before_dispatch_and_records_ledger(self) -> None:
         actions = FakeActions()
