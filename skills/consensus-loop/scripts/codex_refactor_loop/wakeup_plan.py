@@ -22,6 +22,7 @@ from typing import Any, Mapping
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.consensus_gate import consensus_gate_digest, consensus_gate_file_digest
 from codex_refactor_loop.default_issue_intake import default_issue_intake_enabled
 from codex_refactor_loop.implement_lifecycle import (
     classify_implement_attempt,
@@ -38,7 +39,9 @@ from codex_refactor_loop.implementation_pr_artifacts import (
 from codex_refactor_loop.issue_decomposition import (
     IssueDecompositionError,
     applied_issue_decomposition_parent_suppresses_expected_worker,
+    issue_decomposition_apply_proof_matches,
     issue_decomposition_plan_file_digest,
+    load_issue_decomposition_plan,
 )
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.phase9.progress import issue_has_terminal_consensus_judge
@@ -2077,9 +2080,10 @@ def _extract_structured_consensus_field(section: str, field: str) -> str:
         "plan_level_design_consensus_judge_artifact",
     }
     lines = section.splitlines()
-    start_re = re.compile(rf"^\s*(?:-\s*)?{re.escape(field)}\s*:\s*(.*)$")
+    top_level_prefix = r"(?:-\s*|\s+-\s*)?"
+    start_re = re.compile(rf"^{top_level_prefix}{re.escape(field)}\s*:\s*(.*)$")
     other_re = re.compile(
-        r"^\s*(?:-\s*)?(?:" + "|".join(re.escape(name) for name in sorted(field_names - {field})) + r")\s*:\s*"
+        r"^" + top_level_prefix + r"(?:" + "|".join(re.escape(name) for name in sorted(field_names - {field})) + r")\s*:\s*"
     )
     collected: list[str] = []
     collecting = False
@@ -2094,6 +2098,8 @@ def _extract_structured_consensus_field(section: str, field: str) -> str:
             collecting = True
             continue
         if other_re.match(line) or re.match(r"^\s*-\s*(?:Implementation owner|Add `|For large-issue)\b", line):
+            break
+        if re.match(r"^\s*[A-Z_]+_DONE:", line):
             break
         if re.match(r"^\s*-\s+[A-Za-z][A-Za-z0-9 _/-]*:", line):
             break
@@ -2166,13 +2172,34 @@ def _issue_decomposition_apply_projection_from_artifact(
     if plan_level_artifact.strip() != rel:
         return {}
     try:
-        digest = issue_decomposition_plan_file_digest(
-            LoopContext.load(repo_root=repo_root, env=_repo_local_context_env(repo_root, os.environ), cwd=repo_root, read_only=True),
-            plan_path,
-        )
+        context = LoopContext.load(repo_root=repo_root, env=_repo_local_context_env(repo_root, os.environ), cwd=repo_root, read_only=True)
+        plan = load_issue_decomposition_plan(context, plan_path)
+        digest = issue_decomposition_plan_file_digest(context, plan_path)
     except (IssueDecompositionError, RuntimeError, ValueError):
         return {}
+    if plan.parent_issue != issue or plan.source_consensus_artifact != rel:
+        return {}
     if digest != plan_digest.strip():
+        return {}
+    if not issue_decomposition_apply_proof_matches(
+        proof,
+        consensus_artifact=rel,
+        plan_path=plan_path,
+        digest=digest,
+        parent_issue=issue,
+    ):
+        return {}
+    try:
+        proof_payload = _issue_decomposition_consensus_gate_proof(
+            repo_root=repo_root,
+            issue=issue,
+            round_no=round_no,
+            consensus_artifact=rel,
+            plan_path=plan_path,
+            plan_digest=digest,
+            scope_paths=[".refactor-loop/runs"],
+        )
+    except OSError:
         return {}
     return {
         "route": "apply-issue-decomposition-plan",
@@ -2188,6 +2215,66 @@ def _issue_decomposition_apply_projection_from_artifact(
         "issue_decomposition_plan_digest": plan_digest.strip(),
         "issue_decomposition_proof": proof,
         "plan_level_design_consensus_judge_artifact": plan_level_artifact.strip(),
+        "consensus_gate_proof": json.dumps(proof_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+    }
+
+
+def _issue_decomposition_consensus_gate_proof(
+    *,
+    repo_root: Path,
+    issue: int,
+    round_no: int,
+    consensus_artifact: str,
+    plan_path: str,
+    plan_digest: str,
+    scope_paths: list[str],
+) -> dict[str, Any]:
+    target_payload = _issue_decomposition_proof_target_payload(
+        issue=issue,
+        consensus_artifact=consensus_artifact,
+        plan_path=plan_path,
+        plan_digest=plan_digest,
+    )
+    return {
+        "target_kind": "issue-decomposition-plan",
+        "target_ref": plan_path,
+        "target_digest": consensus_gate_digest(target_payload),
+        "decision_producer_id": f"judge-issue-{issue}-r{round_no}",
+        "evidence": [
+            {
+                "producer_id": f"solver-minimal-issue-{issue}-r{round_no}",
+                "role": "minimal",
+                "artifact": consensus_artifact,
+                "artifact_digest": consensus_gate_file_digest(repo_root / consensus_artifact),
+                "verdict": "consensus",
+            },
+            {
+                "producer_id": f"solver-structural-issue-{issue}-r{round_no}",
+                "role": "structural",
+                "artifact": plan_path,
+                "artifact_digest": plan_digest,
+                "verdict": "approve",
+            },
+        ],
+        "required_roles": ["minimal", "structural"],
+        "verdict_rule": "all_required_approve",
+        "scope_paths": scope_paths,
+    }
+
+
+def _issue_decomposition_proof_target_payload(
+    *,
+    issue: int,
+    consensus_artifact: str,
+    plan_path: str,
+    plan_digest: str,
+) -> dict[str, Any]:
+    return {
+        "target_kind": "issue-decomposition-plan",
+        "parent_issue": issue,
+        "consensus_artifact": consensus_artifact,
+        "plan_path": plan_path,
+        "plan_digest": plan_digest,
     }
 
 

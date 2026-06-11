@@ -215,7 +215,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             {"number": 88, "title": "new", "labels": [], "updatedAt": "2026-06-07T00:00:00Z"},
             {"number": 89, "title": "managed", "labels": [{"name": label_catalog.MANAGED}], "updatedAt": ""},
         ]
-        with mock.patch("codex_refactor_loop.wakeup_plan.run_json", return_value=payload) as run_json_mock:
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
+            "codex_refactor_loop.wakeup_plan.run_json",
+            return_value=payload,
+        ) as run_json_mock:
             candidates = load_default_issue_intake_candidates(self.repo, ctx)
 
         self.assertEqual([88], [item.number for item in candidates])
@@ -1928,7 +1931,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             f"- plan_level_design_consensus_judge_artifact: {consensus}\n"
             f"- issue_decomposition_plan_path: {plan_path}\n"
             f"- issue_decomposition_plan_digest: {digest}\n"
-            f"- issue_decomposition_proof: plan-level judge {consensus} validated plan {plan_path} digest {digest} reached consensus for parent issue #{issue}\n\n"
+            "- issue_decomposition_proof:\n"
+            f"  plan_level_design_consensus_judge_artifact={consensus}\n"
+            f"  issue_decomposition_plan_path={plan_path}\n"
+            f"  issue_decomposition_plan_digest={digest}\n"
+            f"  parent_issue={issue}\n\n"
             "META_JUDGE_DONE:consensus:decompose\n",
             encoding="utf-8",
         )
@@ -1961,7 +1968,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             f"- plan_level_design_consensus_judge_artifact: .refactor-loop/runs/phase9-issue{issue}-r{round_no}-judge.md\n"
             f"- issue_decomposition_plan_path: {plan_path}\n"
             f"- issue_decomposition_plan_digest: {digest}\n"
-            f"- issue_decomposition_proof: plan-level judge .refactor-loop/runs/phase9-issue{issue}-r{round_no}-judge.md validated plan {plan_path} digest {digest} reached consensus for parent issue #{issue}\n\n"
+            "- issue_decomposition_proof:\n"
+            f"  plan_level_design_consensus_judge_artifact=.refactor-loop/runs/phase9-issue{issue}-r{round_no}-judge.md\n"
+            f"  issue_decomposition_plan_path={plan_path}\n"
+            f"  issue_decomposition_plan_digest={digest}\n"
+            f"  parent_issue={issue}\n\n"
             "META_JUDGE_DONE:consensus:decompose\n",
             encoding="utf-8",
         )
@@ -3948,6 +3959,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn(".refactor-loop/runs/phase9-issue403-r6-judge.md", action["issue_decomposition_proof"])
         self.assertIn(plan_path, action["issue_decomposition_proof"])
         self.assertIn(digest, action["issue_decomposition_proof"])
+        proof = json.loads(action["consensus_gate_proof"])
+        self.assertEqual(proof["target_kind"], "issue-decomposition-plan")
+        self.assertEqual(proof["target_ref"], plan_path)
+        self.assertEqual(proof["required_roles"], ["minimal", "structural"])
+        self.assertEqual(proof["scope_paths"], [".refactor-loop/runs"])
+        self.assertNotIn("controller_action", proof)
+        self.assertNotIn("lifecycle_authority", proof)
         self.assertEqual(
             action["preconditions"],
             [
@@ -3989,6 +4007,85 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan(fixture="open_issue_403")
 
         self.assertEqual(issue_decomposition_apply_actions(plan), [])
+
+    def test_judge_artifact_structured_issue_decomposition_proof_emits_named_action(self) -> None:
+        plan_path, digest = self.write_issue_decomposition_artifacts()
+        artifact = self.repo / ".refactor-loop/runs/phase9-issue403-r6-judge.md"
+        artifact.write_text(
+            artifact.read_text(encoding="utf-8").replace(
+                "  parent_issue=403\n",
+                "  parent_issue=#403\n",
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
+
+        plan = self.run_plan(fixture="open_issue_403")
+
+        actions = issue_decomposition_apply_actions(plan)
+        self.assertEqual(1, len(actions))
+        self.assertEqual(actions[0]["issue_decomposition_plan_digest"], digest)
+
+    def test_judge_artifact_colon_issue_decomposition_proof_emits_named_action(self) -> None:
+        plan_path, digest = self.write_issue_decomposition_artifacts()
+        artifact = self.repo / ".refactor-loop/runs/phase9-issue403-r6-judge.md"
+        artifact.write_text(
+            artifact.read_text(encoding="utf-8")
+            .replace(
+                f"  plan_level_design_consensus_judge_artifact=.refactor-loop/runs/phase9-issue403-r6-judge.md\n",
+                "  plan_level_design_consensus_judge_artifact: .refactor-loop/runs/phase9-issue403-r6-judge.md\n",
+            )
+            .replace(
+                f"  issue_decomposition_plan_path={plan_path}\n",
+                f"  issue_decomposition_plan_path: {plan_path}\n",
+            )
+            .replace(
+                f"  issue_decomposition_plan_digest={digest}\n",
+                f"  issue_decomposition_plan_digest: {digest}\n",
+            )
+            .replace("  parent_issue=403\n", "  parent_issue: #403\n"),
+            encoding="utf-8",
+        )
+        self.write_completed_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
+
+        plan = self.run_plan(fixture="open_issue_403")
+
+        actions = issue_decomposition_apply_actions(plan)
+        self.assertEqual(1, len(actions))
+        self.assertEqual(actions[0]["controller_action"], "apply_issue_decomposition_plan")
+        self.assertEqual(actions[0]["issue_decomposition_plan_digest"], digest)
+
+    def test_judge_artifact_stale_plan_source_or_proof_does_not_project_issue_decomposition_apply(self) -> None:
+        for name, mutate in (
+            (
+                "plan-source",
+                lambda plan_path, digest: (self.repo / plan_path).write_text(
+                    (self.repo / plan_path).read_text(encoding="utf-8").replace(
+                        ".refactor-loop/runs/phase9-issue403-r6-judge.md",
+                        ".refactor-loop/runs/phase9-issue999-r1-judge.md",
+                    ),
+                    encoding="utf-8",
+                ),
+            ),
+            (
+                "proof",
+                lambda plan_path, digest: (self.repo / ".refactor-loop/runs/phase9-issue403-r6-judge.md").write_text(
+                    (self.repo / ".refactor-loop/runs/phase9-issue403-r6-judge.md").read_text(encoding="utf-8").replace(
+                        f"issue_decomposition_plan_digest={digest}",
+                        "issue_decomposition_plan_digest=" + ("0" * 64),
+                    ),
+                    encoding="utf-8",
+                ),
+            ),
+        ):
+            with self.subTest(name=name):
+                plan_path, digest = self.write_issue_decomposition_artifacts()
+                mutate(plan_path, digest)
+                self.write_completed_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
+
+                plan = self.run_plan(fixture="open_issue_403")
+
+                self.assertEqual(issue_decomposition_apply_actions(plan), [])
 
     def test_issue_decomposition_has_no_private_action_dialect_or_public_commands(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
