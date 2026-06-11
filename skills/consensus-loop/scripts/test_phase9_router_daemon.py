@@ -2165,6 +2165,123 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertNotIn("756-4-structural", ledger_keys)
         self.assertNotIn("756-4-delete", ledger_keys)
 
+    def test_phase9_router_stalled_routes_evolving_same_split_propose_to_reflector(self) -> None:
+        verdicts = {
+            1: (
+                "propose:split scripts/codex_refactor_loop/phase9/router.py with Phase9Router "
+                "normalizing the stalled predicate while preserving source-unreachable handling"
+            ),
+            2: (
+                "propose:preserve source-unreachable handling; normalize stalled predicate "
+                "inside Phase9Router in scripts/codex_refactor_loop/phase9/router.py"
+            ),
+            3: (
+                "propose:Phase9Router change in scripts/codex_refactor_loop/phase9/router.py: "
+                "stalled predicate normalization, source-unreachable behavior unchanged"
+            ),
+        }
+        for round_no, verdict in verdicts.items():
+            self.solver_triplet(issue=845, round_no=round_no, verdict=verdict)
+            self.write_log(
+                f"phase9-issue845-r{round_no}-judge.log",
+                (
+                    f"META_JUDGE_DONE:converge:round-{round_no}:"
+                    "implementation split unchanged between router signature and source gate"
+                ),
+            )
+
+        self.assertTrue(self.router._stalled_predicate_holds("845", 3))
+
+        self.router.tick()
+
+        reflector_commands = [
+            command for command in self.commands if "phase9-issue845-r3-reflector.log" in self.intent_text(command)
+        ]
+        self.assertEqual(len(reflector_commands), 1)
+        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
+        self.assertIn("845-3-reflector", ledger_keys)
+        self.assertNotIn("845-4-minimal", ledger_keys)
+        self.assertNotIn("845-4-structural", ledger_keys)
+        self.assertNotIn("845-4-delete", ledger_keys)
+
+    def test_phase9_router_stalled_rejects_moving_judge_split_reasons(self) -> None:
+        verdicts = {
+            1: (
+                "propose:split scripts/codex_refactor_loop/phase9/router.py with Phase9Router "
+                "normalizing the stalled predicate while preserving source-unreachable handling"
+            ),
+            2: (
+                "propose:move the decision into skills/consensus-loop/prompts/meta-reflector-stalled.md "
+                "and update the stalled reflector prompt contract"
+            ),
+            3: (
+                "propose:add a release-gate coordinate policy check in "
+                "scripts/codex_refactor_loop/release/gate.py before release publication"
+            ),
+        }
+        judge_reasons = {
+            1: "need-more: router split still moving",
+            2: "different split now centered on reflector prompt contract",
+            3: "proposal still moving toward release gate policy",
+        }
+        for round_no, verdict in verdicts.items():
+            self.solver_triplet(issue=846, round_no=round_no, verdict=verdict)
+            self.write_log(
+                f"phase9-issue846-r{round_no}-judge.log",
+                f"META_JUDGE_DONE:converge:round-{round_no}:{judge_reasons[round_no]}",
+            )
+
+        self.assertFalse(self.router._stalled_predicate_holds("846", 3))
+
+        self.router.tick()
+
+        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
+        self.assertNotIn("846-3-reflector", ledger_keys)
+        self.assertIn("846-4-minimal", ledger_keys)
+        self.assertIn("846-4-structural", ledger_keys)
+        self.assertIn("846-4-delete", ledger_keys)
+
+    def test_phase9_router_round_ceiling_routes_to_reflector_without_signature(self) -> None:
+        for round_no in (6, 7, 8):
+            self.solver_triplet(issue=847, round_no=round_no, verdict=f"propose:changing-plan-{round_no}")
+            self.write_log(
+                f"phase9-issue847-r{round_no}-judge.log",
+                f"META_JUDGE_DONE:converge:round-{round_no}:proposal still moving in round {round_no}",
+            )
+
+        self.assertFalse(self.router._stalled_predicate_holds("847", 8))
+
+        self.router.tick()
+
+        reflector_commands = [
+            command for command in self.commands if "phase9-issue847-r8-reflector.log" in self.intent_text(command)
+        ]
+        self.assertEqual(len(reflector_commands), 1)
+        self.assertEqual(reflector_commands[0]["reason"], "round-ceiling")
+        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
+        self.assertIn("847-8-reflector", ledger_keys)
+        self.assertNotIn("847-9-minimal", ledger_keys)
+        self.assertNotIn("847-9-structural", ledger_keys)
+        self.assertNotIn("847-9-delete", ledger_keys)
+
+    def test_phase9_router_round_ceiling_does_not_fire_below_threshold(self) -> None:
+        for round_no in (5, 6, 7):
+            self.solver_triplet(issue=848, round_no=round_no, verdict=f"propose:changing-plan-{round_no}")
+            self.write_log(
+                f"phase9-issue848-r{round_no}-judge.log",
+                f"META_JUDGE_DONE:converge:round-{round_no}:proposal still moving in round {round_no}",
+            )
+
+        self.assertFalse(self.router._stalled_predicate_holds("848", 7))
+
+        self.router.tick()
+
+        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
+        self.assertNotIn("848-7-reflector", ledger_keys)
+        self.assertIn("848-8-minimal", ledger_keys)
+        self.assertIn("848-8-structural", ledger_keys)
+        self.assertIn("848-8-delete", ledger_keys)
+
     def test_phase9_router_stalled_rejects_implementation_bearing_propose_changes(self) -> None:
         verdicts = {
             1: "propose:add-router-helper",
