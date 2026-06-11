@@ -20,6 +20,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import restart
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.daemon_singleton import DaemonSingletonMetadata, DaemonSingletonProjection, read_metadata
 from codex_refactor_loop.daemon_status import DaemonStatusProjection, collect as collect_daemon_status
 from codex_refactor_loop.restart import (
     DAEMON_COMMANDS,
@@ -105,6 +106,8 @@ class FakeRestartDaemonRuntime:
         self._now = now
         self._pid = 9000
         self._next_pid = 10000
+        self.child_pids_by_wrapper: dict[int, int] = {}
+        self.child_commands: dict[int, str] = {}
         self.live_pids: set[int] = set()
         self.wrapper_commands: dict[int, str] = {}
         self.terminated: list[tuple[int, int]] = []
@@ -127,14 +130,29 @@ class FakeRestartDaemonRuntime:
     def collect_inventory(self) -> DaemonProcessInventory:
         if self.inventory_override is not None:
             return self.inventory_override
-        return DaemonProcessInventory(
-            tuple(DaemonProcess(pid, command, 1) for pid, command in sorted(self.wrapper_commands.items()))
-        )
+        processes = [DaemonProcess(pid, command, 1) for pid, command in sorted(self.wrapper_commands.items())]
+        for wrapper_pid, child_pid in sorted(self.child_pids_by_wrapper.items()):
+            if wrapper_pid in self.wrapper_commands:
+                processes.append(DaemonProcess(child_pid, self.child_commands[child_pid], wrapper_pid))
+        return DaemonProcessInventory(tuple(processes))
+
+    def probe_singleton(self, target) -> DaemonSingletonProjection:
+        metadata = read_metadata(target.singleton_lock_file)
+        if metadata is None:
+            state = "missing" if not target.singleton_lock_file.exists() else "held-malformed"
+            return DaemonSingletonProjection(target.singleton_lock_file, state, None, False, f"lock-{state}")
+        if metadata.actor_pid in self.live_pids:
+            return DaemonSingletonProjection(target.singleton_lock_file, "held", metadata.actor_pid, True, "lock-held", metadata)
+        return DaemonSingletonProjection(target.singleton_lock_file, "free", metadata.actor_pid, True, "lock-free", metadata)
 
     def terminate_pid(self, pid: int, grace: int) -> None:
         self.terminated.append((pid, grace))
         self.live_pids.discard(pid)
         self.wrapper_commands.pop(pid, None)
+        child_pid = self.child_pids_by_wrapper.pop(pid, None)
+        if child_pid is not None:
+            self.live_pids.discard(child_pid)
+            self.child_commands.pop(child_pid, None)
 
     def launch_wrapper(
         self,
@@ -147,7 +165,11 @@ class FakeRestartDaemonRuntime:
     ) -> FakeWrapper:
         pid = self._next_pid
         self._next_pid += 1
+        child_pid = self._next_pid
+        self._next_pid += 1
         self.live_pids.add(pid)
+        self.live_pids.add(child_pid)
+        self.child_pids_by_wrapper[pid] = child_pid
         target.pid_file.parent.mkdir(parents=True, exist_ok=True)
         target.pid_file.write_text(f"{pid}\n", encoding="utf-8")
         target.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
@@ -160,6 +182,23 @@ class FakeRestartDaemonRuntime:
         log_file.touch()
         self.launch_envs[target.name] = dict(env)
         self.wrapper_commands[pid] = self.canonical_command(ctx, target.name, target.command, pid=pid)
+        self.child_commands[child_pid] = " ".join(target.command)
+        target.singleton_lock_file.write_text(
+            json.dumps(
+                DaemonSingletonMetadata.create(
+                    daemon_name=target.name,
+                    repo_root=ctx.repo_root,
+                    heartbeat_file=target.heartbeat_file,
+                    fingerprint_file=target.fingerprint_file,
+                    command_sha256=env.get("RESTART_DAEMON_COMMAND_SHA256", ""),
+                    actor_pid=child_pid,
+                    started_at=self._now,
+                ).to_json(),
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         return FakeWrapper(pid)
 
     def canonical_command(self, ctx: LoopContext, name: str, command: tuple[str, ...], *, pid: int = 111) -> str:
@@ -232,12 +271,17 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
     def collect_status_with_fake_allowlist(self, inventory: DaemonProcessInventory | None = None):
         collected = inventory or self.runtime.collect_inventory()
+        def fake_probe(repo_root: Path, name: str) -> DaemonSingletonProjection:
+            target = restart.daemon_target(self.ctx, name, FAKE_COMMAND)
+            return self.runtime.probe_singleton(target)
+
         with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, FAKE_COMMAND) for name in DAEMON_NAMES)):
             with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=collected):
-                with mock.patch("codex_refactor_loop.daemon_status.pid_alive", self.runtime.pid_alive):
-                    with mock.patch("codex_refactor_loop.restart.pid_alive", self.runtime.pid_alive):
-                        with mock.patch("codex_refactor_loop.restart.time.time", return_value=self.runtime.now()):
-                            return collect_daemon_status(repo_root=self.repo, skill_root=self.skill)
+                with mock.patch("codex_refactor_loop.daemon_status.probe_daemon_singleton", side_effect=fake_probe):
+                    with mock.patch("codex_refactor_loop.daemon_status.pid_alive", self.runtime.pid_alive):
+                        with mock.patch("codex_refactor_loop.restart.pid_alive", self.runtime.pid_alive):
+                            with mock.patch("codex_refactor_loop.restart.time.time", return_value=self.runtime.now()):
+                                return collect_daemon_status(repo_root=self.repo, skill_root=self.skill)
 
     def noop_retention(self) -> RuntimeRetentionResult:
         return RuntimeRetentionResult(False, 0, 0, False, 0, False, self.repo / ".refactor-loop", False)
@@ -254,6 +298,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
     def read_pid(self, name: str) -> int:
         return int((self.repo / ".refactor-loop" / "locks" / f"{name}.pid").read_text(encoding="utf-8").strip())
+
+    def singleton_path(self, name: str) -> Path:
+        return self.repo / ".refactor-loop" / "locks" / f"{name}.singleton.lock"
 
     def fingerprint_path(self, name: str) -> Path:
         return self.repo / ".refactor-loop" / "locks" / f"{name}.fingerprint.json"
@@ -803,6 +850,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
     def test_duplicate_canonical_wrappers_are_reaped_before_fresh_spawn(self) -> None:
         self.run_helper()
         old_pid = self.read_pid("concurrency_monitor")
+        old_child_pid = self.runtime.child_pids_by_wrapper[old_pid]
         duplicate_pids = (424242, 424243, 424244)
         command = self.runtime.canonical_command(self.ctx, "concurrency_monitor", FAKE_COMMAND)
         self.runtime.live_pids.update(duplicate_pids)
@@ -814,10 +862,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
         self.run_helper()
 
-        self.assertEqual(
-            [(pid, self.config.stop_grace_seconds) for pid in (old_pid, *duplicate_pids)],
-            self.runtime.terminated,
-        )
+        self.assertEqual((old_child_pid, self.config.stop_grace_seconds), self.runtime.terminated[0])
+        for pid in (old_pid, *duplicate_pids):
+            self.assertIn((pid, self.config.stop_grace_seconds), self.runtime.terminated)
         self.assert_start_count("concurrency_monitor", 2)
         self.assertNotEqual(old_pid, self.read_pid("concurrency_monitor"))
 
@@ -826,7 +873,22 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         old_wrapper_pid = self.read_pid("phase9_router_daemon")
         orphan_child_pid = 515151
         target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
-        (self.repo / ".refactor-loop" / "phase9-router.lock").write_text(f"pid={orphan_child_pid}\n", encoding="utf-8")
+        target.singleton_lock_file.write_text(
+            json.dumps(
+                DaemonSingletonMetadata.create(
+                    daemon_name=target.name,
+                    repo_root=self.ctx.repo_root,
+                    heartbeat_file=target.heartbeat_file,
+                    fingerprint_file=target.fingerprint_file,
+                    command_sha256=restart._command_digest(target.command),
+                    actor_pid=orphan_child_pid,
+                    started_at=self.runtime.now(),
+                ).to_json(),
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         self.runtime.live_pids.discard(old_wrapper_pid)
         self.runtime.wrapper_commands.pop(old_wrapper_pid, None)
         self.runtime.live_pids.add(orphan_child_pid)
@@ -836,7 +898,10 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         helper.start_daemon("phase9_router_daemon", FAKE_COMMAND)
 
         new_pid = self.read_pid("phase9_router_daemon")
-        self.assertEqual([(orphan_child_pid, self.config.stop_grace_seconds)], self.runtime.terminated)
+        self.assertEqual(
+            [(orphan_child_pid, self.config.stop_grace_seconds)],
+            [item for item in self.runtime.terminated if item[0] == orphan_child_pid],
+        )
         self.assertNotEqual(old_wrapper_pid, new_pid)
         self.assert_start_count("phase9_router_daemon", 2)
 
@@ -897,7 +962,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual((222, 333), projection.live_managed_child_pids)
         self.assertEqual((222,), projection.bounded_lock_holder_pids)
         self.assertEqual((111, 222), projection.repair_pids)
-        self.assertEqual((333,), projection.stale_lockless_orphan_child_pids)
+        self.assertEqual((), projection.singleton_holder_pids)
 
     def test_daemon_instance_projects_lockless_orphans_excluding_pid_file_and_locks(self) -> None:
         target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
@@ -926,7 +991,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
         self.assertEqual((333, 444, 555), projection.orphan_child_pids)
         self.assertEqual((444,), projection.bounded_lock_holder_pids)
-        self.assertEqual((555,), projection.stale_lockless_orphan_child_pids)
+        self.assertEqual((), projection.singleton_holder_pids)
 
     def test_daemon_instance_detects_macos_shaped_wrapper_child_by_ppid(self) -> None:
         target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
@@ -1121,6 +1186,22 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         target.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
         target.heartbeat_file.write_text(f"{self.runtime.now()}\n", encoding="utf-8")
         restart.DaemonLaunchFingerprint.current(self.ctx, "concurrency_monitor", target.command).write(target.fingerprint_file)
+        target.singleton_lock_file.write_text(
+            json.dumps(
+                DaemonSingletonMetadata.create(
+                    daemon_name=target.name,
+                    repo_root=self.ctx.repo_root,
+                    heartbeat_file=target.heartbeat_file,
+                    fingerprint_file=target.fingerprint_file,
+                    command_sha256=restart._command_digest(target.command),
+                    actor_pid=505051,
+                    started_at=self.runtime.now(),
+                ).to_json(),
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         self.runtime.live_pids.update({pid, 505051})
         self.runtime.inventory_override = DaemonProcessInventory(
             (
@@ -1136,15 +1217,17 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assert_start_count("concurrency_monitor", 0)
         self.assertEqual([], self.runtime.terminated)
 
-    def test_fresh_singleton_reaps_lockless_orphan_child_without_restart(self) -> None:
+    def test_fresh_singleton_keeps_orphan_child_diagnostic_without_reap_or_restart(self) -> None:
         self.run_helper()
         wrapper_pid = self.read_pid("concurrency_monitor")
+        child_pid = self.runtime.child_pids_by_wrapper[wrapper_pid]
         orphan_child_pid = 535353
         target = restart.daemon_target(self.ctx, "concurrency_monitor", FAKE_COMMAND)
         self.runtime.live_pids.add(orphan_child_pid)
         self.runtime.inventory_override = DaemonProcessInventory(
             (
                 DaemonProcess(wrapper_pid, self.runtime.canonical_command(self.ctx, "concurrency_monitor", FAKE_COMMAND), 1),
+                DaemonProcess(child_pid, " ".join(target.command), wrapper_pid),
                 DaemonProcess(orphan_child_pid, " ".join(target.command), 1),
             )
         )
@@ -1153,7 +1236,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         helper.start_daemon("concurrency_monitor", FAKE_COMMAND)
 
         self.assertEqual(wrapper_pid, self.read_pid("concurrency_monitor"))
-        self.assertEqual([(orphan_child_pid, self.config.stop_grace_seconds)], self.runtime.terminated)
+        self.assertEqual([], self.runtime.terminated)
         self.assert_start_count("concurrency_monitor", 1)
 
     def test_macos_framework_python_orphan_child_lock_holder_is_reaped_and_restarted_once(self) -> None:
@@ -1161,7 +1244,22 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         old_wrapper_pid = self.read_pid("phase9_router_daemon")
         orphan_child_pid = 525252
         target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
-        (self.repo / ".refactor-loop" / "phase9-router.lock").write_text(f"pid={orphan_child_pid}\n", encoding="utf-8")
+        target.singleton_lock_file.write_text(
+            json.dumps(
+                DaemonSingletonMetadata.create(
+                    daemon_name=target.name,
+                    repo_root=self.ctx.repo_root,
+                    heartbeat_file=target.heartbeat_file,
+                    fingerprint_file=target.fingerprint_file,
+                    command_sha256=restart._command_digest(target.command),
+                    actor_pid=orphan_child_pid,
+                    started_at=self.runtime.now(),
+                ).to_json(),
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         self.runtime.live_pids.discard(old_wrapper_pid)
         self.runtime.wrapper_commands.pop(old_wrapper_pid, None)
         self.runtime.live_pids.add(orphan_child_pid)
@@ -1173,7 +1271,10 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         helper.start_daemon("phase9_router_daemon", FAKE_COMMAND)
 
         new_pid = self.read_pid("phase9_router_daemon")
-        self.assertEqual([(orphan_child_pid, self.config.stop_grace_seconds)], self.runtime.terminated)
+        self.assertEqual(
+            [(orphan_child_pid, self.config.stop_grace_seconds)],
+            [item for item in self.runtime.terminated if item[0] == orphan_child_pid],
+        )
         self.assertNotEqual(old_wrapper_pid, new_pid)
         self.assert_start_count("phase9_router_daemon", 2)
 
@@ -1315,6 +1416,22 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         target.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
         target.heartbeat_file.write_text(f"{self.runtime.now()}\n", encoding="utf-8")
         restart.DaemonLaunchFingerprint.current(self.ctx, "phase9_router_daemon", target.command).write(target.fingerprint_file)
+        target.singleton_lock_file.write_text(
+            json.dumps(
+                DaemonSingletonMetadata.create(
+                    daemon_name=target.name,
+                    repo_root=self.ctx.repo_root,
+                    heartbeat_file=target.heartbeat_file,
+                    fingerprint_file=target.fingerprint_file,
+                    command_sha256=restart._command_digest(target.command),
+                    actor_pid=child_pid,
+                    started_at=self.runtime.now(),
+                ).to_json(),
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         (self.repo / ".refactor-loop" / "state").mkdir(parents=True, exist_ok=True)
         (self.repo / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
             json.dumps({"active_controller": "owner"}) + "\n",
@@ -1336,7 +1453,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual([child_pid], payload["managed_child_pids"])
         self.assertEqual([child_pid], payload["canonical_child_pids"])
         self.assertEqual([], payload["orphan_child_pids"])
-        self.assertEqual([], payload["bounded_lock_holder_pids"])
+        self.assertEqual([child_pid], payload["bounded_lock_holder_pids"])
 
     def test_daemon_status_resolves_static_allowlist_targets(self) -> None:
         targets = daemon_targets(self.ctx)

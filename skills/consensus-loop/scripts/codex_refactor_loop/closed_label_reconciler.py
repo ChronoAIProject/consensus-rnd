@@ -304,12 +304,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     reconciler = ClosedLabelReconciler(ctx, dry_run=bool(args.dry_run))
     if args.daemon:
-        lease = DaemonHeartbeatLease("closed_label_reconciler", ctx.repo_root)
-        lease.beat()
+        lease = DaemonHeartbeatLease("closed_label_reconciler", ctx.repo_root, singleton=True)
         interval = max(1, int(args.interval_seconds))
-        while True:
-            lease.run_with_lease(lambda: run_closed_label_reconciler_reconcile_tick(reconciler, beat=lease.beat))
-            lease.sleep_with_lease(interval)
+        with lease.daemon_lifetime():
+            lease.beat()
+            while True:
+                lease.run_with_lease(lambda: run_closed_label_reconciler_reconcile_tick(reconciler, beat=lease.beat))
+                lease.sleep_with_lease(interval)
     return run_closed_label_reconciler_reconcile_tick(reconciler)
 
 
