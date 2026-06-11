@@ -14,7 +14,7 @@ from unittest import mock
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.projections import ProjectionRequest, SharedControllerProjection
+from codex_refactor_loop.projections import ProjectionRequest, SharedControllerProjection, _FreshnessSource
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.supervisor import (
     COMMENT_MONITOR_HANDLER_CONTRACT,
@@ -62,26 +62,27 @@ def fake_projection(_request: ProjectionRequest) -> SharedControllerProjection:
 
 
 def fake_stale_managed_work_projection(_request: ProjectionRequest) -> SharedControllerProjection:
-    projection = fake_projection(_request)
-    from codex_refactor_loop.projections import _FreshnessSource
+    return _projection_with_freshness(
+        _request,
+        _FreshnessSource("managed_work_snapshot", True, "cache:stale", 640.0, 0.0, True),
+    )
 
-    return SharedControllerProjection(
-        repo_root=projection.repo_root,
-        generated_at=projection.generated_at,
-        request=projection.request,
-        managed_work=projection.managed_work,
-        daemon_fleet=projection.daemon_fleet,
-        statusline=projection.statusline,
-        workqueue_keys=projection.workqueue_keys,
-        freshness_sources=(
-            _FreshnessSource("managed_work_snapshot", True, "cache:stale", 640.0, 0.0, True),
-        ),
+
+def fake_failed_managed_work_projection(_request: ProjectionRequest) -> SharedControllerProjection:
+    return _projection_with_freshness(
+        _request,
+        _FreshnessSource("managed_work_snapshot", False, "github-error", None, 0.0),
     )
 
 
 def fake_fresh_managed_work_projection(_request: ProjectionRequest) -> SharedControllerProjection:
-    from codex_refactor_loop.projections import _FreshnessSource
+    return _projection_with_freshness(
+        _request,
+        _FreshnessSource("managed_work_snapshot", True, "cache:fresh", 12.0, 288.0),
+    )
 
+
+def _projection_with_freshness(_request: ProjectionRequest, *sources: _FreshnessSource) -> SharedControllerProjection:
     projection = fake_projection(_request)
     return SharedControllerProjection(
         repo_root=projection.repo_root,
@@ -91,9 +92,7 @@ def fake_fresh_managed_work_projection(_request: ProjectionRequest) -> SharedCon
         daemon_fleet=projection.daemon_fleet,
         statusline=projection.statusline,
         workqueue_keys=projection.workqueue_keys,
-        freshness_sources=(
-            _FreshnessSource("managed_work_snapshot", True, "cache:fresh", 12.0, 288.0),
-        ),
+        freshness_sources=sources,
     )
 
 
@@ -348,6 +347,54 @@ class ControllerTickSupervisorTests(unittest.TestCase):
         diagnostic = stderr.write.call_args.args[0]
         self.assertIn("status=backoff", diagnostic)
         self.assertIn("projection-stale:managed_work_snapshot", diagnostic)
+
+    def test_comment_monitor_handler_blocks_without_executing_when_projection_source_missing(self) -> None:
+        queue = KeyOnlyWorkQueue()
+        queue.enqueue("comment-monitor", "maintainer-comments")
+        monitor = mock.Mock()
+        handler = CommentMonitorTickHandler(monitor)
+
+        supervisor = ControllerTickSupervisor(
+            handlers=(handler,),
+            queue=queue,
+            projection_loader=fake_projection,
+            legacy_guard=LegacyDaemonModeGuard(supervisor_enabled=True, legacy_daemon_names=()),
+        )
+
+        with mock.patch("sys.stderr") as stderr:
+            result = supervisor.tick()
+
+        monitor.tick.assert_not_called()
+        self.assertEqual((), result.processed)
+        self.assertEqual(("blocked",), tuple(item.status for item in result.skipped))
+        self.assertEqual(("projection-missing:managed_work_snapshot",), tuple(item.reason for item in result.skipped))
+        diagnostic = stderr.write.call_args.args[0]
+        self.assertIn("status=blocked", diagnostic)
+        self.assertIn("projection-missing:managed_work_snapshot", diagnostic)
+
+    def test_comment_monitor_handler_blocks_without_executing_when_projection_source_failed(self) -> None:
+        queue = KeyOnlyWorkQueue()
+        queue.enqueue("comment-monitor", "maintainer-comments")
+        monitor = mock.Mock()
+        handler = CommentMonitorTickHandler(monitor)
+
+        supervisor = ControllerTickSupervisor(
+            handlers=(handler,),
+            queue=queue,
+            projection_loader=fake_failed_managed_work_projection,
+            legacy_guard=LegacyDaemonModeGuard(supervisor_enabled=True, legacy_daemon_names=()),
+        )
+
+        with mock.patch("sys.stderr") as stderr:
+            result = supervisor.tick()
+
+        monitor.tick.assert_not_called()
+        self.assertEqual((), result.processed)
+        self.assertEqual(("blocked",), tuple(item.status for item in result.skipped))
+        self.assertEqual(("projection-failed:managed_work_snapshot:github-error",), tuple(item.reason for item in result.skipped))
+        diagnostic = stderr.write.call_args.args[0]
+        self.assertIn("status=blocked", diagnostic)
+        self.assertIn("projection-failed:managed_work_snapshot:github-error", diagnostic)
 
 
 if __name__ == "__main__":
