@@ -808,7 +808,7 @@ class Phase9Router:
         if payload.startswith("propose:") and self._propose_unreadable_source_signature(payload) is not None:
             return "source-unreachable/no-actionable-source"
         if payload.startswith("propose:"):
-            return payload
+            return self._propose_structural_signature(payload)
         return self._solver_verdict_text(marker)
 
     def _propose_unreadable_source_signature(self, payload: str) -> str | None:
@@ -817,6 +817,53 @@ class Phase9Router:
         if not re.search(r"\b(?:current-checkout|checkout|source|target|pr)\b", payload):
             return None
         return "source-unreachable/no-actionable-source"
+
+    def _propose_structural_signature(self, payload: str) -> str:
+        """Return stable implementation anchors for propose verdicts while ignoring prose churn."""
+        body = payload.removeprefix("propose:").strip()
+        if not body:
+            return payload
+        anchors: set[str] = set()
+        lower_body = body.lower()
+        anchors.update(f"path:{token}" for token in re.findall(r"\b[a-z0-9_.-]+(?:/[a-z0-9_.-]+)+\b", lower_body))
+        anchors.update(f"compound:{token}" for token in re.findall(r"\b[a-z0-9]+(?:-[a-z0-9]+)+\b", lower_body))
+        anchors.update(
+            f"identifier:{token.lower()}"
+            for token in re.findall(r"\b[A-Z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]*)+[A-Za-z0-9]*\b", body)
+        )
+        for token in re.findall(r"\b[a-z][a-z0-9_]*\b", lower_body):
+            structural = self._propose_structural_keyword(token)
+            if structural is not None:
+                anchors.add(f"keyword:{structural}")
+        if len(anchors) < 2:
+            return payload
+        return "propose-structure:" + "|".join(sorted(anchors))
+
+    def _propose_structural_keyword(self, token: str) -> str | None:
+        if token.startswith("normaliz"):
+            return "normalize"
+        if token.startswith("canonicaliz"):
+            return "canonicalize"
+        keywords = {
+            "canonicalizer",
+            "contract",
+            "coordinate",
+            "gate",
+            "helper",
+            "policy",
+            "predicate",
+            "prompt",
+            "publication",
+            "reflector",
+            "release",
+            "renderer",
+            "router",
+            "stalled",
+            "test",
+            "tests",
+            "typed",
+        }
+        return token if token in keywords else None
 
     def _in_flight(self, log_path: Path) -> bool:
         return log_path.exists() or self._spawn_codex_in_flight(log_path)
