@@ -1690,6 +1690,8 @@ class ControllerActionsTests(unittest.TestCase):
             nonlocal pr_list_calls
             if args == ["issue", "view", "77", "--json", "labels,body"]:
                 return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args == ["pr", "list", "--state", "open", "--head", "refactor/iter77-issue-77", "--json", "author,headRefName"]:
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
             if args[:4] == ["pr", "list", "--state", "open"]:
                 pr_list_calls += 1
                 sequence.append(f"gh:pr-list:{pr_list_calls}")
@@ -1726,12 +1728,16 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/canonical-integration"]:
                 sequence.append("git:origin-base")
                 return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
+            if args == ["git", "-C", str(worktree), "fetch", "origin", "refactor/iter77-issue-77"]:
+                sequence.append("git:push-fetch")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-list", "--count", "HEAD..origin/refactor/iter77-issue-77"]:
+                sequence.append("git:push-behind")
+                return mock.Mock(returncode=0, stdout="0\n", stderr="")
+            if args == ["git", "-C", str(worktree), "push", "origin", "refactor/iter77-issue-77"]:
+                sequence.append("git:push")
+                return mock.Mock(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected subprocess call: {args!r}")
-
-        def fake_safe_push(*, branch: str, worktree: Path) -> int:
-            sequence.append("safe_push")
-            self.assertEqual("refactor/iter77-issue-77", branch)
-            return 0
 
         def fake_open_pr(title: str, body_file_arg: str, *, base: str | None = None, head: str = "") -> tuple[int, str]:
             sequence.append("open_pr")
@@ -1746,18 +1752,20 @@ class ControllerActionsTests(unittest.TestCase):
             self.assertEqual({"target_kind": "PR", "target_number": 414}, dict(review_action))
             return 0
 
+        delattr(self.actions, "_require_branch_push_admission_or_return")
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
                 with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
-                    with mock.patch.object(self.actions, "safe_push", side_effect=fake_safe_push):
-                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=fake_open_pr):
-                            with mock.patch.object(self.actions, "_update_existing_implementation_pr", side_effect=AssertionError("new PR must not be re-edited")):
-                                with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=fake_dispatch):
-                                    self.assertEqual(0, self.actions.publish_implementation_output(action))
+                    with mock.patch.object(self.actions, "open_pr_with_label", side_effect=fake_open_pr):
+                        with mock.patch.object(self.actions, "_update_existing_implementation_pr", side_effect=AssertionError("new PR must not be re-edited")):
+                            with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=fake_dispatch):
+                                self.assertEqual(0, self.actions.publish_implementation_output(action))
 
         self.assertEqual(
             sequence,
             [
+                "git:branch",
+                "git:branch",
                 "git:branch",
                 "git:diff-head",
                 "git:status",
@@ -1768,13 +1776,22 @@ class ControllerActionsTests(unittest.TestCase):
                 "git:origin-base",
                 "host:true",
                 "host:python3 -m unittest discover -s skills/consensus-loop/scripts -p 'test_*.py'",
-                "safe_push",
+                "git:branch",
+                "git:push-fetch",
+                "git:push-behind",
+                "git:push",
                 "gh:pr-list:1",
                 "open_pr",
                 "gh:pr-list:2",
                 "dispatch_reviewers",
             ],
         )
+        provenance = json.loads(
+            (self.tmp / ".refactor-loop" / "state" / "branch-provenance" / "refactor__iter77-issue-77.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual("refactor/iter77-issue-77", provenance["branch"])
+        self.assertEqual("77", provenance["issue"])
+        self.assertEqual("controller-bot", provenance["github_login"])
 
     def test_publish_implementation_output_opens_pr_for_already_committed_diff_without_second_commit(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
