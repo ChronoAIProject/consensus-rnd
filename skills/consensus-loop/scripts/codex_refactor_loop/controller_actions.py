@@ -2636,26 +2636,35 @@ class ControllerActions:
                 return current
         return None
 
-    def _write_branch_provenance(self, *, branch: str, worktree: Path, issue: str, base_sha: str) -> None:
+    def _write_branch_provenance(
+        self,
+        *,
+        branch: str,
+        worktree: Path,
+        issue: str,
+        base_sha: str,
+        actor_login: str | None = None,
+    ) -> None:
         if not self._canonical_managed_head(branch):
             return
-        actor_login = ""
-        actor = self.github_actor or GitHubAuthenticatedActor(self.ctx)
-        try:
-            admission = actor.require_admission("branch-provenance")
-        except RuntimeError:
-            admission = None
-        if isinstance(admission, GitHubActorAdmission):
-            actor_login = admission.login
-        elif admission is not None:
-            actor_login = str(getattr(admission, "login", "") or "")
+        resolved_actor_login = actor_login or ""
+        if actor_login is None:
+            actor = self.github_actor or GitHubAuthenticatedActor(self.ctx)
+            try:
+                admission = actor.require_admission("branch-provenance")
+            except RuntimeError:
+                admission = None
+            if isinstance(admission, GitHubActorAdmission):
+                resolved_actor_login = admission.login
+            elif admission is not None:
+                resolved_actor_login = str(getattr(admission, "login", "") or "")
         path = self._branch_provenance_path(branch)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "branch": branch,
             "worktree": str(worktree.resolve()),
             "owner_device": self._current_owner_device(),
-            "github_login": actor_login,
+            "github_login": resolved_actor_login,
             "issue": issue,
             "created_at": self._now(),
             "base_sha": base_sha,
@@ -2684,9 +2693,12 @@ class ControllerActions:
             return 3
         provenance = self._read_branch_provenance(branch)
         if provenance is None:
-            self._append_pending_event(f"PUSH_OWNERSHIP_BLOCKED:{action}:{branch}:missing-provenance")
-            sys.stderr.write(f"push_ownership_guard:{action}: missing provenance for {branch}\n")
-            return 2
+            self._backfill_legacy_branch_provenance(branch=branch, worktree=worktree, actor_login=admission_login)
+            provenance = self._read_branch_provenance(branch)
+            if provenance is None:
+                self._append_pending_event(f"PUSH_OWNERSHIP_BLOCKED:{action}:{branch}:missing-provenance")
+                sys.stderr.write(f"push_ownership_guard:{action}: missing provenance for {branch}\n")
+                return 2
         current_owner = self._current_owner_device()
         if (
             provenance.get("branch") != branch
@@ -2713,6 +2725,23 @@ class ControllerActions:
             sys.stderr.write(f"push_ownership_guard:{action}: branch_pr_author_mismatch current={admission_login} author={author}\n")
             return 2
         return None
+
+    def _backfill_legacy_branch_provenance(self, *, branch: str, worktree: Path, actor_login: str) -> None:
+        match = MANAGED_PR_HEAD_RE.fullmatch(branch)
+        if match is None:
+            return
+        issue = match.group(1)
+        cluster = match.group(2)
+        if cluster != f"issue-{issue}":
+            return
+        expected_worktree = (self.ctx.repo_root / ".worktrees" / f"iter{issue}-{cluster}").resolve()
+        if worktree.resolve() != expected_worktree:
+            return
+        if self._current_branch(worktree) != branch:
+            return
+        if not self._live_target_has_managed_label(kind="issue", target=issue):
+            return
+        self._write_branch_provenance(branch=branch, worktree=worktree, issue=issue, base_sha="", actor_login=actor_login)
 
     def _read_branch_provenance(self, branch: str) -> dict[str, object] | None:
         path = self._branch_provenance_path(branch)
