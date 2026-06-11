@@ -3960,7 +3960,11 @@ class ControllerActionsTests(unittest.TestCase):
                         return mock.Mock(returncode=0, stdout=json.dumps({"comments": comments}), stderr="")
                     raise AssertionError(f"unexpected gh call: {args}")
 
-                with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                snapshot = ManagedWorkSnapshotResult((), True, "cache:fresh", None, 10)
+                with mock.patch.object(self.actions, "gh", side_effect=fake_gh), mock.patch(
+                    "codex_refactor_loop.controller_actions.load_open_managed_work_snapshot",
+                    return_value=snapshot,
+                ):
                     self.assertEqual(tuple(), self.actions.apply_issue_decomposition_plan(str(plan_path)))
                 self.assertEqual(
                     [["issue", "view", "403", "--json", "comments"]],

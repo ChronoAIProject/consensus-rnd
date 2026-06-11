@@ -215,7 +215,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             {"number": 88, "title": "new", "labels": [], "updatedAt": "2026-06-07T00:00:00Z"},
             {"number": 89, "title": "managed", "labels": [{"name": label_catalog.MANAGED}], "updatedAt": ""},
         ]
-        with mock.patch("codex_refactor_loop.wakeup_plan.run_json", return_value=payload) as run_json_mock:
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
+            "codex_refactor_loop.wakeup_plan.run_json",
+            return_value=payload,
+        ) as run_json_mock:
             candidates = load_default_issue_intake_candidates(self.repo, ctx)
 
         self.assertEqual([88], [item.number for item in candidates])
