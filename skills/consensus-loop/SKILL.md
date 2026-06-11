@@ -2183,7 +2183,7 @@ One-shot:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --
 <a id="tier0-scaffold-inventory"></a>
 ### Tier 0 scaffold inventory
 
-This inventory is prose plus the single test-owned/data-only `controller_runtime_inventory.py`, and remains non-authoritative. It is a reader index for existing owner-local surfaces, not a runtime scaffold, package API, or executable registry. Runtime execution paths must not import/read `controller_runtime_inventory.py`; it has no dispatch, write, state-transition, pending-events, label mutation, GitHub/git, or authorization authority.
+This inventory is prose plus the single test-owned/data-only `controller_runtime_inventory.py`, and remains non-authoritative. It is a reader index for existing owner-local surfaces, not a runtime scaffold, package API, or executable registry. `restart.py::DAEMON_COMMANDS` remains the sole active seven-daemon command surface. Runtime execution paths must not import/read `controller_runtime_inventory.py`; it has no dispatch, write, state-transition, pending-events, label mutation, GitHub/git, or authorization authority.
 
 Owner-local fact sources stay where their behavior is owned:
 
