@@ -39,6 +39,7 @@ from .. import labels as label_catalog
 
 ROLES = ("minimal", "structural", "delete")
 JUDGE_ROLE = "judge"
+PHASE9_STALLED_ROUND_CEILING = 8
 LIFECYCLE_PREFIXES = (
     "META_JUDGE_DONE:consensus",
     "IMPLEMENT_DONE",
@@ -594,8 +595,9 @@ class Phase9Router:
                 target_round = self._converge_target_round(marker.marker, marker.round)
                 if target_round is None:
                     continue
-                if self._stalled_predicate_holds(marker.issue, marker.round):
-                    self._dispatch_stalled_reflector(marker, ledger)
+                stalled_reason = self._stalled_route_reason(marker.issue, marker.round, marker.marker)
+                if stalled_reason is not None:
+                    self._dispatch_stalled_reflector(marker, ledger, stalled_reason)
                     continue
                 for role in self._solver_roles():
                     key = self._key(marker.issue, target_round, role)
@@ -637,7 +639,7 @@ class Phase9Router:
             if marker.marker.startswith("META_JUDGE_DONE:escalate:stalled:"):
                 if marker.role != self._judge_role():
                     continue
-                self._dispatch_stalled_reflector(marker, ledger)
+                self._dispatch_stalled_reflector(marker, ledger, "stalled-marker")
 
     def _append_fallbacks(self, markers: list[Marker], ledger: set[str]) -> None:
         for marker in markers:
@@ -704,7 +706,9 @@ class Phase9Router:
             target_round = self._converge_target_round(marker.marker, marker.round)
             if target_round is None:
                 return False
-            if self._stalled_predicate_holds(marker.issue, marker.round):
+            if self._stalled_route_reason(marker.issue, marker.round, marker.marker) is not None:
+                if f"phase9-terminal-eligibility:{marker.issue}-{marker.round}-stalled_to_reflector" in self._fallback_seen:
+                    return True
                 if f"phase9-source-eligibility:{marker.issue}-{marker.round}-stalled_to_reflector" in self._fallback_seen:
                     return True
                 return self._key(marker.issue, marker.round, "reflector") in ledger
@@ -716,6 +720,8 @@ class Phase9Router:
         if marker.marker.startswith("META_JUDGE_DONE:escalate:stalled:"):
             if marker.role != self._judge_role():
                 return False
+            if f"phase9-terminal-eligibility:{marker.issue}-{marker.round}-stalled_to_reflector" in self._fallback_seen:
+                return True
             if f"phase9-source-eligibility:{marker.issue}-{marker.round}-stalled_to_reflector" in self._fallback_seen:
                 return True
             return self._key(marker.issue, marker.round, "reflector") in ledger
@@ -739,12 +745,24 @@ class Phase9Router:
             return source_round + 1
         return None
 
-    def _dispatch_stalled_reflector(self, marker: Marker, ledger: set[str]) -> None:
+    def _dispatch_stalled_reflector(self, marker: Marker, ledger: set[str], reason: str | None = None) -> None:
         key = self._key(marker.issue, marker.round, "reflector")
         log_path = self._log_path(marker.issue, marker.round, "reflector")
         if key in ledger or self._in_flight(log_path):
             return
-        if not self._stalled_predicate_holds(marker.issue, marker.round):
+        stalled_reason = reason or self._stalled_route_reason(marker.issue, marker.round, marker.marker)
+        if stalled_reason is None:
+            return
+        terminal_decision = self._solver_dispatch_terminal_decision(marker.issue)
+        if not terminal_decision.allowed:
+            self._append_terminal_fallback_event(
+                marker.issue,
+                marker.round,
+                "stalled_to_reflector",
+                marker.marker,
+                marker.log_path,
+                terminal_decision,
+            )
             return
         if not self._require_open_source_issue(
             marker.issue,
@@ -755,13 +773,31 @@ class Phase9Router:
         ):
             return
         prompt = self._write_prompt(marker.issue, marker.round, "reflector", self._reflector_prompt(marker))
-        if self._spawn(prompt, log_path):
+        if self._spawn(prompt, log_path, reason=stalled_reason):
             self._append_ledger(key, marker.marker, log_path)
             ledger.add(key)
+
+    def _stalled_route_reason(self, issue: str, round_no: int, marker: str) -> str | None:
+        if self._stalled_predicate_holds(issue, round_no):
+            return "no-progress-signature"
+        if self._round_ceiling_holds(round_no, marker):
+            return "round-ceiling"
+        return None
+
+    def _round_ceiling_holds(self, round_no: int, marker: str) -> bool:
+        return round_no >= PHASE9_STALLED_ROUND_CEILING and self._converge_target_round(marker, round_no) is not None
 
     def _stalled_predicate_holds(self, issue: str, round_no: int) -> bool:
         if round_no < 3:
             return False
+        judge_reasons = [self._judge_converge_reason_for_round(issue, r) for r in range(round_no - 2, round_no + 1)]
+        if all(reason is not None for reason in judge_reasons):
+            judge_signatures = [
+                self._normalize_judge_converge_no_progress_reason(reason)
+                for reason in judge_reasons
+                if reason is not None
+            ]
+            return all(signature is not None for signature in judge_signatures) and len(set(judge_signatures)) == 1
         recent: list[set[str]] = []
         for r in range(round_no - 2, round_no + 1):
             signatures: set[str] = set()
@@ -783,6 +819,60 @@ class Phase9Router:
                 return False
             recent.append(signatures)
         return recent[0] == recent[1] == recent[2]
+
+    def _judge_converge_no_progress_signature(self, issue: str, round_no: int) -> str | None:
+        reason = self._judge_converge_reason_for_round(issue, round_no)
+        if reason is None:
+            return None
+        return self._normalize_judge_converge_no_progress_reason(reason)
+
+    def _judge_converge_reason_for_round(self, issue: str, round_no: int) -> str | None:
+        for path in self._actor_log_paths(issue, round_no, self._judge_role()):
+            if not self._is_clean_exit(path):
+                continue
+            marker = self._final_marker_from_path(path)
+            if marker is None or self._converge_target_round(marker, round_no) is None:
+                continue
+            reason = self._judge_converge_reason(marker)
+            if reason is None:
+                continue
+            return reason
+        return None
+
+    def _judge_converge_reason(self, marker: str) -> str | None:
+        parts = marker.split(":", 3)
+        if len(parts) < 4 or parts[0] != "META_JUDGE_DONE" or parts[1] != "converge":
+            return None
+        return parts[3]
+
+    def _normalize_judge_converge_no_progress_reason(self, reason: str) -> str | None:
+        normalized = reason.lower()
+        normalized = re.sub(r"\bround[-\s]*\d+\b", " ", normalized)
+        normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        if not normalized:
+            return None
+        normalized_words = f" {normalized} "
+        motion_terms = (
+            "moving",
+            "need more",
+            "different split",
+            "split different",
+            "changed split",
+            "split changed",
+        )
+        if any(f" {term} " in normalized_words for term in motion_terms):
+            return None
+        stable_terms = (
+            "split unchanged",
+            "unchanged split",
+            "same split",
+            "implementation split unchanged",
+            "proposal split unchanged",
+        )
+        if any(f" {term} " in normalized_words for term in stable_terms):
+            return "judge-converge/split-unchanged"
+        return None
 
     def _collect_markers_from_path(self, path: Path) -> list[str]:
         if not path.exists():
@@ -808,7 +898,7 @@ class Phase9Router:
         if payload.startswith("propose:") and self._propose_unreadable_source_signature(payload) is not None:
             return "source-unreachable/no-actionable-source"
         if payload.startswith("propose:"):
-            return self._propose_structural_signature(payload)
+            return payload
         return self._solver_verdict_text(marker)
 
     def _propose_unreadable_source_signature(self, payload: str) -> str | None:
@@ -817,53 +907,6 @@ class Phase9Router:
         if not re.search(r"\b(?:current-checkout|checkout|source|target|pr)\b", payload):
             return None
         return "source-unreachable/no-actionable-source"
-
-    def _propose_structural_signature(self, payload: str) -> str:
-        """Return stable implementation anchors for propose verdicts while ignoring prose churn."""
-        body = payload.removeprefix("propose:").strip()
-        if not body:
-            return payload
-        anchors: set[str] = set()
-        lower_body = body.lower()
-        anchors.update(f"path:{token}" for token in re.findall(r"\b[a-z0-9_.-]+(?:/[a-z0-9_.-]+)+\b", lower_body))
-        anchors.update(f"compound:{token}" for token in re.findall(r"\b[a-z0-9]+(?:-[a-z0-9]+)+\b", lower_body))
-        anchors.update(
-            f"identifier:{token.lower()}"
-            for token in re.findall(r"\b[A-Z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]*)+[A-Za-z0-9]*\b", body)
-        )
-        for token in re.findall(r"\b[a-z][a-z0-9_]*\b", lower_body):
-            structural = self._propose_structural_keyword(token)
-            if structural is not None:
-                anchors.add(f"keyword:{structural}")
-        if len(anchors) < 2:
-            return payload
-        return "propose-structure:" + "|".join(sorted(anchors))
-
-    def _propose_structural_keyword(self, token: str) -> str | None:
-        if token.startswith("normaliz"):
-            return "normalize"
-        if token.startswith("canonicaliz"):
-            return "canonicalize"
-        keywords = {
-            "canonicalizer",
-            "contract",
-            "coordinate",
-            "gate",
-            "helper",
-            "policy",
-            "predicate",
-            "prompt",
-            "publication",
-            "reflector",
-            "release",
-            "renderer",
-            "router",
-            "stalled",
-            "test",
-            "tests",
-            "typed",
-        }
-        return token if token in keywords else None
 
     def _in_flight(self, log_path: Path) -> bool:
         return log_path.exists() or self._spawn_codex_in_flight(log_path)
