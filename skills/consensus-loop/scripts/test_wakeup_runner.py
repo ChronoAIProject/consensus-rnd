@@ -19,7 +19,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.issue_decomposition import issue_decomposition_child_fingerprint, issue_decomposition_plan_file_digest
+from codex_refactor_loop.issue_decomposition import (
+    IssueDecompositionBackoff,
+    issue_decomposition_child_fingerprint,
+    issue_decomposition_plan_file_digest,
+)
 from codex_refactor_loop import labels
 from codex_refactor_loop.cross_instance_stand_down import CrossInstanceAdmission
 from codex_refactor_loop.github_budget import reset_graphql_budget_cache
@@ -260,6 +264,16 @@ class FakeActions:
 
     def publish_release_candidate(self, *, candidate_path: str, target_ref: str):
         raise AssertionError("release publish should not be dispatched")
+
+
+class DecompositionBackoffActions(FakeActions):
+    def apply_issue_decomposition_plan(self, plan_path: str) -> tuple[tuple[int, str], ...]:
+        self.calls.append(("apply_issue_decomposition_plan", plan_path))
+        raise IssueDecompositionBackoff(
+            "ISSUE_DECOMPOSITION_BACKOFF managed-work-snapshot-unavailable "
+            "caller=apply_issue_decomposition_plan.child-fingerprint-discovery "
+            "reason=graphql-headroom-low source=unavailable age_seconds=901 items=0 target=parent=#403"
+        )
 
 
 class FakeReviewFixActions(FakeActions):
@@ -4237,6 +4251,34 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
+
+    def test_issue_decomposition_backoff_skips_without_ledger_and_allows_sibling_action(self) -> None:
+        actions = DecompositionBackoffActions()
+        decompose = self.issue_decomposition_action(action_id="decompose:backoff")
+        sibling = self.consensus_action(action_id="consensus:sibling-after-decompose-backoff")
+
+        results = self.run_result(self.batch_plan([decompose, sibling], dispatch_required=0, deficit=0), actions=actions)
+
+        self.assertEqual(
+            [
+                ("decompose:backoff", "skipped", "graphql-backoff:apply_issue_decomposition_plan"),
+                ("consensus:sibling-after-decompose-backoff", "applied", ""),
+            ],
+            [(result.action_id, result.status, result.reason) for result in results],
+        )
+        ledger_text = (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").read_text(encoding="utf-8")
+        self.assertNotIn("decompose:backoff", ledger_text)
+        self.assertIn("consensus:sibling-after-decompose-backoff", ledger_text)
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("ISSUE_DECOMPOSITION_BACKOFF:decompose:backoff:", pending)
+        self.assertIn("graphql-headroom-low", pending)
+        self.assertEqual(
+            [
+                ("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json"),
+                ("dispatch_consensus_implementation", mock.ANY),
+            ],
+            actions.calls,
+        )
 
     def test_issue_decomposition_apply_rejects_partial_implement_source_marker(self) -> None:
         actions = FakeActions()

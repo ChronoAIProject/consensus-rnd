@@ -32,6 +32,7 @@ from .implement_lifecycle import (
 )
 from .implementation_pr_artifacts import validate_implementation_pr_artifacts
 from .issue_decomposition import (
+    IssueDecompositionBackoff,
     IssueDecompositionError,
     issue_decomposition_plan_file_digest,
     load_issue_decomposition_plan,
@@ -397,6 +398,8 @@ class WakeupRunner:
             exit_code = self._dispatch(controller_action, action)
         except Exception as exc:
             return self._blocked(action, f"exception:{exc}")
+        if exit_code == 4 and controller_action == "apply_issue_decomposition_plan":
+            return RunnerResult(action_id, "skipped", "graphql-backoff:apply_issue_decomposition_plan")
         status = "applied" if exit_code == 0 else "blocked"
         reason = "" if exit_code == 0 else f"helper_exit:{exit_code}"
         if exit_code == 0 and controller_action == "dispatch_consensus_implementation":
@@ -1258,7 +1261,13 @@ class WakeupRunner:
             )
             return 0 if result.published else 3
         if controller_action == "apply_issue_decomposition_plan":
-            self.actions.apply_issue_decomposition_plan(str(action.get("issue_decomposition_plan_path") or ""))
+            try:
+                self.actions.apply_issue_decomposition_plan(str(action.get("issue_decomposition_plan_path") or ""))
+            except IssueDecompositionBackoff as exc:
+                action_id = str(action.get("action_id") or "")
+                diagnostic = _single_line(exc.diagnostic)
+                self._append_pending_event(f"ISSUE_DECOMPOSITION_BACKOFF:{action_id}:{diagnostic}")
+                return 4
             return 0
         if controller_action == "apply_default_issue_intake_claim":
             target = action.get("target_number")
@@ -2378,7 +2387,7 @@ def _wakeup_tick_action(results: Sequence[RunnerResult]) -> str:
         result
         for result in results
         if result.status in ("blocked", "skipped")
-        and result.reason != "graphql-backoff"
+        and result.reason not in {"graphql-backoff", "graphql-backoff:apply_issue_decomposition_plan"}
         and (result.reason or result.action_id)
     ]
 
@@ -2411,6 +2420,8 @@ def _wakeup_tick_action(results: Sequence[RunnerResult]) -> str:
         return f"dispatched {first.action_id or 'action'}{_notable_suffix()} [{counts}]"
     if first.status == "skipped" and first.reason == "graphql-backoff":
         return f"skip:graphql-backoff remaining=unknown [{counts}]"
+    if first.status == "skipped" and first.reason == "graphql-backoff:apply_issue_decomposition_plan":
+        return f"skip:graphql-backoff:apply_issue_decomposition_plan [{counts}]"
     if first.status == "noop":
         return f"noop:{first.reason or 'idle'}{_notable_suffix()} [{counts}]"
     if first.status == "blocked":

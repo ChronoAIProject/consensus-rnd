@@ -68,6 +68,14 @@ class IssueDecompositionError(ValueError):
     """Raised when an IssueDecompositionPlan crosses the controller boundary."""
 
 
+class IssueDecompositionBackoff(RuntimeError):
+    """Raised when decomposition apply should retry without consuming the action."""
+
+    def __init__(self, diagnostic: str) -> None:
+        super().__init__(diagnostic)
+        self.diagnostic = diagnostic
+
+
 @dataclass(frozen=True)
 class IssueDecompositionChild:
     slug: str
