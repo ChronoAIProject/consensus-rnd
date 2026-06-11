@@ -376,8 +376,36 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                     helper = RestartDaemons(ctx, self.config, runtime=self.runtime)
                     self.assertEqual(0, helper.run())
 
-        self.assertEqual([*DAEMON_NAMES, "controller_tick_supervisor"], calls)
+        self.assertEqual([name for name in DAEMON_NAMES if name != "comment-monitor"] + ["controller_tick_supervisor"], calls)
         self.assertEqual(DAEMON_NAMES, restart_managed_daemon_names())
+        self.assertEqual(
+            tuple(name for name in DAEMON_NAMES if name != "comment-monitor"),
+            restart.restart_managed_daemon_names_for_context(ctx),
+        )
+
+    def test_supervisor_enabled_mode_stops_legacy_comment_monitor_before_starting_supervisor(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="restart-daemons", lease_id="lease", expires_at="")
+        self.run_helper()
+        old_comment_pid = self.read_pid("comment-monitor")
+        self.host_env_path.write_text(
+            f'export REPO_ROOT="{self.repo}"\n'
+            'export GH_REPO_SLUG="example/repo"\n'
+            'export MAINTAINER_WHITELIST="maintainer"\n'
+            'export CONTROLLER_TICK_SUPERVISOR_ENABLE="true"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill, env={"CONSENSUS_RND_HOST_ENV": str(self.host_env_path)})
+
+        with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, FAKE_COMMAND) for name in DAEMON_NAMES)):
+            with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
+                with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
+                    helper = RestartDaemons(ctx, self.config, runtime=self.runtime)
+                    self.assertEqual(0, helper.run())
+
+        self.assertIn((old_comment_pid, self.config.stop_grace_seconds), self.runtime.terminated)
+        self.assertFalse((self.repo / ".refactor-loop" / "locks" / "comment-monitor.pid").exists())
+        self.assertEqual(1, self.start_count("comment-monitor"))
+        self.assertEqual(1, self.start_count("controller_tick_supervisor"))
 
     def test_help_exits_without_starting_daemons(self) -> None:
         with mock.patch.object(restart.RestartDaemons, "run") as run:

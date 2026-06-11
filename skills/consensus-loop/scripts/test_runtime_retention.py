@@ -723,7 +723,10 @@ class RuntimeRetentionSourceRegressionTests(unittest.TestCase):
     def test_restart_helper_runs_runtime_retention_before_daemon_start(self) -> None:
         restart = (SCRIPT_DIR / "codex_refactor_loop" / "restart.py").read_text(encoding="utf-8")
         self.assertIn("_run_runtime_retention", restart)
-        self.assertLess(restart.index("self._run_runtime_retention()"), restart.index("for name, command in DAEMON_COMMANDS"))
+        self.assertLess(
+            restart.index("self._run_runtime_retention()"),
+            restart.index("for name, command in restart_daemon_commands_for_context(self.ctx)"),
+        )
         self.assertIn("runtime_retention warning: helper failed; continuing daemon restart", restart)
 
 

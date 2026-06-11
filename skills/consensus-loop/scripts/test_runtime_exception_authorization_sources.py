@@ -1333,11 +1333,21 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "ManagedWorkSnapshot",
             "key-only workqueue keys",
             "TickWorkItem(handler,key)",
+            "TickHandlerContract",
+            "required projection sources/freshness",
+            "delegated existing helper",
+            "replaced legacy daemon target",
+            "net-deletion target",
             "LegacyDaemonModeGuard",
             "backoff",
+            "blocked",
             "noop",
             "diagnostics only",
             "$CONTROLLER_TICK_SUPERVISOR_ENABLE=true",
+            "mechanically excludes the migrated `comment-monitor` legacy daemon target",
+            "run_comment_monitor_reconcile_tick()",
+            "CommentMonitor.tick()",
+            "managed_work_snapshot",
             "canonical legacy daemon list",
             "test_shared_controller_projection.py",
             "test_controller_tick_supervisor.py",
@@ -1352,6 +1362,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "no `ControllerProjectionInformer`",
             "no second public shared projection read surface",
             "no freshness public or parsed read-model authority",
+            "no phase9-router migration",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, entry)
@@ -1365,11 +1376,11 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
         for forbidden in (
             "no generic executor",
-            "no argv/shell/cmd/command_line/commands/env/git/gh payload",
-            "no pending-events authority",
+            "no argv/shell/cmd/command_line/commands/env/git/gh/owner/pending_events_authority/lifecycle_authority/lifecycle_owner payload",
+            "no pending-events authority movement",
             "no host production SSOT",
             "no dev-sync migration in the first pass",
-            "no write side-effect authorization",
+            "no write side-effect authorization movement",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, entry)
