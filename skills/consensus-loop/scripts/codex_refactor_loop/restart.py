@@ -217,6 +217,13 @@ class DaemonInstanceProjection:
         return self.bounded_lock_holder_pids
 
     @property
+    def stale_lockless_orphan_child_pids(self) -> tuple[int, ...]:
+        excluded = set(self.bounded_lock_holder_pids)
+        if self.pid_file_pid is not None:
+            excluded.add(self.pid_file_pid)
+        return tuple(sorted(pid for pid in self.orphan_child_pids if pid not in excluded))
+
+    @property
     def repair_pids(self) -> tuple[int, ...]:
         pids = set(self.live_wrapper_pids)
         pids.update(self.bounded_lock_holder_pids)
@@ -655,6 +662,7 @@ class RestartDaemons:
             lock_files=daemon_lock_files(self.ctx, name),
             is_alive=self.runtime.pid_alive,
         )
+        self._terminate_pids(instance.stale_lockless_orphan_child_pids)
         if instance.has_singleton_wrapper and self._singleton_check_fresh(target, current_fingerprint, instance):
             self._log(f"{name} skip: alive pid={pid_file.read_text(encoding='utf-8').strip()} heartbeat=fresh")
             return
@@ -772,10 +780,13 @@ class RestartDaemons:
         return heartbeat_is_fresh(target, self.config, now=self.runtime.now())
 
     def _stop_existing_daemon(self, target: DaemonTarget, *, instance: DaemonInstanceProjection) -> None:
-        for existing_pid in instance.repair_pids:
+        self._terminate_pids(instance.repair_pids)
+        target.pid_file.unlink(missing_ok=True)
+
+    def _terminate_pids(self, pids: Sequence[int]) -> None:
+        for existing_pid in pids:
             if self.runtime.pid_alive(existing_pid):
                 self.runtime.terminate_pid(existing_pid, self.config.stop_grace_seconds)
-        target.pid_file.unlink(missing_ok=True)
 
     def _fingerprint_path(self, name: str) -> Path:
         return self.ctx.paths.refactor_loop / "locks" / f"{name}.fingerprint.json"
