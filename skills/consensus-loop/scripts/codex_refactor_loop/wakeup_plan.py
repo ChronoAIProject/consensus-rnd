@@ -1353,6 +1353,9 @@ def completed_marker_actions(
             continue
         target_text = f"{log_path.name} {marker}"
         item = infer_item_from_text(target_text)
+        target = _target_from_item(item)
+        if open_targets is not None and target is not None and (target["kind"], target["number"]) not in open_targets:
+            continue
         action = {
             "priority": 3,
             "kind": "completed-marker",
@@ -1366,7 +1369,7 @@ def completed_marker_actions(
             "source_marker": marker,
             "target_kind": _target_kind_from_item(item),
             "target_number": _target_number_from_item(item),
-            "target": _target_from_item(item),
+            "target": target,
             "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present"],
             "controller_action": controller_action_from_marker(marker),
             "runner_authority": RUNNER_AUTHORITY,
@@ -1377,16 +1380,6 @@ def completed_marker_actions(
         if action["controller_action"] == "publish_implementation_output":
             _attach_implementation_pr_artifacts(repo_root, action)
         _apply_remote_ci_fix_done_target_gate(action, open_targets)
-        target = _action_target_key(action)
-        if (
-            open_targets is not None
-            and target is not None
-            and target not in open_targets
-            and not action.get("status_only")
-            and not marker.startswith("META_JUDGE_DONE:consensus")
-            and controller_action_from_marker(marker) != "close_managed_item_from_drop_marker"
-        ):
-            continue
         route = route_from_marker(marker)
         if route:
             action["route"] = route
