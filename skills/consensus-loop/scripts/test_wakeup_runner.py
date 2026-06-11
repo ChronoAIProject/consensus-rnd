@@ -19,6 +19,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.consensus_gate import consensus_gate_digest, consensus_gate_file_digest
 from codex_refactor_loop.issue_decomposition import (
     IssueDecompositionBackoff,
     issue_decomposition_child_fingerprint,
@@ -1613,6 +1614,13 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
         digest = issue_decomposition_plan_file_digest(self.ctx, plan_path)
+        proof_target = {
+            "target_kind": "issue-decomposition-plan",
+            "parent_issue": 403,
+            "consensus_artifact": consensus,
+            "plan_path": plan_path,
+            "plan_digest": digest,
+        }
         marker = "META_JUDGE_DONE:consensus:decompose"
         log = self.repo / ".refactor-loop/logs/phase9-issue403-r6-judge.log"
         log.write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
@@ -1643,6 +1651,35 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "issue_decomposition_plan_path": plan_path,
             "issue_decomposition_plan_digest": digest,
             "issue_decomposition_proof": f"plan-level judge {consensus} validated plan {plan_path} digest {digest} reached consensus",
+            "consensus_gate_proof": json.dumps(
+                {
+                    "target_kind": "issue-decomposition-plan",
+                    "target_ref": plan_path,
+                    "target_digest": consensus_gate_digest(proof_target),
+                    "decision_producer_id": "judge-issue-403-r6",
+                    "evidence": [
+                        {
+                            "producer_id": "solver-minimal-issue-403-r6",
+                            "role": "minimal",
+                            "artifact": consensus,
+                            "artifact_digest": consensus_gate_file_digest(self.repo / consensus),
+                            "verdict": "consensus",
+                        },
+                        {
+                            "producer_id": "solver-structural-issue-403-r6",
+                            "role": "structural",
+                            "artifact": plan_path,
+                            "artifact_digest": digest,
+                            "verdict": "approve",
+                        },
+                    ],
+                    "required_roles": ["minimal", "structural"],
+                    "verdict_rule": "all_required_approve",
+                    "scope_paths": [".refactor-loop/runs"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
         }
         action.update(overrides)
         return action
@@ -4329,6 +4366,46 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 results = self.run_result(self.base_plan(action), actions=actions)
 
                 self.assert_blocked_before_dispatch(results, f"decompose:{reason}", reason, actions)
+
+    def test_issue_decomposition_requires_valid_structured_consensus_gate_proof(self) -> None:
+        cases = (
+            (
+                "missing",
+                {"consensus_gate_proof": None},
+                "issue_decomposition_consensus_gate_proof_missing",
+            ),
+            (
+                "mechanical-target",
+                {"consensus_gate_proof": {"target_kind": "apply"}},
+                "issue_decomposition_consensus_gate_proof_invalid",
+            ),
+            (
+                "digest-mismatch",
+                {"consensus_gate_proof": {"target_digest": "0" * 64}},
+                "issue_decomposition_consensus_gate_proof_invalid",
+            ),
+        )
+        for name, overrides, reason in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                action = self.issue_decomposition_action(action_id=f"decompose:structured-proof:{name}")
+                if name == "mechanical-target":
+                    proof = json.loads(action["consensus_gate_proof"])
+                    proof["target_kind"] = "apply"
+                    action["consensus_gate_proof"] = json.dumps(proof, sort_keys=True, separators=(",", ":"))
+                elif name == "digest-mismatch":
+                    proof = json.loads(action["consensus_gate_proof"])
+                    proof["target_digest"] = "0" * 64
+                    action["consensus_gate_proof"] = json.dumps(proof, sort_keys=True, separators=(",", ":"))
+                else:
+                    action.update(overrides)
+
+                results = self.run_result(self.base_plan(action), actions=actions)
+
+                self.assertEqual(results[0].action_id, f"decompose:structured-proof:{name}")
+                self.assertEqual(results[0].status, "blocked")
+                self.assertTrue(results[0].reason.startswith(reason), results[0].reason)
+                self.assertEqual(actions.calls, [])
 
     def test_issue_decomposition_plan_level_judge_source_mismatch_fails_closed(self) -> None:
         actions = FakeActions()

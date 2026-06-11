@@ -78,6 +78,24 @@ class ConsensusGateProofTests(unittest.TestCase):
         with self.assertRaisesRegex(ConsensusGateProofError, "target_digest_mismatch"):
             validate_consensus_gate_proof(raw, target_digest=wrong_digest)
 
+    def test_target_kind_and_ref_bind_to_expected_substantive_target(self) -> None:
+        raw = valid_proof()
+
+        validate_consensus_gate_proof(raw, target_kind="implementation-plan", target_ref="gh-issue-579#consensus")
+
+        with self.assertRaisesRegex(ConsensusGateProofError, "target_kind_mismatch"):
+            validate_consensus_gate_proof(raw, target_kind="issue-decomposition-plan")
+        with self.assertRaisesRegex(ConsensusGateProofError, "target_ref_mismatch"):
+            validate_consensus_gate_proof(raw, target_ref=".refactor-loop/runs/other.json")
+
+    def test_mechanical_target_kind_is_outside_proof_scope(self) -> None:
+        for target_kind in ("route", "post", "label", "spawn", "merge", "apply-validated-proof"):
+            raw = valid_proof()
+            raw["target_kind"] = target_kind
+            with self.subTest(target_kind=target_kind):
+                with self.assertRaisesRegex(ConsensusGateProofError, "mechanical target_kind"):
+                    validate_consensus_gate_proof(raw)
+
     def test_decision_producer_cannot_self_certify(self) -> None:
         raw = valid_proof()
         replace_evidence(raw, 0, producer_id=raw["decision_producer_id"])
@@ -98,6 +116,17 @@ class ConsensusGateProofTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ConsensusGateProofError, "duplicate evidence role: minimal"):
             validate_consensus_gate_proof(raw)
+
+    def test_artifact_digest_bindings_fail_closed_on_tampered_evidence(self) -> None:
+        raw = valid_proof()
+        evidence = list(raw["evidence"])
+        first = dict(evidence[0])
+        artifact = str(first["artifact"])
+
+        validate_consensus_gate_proof(raw, artifact_digests={artifact: str(first["artifact_digest"])})
+
+        with self.assertRaisesRegex(ConsensusGateProofError, "artifact_digest_mismatch"):
+            validate_consensus_gate_proof(raw, artifact_digests={artifact: "0" * 64})
 
     def test_missing_required_role_fails_closed(self) -> None:
         raw = valid_proof()
@@ -177,6 +206,17 @@ class ConsensusGateProofTests(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 with self.assertRaisesRegex(ConsensusGateProofError, "repo-relative"):
                     validate_consensus_gate_proof(raw)
+
+    def test_required_scope_paths_must_be_bound_in_proof(self) -> None:
+        raw = valid_proof()
+
+        validate_consensus_gate_proof(
+            raw,
+            required_scope_paths=["skills/consensus-loop/scripts/codex_refactor_loop/consensus_gate.py"],
+        )
+
+        with self.assertRaisesRegex(ConsensusGateProofError, "missing_scope_paths"):
+            validate_consensus_gate_proof(raw, required_scope_paths=["skills/consensus-loop/scripts/codex_refactor_loop/wakeup_plan.py"])
 
     def test_proof_shape_is_exact_except_optional_scope_paths(self) -> None:
         raw = valid_proof()
