@@ -3332,6 +3332,14 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 str(base["issue_decomposition_proof"]).replace("parent_issue=403", "parent_issue=404"),
             ),
             (
+                "colon_wrong_parent",
+                str(base["issue_decomposition_proof"])
+                .replace("plan_level_design_consensus_judge_artifact=", "plan_level_design_consensus_judge_artifact: ")
+                .replace("issue_decomposition_plan_path=", "issue_decomposition_plan_path: ")
+                .replace("issue_decomposition_plan_digest=", "issue_decomposition_plan_digest: ")
+                .replace("parent_issue=403", "parent_issue: #404"),
+            ),
+            (
                 "extra_field",
                 str(base["issue_decomposition_proof"]) + "\nexecutor=shell",
             ),
