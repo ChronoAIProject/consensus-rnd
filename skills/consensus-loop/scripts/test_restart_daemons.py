@@ -339,6 +339,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertIn("closed_label_reconciler", restart_managed_daemon_names())
         self.assertIn("wakeup_runner_daemon", restart_managed_daemon_names())
         self.assertNotIn("patrol_inspector_daemon", restart_managed_daemon_names())
+        self.assertNotIn("controller_tick_supervisor", restart_managed_daemon_names())
         patched = (
             ("first", ("python3", "first")),
             ("second", ("python3", "second")),
