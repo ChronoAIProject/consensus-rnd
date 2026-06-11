@@ -1110,12 +1110,11 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.source_issue_states.clear()
         self.router = self.new_router()
         self.router._read_source_issue_decision = lambda issue: Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open")  # type: ignore[method-assign]
-        self.router._issue_source_snapshots["428"] = self.router._unavailable_issue_source_snapshot(
-            "428",
-            "2026-06-01T00:00:00Z",
-            "issue-read-failed",
-        )
-        self.router.tick()
+        with mock.patch(
+            "codex_refactor_loop.phase9.router.load_open_managed_work_snapshot",
+            return_value=managed_snapshot([]),
+        ):
+            self.router.tick()
 
         prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue428-r2-minimal.md").read_text(encoding="utf-8")
         self.assertIn("Snapshot unavailable.", prompt)
