@@ -36,6 +36,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT,
     INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER,
     RELEASE_ROLLUP_LIVE_PR_LIST_TIMEOUT_SECONDS,
+    _extract_implementation_owner,
     _release_rollup_event_satisfied,
     _revive_stale_redispatchable_implement_log,
     ci_red_actions,
@@ -2092,6 +2093,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         frontmatter: str = "decision: consensus",
         include_if_consensus: bool = True,
         include_owner: bool = True,
+        decorated_owner: bool = False,
         design_decision_path: str | None = None,
         scope_paths: str | None = None,
         old_pattern: str | None = "consensus to implement used solver fallback",
@@ -2106,11 +2108,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         owner_path = design_decision_path if design_decision_path is not None else rel
         if_consensus_lines: list[str] = []
         if include_if_consensus:
-            owner_line = (
-                f"- Implementation owner: dispatch implement codex with cluster_id=issue-{issue}, design_decision_path={owner_path}"
-                if include_owner
-                else ""
-            )
+            if include_owner and decorated_owner:
+                owner_line = (
+                    f"- Implementation owner: dispatch implement codex with "
+                    f"`cluster_id=issue-{issue}`, `design_decision_path={owner_path}`."
+                )
+            elif include_owner:
+                owner_line = (
+                    f"- Implementation owner: dispatch implement codex with "
+                    f"cluster_id=issue-{issue}, design_decision_path={owner_path}"
+                )
+            else:
+                owner_line = ""
             scope_value = scope_paths if scope_paths is not None else (
                 "- skills/consensus-loop/scripts/codex_refactor_loop/wakeup_plan.py\n"
                 "- skills/consensus-loop/scripts/codex_refactor_loop/wakeup_runner.py"
@@ -6058,6 +6067,47 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("", action["verification_hints"])
         self.assertIn("wakeup_plan.py", action["scope_paths"])
         self.assertFalse(action.get("status_only"))
+
+    def test_extract_implementation_owner_accepts_markdown_decorated_owner_line(self) -> None:
+        owner = _extract_implementation_owner(
+            "- Implementation owner: dispatch implement codex with "
+            "`cluster_id=issue-839`, `design_decision_path=.refactor-loop/runs/phase9-issue839-r2-judge.md`."
+        )
+
+        self.assertEqual(("issue-839", ".refactor-loop/runs/phase9-issue839-r2-judge.md"), owner)
+        self.assertNotIn("`", owner[0])
+        self.assertNotIn("`", owner[1])
+        self.assertFalse(owner[1].endswith(".md."))
+
+    def test_extract_implementation_owner_accepts_canonical_owner_line(self) -> None:
+        owner = _extract_implementation_owner(
+            "- Implementation owner: dispatch implement codex with "
+            "cluster_id=issue-839, design_decision_path=.refactor-loop/runs/phase9-issue839-r2-judge.md"
+        )
+
+        self.assertEqual(("issue-839", ".refactor-loop/runs/phase9-issue839-r2-judge.md"), owner)
+
+    def test_consensus_implementation_fields_accepts_decorated_owner_line(self) -> None:
+        artifact = self.write_consensus_artifact(issue=839, round_no=2, decorated_owner=True)
+        log = self.logs / "phase9-issue839-r2-judge.log"
+        log.write_text("META_JUDGE_DONE:consensus:structural\nEXIT=0\n", encoding="utf-8")
+
+        fields = consensus_implementation_fields(self.repo, log, "issue #839")
+
+        self.assertEqual("issue-839", fields["cluster_id"])
+        self.assertEqual(artifact.relative_to(self.repo).as_posix(), fields["design_decision_path"])
+        self.assertIn("wakeup_plan.py", fields["scope_paths"])
+        self.assertEqual("consensus to implement used solver fallback", fields["old_pattern"])
+        self.assertEqual("project implementation only from the consensus judge artifact", fields["new_principle"])
+
+    def test_extract_implementation_owner_rejects_unrelated_owner_lines(self) -> None:
+        cases = (
+            "- Implementation owner: dispatch implement codex with issue-839, .refactor-loop/runs/phase9-issue839-r2-judge.md",
+            "- Implementation owner: none; human will decide",
+        )
+        for line in cases:
+            with self.subTest(line=line):
+                self.assertIsNone(_extract_implementation_owner(line))
 
     def test_consensus_completed_marker_without_durable_artifact_is_not_executable(self) -> None:
         self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")

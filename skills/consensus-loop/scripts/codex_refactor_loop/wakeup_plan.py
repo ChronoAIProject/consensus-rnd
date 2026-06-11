@@ -2060,12 +2060,12 @@ def _frontmatter_is_consensus(text: str) -> bool:
 def _extract_implementation_owner(section: str) -> tuple[str, str] | None:
     match = re.search(
         r"(?im)^\s*-\s*Implementation owner:\s*dispatch implement codex with "
-        r"cluster_id=([^,\s]+),\s*design_decision_path=([^\s]+)\s*$",
+        r"`?cluster_id=([^,`\s]+)`?,\s*`?design_decision_path=([^,`\s]+)`?\.?\s*$",
         section,
     )
     if not match:
         return None
-    return match.group(1), match.group(2)
+    return match.group(1), match.group(2).rstrip(".")
 
 
 def _extract_structured_consensus_field(section: str, field: str) -> str:
