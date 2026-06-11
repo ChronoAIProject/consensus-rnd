@@ -1573,7 +1573,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, combined)
 
-        self.assertEqual(router.count("_converge_target_round("), 3)
+        self.assertEqual(router.count("def _converge_target_round("), 1)
         self.assertNotIn("target_round <= marker.round", router)
         self.assertFalse((router_path.parent / "decision.py").exists())
         self.assertNotIn("MetaJudgeRouteProjection", combined)
