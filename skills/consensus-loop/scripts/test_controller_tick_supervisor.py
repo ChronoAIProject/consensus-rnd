@@ -96,6 +96,16 @@ def _projection_with_freshness(_request: ProjectionRequest, *sources: _Freshness
     )
 
 
+def valid_tick_handler_contract_payload() -> dict[str, object]:
+    return {
+        "handler": "comment-monitor",
+        "required_projection_sources": ["managed_work_snapshot"],
+        "delegated_helper": "run_comment_monitor_reconcile_tick",
+        "replaced_legacy_daemon_target": "comment-monitor",
+        "net_deletion_target": "restart.py daemon target comment-monitor",
+    }
+
+
 class ControllerTickSupervisorTests(unittest.TestCase):
     def test_supervisor_dispatches_named_handlers_only(self) -> None:
         queue = KeyOnlyWorkQueue()
@@ -290,19 +300,62 @@ class ControllerTickSupervisorTests(unittest.TestCase):
         self.assertIn("reason='nothing-to-do'", diagnostic)
 
     def test_tick_handler_contract_rejects_command_and_lifecycle_fields(self) -> None:
-        valid = {
-            "handler": "comment-monitor",
-            "required_projection_sources": ["managed_work_snapshot"],
-            "delegated_helper": "run_comment_monitor_reconcile_tick",
-            "replaced_legacy_daemon_target": "comment-monitor",
-            "net_deletion_target": "restart.py daemon target comment-monitor",
-        }
+        valid = valid_tick_handler_contract_payload()
         for forbidden in sorted(FORBIDDEN_CONTRACT_FIELDS):
             with self.subTest(forbidden=forbidden):
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(ValueError, "cannot carry authority fields"):
                     TickHandlerContract.from_mapping({**valid, forbidden: "x"})
 
         self.assertEqual(COMMENT_MONITOR_HANDLER_CONTRACT, TickHandlerContract.from_mapping(valid))
+
+    def test_tick_handler_contract_rejects_unexpected_fields(self) -> None:
+        payload = {**valid_tick_handler_contract_payload(), "unexpected": "x"}
+
+        with self.assertRaisesRegex(ValueError, "unexpected fields=\\['unexpected'\\]"):
+            TickHandlerContract.from_mapping(payload)
+
+    def test_tick_handler_contract_rejects_malformed_required_projection_sources(self) -> None:
+        invalid_sources: tuple[object, ...] = (
+            "managed_work_snapshot",
+            ["managed_work_snapshot", 42],
+        )
+
+        for required_projection_sources in invalid_sources:
+            with self.subTest(required_projection_sources=required_projection_sources):
+                payload = {
+                    **valid_tick_handler_contract_payload(),
+                    "required_projection_sources": required_projection_sources,
+                }
+
+                with self.assertRaisesRegex(ValueError, "requires string required_projection_sources"):
+                    TickHandlerContract.from_mapping(payload)
+
+    def test_tick_handler_contract_rejects_missing_identity_fields(self) -> None:
+        for identity_field in (
+            "handler",
+            "delegated_helper",
+            "replaced_legacy_daemon_target",
+            "net_deletion_target",
+        ):
+            with self.subTest(identity_field=identity_field):
+                payload = valid_tick_handler_contract_payload()
+                payload.pop(identity_field)
+
+                with self.assertRaisesRegex(ValueError, "requires non-empty string identity fields"):
+                    TickHandlerContract.from_mapping(payload)
+
+    def test_tick_handler_contract_rejects_empty_identity_fields(self) -> None:
+        for identity_field in (
+            "handler",
+            "delegated_helper",
+            "replaced_legacy_daemon_target",
+            "net_deletion_target",
+        ):
+            with self.subTest(identity_field=identity_field):
+                payload = {**valid_tick_handler_contract_payload(), identity_field: ""}
+
+                with self.assertRaisesRegex(ValueError, "requires non-empty string identity fields"):
+                    TickHandlerContract.from_mapping(payload)
 
     def test_comment_monitor_handler_delegates_existing_tick_for_fresh_projection(self) -> None:
         queue = KeyOnlyWorkQueue()
