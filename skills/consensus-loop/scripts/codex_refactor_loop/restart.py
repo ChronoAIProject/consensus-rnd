@@ -45,8 +45,16 @@ DAEMON_COMMAND_ENV_PLACEHOLDERS: dict[str, tuple[str, str]] = {
     "{wakeup_runner_interval_seconds}": ("WAKEUP_RUNNER_INTERVAL_SECONDS", "120"),
 }
 
+
+SUPERVISOR_REPLACED_DAEMON_TARGETS = frozenset({"comment-monitor"})
+
+
 def restart_managed_daemon_names() -> tuple[str, ...]:
     return tuple(name for name, _command in DAEMON_COMMANDS)
+
+
+def restart_managed_daemon_names_for_context(ctx: LoopContext) -> tuple[str, ...]:
+    return tuple(name for name, _command in restart_daemon_commands_for_context(ctx))
 
 
 SUPERVISOR_DAEMON_COMMAND: tuple[str, tuple[str, ...]] = (
@@ -479,9 +487,15 @@ def daemon_targets(ctx: LoopContext, target: str = "all") -> tuple[DaemonTarget,
         raise ValueError(f"unknown daemon target: {target}")
     return tuple(
         daemon_target(ctx, daemon_name, command_template)
-        for daemon_name, command_template in DAEMON_COMMANDS
+        for daemon_name, command_template in restart_daemon_commands_for_context(ctx)
         if target == "all" or daemon_name == target
     )
+
+
+def restart_daemon_commands_for_context(ctx: LoopContext) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    if not _truthy(ctx.host_env.get("CONTROLLER_TICK_SUPERVISOR_ENABLE")):
+        return DAEMON_COMMANDS
+    return tuple((name, command) for name, command in DAEMON_COMMANDS if name not in SUPERVISOR_REPLACED_DAEMON_TARGETS)
 
 
 def read_daemon_pid(target: DaemonTarget) -> int | None:
@@ -633,7 +647,9 @@ class RestartDaemons:
         self._acquire_restart_lock()
         try:
             self._run_runtime_retention()
-            for name, command in DAEMON_COMMANDS:
+            if _truthy(self.ctx.host_env.get("CONTROLLER_TICK_SUPERVISOR_ENABLE")):
+                self._stop_supervisor_replaced_daemons()
+            for name, command in restart_daemon_commands_for_context(self.ctx):
                 self.start_daemon(name, command)
             if _truthy(self.ctx.host_env.get("CONTROLLER_TICK_SUPERVISOR_ENABLE")):
                 name, command = SUPERVISOR_DAEMON_COMMAND
@@ -642,6 +658,29 @@ class RestartDaemons:
             self._release_restart_lock()
         self._run_update_check()
         return 0
+
+    def _stop_supervisor_replaced_daemons(self) -> None:
+        command_by_name = dict(DAEMON_COMMANDS)
+        for name in sorted(SUPERVISOR_REPLACED_DAEMON_TARGETS):
+            command_template = command_by_name.get(name)
+            if command_template is None:
+                continue
+            target = daemon_target(self.ctx, name, command_template)
+            inventory = self.runtime.collect_inventory()
+            instance = inventory.daemon_instance(
+                name=name,
+                repo_root=self.ctx.repo_root,
+                pid_file=target.pid_file,
+                died_file=target.died_file,
+                command=target.command,
+                lock_files=daemon_lock_files(self.ctx, name),
+                is_alive=self.runtime.pid_alive,
+            )
+            pids = tuple(sorted(set(instance.repair_pids).union(instance.stale_lockless_orphan_child_pids)))
+            self._terminate_pids(pids)
+            target.pid_file.unlink(missing_ok=True)
+            if pids:
+                self._log(f"{name} stopped: supervisor-replaced pids={','.join(str(pid) for pid in pids)}")
 
     def start_daemon(self, name: str, command_template: Sequence[str]) -> None:
         target = daemon_target(self.ctx, name, command_template)

@@ -119,6 +119,13 @@ class SharedControllerProjection:
         }
 
 
+@dataclass(frozen=True)
+class ProjectionFreshnessCheck:
+    ready: bool
+    status: str
+    reason: str
+
+
 ManagedWorkLoader = Callable[[LoopContext], ManagedWorkSnapshotResult]
 DaemonStatusCollector = Callable[..., DaemonStatusReport]
 
@@ -166,6 +173,25 @@ def collect_shared_controller_projection(
             _workqueue_freshness(selected.include_workqueue_keys, projected_workqueue_keys),
         ),
     )
+
+
+def check_projection_freshness(
+    projection: SharedControllerProjection,
+    *,
+    required_sources: tuple[str, ...],
+) -> ProjectionFreshnessCheck:
+    freshness_by_source = {source.source: source for source in projection.freshness_sources}
+    for required_source in required_sources:
+        source = freshness_by_source.get(required_source)
+        if source is None:
+            return ProjectionFreshnessCheck(False, "blocked", f"projection-missing:{required_source}")
+        if not source.loaded_ok:
+            suffix = f":{source.reason}" if source.reason else ""
+            return ProjectionFreshnessCheck(False, "blocked", f"projection-failed:{required_source}{suffix}")
+        if source.stale:
+            suffix = f":{source.reason}" if source.reason else ""
+            return ProjectionFreshnessCheck(False, "backoff", f"projection-stale:{required_source}{suffix}")
+    return ProjectionFreshnessCheck(True, "ready", "projection-ready")
 
 
 def _managed_work_summary(snapshot: ManagedWorkSnapshotResult) -> ManagedWorkSummary:

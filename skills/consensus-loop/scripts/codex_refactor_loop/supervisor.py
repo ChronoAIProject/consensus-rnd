@@ -9,8 +9,9 @@ from typing import Callable, Mapping, Protocol, Sequence
 
 from .context import LoopContext, LoopContextError
 from .heartbeat import DaemonHeartbeatLease
-from .projections import ProjectionRequest, SharedControllerProjection, collect_shared_controller_projection
-from .restart import restart_managed_daemon_names
+from .monitors.comment import CommentMonitor, run_comment_monitor_reconcile_tick
+from .projections import ProjectionRequest, SharedControllerProjection, check_projection_freshness, collect_shared_controller_projection
+from .restart import restart_managed_daemon_names_for_context
 from .workqueue import KeyOnlyWorkQueue, TickWorkItem
 
 
@@ -28,7 +29,24 @@ FORBIDDEN_LIFECYCLE_AUTHORITY = (
     "host production SSOT",
     "GitHub/git lifecycle authority",
 )
-NON_ACTION_HANDLER_STATUSES = frozenset({"backoff", "noop"})
+NON_ACTION_HANDLER_STATUSES = frozenset({"backoff", "blocked", "noop"})
+FORBIDDEN_CONTRACT_FIELDS = frozenset(
+    {
+        "argv",
+        "cmd",
+        "command_line",
+        "commands",
+        "env",
+        "executor",
+        "gh",
+        "git",
+        "lifecycle_authority",
+        "lifecycle_owner",
+        "owner",
+        "pending_events_authority",
+        "shell",
+    }
+)
 
 
 class TickHandler(Protocol):
@@ -44,6 +62,60 @@ class TickHandlerResult:
     key: str
     status: str
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class TickHandlerContract:
+    handler: str
+    required_projection_sources: tuple[str, ...]
+    delegated_helper: str
+    replaced_legacy_daemon_target: str
+    net_deletion_target: str
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, object]) -> "TickHandlerContract":
+        forbidden = sorted(FORBIDDEN_CONTRACT_FIELDS & set(payload))
+        if forbidden:
+            raise ValueError(f"tick handler contract cannot carry authority fields={forbidden}")
+        extra = set(payload) - {
+            "handler",
+            "required_projection_sources",
+            "delegated_helper",
+            "replaced_legacy_daemon_target",
+            "net_deletion_target",
+        }
+        if extra:
+            raise ValueError(f"tick handler contract has unexpected fields={sorted(extra)}")
+        required_sources = payload.get("required_projection_sources")
+        if not isinstance(required_sources, (list, tuple)) or not all(isinstance(item, str) for item in required_sources):
+            raise ValueError("tick handler contract requires string required_projection_sources")
+        values = {
+            name: payload.get(name)
+            for name in (
+                "handler",
+                "delegated_helper",
+                "replaced_legacy_daemon_target",
+                "net_deletion_target",
+            )
+        }
+        if not all(isinstance(value, str) and value for value in values.values()):
+            raise ValueError("tick handler contract requires non-empty string identity fields")
+        return cls(
+            handler=str(values["handler"]),
+            required_projection_sources=tuple(required_sources),
+            delegated_helper=str(values["delegated_helper"]),
+            replaced_legacy_daemon_target=str(values["replaced_legacy_daemon_target"]),
+            net_deletion_target=str(values["net_deletion_target"]),
+        )
+
+
+COMMENT_MONITOR_HANDLER_CONTRACT = TickHandlerContract(
+    handler="comment-monitor",
+    required_projection_sources=("managed_work_snapshot",),
+    delegated_helper="run_comment_monitor_reconcile_tick",
+    replaced_legacy_daemon_target="comment-monitor",
+    net_deletion_target="restart.py daemon target comment-monitor",
+)
 
 
 @dataclass(frozen=True)
@@ -121,6 +193,24 @@ class ControllerTickSupervisor:
         return ControllerTickResult(tuple(processed), tuple(skipped))
 
 
+class CommentMonitorTickHandler:
+    name = COMMENT_MONITOR_HANDLER_CONTRACT.handler
+
+    def __init__(self, monitor: CommentMonitor, *, contract: TickHandlerContract = COMMENT_MONITOR_HANDLER_CONTRACT) -> None:
+        self.monitor = monitor
+        self.contract = contract
+
+    def handle(self, *, item: TickWorkItem, projection: SharedControllerProjection) -> TickHandlerResult:
+        check = check_projection_freshness(
+            projection,
+            required_sources=self.contract.required_projection_sources,
+        )
+        if not check.ready:
+            return TickHandlerResult(item.handler, item.key, check.status, check.reason)
+        run_comment_monitor_reconcile_tick(self.monitor)
+        return TickHandlerResult(item.handler, item.key, "handled", self.contract.delegated_helper)
+
+
 def build_projection_loader(ctx: LoopContext, queue: KeyOnlyWorkQueue) -> ProjectionLoader:
     def load(request: ProjectionRequest) -> SharedControllerProjection:
         return collect_shared_controller_projection(ctx, request, workqueue_keys=queue.keys())
@@ -129,7 +219,7 @@ def build_projection_loader(ctx: LoopContext, queue: KeyOnlyWorkQueue) -> Projec
 
 
 def build_legacy_guard(ctx: LoopContext) -> LegacyDaemonModeGuard:
-    return LegacyDaemonModeGuard.from_context(ctx, legacy_daemon_names=restart_managed_daemon_names())
+    return LegacyDaemonModeGuard.from_context(ctx, legacy_daemon_names=restart_managed_daemon_names_for_context(ctx))
 
 
 def _truthy(value: object) -> bool:
@@ -157,14 +247,16 @@ def _log_tick_skip(
 
 def run_empty_supervisor_daemon(ctx: LoopContext, *, interval_seconds: int = 120) -> int:
     queue = KeyOnlyWorkQueue()
+    monitor = CommentMonitor(ctx)
     supervisor = ControllerTickSupervisor(
-        handlers=(),
+        handlers=(CommentMonitorTickHandler(monitor),),
         queue=queue,
         projection_loader=build_projection_loader(ctx, queue),
         legacy_guard=build_legacy_guard(ctx),
     )
     heartbeat = DaemonHeartbeatLease("controller_tick_supervisor", ctx.repo_root)
     while True:
+        queue.enqueue("comment-monitor", "maintainer-comments")
         supervisor.tick()
         heartbeat.beat()
         heartbeat.sleep_with_lease(interval_seconds)
@@ -180,9 +272,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"FATAL: {exc}", flush=True)
         return 2
     if not args.daemon:
-        queue = KeyOnlyWorkQueue()
+        queue = KeyOnlyWorkQueue((TickWorkItem.create(handler="comment-monitor", key="maintainer-comments"),))
+        monitor = CommentMonitor(ctx)
         ControllerTickSupervisor(
-            handlers=(),
+            handlers=(CommentMonitorTickHandler(monitor),),
             queue=queue,
             projection_loader=build_projection_loader(ctx, queue),
             legacy_guard=build_legacy_guard(ctx),
