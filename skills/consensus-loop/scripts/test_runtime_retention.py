@@ -24,6 +24,7 @@ CLI = SCRIPT_DIR / "consensus-rnd-cli"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.active_controller import LeaseDecision
+from codex_refactor_loop import runtime_retention
 from codex_refactor_loop.runtime_retention import main as runtime_retention_main, retain_runtime
 
 
@@ -185,7 +186,7 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         self.assertTrue(old_log.exists())
         self.assertTrue(stale.exists())
 
-    def test_generated_file_gc_fails_closed_without_file_level_planner_proof(self) -> None:
+    def test_generated_file_gc_deletes_old_generated_files_without_prewritten_plan(self) -> None:
         old_log = self.write_file(".refactor-loop/logs/old.log", "done\nEXIT=0\n", 25)
         old_prompt = self.write_file(".refactor-loop/prompts/old.md", "prompt\n", 25)
         old_run = self.write_file(".refactor-loop/runs/old.json", "{}\n", 25)
@@ -195,31 +196,64 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
 
         result = retain_runtime(self.repo, enabled=True)
 
-        self.assertEqual((result.deleted, result.kept, result.missing), (0, 0, False))
-        self.assertEqual(result.target.resolve(), self.refactor_loop.resolve())
-        self.assertTrue(old_log.exists())
-        self.assertTrue(old_prompt.exists())
-        self.assertTrue(old_run.exists())
-        self.assertTrue(young_log.exists())
-        self.assertTrue(old_non_generated.exists())
-        self.assertTrue(state_artifact.exists())
-
-    def test_generated_file_gc_deletes_old_planner_proven_regular_files(self) -> None:
-        old_log = self.write_file(".refactor-loop/logs/old.log", "complete\nDONE_OK:real\nEXIT=0\n", 25)
-        old_prompt = self.write_file(".refactor-loop/prompts/old.md", "prompt\n", 25)
-        old_run = self.write_file(".refactor-loop/runs/old.json", "{}\n", 25)
-        self.write_generated_files_plan(
-            self.generated_file_plan_item(".refactor-loop/logs/old.log"),
-            self.generated_file_plan_item(".refactor-loop/prompts/old.md"),
-            self.generated_file_plan_item(".refactor-loop/runs/old.json"),
-        )
-
-        result = retain_runtime(self.repo, enabled=True)
-
         self.assertEqual((result.deleted, result.kept, result.missing), (3, 0, False))
+        self.assertEqual(result.target.resolve(), self.refactor_loop.resolve())
         self.assertFalse(old_log.exists())
         self.assertFalse(old_prompt.exists())
         self.assertFalse(old_run.exists())
+        self.assertTrue(young_log.exists())
+        self.assertTrue(old_non_generated.exists())
+        self.assertTrue(state_artifact.exists())
+        plan = json.loads((self.refactor_loop / "state" / "runtime-retention-plan.json").read_text(encoding="utf-8"))
+        self.assertEqual("RuntimeRetentionPlan", plan["kind"])
+        self.assertEqual(
+            [".refactor-loop/logs/old.log", ".refactor-loop/prompts/old.md", ".refactor-loop/runs/old.json"],
+            [item["path"] for item in plan["generated_files"]],
+        )
+
+    def test_generated_file_gc_merges_generated_plan_with_stale_worktree_plan(self) -> None:
+        old_log = self.write_file(".refactor-loop/logs/old.log", "complete\nDONE_OK:real\nEXIT=0\n", 25)
+        old_prompt = self.write_file(".refactor-loop/prompts/old.md", "prompt\n", 25)
+        old_run = self.write_file(".refactor-loop/runs/old.json", "{}\n", 25)
+        stale = self.write_stale_worktree_plan()
+        commands: list[tuple[str, ...]] = []
+
+        result = retain_runtime(self.repo, enabled=True, command_runner=self.git_recheck_runner(commands))
+
+        self.assertEqual((result.deleted, result.kept, result.missing), (3, 0, False))
+        self.assertEqual(1, result.removed_worktrees)
+        self.assertFalse(old_log.exists())
+        self.assertFalse(old_prompt.exists())
+        self.assertFalse(old_run.exists())
+        self.assertIn(("git", "-C", str(self.repo.resolve()), "worktree", "remove", str(stale.resolve())), commands)
+        plan = json.loads((self.refactor_loop / "state" / "runtime-retention-plan.json").read_text(encoding="utf-8"))
+        self.assertEqual(1, len(plan["stale_worktrees"]))
+        self.assertEqual(
+            [".refactor-loop/logs/old.log", ".refactor-loop/prompts/old.md", ".refactor-loop/runs/old.json"],
+            [item["path"] for item in plan["generated_files"]],
+        )
+
+    def test_generated_file_planning_writes_repo_local_plan_atomically_without_lifecycle_commands(self) -> None:
+        self.write_file(".refactor-loop/logs/old.log", "done\n", 25)
+        captured_replace: list[tuple[Path, Path]] = []
+
+        def capture_replace(src: str | bytes | os.PathLike[str], dst: str | bytes | os.PathLike[str]) -> None:
+            captured_replace.append((Path(src), Path(dst)))
+
+        with mock.patch("codex_refactor_loop.runtime_retention.os.replace", side_effect=capture_replace):
+            result = retain_runtime(
+                self.repo,
+                enabled=True,
+                command_runner=lambda command: (_ for _ in ()).throw(AssertionError(f"unexpected lifecycle command: {command}")),
+            )
+
+        self.assertEqual((result.deleted, result.kept, result.removed_worktrees), (0, 0, 0))
+        self.assertEqual(1, len(captured_replace))
+        temp_path, plan_path = captured_replace[0]
+        expected_plan = self.refactor_loop / "state" / "runtime-retention-plan.json"
+        self.assertEqual(expected_plan.resolve(), plan_path.resolve())
+        self.assertEqual(expected_plan.parent.resolve(), temp_path.parent.resolve())
+        self.assertTrue(temp_path.name.startswith(f".{expected_plan.name}."))
 
     def test_generated_file_gc_legacy_stale_worktree_only_plan_keeps_compatibility(self) -> None:
         old_log = self.write_file(".refactor-loop/logs/old.log", "done\n", 25)
@@ -228,13 +262,13 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
 
         result = retain_runtime(self.repo, enabled=True, command_runner=self.git_recheck_runner(commands))
 
-        self.assertEqual((result.deleted, result.kept), (0, 0))
+        self.assertEqual((result.deleted, result.kept), (1, 0))
         self.assertEqual(1, result.removed_worktrees)
         self.assertTrue(result.pruned_worktrees)
-        self.assertTrue(old_log.exists())
+        self.assertFalse(old_log.exists())
         self.assertIn(("git", "-C", str(self.repo.resolve()), "worktree", "remove", str(stale.resolve())), commands)
 
-    def test_generated_file_gc_keeps_young_open_inflight_pending_unconsumed_recovery_and_unproven_files(self) -> None:
+    def test_generated_file_executor_revalidates_planner_proof_bits(self) -> None:
         cases: list[tuple[str, str, float, dict[str, object], str]] = [
             ("young", ".refactor-loop/logs/young.log", 1, {}, "generated_file_ttl_not_expired"),
             ("open-target", ".refactor-loop/logs/open.log", 25, {"no_open_actionable": False}, "generated_file_proof_no_open_actionable_not_true"),
@@ -253,34 +287,67 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         for name, rel, age_hours, proof_overrides, reason in cases:
             with self.subTest(name=name):
                 path = self.write_file(rel, "done\n", age_hours)
-                self.write_generated_files_plan(self.generated_file_plan_item(rel, proof_overrides=proof_overrides))
+                diagnostics: list[str] = []
 
-                result = retain_runtime(self.repo, enabled=True)
+                deleted, kept = runtime_retention._delete_planner_generated_files(
+                    self.repo.resolve(),
+                    [self.generated_file_plan_item(rel, proof_overrides=proof_overrides)],
+                    now=time.time(),
+                    diagnostics=diagnostics,
+                )
 
-                self.assertEqual((result.deleted, result.kept), (0, 1))
+                self.assertEqual((deleted, kept), (0, 1))
                 self.assertTrue(path.exists())
-                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in diagnostics), diagnostics)
 
-    def test_generated_file_gc_keeps_pending_referenced_and_markerless_recovery_files(self) -> None:
+    def test_generated_file_planner_keeps_young_symlink_fifo_pending_and_recovery_files(self) -> None:
+        young_log = self.write_file(".refactor-loop/logs/young.log", "done\n", 1)
+        pending_prompt = self.write_file(".refactor-loop/prompts/pending-ref.md", "prompt\n", 25)
+        markerless_log = self.write_file(".refactor-loop/logs/implement-issue-8.log", "done without marker\nEXIT=0\n", 25)
+        dead_log = self.write_file(".refactor-loop/logs/implement-issue-9.log", "started\n", 25)
+        failed_log = self.write_file(".refactor-loop/logs/review-pr8-tests-r1.log", "started\nREVIEW_DONE:8:tests:reject\nEXIT=1\n", 25)
+        old_target = self.write_file(".refactor-loop/logs/target.log", "target\n", 25)
+        symlink_log = self.refactor_loop / "logs" / "linked.log"
+        symlink_log.symlink_to(old_target)
+        fifo_log = self.refactor_loop / "logs" / "pipe.log"
+        os.mkfifo(fifo_log)
+        pending = self.refactor_loop / ".controller-pending-events.log"
+        pending.write_text("HARNESS_SPAWN_INTENT prompt=.refactor-loop/prompts/pending-ref.md\n", encoding="utf-8")
+
+        result = retain_runtime(self.repo, enabled=True)
+
+        self.assertEqual((result.deleted, result.kept), (1, 0))
+        self.assertFalse(old_target.exists())
+        for path in (young_log, pending_prompt, markerless_log, dead_log, failed_log, fifo_log):
+            with self.subTest(path=path):
+                self.assertTrue(path.exists())
+        self.assertTrue(symlink_log.is_symlink())
+
+    def test_generated_file_executor_keeps_pending_referenced_and_markerless_recovery_files(self) -> None:
         pending_prompt = self.write_file(".refactor-loop/prompts/pending-ref.md", "prompt\n", 25)
         markerless_log = self.write_file(".refactor-loop/logs/implement-issue-8.log", "done without marker\nEXIT=0\n", 25)
         pending = self.refactor_loop / ".controller-pending-events.log"
         pending.write_text("HARNESS_SPAWN_INTENT prompt=.refactor-loop/prompts/pending-ref.md\n", encoding="utf-8")
-        self.write_generated_files_plan(
-            self.generated_file_plan_item(".refactor-loop/prompts/pending-ref.md"),
-            self.generated_file_plan_item(".refactor-loop/logs/implement-issue-8.log"),
+        diagnostics: list[str] = []
+
+        deleted, kept = runtime_retention._delete_planner_generated_files(
+            self.repo.resolve(),
+            [
+                self.generated_file_plan_item(".refactor-loop/prompts/pending-ref.md"),
+                self.generated_file_plan_item(".refactor-loop/logs/implement-issue-8.log"),
+            ],
+            now=time.time(),
+            diagnostics=diagnostics,
         )
 
-        result = retain_runtime(self.repo, enabled=True)
-
-        self.assertEqual((result.deleted, result.kept), (0, 2))
+        self.assertEqual((deleted, kept), (0, 2))
         self.assertTrue(pending_prompt.exists())
         self.assertTrue(markerless_log.exists())
         for reason in ("generated_file_pending_reference", "generated_file_recovery_markerless_log"):
             with self.subTest(reason=reason):
-                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in diagnostics), diagnostics)
 
-    def test_generated_file_gc_keeps_dead_and_failed_worker_recovery_logs(self) -> None:
+    def test_generated_file_executor_keeps_dead_and_failed_worker_recovery_logs(self) -> None:
         cases = (
             (
                 "dead-worker",
@@ -298,34 +365,44 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         for name, rel, text, reason in cases:
             with self.subTest(name=name):
                 path = self.write_file(rel, text, 25)
-                self.write_generated_files_plan(self.generated_file_plan_item(rel))
+                diagnostics: list[str] = []
 
-                result = retain_runtime(self.repo, enabled=True)
+                deleted, kept = runtime_retention._delete_planner_generated_files(
+                    self.repo.resolve(),
+                    [self.generated_file_plan_item(rel)],
+                    now=time.time(),
+                    diagnostics=diagnostics,
+                )
 
-                self.assertEqual((result.deleted, result.kept), (0, 1))
+                self.assertEqual((deleted, kept), (0, 1))
                 self.assertTrue(path.exists())
-                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in diagnostics), diagnostics)
 
-    def test_generated_file_gc_keeps_malformed_path_escape_symlink_fifo_and_missing_entries(self) -> None:
+    def test_generated_file_executor_keeps_malformed_path_escape_symlink_fifo_and_missing_entries(self) -> None:
         old_target = self.write_file(".refactor-loop/logs/target.log", "target\n", 25)
         symlink_log = self.refactor_loop / "logs" / "linked.log"
         symlink_log.symlink_to(old_target)
         fifo_log = self.refactor_loop / "logs" / "pipe.log"
         os.mkfifo(fifo_log)
         malformed = self.write_file(".refactor-loop/logs/malformed.log", "done\n", 25)
-        self.write_generated_files_plan(
-            "not-a-dict",
-            self.generated_file_plan_item(".refactor-loop/../escape.log"),
-            self.generated_file_plan_item(".refactor-loop/state/old.json"),
-            self.generated_file_plan_item(".refactor-loop/logs/linked.log"),
-            self.generated_file_plan_item(".refactor-loop/logs/pipe.log"),
-            {"path": ".refactor-loop/logs/malformed.log", "eligible": True, "proof": []},
-            self.generated_file_plan_item(".refactor-loop/logs/missing.log"),
+        diagnostics: list[str] = []
+
+        deleted, kept = runtime_retention._delete_planner_generated_files(
+            self.repo.resolve(),
+            [
+                "not-a-dict",
+                self.generated_file_plan_item(".refactor-loop/../escape.log"),
+                self.generated_file_plan_item(".refactor-loop/state/old.json"),
+                self.generated_file_plan_item(".refactor-loop/logs/linked.log"),
+                self.generated_file_plan_item(".refactor-loop/logs/pipe.log"),
+                {"path": ".refactor-loop/logs/malformed.log", "eligible": True, "proof": []},
+                self.generated_file_plan_item(".refactor-loop/logs/missing.log"),
+            ],
+            now=time.time(),
+            diagnostics=diagnostics,
         )
 
-        result = retain_runtime(self.repo, enabled=True)
-
-        self.assertEqual((result.deleted, result.kept), (0, 7))
+        self.assertEqual((deleted, kept), (0, 7))
         self.assertTrue(old_target.exists())
         self.assertTrue(symlink_log.is_symlink())
         self.assertTrue(fifo_log.exists())
@@ -340,7 +417,7 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
             "generated_file_missing",
         ):
             with self.subTest(reason=reason):
-                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in diagnostics), diagnostics)
 
     def test_generated_path_symlink_and_non_regular_files_are_retained_without_plan_entries(self) -> None:
         old_target = self.write_file(".refactor-loop/logs/target.log", "target\n", 25)
@@ -351,10 +428,10 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
 
         result = retain_runtime(self.repo, enabled=True)
 
-        self.assertEqual((result.deleted, result.kept), (0, 0))
+        self.assertEqual((result.deleted, result.kept), (1, 0))
         self.assertTrue(symlink_log.is_symlink())
         self.assertTrue(fifo_log.exists())
-        self.assertTrue(old_target.exists())
+        self.assertFalse(old_target.exists())
 
     def test_pending_events_compaction_preserves_same_inode_tail(self) -> None:
         pending = self.refactor_loop / ".controller-pending-events.log"
@@ -459,7 +536,7 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         self.write_file(".refactor-loop/logs/old.log", "done\nEXIT=0\n", 25)
         result = self.run_cli()
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("runtime_retention: enabled=true ttl_hours=24 deleted=0 kept=0", result.stdout)
+        self.assertIn("runtime_retention: enabled=true ttl_hours=24 deleted=1 kept=0", result.stdout)
         self.assertIn("removed_worktrees=0", result.stdout)
         self.assertIn("diagnostics=none", result.stdout)
 
