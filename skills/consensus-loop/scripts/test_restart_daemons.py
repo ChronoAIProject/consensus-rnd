@@ -869,6 +869,36 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual((222, 333), projection.live_managed_child_pids)
         self.assertEqual((222,), projection.bounded_lock_holder_pids)
         self.assertEqual((111, 222), projection.repair_pids)
+        self.assertEqual((333,), projection.stale_lockless_orphan_child_pids)
+
+    def test_daemon_instance_projects_lockless_orphans_excluding_pid_file_and_locks(self) -> None:
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        target.pid_file.parent.mkdir(parents=True, exist_ok=True)
+        target.pid_file.write_text("333\n", encoding="utf-8")
+        lock_holder = self.repo / ".refactor-loop" / "phase9-router.lock"
+        lock_holder.write_text("pid=444\n", encoding="utf-8")
+        inventory = DaemonProcessInventory(
+            (
+                DaemonProcess(333, " ".join(target.command), 1),
+                DaemonProcess(444, " ".join(target.command), 1),
+                DaemonProcess(555, " ".join(target.command), 1),
+            )
+        )
+        self.runtime.live_pids.update({333, 444, 555})
+
+        projection = inventory.daemon_instance(
+            name="phase9_router_daemon",
+            repo_root=self.ctx.repo_root,
+            pid_file=target.pid_file,
+            died_file=target.died_file,
+            command=target.command,
+            lock_files=(lock_holder,),
+            is_alive=self.runtime.pid_alive,
+        )
+
+        self.assertEqual((333, 444, 555), projection.orphan_child_pids)
+        self.assertEqual((444,), projection.bounded_lock_holder_pids)
+        self.assertEqual((555,), projection.stale_lockless_orphan_child_pids)
 
     def test_daemon_instance_detects_macos_shaped_wrapper_child_by_ppid(self) -> None:
         target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
@@ -1077,6 +1107,26 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual(pid, self.read_pid("concurrency_monitor"))
         self.assert_start_count("concurrency_monitor", 0)
         self.assertEqual([], self.runtime.terminated)
+
+    def test_fresh_singleton_reaps_lockless_orphan_child_without_restart(self) -> None:
+        self.run_helper()
+        wrapper_pid = self.read_pid("concurrency_monitor")
+        orphan_child_pid = 535353
+        target = restart.daemon_target(self.ctx, "concurrency_monitor", FAKE_COMMAND)
+        self.runtime.live_pids.add(orphan_child_pid)
+        self.runtime.inventory_override = DaemonProcessInventory(
+            (
+                DaemonProcess(wrapper_pid, self.runtime.canonical_command(self.ctx, "concurrency_monitor", FAKE_COMMAND), 1),
+                DaemonProcess(orphan_child_pid, " ".join(target.command), 1),
+            )
+        )
+
+        helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
+        helper.start_daemon("concurrency_monitor", FAKE_COMMAND)
+
+        self.assertEqual(wrapper_pid, self.read_pid("concurrency_monitor"))
+        self.assertEqual([(orphan_child_pid, self.config.stop_grace_seconds)], self.runtime.terminated)
+        self.assert_start_count("concurrency_monitor", 1)
 
     def test_macos_framework_python_orphan_child_lock_holder_is_reaped_and_restarted_once(self) -> None:
         self.run_helper()
