@@ -362,7 +362,7 @@ class IssueDecompositionTests(unittest.TestCase):
         consensus = ".refactor-loop/runs/phase9-issue403-r6-judge.md"
         plan_path = ".refactor-loop/runs/decomposition-plan.json"
         digest = "a" * 64
-        structured = "\n".join(
+        structured_equals = "\n".join(
             [
                 f"plan_level_design_consensus_judge_artifact={consensus}",
                 f"issue_decomposition_plan_path={plan_path}",
@@ -370,11 +370,30 @@ class IssueDecompositionTests(unittest.TestCase):
                 "parent_issue=403",
             ]
         )
+        structured_colon = "\n".join(
+            [
+                f"plan_level_design_consensus_judge_artifact: {consensus}",
+                f"issue_decomposition_plan_path: {plan_path}",
+                f"issue_decomposition_plan_digest: {digest}",
+                "parent_issue: #403",
+            ]
+        )
         legacy = f"plan-level judge {consensus} validated plan {plan_path} digest {digest} reached consensus for parent issue #403"
 
-        self.assertTrue(
+        for proof in (structured_equals, structured_colon):
+            with self.subTest(proof=proof):
+                self.assertTrue(
+                    issue_decomposition_apply_proof_matches(
+                        proof,
+                        consensus_artifact=consensus,
+                        plan_path=plan_path,
+                        digest=digest,
+                        parent_issue=403,
+                    )
+                )
+        self.assertFalse(
             issue_decomposition_apply_proof_matches(
-                structured,
+                structured_colon.replace("parent_issue: #403", "parent_issue: #404"),
                 consensus_artifact=consensus,
                 plan_path=plan_path,
                 digest=digest,
@@ -391,8 +410,8 @@ class IssueDecompositionTests(unittest.TestCase):
             )
         )
         for proof in (
-            structured.replace("parent_issue=403", "parent_issue=404"),
-            structured + "\nexecutor=shell",
+            structured_equals.replace("parent_issue=403", "parent_issue=404"),
+            structured_equals + "\nexecutor=shell",
             f"mentions {consensus} {plan_path} {digest} #403 but is not proof",
         ):
             with self.subTest(proof=proof):

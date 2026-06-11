@@ -3370,6 +3370,24 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
 
+    def test_issue_decomposition_colon_structured_proof_reaches_named_apply_action(self) -> None:
+        base = self.issue_decomposition_action()
+        proof = "\n".join(
+            [
+                f"plan_level_design_consensus_judge_artifact: {base['plan_level_design_consensus_judge_artifact']}",
+                f"issue_decomposition_plan_path: {base['issue_decomposition_plan_path']}",
+                f"issue_decomposition_plan_digest: {base['issue_decomposition_plan_digest']}",
+                "parent_issue: #403",
+            ]
+        )
+        actions = FakeActions()
+        action = self.issue_decomposition_action(action_id="decompose:colon-proof", issue_decomposition_proof=proof)
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
+
     def test_malformed_plan_envelope_blocks_before_dispatch_and_records_ledger(self) -> None:
         actions = FakeActions()
         plan = self.base_plan(self.spawn_action())

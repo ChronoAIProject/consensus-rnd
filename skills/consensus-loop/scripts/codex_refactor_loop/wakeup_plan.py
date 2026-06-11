@@ -2080,9 +2080,10 @@ def _extract_structured_consensus_field(section: str, field: str) -> str:
         "plan_level_design_consensus_judge_artifact",
     }
     lines = section.splitlines()
-    start_re = re.compile(rf"^\s*(?:-\s*)?{re.escape(field)}\s*:\s*(.*)$")
+    top_level_prefix = r"(?:-\s*|\s+-\s*)?"
+    start_re = re.compile(rf"^{top_level_prefix}{re.escape(field)}\s*:\s*(.*)$")
     other_re = re.compile(
-        r"^\s*(?:-\s*)?(?:" + "|".join(re.escape(name) for name in sorted(field_names - {field})) + r")\s*:\s*"
+        r"^" + top_level_prefix + r"(?:" + "|".join(re.escape(name) for name in sorted(field_names - {field})) + r")\s*:\s*"
     )
     collected: list[str] = []
     collecting = False
