@@ -15,6 +15,12 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
+from .consensus_gate import (
+    ConsensusGateProofError,
+    consensus_gate_digest,
+    consensus_gate_file_digest,
+    validate_consensus_gate_proof,
+)
 from .context import LoopContext, LoopContextError
 from .controller_actions import ControllerActions
 from .cross_instance_stand_down import check_cross_instance_admission
@@ -32,7 +38,9 @@ from .implement_lifecycle import (
 )
 from .implementation_pr_artifacts import validate_implementation_pr_artifacts
 from .issue_decomposition import (
+    IssueDecompositionBackoff,
     IssueDecompositionError,
+    issue_decomposition_apply_proof_matches,
     issue_decomposition_plan_file_digest,
     load_issue_decomposition_plan,
     parse_issue_decomposition_tracking_comments,
@@ -397,6 +405,8 @@ class WakeupRunner:
             exit_code = self._dispatch(controller_action, action)
         except Exception as exc:
             return self._blocked(action, f"exception:{exc}")
+        if exit_code == 4 and controller_action == "apply_issue_decomposition_plan":
+            return RunnerResult(action_id, "skipped", "graphql-backoff:apply_issue_decomposition_plan")
         status = "applied" if exit_code == 0 else "blocked"
         reason = "" if exit_code == 0 else f"helper_exit:{exit_code}"
         if exit_code == 0 and controller_action == "dispatch_consensus_implementation":
@@ -816,11 +826,62 @@ class WakeupRunner:
         if not _source_log_has_clean_marker(plan_level_log, str(action.get("source_marker") or "")):
             return "issue_decomposition_plan_level_judge_marker_missing"
         proof = str(action.get("issue_decomposition_proof") or "")
-        if digest not in proof or plan_path not in proof or consensus_artifact not in proof:
+        if not issue_decomposition_apply_proof_matches(
+            proof,
+            consensus_artifact=consensus_artifact,
+            plan_path=plan_path,
+            digest=digest,
+            parent_issue=target,
+        ):
             return "issue_decomposition_proof_mismatch"
+        proof_error = self._validate_issue_decomposition_consensus_gate_proof(action, digest)
+        if proof_error:
+            return proof_error
         tracking_error = self._issue_decomposition_tracking_error(plan, digest)
         if tracking_error:
             return tracking_error
+        return None
+
+    def _validate_issue_decomposition_consensus_gate_proof(
+        self,
+        action: Mapping[str, Any],
+        digest: str,
+    ) -> str | None:
+        raw_proof_text = action.get("consensus_gate_proof")
+        if not isinstance(raw_proof_text, str) or not raw_proof_text.strip():
+            return "issue_decomposition_consensus_gate_proof_missing"
+        try:
+            raw_proof = json.loads(raw_proof_text)
+        except json.JSONDecodeError as exc:
+            return f"issue_decomposition_consensus_gate_proof_invalid:{exc}"
+        if not isinstance(raw_proof, Mapping):
+            return "issue_decomposition_consensus_gate_proof_invalid:ConsensusGateProof must be a JSON object"
+        consensus_artifact = str(action.get("consensus_artifact") or "")
+        plan_path = str(action.get("issue_decomposition_plan_path") or "")
+        issue = action.get("consensus_issue")
+        if not isinstance(issue, int):
+            return "issue_decomposition_consensus_gate_proof_target_mismatch"
+        target_payload = {
+            "target_kind": "issue-decomposition-plan",
+            "parent_issue": issue,
+            "consensus_artifact": consensus_artifact,
+            "plan_path": plan_path,
+            "plan_digest": digest,
+        }
+        artifact_digests: dict[str, str] = {}
+        try:
+            artifact_digests[consensus_artifact] = consensus_gate_file_digest(self.ctx.artifact_execution_path(consensus_artifact))
+            artifact_digests[plan_path] = digest
+            validate_consensus_gate_proof(
+                raw_proof,
+                target_kind="issue-decomposition-plan",
+                target_ref=plan_path,
+                target_digest=consensus_gate_digest(target_payload),
+                artifact_digests=artifact_digests,
+                required_scope_paths=[".refactor-loop/runs"],
+            )
+        except (ConsensusGateProofError, LoopContextError, OSError) as exc:
+            return f"issue_decomposition_consensus_gate_proof_invalid:{exc}"
         return None
 
     def _validate_default_issue_intake_claim(self, action: Mapping[str, Any]) -> str | None:
@@ -1258,7 +1319,13 @@ class WakeupRunner:
             )
             return 0 if result.published else 3
         if controller_action == "apply_issue_decomposition_plan":
-            self.actions.apply_issue_decomposition_plan(str(action.get("issue_decomposition_plan_path") or ""))
+            try:
+                self.actions.apply_issue_decomposition_plan(str(action.get("issue_decomposition_plan_path") or ""))
+            except IssueDecompositionBackoff as exc:
+                action_id = str(action.get("action_id") or "")
+                diagnostic = _single_line(exc.diagnostic)
+                self._append_pending_event(f"ISSUE_DECOMPOSITION_BACKOFF:{action_id}:{diagnostic}")
+                return 4
             return 0
         if controller_action == "apply_default_issue_intake_claim":
             target = action.get("target_number")
@@ -2378,7 +2445,7 @@ def _wakeup_tick_action(results: Sequence[RunnerResult]) -> str:
         result
         for result in results
         if result.status in ("blocked", "skipped")
-        and result.reason != "graphql-backoff"
+        and result.reason not in {"graphql-backoff", "graphql-backoff:apply_issue_decomposition_plan"}
         and (result.reason or result.action_id)
     ]
 
@@ -2411,6 +2478,8 @@ def _wakeup_tick_action(results: Sequence[RunnerResult]) -> str:
         return f"dispatched {first.action_id or 'action'}{_notable_suffix()} [{counts}]"
     if first.status == "skipped" and first.reason == "graphql-backoff":
         return f"skip:graphql-backoff remaining=unknown [{counts}]"
+    if first.status == "skipped" and first.reason == "graphql-backoff:apply_issue_decomposition_plan":
+        return f"skip:graphql-backoff:apply_issue_decomposition_plan [{counts}]"
     if first.status == "noop":
         return f"noop:{first.reason or 'idle'}{_notable_suffix()} [{counts}]"
     if first.status == "blocked":

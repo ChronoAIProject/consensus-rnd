@@ -7,6 +7,7 @@ import os
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ RETENTION_TTL_HOURS = 24
 PENDING_EVENTS_MAX_LINES = 2000
 RETENTION_PLAN_PATH = Path(".refactor-loop") / "state" / "runtime-retention-plan.json"
 GENERATED_FILE_ROOTS = ("logs", "prompts", "runs")
+GENERATED_FILE_SUFFIXES = (".json", ".jsonl", ".log", ".md", ".txt")
 GENERATED_FILE_PROOF_TRUTHS = (
     "generated_file",
     "ttl_expired",
@@ -86,6 +88,7 @@ def retain_runtime(
     now_value = time.time() if now is None else now
     diagnostics: list[str] = []
     compacted = _compact_pending_events(refactor_loop / ".controller-pending-events.log")
+    _write_generated_file_plan(repo_real, now=now_value, diagnostics=diagnostics)
     plan = _read_retention_plan(repo_real / RETENTION_PLAN_PATH, diagnostics=diagnostics)
     deleted, kept = _delete_planner_generated_files(repo_real, plan.generated_files, now=now_value, diagnostics=diagnostics)
     runner = command_runner or _run_git
@@ -161,6 +164,104 @@ def _delete_planner_generated_files(
             continue
         deleted += 1
     return deleted, kept
+
+
+def _write_generated_file_plan(repo_root: Path, *, now: float, diagnostics: list[str]) -> None:
+    plan_path = repo_root / RETENTION_PLAN_PATH
+    plan = _read_retention_plan_payload(plan_path, diagnostics=diagnostics)
+    generated_files = _produce_generated_file_plan(repo_root, now=now, diagnostics=diagnostics)
+    plan["kind"] = "RuntimeRetentionPlan"
+    plan["generated_files"] = generated_files
+    try:
+        plan_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=plan_path.parent,
+            prefix=f".{plan_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            json.dump(plan, handle, sort_keys=True)
+            handle.write("\n")
+        os.replace(temp_path, plan_path)
+    except OSError as exc:
+        diagnostics.append(_diagnostic(plan_path, "generated_file_plan_write_failed", error=exc))
+        try:
+            temp_path.unlink()
+        except (NameError, OSError):
+            pass
+
+
+def _read_retention_plan_payload(path: Path, *, diagnostics: list[str]) -> dict[str, Any]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"kind": "RuntimeRetentionPlan"}
+    except json.JSONDecodeError as exc:
+        diagnostics.append(_diagnostic(path, "plan_json_invalid", line=exc.lineno, column=exc.colno))
+        return {"kind": "RuntimeRetentionPlan"}
+    except OSError as exc:
+        diagnostics.append(_diagnostic(path, "plan_read_failed", error=exc))
+        return {"kind": "RuntimeRetentionPlan"}
+    if not isinstance(raw, dict):
+        diagnostics.append(_diagnostic(path, "plan_shape_invalid", got=type(raw).__name__))
+        return {"kind": "RuntimeRetentionPlan"}
+    if raw.get("kind") != "RuntimeRetentionPlan":
+        diagnostics.append(_diagnostic(path, "plan_kind_invalid", got=raw.get("kind")))
+        return {"kind": "RuntimeRetentionPlan"}
+    generated_files = raw.get("generated_files")
+    if generated_files is not None and not isinstance(generated_files, list):
+        diagnostics.append(_diagnostic(path, "generated_files_invalid", got=type(generated_files).__name__))
+    return raw
+
+
+def _produce_generated_file_plan(repo_root: Path, *, now: float, diagnostics: list[str]) -> list[dict[str, Any]]:
+    planned: list[dict[str, Any]] = []
+    refactor_loop = repo_root / ".refactor-loop"
+    cutoff = now - (RETENTION_TTL_HOURS * 60 * 60)
+    for root_name in GENERATED_FILE_ROOTS:
+        root = refactor_loop / root_name
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*")):
+            item = _generated_file_plan_item(repo_root, path, cutoff=cutoff, diagnostics=diagnostics)
+            if item is not None:
+                planned.append(item)
+    return planned
+
+
+def _generated_file_plan_item(
+    repo_root: Path,
+    path: Path,
+    *,
+    cutoff: float,
+    diagnostics: list[str],
+) -> dict[str, Any] | None:
+    if path.is_symlink():
+        return None
+    try:
+        file_stat = path.stat(follow_symlinks=False)
+    except OSError as exc:
+        diagnostics.append(_diagnostic(path, "generated_file_plan_stat_failed", error=exc))
+        return None
+    if not stat.S_ISREG(file_stat.st_mode):
+        return None
+    if path.suffix not in GENERATED_FILE_SUFFIXES:
+        return None
+    if file_stat.st_mtime > cutoff:
+        return None
+    rel = path.relative_to(repo_root)
+    if _pending_reference_reason(repo_root, rel):
+        return None
+    if _recovery_surface_reason(path, rel):
+        return None
+    return {
+        "path": rel.as_posix(),
+        "eligible": True,
+        "proof": {key: True for key in GENERATED_FILE_PROOF_TRUTHS},
+    }
 
 
 def _read_retention_plan(path: Path, *, diagnostics: list[str]) -> RuntimeRetentionPlan:

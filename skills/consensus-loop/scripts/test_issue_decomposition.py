@@ -24,6 +24,7 @@ from codex_refactor_loop.issue_decomposition import (
     append_issue_decomposition_tracking_block,
     build_issue_decomposition_tracking_block,
     issue_decomposition_child_fingerprint,
+    issue_decomposition_apply_proof_matches,
     issue_decomposition_plan_digest,
     load_issue_decomposition_plan,
     parse_issue_decomposition_tracking_comments,
@@ -356,6 +357,73 @@ class IssueDecompositionTests(unittest.TestCase):
         self.assertNotEqual(first, issue_decomposition_child_fingerprint(404, "a" * 64, "first-child"))
         self.assertNotEqual(first, issue_decomposition_child_fingerprint(403, "b" * 64, "first-child"))
         self.assertNotEqual(first, issue_decomposition_child_fingerprint(403, "a" * 64, "second-child"))
+
+    def test_apply_proof_matches_exact_structured_fields_or_exact_legacy_sentence(self) -> None:
+        consensus = ".refactor-loop/runs/phase9-issue403-r6-judge.md"
+        plan_path = ".refactor-loop/runs/decomposition-plan.json"
+        digest = "a" * 64
+        structured_equals = "\n".join(
+            [
+                f"plan_level_design_consensus_judge_artifact={consensus}",
+                f"issue_decomposition_plan_path={plan_path}",
+                f"issue_decomposition_plan_digest={digest}",
+                "parent_issue=403",
+            ]
+        )
+        structured_colon = "\n".join(
+            [
+                f"plan_level_design_consensus_judge_artifact: {consensus}",
+                f"issue_decomposition_plan_path: {plan_path}",
+                f"issue_decomposition_plan_digest: {digest}",
+                "parent_issue: #403",
+            ]
+        )
+        legacy = f"plan-level judge {consensus} validated plan {plan_path} digest {digest} reached consensus for parent issue #403"
+
+        for proof in (structured_equals, structured_colon):
+            with self.subTest(proof=proof):
+                self.assertTrue(
+                    issue_decomposition_apply_proof_matches(
+                        proof,
+                        consensus_artifact=consensus,
+                        plan_path=plan_path,
+                        digest=digest,
+                        parent_issue=403,
+                    )
+                )
+        self.assertFalse(
+            issue_decomposition_apply_proof_matches(
+                structured_colon.replace("parent_issue: #403", "parent_issue: #404"),
+                consensus_artifact=consensus,
+                plan_path=plan_path,
+                digest=digest,
+                parent_issue=403,
+            )
+        )
+        self.assertTrue(
+            issue_decomposition_apply_proof_matches(
+                legacy,
+                consensus_artifact=consensus,
+                plan_path=plan_path,
+                digest=digest,
+                parent_issue=403,
+            )
+        )
+        for proof in (
+            structured_equals.replace("parent_issue=403", "parent_issue=404"),
+            structured_equals + "\nexecutor=shell",
+            f"mentions {consensus} {plan_path} {digest} #403 but is not proof",
+        ):
+            with self.subTest(proof=proof):
+                self.assertFalse(
+                    issue_decomposition_apply_proof_matches(
+                        proof,
+                        consensus_artifact=consensus,
+                        plan_path=plan_path,
+                        digest=digest,
+                        parent_issue=403,
+                    )
+                )
 
     def test_exact_helper_tracking_parser_ignores_sentinel_like_prose_and_reconciles_duplicates(self) -> None:
         plan_path = self.write_plan(self.valid_payload())

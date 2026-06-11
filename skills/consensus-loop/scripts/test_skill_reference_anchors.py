@@ -2013,6 +2013,7 @@ class WakeupRunnerContractTests(unittest.TestCase):
 
     def test_restart_managed_daemon_list_projects_owner_local_command_surface(self) -> None:
         self.assertIn("restart.py::DAEMON_COMMANDS", self.skill)
+        self.assertIn("sole active seven-daemon command surface", self.skill)
         for daemon_name in restart_managed_daemon_names():
             with self.subTest(daemon_name=daemon_name):
                 self.assertIn(daemon_name, self.skill)
@@ -2046,6 +2047,7 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "Runtime execution paths must not import/read `controller_runtime_inventory.py`",
             "no dispatch, write, state-transition, pending-events, label mutation, GitHub/git, or authorization authority",
             "restart.py::DAEMON_COMMANDS",
+            "sole active seven-daemon command surface",
             "restart_managed_daemon_names()",
             "daemon name, owner module/CLI command, tick import path, authority note, and test owner",
             "callable, argv/shell/cmd/env, git/gh, executor, dispatch, authorization, pending-events, state-transition, or lifecycle owner fields",

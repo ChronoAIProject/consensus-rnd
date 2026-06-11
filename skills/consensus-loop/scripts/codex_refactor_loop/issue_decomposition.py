@@ -68,6 +68,14 @@ class IssueDecompositionError(ValueError):
     """Raised when an IssueDecompositionPlan crosses the controller boundary."""
 
 
+class IssueDecompositionBackoff(RuntimeError):
+    """Raised when decomposition apply should retry without consuming the action."""
+
+    def __init__(self, diagnostic: str) -> None:
+        super().__init__(diagnostic)
+        self.diagnostic = diagnostic
+
+
 @dataclass(frozen=True)
 class IssueDecompositionChild:
     slug: str
@@ -191,6 +199,26 @@ def issue_decomposition_plan_file_digest(ctx: LoopContext, plan_path: str | Path
     except json.JSONDecodeError as exc:
         raise IssueDecompositionError(f"invalid IssueDecompositionPlan JSON: {exc}") from exc
     return issue_decomposition_plan_digest(raw)
+
+
+def issue_decomposition_apply_proof_matches(
+    proof: str,
+    *,
+    consensus_artifact: str,
+    plan_path: str,
+    digest: str,
+    parent_issue: int,
+) -> bool:
+    fields = _issue_decomposition_apply_proof_fields(proof)
+    if fields:
+        return fields == {
+            "plan_level_design_consensus_judge_artifact": consensus_artifact,
+            "issue_decomposition_plan_path": plan_path,
+            "issue_decomposition_plan_digest": digest,
+            "parent_issue": str(parent_issue),
+        }
+    legacy = f"plan-level judge {consensus_artifact} validated plan {plan_path} digest {digest} reached consensus for parent issue #{parent_issue}"
+    return proof.strip() == legacy
 
 
 def issue_decomposition_child_fingerprint(parent_issue: int, digest: str, slug: str) -> str:
@@ -474,6 +502,34 @@ def _wakeup_runner_has_applied_issue_decomposition_action(ctx: LoopContext, plan
 def _completed_marker_action_id_is_decomposition_consensus(action_id: str, action_prefix: str) -> bool:
     marker = action_id.removeprefix(action_prefix)
     return marker.startswith("META_JUDGE_DONE:consensus:")
+
+
+def _issue_decomposition_apply_proof_fields(proof: str) -> dict[str, str]:
+    allowed = {
+        "plan_level_design_consensus_judge_artifact",
+        "issue_decomposition_plan_path",
+        "issue_decomposition_plan_digest",
+        "parent_issue",
+    }
+    fields: dict[str, str] = {}
+    for raw_line in proof.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        separator = "=" if "=" in line else ":"
+        key, sep, value = line.partition(separator)
+        if not sep:
+            return {}
+        key = key.strip()
+        if key not in allowed or key in fields:
+            return {}
+        text = value.strip()
+        if key == "parent_issue":
+            text = text.removeprefix("#")
+        if not text:
+            return {}
+        fields[key] = text
+    return fields
 
 
 def _resolve_input_path(ctx: LoopContext, plan_path: str | Path) -> Path:

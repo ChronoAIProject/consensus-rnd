@@ -19,7 +19,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.issue_decomposition import issue_decomposition_child_fingerprint, issue_decomposition_plan_file_digest
+from codex_refactor_loop.consensus_gate import consensus_gate_digest, consensus_gate_file_digest
+from codex_refactor_loop.issue_decomposition import (
+    IssueDecompositionBackoff,
+    issue_decomposition_child_fingerprint,
+    issue_decomposition_plan_file_digest,
+)
 from codex_refactor_loop import labels
 from codex_refactor_loop.cross_instance_stand_down import CrossInstanceAdmission
 from codex_refactor_loop.github_budget import reset_graphql_budget_cache
@@ -260,6 +265,16 @@ class FakeActions:
 
     def publish_release_candidate(self, *, candidate_path: str, target_ref: str):
         raise AssertionError("release publish should not be dispatched")
+
+
+class DecompositionBackoffActions(FakeActions):
+    def apply_issue_decomposition_plan(self, plan_path: str) -> tuple[tuple[int, str], ...]:
+        self.calls.append(("apply_issue_decomposition_plan", plan_path))
+        raise IssueDecompositionBackoff(
+            "ISSUE_DECOMPOSITION_BACKOFF managed-work-snapshot-unavailable "
+            "caller=apply_issue_decomposition_plan.child-fingerprint-discovery "
+            "reason=graphql-headroom-low source=unavailable age_seconds=901 items=0 target=parent=#403"
+        )
 
 
 class FakeReviewFixActions(FakeActions):
@@ -1599,6 +1614,13 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
         digest = issue_decomposition_plan_file_digest(self.ctx, plan_path)
+        proof_target = {
+            "target_kind": "issue-decomposition-plan",
+            "parent_issue": 403,
+            "consensus_artifact": consensus,
+            "plan_path": plan_path,
+            "plan_digest": digest,
+        }
         marker = "META_JUDGE_DONE:consensus:decompose"
         log = self.repo / ".refactor-loop/logs/phase9-issue403-r6-judge.log"
         log.write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
@@ -1628,7 +1650,43 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "plan_level_design_consensus_judge_artifact": consensus,
             "issue_decomposition_plan_path": plan_path,
             "issue_decomposition_plan_digest": digest,
-            "issue_decomposition_proof": f"plan-level judge {consensus} validated plan {plan_path} digest {digest} reached consensus",
+            "issue_decomposition_proof": "\n".join(
+                [
+                    f"plan_level_design_consensus_judge_artifact={consensus}",
+                    f"issue_decomposition_plan_path={plan_path}",
+                    f"issue_decomposition_plan_digest={digest}",
+                    "parent_issue=403",
+                ]
+            ),
+            "consensus_gate_proof": json.dumps(
+                {
+                    "target_kind": "issue-decomposition-plan",
+                    "target_ref": plan_path,
+                    "target_digest": consensus_gate_digest(proof_target),
+                    "decision_producer_id": "judge-issue-403-r6",
+                    "evidence": [
+                        {
+                            "producer_id": "solver-minimal-issue-403-r6",
+                            "role": "minimal",
+                            "artifact": consensus,
+                            "artifact_digest": consensus_gate_file_digest(self.repo / consensus),
+                            "verdict": "consensus",
+                        },
+                        {
+                            "producer_id": "solver-structural-issue-403-r6",
+                            "role": "structural",
+                            "artifact": plan_path,
+                            "artifact_digest": digest,
+                            "verdict": "approve",
+                        },
+                    ],
+                    "required_roles": ["minimal", "structural"],
+                    "verdict_rule": "all_required_approve",
+                    "scope_paths": [".refactor-loop/runs"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
         }
         action.update(overrides)
         return action
@@ -3265,16 +3323,78 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "blocked")
         self.assertEqual(results[0].reason, "forbidden_fields:proof_payload.executor,proof_payload.nested[0].env")
 
-    def test_nested_forbidden_fields_fail_closed(self) -> None:
-        action = self.issue_decomposition_action(
-            action_id="decompose:nested-forbidden",
-            proof_payload={"executor": "shell", "nested": [{"env": {"TOKEN": "x"}}]},
+    def test_issue_decomposition_structured_proof_must_match_exact_fields(self) -> None:
+        base = self.issue_decomposition_action()
+        cases = (
+            ("missing_parent", "\n".join(str(base["issue_decomposition_proof"]).splitlines()[:-1])),
+            (
+                "wrong_parent",
+                str(base["issue_decomposition_proof"]).replace("parent_issue=403", "parent_issue=404"),
+            ),
+            (
+                "colon_wrong_parent",
+                str(base["issue_decomposition_proof"])
+                .replace("plan_level_design_consensus_judge_artifact=", "plan_level_design_consensus_judge_artifact: ")
+                .replace("issue_decomposition_plan_path=", "issue_decomposition_plan_path: ")
+                .replace("issue_decomposition_plan_digest=", "issue_decomposition_plan_digest: ")
+                .replace("parent_issue=403", "parent_issue: #404"),
+            ),
+            (
+                "extra_field",
+                str(base["issue_decomposition_proof"]) + "\nexecutor=shell",
+            ),
+            (
+                "substring_only",
+                f"proof text mentions {base['plan_level_design_consensus_judge_artifact']} "
+                f"and {base['issue_decomposition_plan_path']} and {base['issue_decomposition_plan_digest']} "
+                "but is not structured proof",
+            ),
         )
+        for name, proof in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                action = self.issue_decomposition_action(
+                    action_id=f"decompose:proof:{name}",
+                    issue_decomposition_proof=proof,
+                )
 
-        results = self.run_result(self.base_plan(action), actions=FakeActions())
+                results = self.run_result(self.base_plan(action), actions=actions)
 
-        self.assertEqual(results[0].status, "blocked")
-        self.assertEqual(results[0].reason, "forbidden_fields:proof_payload.executor,proof_payload.nested[0].env")
+                self.assert_blocked_before_dispatch(results, f"decompose:proof:{name}", "issue_decomposition_proof_mismatch", actions)
+
+    def test_issue_decomposition_legacy_exact_proof_sentence_remains_compatible(self) -> None:
+        base = self.issue_decomposition_action()
+        proof = (
+            f"plan-level judge {base['plan_level_design_consensus_judge_artifact']} "
+            f"validated plan {base['issue_decomposition_plan_path']} "
+            f"digest {base['issue_decomposition_plan_digest']} "
+            "reached consensus for parent issue #403"
+        )
+        actions = FakeActions()
+        action = self.issue_decomposition_action(action_id="decompose:legacy-proof", issue_decomposition_proof=proof)
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
+
+    def test_issue_decomposition_colon_structured_proof_reaches_named_apply_action(self) -> None:
+        base = self.issue_decomposition_action()
+        proof = "\n".join(
+            [
+                f"plan_level_design_consensus_judge_artifact: {base['plan_level_design_consensus_judge_artifact']}",
+                f"issue_decomposition_plan_path: {base['issue_decomposition_plan_path']}",
+                f"issue_decomposition_plan_digest: {base['issue_decomposition_plan_digest']}",
+                "parent_issue: #403",
+            ]
+        )
+        actions = FakeActions()
+        action = self.issue_decomposition_action(action_id="decompose:colon-proof", issue_decomposition_proof=proof)
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
 
     def test_malformed_plan_envelope_blocks_before_dispatch_and_records_ledger(self) -> None:
         actions = FakeActions()
@@ -4238,6 +4358,34 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
 
+    def test_issue_decomposition_backoff_skips_without_ledger_and_allows_sibling_action(self) -> None:
+        actions = DecompositionBackoffActions()
+        decompose = self.issue_decomposition_action(action_id="decompose:backoff")
+        sibling = self.consensus_action(action_id="consensus:sibling-after-decompose-backoff")
+
+        results = self.run_result(self.batch_plan([decompose, sibling], dispatch_required=0, deficit=0), actions=actions)
+
+        self.assertEqual(
+            [
+                ("decompose:backoff", "skipped", "graphql-backoff:apply_issue_decomposition_plan"),
+                ("consensus:sibling-after-decompose-backoff", "applied", ""),
+            ],
+            [(result.action_id, result.status, result.reason) for result in results],
+        )
+        ledger_text = (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").read_text(encoding="utf-8")
+        self.assertNotIn("decompose:backoff", ledger_text)
+        self.assertIn("consensus:sibling-after-decompose-backoff", ledger_text)
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("ISSUE_DECOMPOSITION_BACKOFF:decompose:backoff:", pending)
+        self.assertIn("graphql-headroom-low", pending)
+        self.assertEqual(
+            [
+                ("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json"),
+                ("dispatch_consensus_implementation", mock.ANY),
+            ],
+            actions.calls,
+        )
+
     def test_issue_decomposition_apply_rejects_partial_implement_source_marker(self) -> None:
         actions = FakeActions()
         action = self.issue_decomposition_action(
@@ -4287,6 +4435,46 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 results = self.run_result(self.base_plan(action), actions=actions)
 
                 self.assert_blocked_before_dispatch(results, f"decompose:{reason}", reason, actions)
+
+    def test_issue_decomposition_requires_valid_structured_consensus_gate_proof(self) -> None:
+        cases = (
+            (
+                "missing",
+                {"consensus_gate_proof": None},
+                "issue_decomposition_consensus_gate_proof_missing",
+            ),
+            (
+                "mechanical-target",
+                {"consensus_gate_proof": {"target_kind": "apply"}},
+                "issue_decomposition_consensus_gate_proof_invalid",
+            ),
+            (
+                "digest-mismatch",
+                {"consensus_gate_proof": {"target_digest": "0" * 64}},
+                "issue_decomposition_consensus_gate_proof_invalid",
+            ),
+        )
+        for name, overrides, reason in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                action = self.issue_decomposition_action(action_id=f"decompose:structured-proof:{name}")
+                if name == "mechanical-target":
+                    proof = json.loads(action["consensus_gate_proof"])
+                    proof["target_kind"] = "apply"
+                    action["consensus_gate_proof"] = json.dumps(proof, sort_keys=True, separators=(",", ":"))
+                elif name == "digest-mismatch":
+                    proof = json.loads(action["consensus_gate_proof"])
+                    proof["target_digest"] = "0" * 64
+                    action["consensus_gate_proof"] = json.dumps(proof, sort_keys=True, separators=(",", ":"))
+                else:
+                    action.update(overrides)
+
+                results = self.run_result(self.base_plan(action), actions=actions)
+
+                self.assertEqual(results[0].action_id, f"decompose:structured-proof:{name}")
+                self.assertEqual(results[0].status, "blocked")
+                self.assertTrue(results[0].reason.startswith(reason), results[0].reason)
+                self.assertEqual(actions.calls, [])
 
     def test_issue_decomposition_plan_level_judge_source_mismatch_fails_closed(self) -> None:
         actions = FakeActions()

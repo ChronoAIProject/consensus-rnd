@@ -31,6 +31,7 @@ from .implementation_pr_artifacts import (
 )
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log
 from .issue_decomposition import (
+    IssueDecompositionBackoff,
     IssueDecompositionChild,
     IssueDecompositionError,
     IssueDecompositionPlan,
@@ -44,7 +45,7 @@ from .issue_decomposition import (
     parse_issue_decomposition_tracking_comments,
     reconcile_issue_decomposition_tracking_children,
 )
-from .managed_work_snapshot import invalidate_open_managed_work_snapshot
+from .managed_work_snapshot import invalidate_open_managed_work_snapshot, load_open_managed_work_snapshot
 from .prompt_rendering import render_prompt_text
 from .processes import launch_spawn_codex_supervisor
 from .release.publisher import ReleasePublisher
@@ -724,6 +725,10 @@ class ControllerActions:
         created: list[tuple[int, str]] = []
         for child in missing:
             fingerprint = issue_decomposition_child_fingerprint(plan.parent_issue, digest, child.slug)
+            live_duplicate = self._issue_decomposition_live_child_by_fingerprint(child.slug, fingerprint)
+            if live_duplicate is not None:
+                children_by_slug[child.slug] = live_duplicate
+                continue
             self._write_issue_decomposition_child_body_fingerprint(child, fingerprint)
             number, url = self.open_design_issue_with_labels(child.title, child.body_artifact_path)
             created.append((number, url))
@@ -795,59 +800,91 @@ class ControllerActions:
         plan: IssueDecompositionPlan,
         digest: str,
     ) -> dict[str, IssueDecompositionTrackingChild]:
-        result = self.gh(
-            [
-                "issue",
-                "list",
-                "--state",
-                "open",
-                "--label",
-                labels.MANAGED,
-                "--json",
-                "number,url,body,labels",
-                "--limit",
-                "200",
-            ],
-            check=False,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"apply_issue_decomposition_plan: child issue projection unavailable: {result.stderr.strip() or result.stdout.strip()}")
-        try:
-            payload = json.loads(result.stdout or "[]")
-        except json.JSONDecodeError as exc:
-            raise RuntimeError("apply_issue_decomposition_plan: child issue projection invalid JSON") from exc
-        if not isinstance(payload, list):
-            raise RuntimeError("apply_issue_decomposition_plan: child issue projection invalid JSON")
+        snapshot = load_open_managed_work_snapshot(self.ctx)
+        if not snapshot.loaded_ok:
+            diagnostic = snapshot.unavailable_diagnostic(
+                "apply_issue_decomposition_plan.child-fingerprint-discovery",
+                target_context=f"parent=#{plan.parent_issue}",
+            )
+            raise IssueDecompositionBackoff(f"ISSUE_DECOMPOSITION_BACKOFF {diagnostic}")
         expected = issue_decomposition_expected_child_fingerprints(plan, digest)
         by_fingerprint = {fingerprint: slug for slug, fingerprint in expected.items()}
         found: dict[str, IssueDecompositionTrackingChild] = {}
-        for item in payload:
-            if not isinstance(item, Mapping):
+        for item in snapshot.items:
+            if item.kind != "issue":
                 continue
-            body = item.get("body")
-            fingerprint = extract_issue_decomposition_child_fingerprint(body) if isinstance(body, str) else ""
+            fingerprint = extract_issue_decomposition_child_fingerprint(item.body)
             slug = by_fingerprint.get(fingerprint)
             if slug is None:
                 continue
-            labels_payload = item.get("labels")
-            label_names: set[str] = set()
-            if isinstance(labels_payload, list):
-                label_names = {str(label.get("name") or "") for label in labels_payload if isinstance(label, Mapping)}
-            if labels.MANAGED not in label_names:
+            if labels.MANAGED not in labels.normalize_label_set(item.labels).canonical:
                 continue
-            try:
-                issue_number = int(item.get("number"))
-            except (TypeError, ValueError) as exc:
-                raise RuntimeError("apply_issue_decomposition_plan: child issue projection missing number") from exc
-            url = str(item.get("url") or "")
-            if not url:
-                raise RuntimeError("apply_issue_decomposition_plan: child issue projection missing url")
+            issue_number = item.number
+            url = self._issue_url(issue_number)
             existing = found.get(slug)
             child = IssueDecompositionTrackingChild(slug=slug, issue_number=issue_number, url=url, fingerprint=fingerprint)
             if existing is not None and existing != child:
                 raise RuntimeError(f"apply_issue_decomposition_plan: duplicate child fingerprint for slug {slug}")
             found[slug] = child
         return found
+
+    def _issue_decomposition_live_child_by_fingerprint(
+        self,
+        slug: str,
+        fingerprint: str,
+    ) -> IssueDecompositionTrackingChild | None:
+        result = self.gh(
+            [
+                "search",
+                "issues",
+                "--state",
+                "open",
+                "--label",
+                labels.MANAGED,
+                fingerprint,
+                "--json",
+                "number,url,body,labels",
+                "--limit",
+                "2",
+            ],
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"apply_issue_decomposition_plan: child duplicate check unavailable: {result.stderr.strip() or result.stdout.strip()}")
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("apply_issue_decomposition_plan: child duplicate check invalid JSON") from exc
+        if not isinstance(payload, list):
+            raise RuntimeError("apply_issue_decomposition_plan: child duplicate check invalid JSON")
+        matches: list[IssueDecompositionTrackingChild] = []
+        for item in payload:
+            if not isinstance(item, Mapping):
+                continue
+            body = item.get("body")
+            if not isinstance(body, str) or extract_issue_decomposition_child_fingerprint(body) != fingerprint:
+                continue
+            label_names: set[str] = set()
+            labels_payload = item.get("labels")
+            if isinstance(labels_payload, list):
+                label_names = {str(label.get("name") or "") for label in labels_payload if isinstance(label, Mapping)}
+            if labels.MANAGED not in labels.normalize_label_set(label_names).canonical:
+                continue
+            try:
+                issue_number = int(item.get("number"))
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("apply_issue_decomposition_plan: child duplicate check missing number") from exc
+            url = str(item.get("url") or "") or self._issue_url(issue_number)
+            matches.append(IssueDecompositionTrackingChild(slug=slug, issue_number=issue_number, url=url, fingerprint=fingerprint))
+        unique = set(matches)
+        if len(unique) > 1:
+            raise RuntimeError(f"apply_issue_decomposition_plan: duplicate child fingerprint for slug {slug}")
+        return matches[0] if matches else None
+
+    def _issue_url(self, issue_number: int) -> str:
+        if self.ctx.gh_repo_slug:
+            return f"https://github.com/{self.ctx.gh_repo_slug}/issues/{issue_number}"
+        return f"https://github.com/unknown/unknown/issues/{issue_number}"
 
     def _write_issue_decomposition_child_body_fingerprint(self, child: IssueDecompositionChild, fingerprint: str) -> None:
         body_path = self.ctx.repo_root / child.body_artifact_path

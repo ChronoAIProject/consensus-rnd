@@ -87,6 +87,21 @@ class ControllerRuntimeInventoryTests(unittest.TestCase):
             with self.subTest(path=path.relative_to(SCRIPT_DIR)):
                 self.assertNotIn("controller_runtime_inventory", path.read_text(encoding="utf-8"))
 
+    def test_inventory_does_not_define_generated_runtime_residue_or_cleanup_surface(self) -> None:
+        source = SCRIPT_DIR / "codex_refactor_loop" / "controller_runtime_inventory.py"
+        text = source.read_text(encoding="utf-8")
+
+        for token in (
+            "__pycache__",
+            "cleanup",
+            "retention",
+            ".refactor-loop",
+            "pending-events",
+            "pending_events",
+        ):
+            with self.subTest(token=token):
+                self.assertNotIn(token, text)
+
 
 if __name__ == "__main__":
     unittest.main()

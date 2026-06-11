@@ -215,7 +215,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             {"number": 88, "title": "new", "labels": [], "updatedAt": "2026-06-07T00:00:00Z"},
             {"number": 89, "title": "managed", "labels": [{"name": label_catalog.MANAGED}], "updatedAt": ""},
         ]
-        with mock.patch("codex_refactor_loop.wakeup_plan.run_json", return_value=payload) as run_json_mock:
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
+            "codex_refactor_loop.wakeup_plan.run_json",
+            return_value=payload,
+        ) as run_json_mock:
             candidates = load_default_issue_intake_candidates(self.repo, ctx)
 
         self.assertEqual([88], [item.number for item in candidates])
@@ -1928,7 +1931,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             f"- plan_level_design_consensus_judge_artifact: {consensus}\n"
             f"- issue_decomposition_plan_path: {plan_path}\n"
             f"- issue_decomposition_plan_digest: {digest}\n"
-            f"- issue_decomposition_proof: plan-level judge {consensus} validated plan {plan_path} digest {digest} reached consensus for parent issue #{issue}\n\n"
+            "- issue_decomposition_proof:\n"
+            f"  plan_level_design_consensus_judge_artifact={consensus}\n"
+            f"  issue_decomposition_plan_path={plan_path}\n"
+            f"  issue_decomposition_plan_digest={digest}\n"
+            f"  parent_issue={issue}\n\n"
             "META_JUDGE_DONE:consensus:decompose\n",
             encoding="utf-8",
         )
@@ -1961,7 +1968,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             f"- plan_level_design_consensus_judge_artifact: .refactor-loop/runs/phase9-issue{issue}-r{round_no}-judge.md\n"
             f"- issue_decomposition_plan_path: {plan_path}\n"
             f"- issue_decomposition_plan_digest: {digest}\n"
-            f"- issue_decomposition_proof: plan-level judge .refactor-loop/runs/phase9-issue{issue}-r{round_no}-judge.md validated plan {plan_path} digest {digest} reached consensus for parent issue #{issue}\n\n"
+            "- issue_decomposition_proof:\n"
+            f"  plan_level_design_consensus_judge_artifact=.refactor-loop/runs/phase9-issue{issue}-r{round_no}-judge.md\n"
+            f"  issue_decomposition_plan_path={plan_path}\n"
+            f"  issue_decomposition_plan_digest={digest}\n"
+            f"  parent_issue={issue}\n\n"
             "META_JUDGE_DONE:consensus:decompose\n",
             encoding="utf-8",
         )
@@ -3948,6 +3959,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn(".refactor-loop/runs/phase9-issue403-r6-judge.md", action["issue_decomposition_proof"])
         self.assertIn(plan_path, action["issue_decomposition_proof"])
         self.assertIn(digest, action["issue_decomposition_proof"])
+        proof = json.loads(action["consensus_gate_proof"])
+        self.assertEqual(proof["target_kind"], "issue-decomposition-plan")
+        self.assertEqual(proof["target_ref"], plan_path)
+        self.assertEqual(proof["required_roles"], ["minimal", "structural"])
+        self.assertEqual(proof["scope_paths"], [".refactor-loop/runs"])
+        self.assertNotIn("controller_action", proof)
+        self.assertNotIn("lifecycle_authority", proof)
         self.assertEqual(
             action["preconditions"],
             [
@@ -3989,6 +4007,85 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan(fixture="open_issue_403")
 
         self.assertEqual(issue_decomposition_apply_actions(plan), [])
+
+    def test_judge_artifact_structured_issue_decomposition_proof_emits_named_action(self) -> None:
+        plan_path, digest = self.write_issue_decomposition_artifacts()
+        artifact = self.repo / ".refactor-loop/runs/phase9-issue403-r6-judge.md"
+        artifact.write_text(
+            artifact.read_text(encoding="utf-8").replace(
+                "  parent_issue=403\n",
+                "  parent_issue=#403\n",
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
+
+        plan = self.run_plan(fixture="open_issue_403")
+
+        actions = issue_decomposition_apply_actions(plan)
+        self.assertEqual(1, len(actions))
+        self.assertEqual(actions[0]["issue_decomposition_plan_digest"], digest)
+
+    def test_judge_artifact_colon_issue_decomposition_proof_emits_named_action(self) -> None:
+        plan_path, digest = self.write_issue_decomposition_artifacts()
+        artifact = self.repo / ".refactor-loop/runs/phase9-issue403-r6-judge.md"
+        artifact.write_text(
+            artifact.read_text(encoding="utf-8")
+            .replace(
+                f"  plan_level_design_consensus_judge_artifact=.refactor-loop/runs/phase9-issue403-r6-judge.md\n",
+                "  plan_level_design_consensus_judge_artifact: .refactor-loop/runs/phase9-issue403-r6-judge.md\n",
+            )
+            .replace(
+                f"  issue_decomposition_plan_path={plan_path}\n",
+                f"  issue_decomposition_plan_path: {plan_path}\n",
+            )
+            .replace(
+                f"  issue_decomposition_plan_digest={digest}\n",
+                f"  issue_decomposition_plan_digest: {digest}\n",
+            )
+            .replace("  parent_issue=403\n", "  parent_issue: #403\n"),
+            encoding="utf-8",
+        )
+        self.write_completed_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
+
+        plan = self.run_plan(fixture="open_issue_403")
+
+        actions = issue_decomposition_apply_actions(plan)
+        self.assertEqual(1, len(actions))
+        self.assertEqual(actions[0]["controller_action"], "apply_issue_decomposition_plan")
+        self.assertEqual(actions[0]["issue_decomposition_plan_digest"], digest)
+
+    def test_judge_artifact_stale_plan_source_or_proof_does_not_project_issue_decomposition_apply(self) -> None:
+        for name, mutate in (
+            (
+                "plan-source",
+                lambda plan_path, digest: (self.repo / plan_path).write_text(
+                    (self.repo / plan_path).read_text(encoding="utf-8").replace(
+                        ".refactor-loop/runs/phase9-issue403-r6-judge.md",
+                        ".refactor-loop/runs/phase9-issue999-r1-judge.md",
+                    ),
+                    encoding="utf-8",
+                ),
+            ),
+            (
+                "proof",
+                lambda plan_path, digest: (self.repo / ".refactor-loop/runs/phase9-issue403-r6-judge.md").write_text(
+                    (self.repo / ".refactor-loop/runs/phase9-issue403-r6-judge.md").read_text(encoding="utf-8").replace(
+                        f"issue_decomposition_plan_digest={digest}",
+                        "issue_decomposition_plan_digest=" + ("0" * 64),
+                    ),
+                    encoding="utf-8",
+                ),
+            ),
+        ):
+            with self.subTest(name=name):
+                plan_path, digest = self.write_issue_decomposition_artifacts()
+                mutate(plan_path, digest)
+                self.write_completed_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
+
+                plan = self.run_plan(fixture="open_issue_403")
+
+                self.assertEqual(issue_decomposition_apply_actions(plan), [])
 
     def test_issue_decomposition_has_no_private_action_dialect_or_public_commands(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
@@ -4201,7 +4298,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
 
 
-    def test_meta_resolved_drop_completed_marker_for_closed_target_is_status_only(self) -> None:
+    def test_meta_resolved_drop_completed_marker_for_closed_target_is_suppressed_before_enrichment(self) -> None:
         (self.logs / "issue53-judge-drop.log").write_text(
             "raw prose is diagnostic only\n"
             "META_RESOLVED:drop:no-action\n"
@@ -4211,23 +4308,58 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan = self.run_plan(fixture="open_issue_54")
 
-        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:issue53-judge-drop"))
-        self.assertEqual(action["kind"], "completed-marker")
-        self.assertEqual(action["controller_action"], "close_managed_item_from_drop_marker")
-        self.assertTrue(action["status_only"])
-        self.assertTrue(action["no_lifecycle_authority"])
-        self.assertEqual(action["suppressed_reason"], "target_not_open")
-        self.assertNotIn("runner_authority", action)
-        self.assertNotIn("no_generic_command", action)
-        self.assertEqual(
-            action["preconditions"],
-            ["active_controller_owner", "clean_exit_source_marker", "live_open_target", "live_managed_target"],
+        rendered = json.dumps(plan, sort_keys=True)
+        self.assertNotIn("completed-marker:issue53-judge-drop", rendered)
+        self.assertNotIn("META_RESOLVED:drop:no-action", rendered)
+
+    def test_completed_marker_projection_scales_with_open_targets_not_historical_backlog(self) -> None:
+        for issue in range(1000, 1150):
+            self.write_completed_log(f"phase9-issue{issue}-r1-judge.log", "META_JUDGE_DONE:consensus:minimal")
+            self.write_run_artifact(f"phase9-issue{issue}-r1-judge", f"META_JUDGE_DONE:consensus:minimal:issue-{issue}")
+        self.write_completed_log("phase9-issue330-r1-judge.log", "META_JUDGE_DONE:consensus:minimal")
+        self.write_run_artifact("phase9-issue330-r1-judge", "META_JUDGE_DONE:consensus:minimal:issue-330")
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        with mock.patch(
+            "codex_refactor_loop.wakeup_plan.consensus_implementation_fields",
+            return_value={},
+        ) as consensus_fields:
+            actions = completed_marker_actions(
+                self.repo,
+                open_targets={("issue", 330), ("PR", 77)},
+                gh_items=[
+                    GhItem("issue", 330, "open issue", (label_catalog.MANAGED, label_catalog.PHASE_DESIGN_SOLVING)),
+                    GhItem("PR", 77, "open pr", (label_catalog.MANAGED, label_catalog.PHASE_REVIEWING)),
+                ],
+            )
+
+        rendered = json.dumps(actions, sort_keys=True)
+        self.assertIn("phase9-issue330-r1-judge.log", rendered)
+        self.assertIn("fix-pr77-r3.log", rendered)
+        self.assertNotIn("phase9-issue1000-r1-judge.log", rendered)
+        self.assertNotIn("phase9-issue1149-r1-judge.log", rendered)
+        consensus_fields.assert_called_once()
+
+    def test_completed_marker_preserves_open_snapshot_targets_with_large_historical_backlog(self) -> None:
+        for issue in range(1200, 1350):
+            self.write_completed_log(f"remote-ci-fix-pr{issue}-contract-tests.log", "REMOTE_CI_FIX_DONE:contract-tests:ok")
+        self.write_completed_log("remote-ci-fix-pr77-contract-tests.log", "REMOTE_CI_FIX_DONE:contract-tests:ok")
+        self.write_completed_log("fix-pr78-r3.log", "FIX_DONE")
+
+        actions = completed_marker_actions(
+            self.repo,
+            open_targets={("PR", 77), ("PR", 78)},
+            gh_items=[
+                GhItem("PR", 77, "open pr 77", (label_catalog.MANAGED, label_catalog.PHASE_CI_RUNNING)),
+                GhItem("PR", 78, "open pr 78", (label_catalog.MANAGED, label_catalog.PHASE_REVIEWING)),
+            ],
         )
-        self.assertEqual(action["source_artifact"], ".refactor-loop/logs/issue53-judge-drop.log")
-        self.assertEqual(action["source_marker"], "META_RESOLVED:drop:no-action")
-        self.assertEqual(action["target_kind"], "issue")
-        self.assertEqual(action["target_number"], 53)
-        self.assertEqual(action["target"], {"kind": "issue", "number": 53})
+
+        action_ids = {str(action.get("action_id") or "") for action in actions}
+        self.assertTrue(any(action_id.startswith("completed-marker:remote-ci-fix-pr77") for action_id in action_ids))
+        self.assertTrue(any(action_id.startswith("completed-marker:fix-pr78-r3") for action_id in action_ids))
+        self.assertFalse(any("remote-ci-fix-pr1200" in action_id for action_id in action_ids))
+        self.assertFalse(any("remote-ci-fix-pr1349" in action_id for action_id in action_ids))
 
     def test_non_drop_meta_resolved_is_status_only_for_phase9_router(self) -> None:
         self.write_completed_log("judge-issue54.log", "META_RESOLVED:continue")
@@ -4483,35 +4615,25 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("runner_authority", action)
         self.assertNotIn("no_generic_command", action)
 
-    def test_remote_ci_fix_done_issue_target_is_status_only(self) -> None:
+    def test_remote_ci_fix_done_issue_target_absent_from_open_snapshot_is_suppressed(self) -> None:
         marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
         (self.logs / "remote-ci-fix-issue77-contract-tests.log").write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
 
         plan = self.run_plan(fixture="open_pr_77")
 
-        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-issue77-contract-tests")
-        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
-        self.assertEqual(action["target_kind"], "issue")
-        self.assertEqual(action["target_number"], 77)
-        self.assertTrue(action["status_only"])
-        self.assertEqual(action["suppressed_reason"], "remote_ci_fix_target_not_pr")
-        self.assertNotIn("runner_authority", action)
-        self.assertNotIn("no_generic_command", action)
+        rendered = json.dumps(plan, sort_keys=True)
+        self.assertNotIn("completed-marker:remote-ci-fix-issue77-contract-tests", rendered)
+        self.assertNotIn(marker, rendered)
 
-    def test_remote_ci_fix_done_non_open_pr_target_is_status_only(self) -> None:
+    def test_remote_ci_fix_done_non_open_pr_target_is_suppressed_before_enrichment(self) -> None:
         marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
         (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
 
         plan = self.run_plan(fixture="open_issue_331")
 
-        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-pr77-contract-tests")
-        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
-        self.assertEqual(action["target_kind"], "PR")
-        self.assertEqual(action["target_number"], 77)
-        self.assertTrue(action["status_only"])
-        self.assertEqual(action["suppressed_reason"], "target_not_open")
-        self.assertNotIn("runner_authority", action)
-        self.assertNotIn("no_generic_command", action)
+        rendered = json.dumps(plan, sort_keys=True)
+        self.assertNotIn("completed-marker:remote-ci-fix-pr77-contract-tests", rendered)
+        self.assertNotIn(marker, rendered)
 
     def test_remote_ci_fix_done_when_read_model_unavailable_is_status_only(self) -> None:
         marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"

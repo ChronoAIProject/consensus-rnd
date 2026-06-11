@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 from typing import Sequence
 
 
@@ -70,9 +72,10 @@ class DefaultIssueIntakeTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_missing_or_empty_enable_defaults_true(self) -> None:
-        self.assertTrue(default_issue_intake_enabled({}))
-        self.assertTrue(default_issue_intake_enabled({"DEFAULT_ISSUE_INTAKE_ENABLE": ""}))
-        self.assertFalse(default_issue_intake_enabled({"DEFAULT_ISSUE_INTAKE_ENABLE": "false"}))
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(default_issue_intake_enabled({}))
+            self.assertTrue(default_issue_intake_enabled({"DEFAULT_ISSUE_INTAKE_ENABLE": ""}))
+            self.assertFalse(default_issue_intake_enabled({"DEFAULT_ISSUE_INTAKE_ENABLE": "false"}))
 
     def test_no_prior_claim_writes_claim_and_design_labels(self) -> None:
         fake = FakeGh(issue={"state": "open", "labels": []})
