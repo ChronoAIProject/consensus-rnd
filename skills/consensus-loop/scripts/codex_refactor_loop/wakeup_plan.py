@@ -39,7 +39,9 @@ from codex_refactor_loop.implementation_pr_artifacts import (
 from codex_refactor_loop.issue_decomposition import (
     IssueDecompositionError,
     applied_issue_decomposition_parent_suppresses_expected_worker,
+    issue_decomposition_apply_proof_matches,
     issue_decomposition_plan_file_digest,
+    load_issue_decomposition_plan,
 )
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.phase9.progress import issue_has_terminal_consensus_judge
@@ -2078,9 +2080,10 @@ def _extract_structured_consensus_field(section: str, field: str) -> str:
         "plan_level_design_consensus_judge_artifact",
     }
     lines = section.splitlines()
-    start_re = re.compile(rf"^\s*(?:-\s*)?{re.escape(field)}\s*:\s*(.*)$")
+    top_level_prefix = r"(?:-\s*|\s+-\s*)?"
+    start_re = re.compile(rf"^{top_level_prefix}{re.escape(field)}\s*:\s*(.*)$")
     other_re = re.compile(
-        r"^\s*(?:-\s*)?(?:" + "|".join(re.escape(name) for name in sorted(field_names - {field})) + r")\s*:\s*"
+        r"^" + top_level_prefix + r"(?:" + "|".join(re.escape(name) for name in sorted(field_names - {field})) + r")\s*:\s*"
     )
     collected: list[str] = []
     collecting = False
@@ -2095,6 +2098,8 @@ def _extract_structured_consensus_field(section: str, field: str) -> str:
             collecting = True
             continue
         if other_re.match(line) or re.match(r"^\s*-\s*(?:Implementation owner|Add `|For large-issue)\b", line):
+            break
+        if re.match(r"^\s*[A-Z_]+_DONE:", line):
             break
         if re.match(r"^\s*-\s+[A-Za-z][A-Za-z0-9 _/-]*:", line):
             break
@@ -2167,13 +2172,22 @@ def _issue_decomposition_apply_projection_from_artifact(
     if plan_level_artifact.strip() != rel:
         return {}
     try:
-        digest = issue_decomposition_plan_file_digest(
-            LoopContext.load(repo_root=repo_root, env=_repo_local_context_env(repo_root, os.environ), cwd=repo_root, read_only=True),
-            plan_path,
-        )
+        context = LoopContext.load(repo_root=repo_root, env=_repo_local_context_env(repo_root, os.environ), cwd=repo_root, read_only=True)
+        plan = load_issue_decomposition_plan(context, plan_path)
+        digest = issue_decomposition_plan_file_digest(context, plan_path)
     except (IssueDecompositionError, RuntimeError, ValueError):
         return {}
+    if plan.parent_issue != issue or plan.source_consensus_artifact != rel:
+        return {}
     if digest != plan_digest.strip():
+        return {}
+    if not issue_decomposition_apply_proof_matches(
+        proof,
+        consensus_artifact=rel,
+        plan_path=plan_path,
+        digest=digest,
+        parent_issue=issue,
+    ):
         return {}
     try:
         proof_payload = _issue_decomposition_consensus_gate_proof(

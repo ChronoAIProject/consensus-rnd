@@ -40,6 +40,7 @@ from .implementation_pr_artifacts import validate_implementation_pr_artifacts
 from .issue_decomposition import (
     IssueDecompositionBackoff,
     IssueDecompositionError,
+    issue_decomposition_apply_proof_matches,
     issue_decomposition_plan_file_digest,
     load_issue_decomposition_plan,
     parse_issue_decomposition_tracking_comments,
@@ -825,7 +826,13 @@ class WakeupRunner:
         if not _source_log_has_clean_marker(plan_level_log, str(action.get("source_marker") or "")):
             return "issue_decomposition_plan_level_judge_marker_missing"
         proof = str(action.get("issue_decomposition_proof") or "")
-        if digest not in proof or plan_path not in proof or consensus_artifact not in proof:
+        if not issue_decomposition_apply_proof_matches(
+            proof,
+            consensus_artifact=consensus_artifact,
+            plan_path=plan_path,
+            digest=digest,
+            parent_issue=target,
+        ):
             return "issue_decomposition_proof_mismatch"
         proof_error = self._validate_issue_decomposition_consensus_gate_proof(action, digest)
         if proof_error:
