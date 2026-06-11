@@ -15,6 +15,12 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
+from .consensus_gate import (
+    ConsensusGateProofError,
+    consensus_gate_digest,
+    consensus_gate_file_digest,
+    validate_consensus_gate_proof,
+)
 from .context import LoopContext, LoopContextError
 from .controller_actions import ControllerActions
 from .cross_instance_stand_down import check_cross_instance_admission
@@ -828,9 +834,54 @@ class WakeupRunner:
             parent_issue=target,
         ):
             return "issue_decomposition_proof_mismatch"
+        proof_error = self._validate_issue_decomposition_consensus_gate_proof(action, digest)
+        if proof_error:
+            return proof_error
         tracking_error = self._issue_decomposition_tracking_error(plan, digest)
         if tracking_error:
             return tracking_error
+        return None
+
+    def _validate_issue_decomposition_consensus_gate_proof(
+        self,
+        action: Mapping[str, Any],
+        digest: str,
+    ) -> str | None:
+        raw_proof_text = action.get("consensus_gate_proof")
+        if not isinstance(raw_proof_text, str) or not raw_proof_text.strip():
+            return "issue_decomposition_consensus_gate_proof_missing"
+        try:
+            raw_proof = json.loads(raw_proof_text)
+        except json.JSONDecodeError as exc:
+            return f"issue_decomposition_consensus_gate_proof_invalid:{exc}"
+        if not isinstance(raw_proof, Mapping):
+            return "issue_decomposition_consensus_gate_proof_invalid:ConsensusGateProof must be a JSON object"
+        consensus_artifact = str(action.get("consensus_artifact") or "")
+        plan_path = str(action.get("issue_decomposition_plan_path") or "")
+        issue = action.get("consensus_issue")
+        if not isinstance(issue, int):
+            return "issue_decomposition_consensus_gate_proof_target_mismatch"
+        target_payload = {
+            "target_kind": "issue-decomposition-plan",
+            "parent_issue": issue,
+            "consensus_artifact": consensus_artifact,
+            "plan_path": plan_path,
+            "plan_digest": digest,
+        }
+        artifact_digests: dict[str, str] = {}
+        try:
+            artifact_digests[consensus_artifact] = consensus_gate_file_digest(self.ctx.artifact_execution_path(consensus_artifact))
+            artifact_digests[plan_path] = digest
+            validate_consensus_gate_proof(
+                raw_proof,
+                target_kind="issue-decomposition-plan",
+                target_ref=plan_path,
+                target_digest=consensus_gate_digest(target_payload),
+                artifact_digests=artifact_digests,
+                required_scope_paths=[".refactor-loop/runs"],
+            )
+        except (ConsensusGateProofError, LoopContextError, OSError) as exc:
+            return f"issue_decomposition_consensus_gate_proof_invalid:{exc}"
         return None
 
     def _validate_default_issue_intake_claim(self, action: Mapping[str, Any]) -> str | None:

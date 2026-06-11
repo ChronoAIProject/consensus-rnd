@@ -3956,6 +3956,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn(".refactor-loop/runs/phase9-issue403-r6-judge.md", action["issue_decomposition_proof"])
         self.assertIn(plan_path, action["issue_decomposition_proof"])
         self.assertIn(digest, action["issue_decomposition_proof"])
+        proof = json.loads(action["consensus_gate_proof"])
+        self.assertEqual(proof["target_kind"], "issue-decomposition-plan")
+        self.assertEqual(proof["target_ref"], plan_path)
+        self.assertEqual(proof["required_roles"], ["minimal", "structural"])
+        self.assertEqual(proof["scope_paths"], [".refactor-loop/runs"])
+        self.assertNotIn("controller_action", proof)
+        self.assertNotIn("lifecycle_authority", proof)
         self.assertEqual(
             action["preconditions"],
             [

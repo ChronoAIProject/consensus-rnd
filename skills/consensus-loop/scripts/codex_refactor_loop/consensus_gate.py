@@ -6,8 +6,8 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from pathlib import PurePosixPath
-from typing import Any
+from pathlib import Path, PurePosixPath
+from typing import Any, Mapping, Sequence
 
 
 FORBIDDEN_CONSENSUS_PROOF_FIELDS = frozenset(
@@ -47,6 +47,19 @@ SUPPORTED_VERDICT_RULES = frozenset({"all_required_approve", "reject_zero_approv
 POSITIVE_VERDICTS = frozenset({"approve", "approved", "propose", "consensus"})
 REJECT_VERDICTS = frozenset({"reject", "rejected"})
 KNOWN_VERDICTS = POSITIVE_VERDICTS | REJECT_VERDICTS | frozenset({"comment", "abstain"})
+MECHANICAL_TARGET_KINDS = frozenset(
+    {
+        "route",
+        "post",
+        "label",
+        "spawn",
+        "merge",
+        "apply",
+        "apply-validated-proof",
+        "wakeup-action",
+        "controller-action",
+    }
+)
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 
@@ -81,7 +94,19 @@ def consensus_gate_digest(data: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def validate_consensus_gate_proof(raw: Any, *, target_digest: str | None = None) -> ConsensusGateProof:
+def consensus_gate_file_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def validate_consensus_gate_proof(
+    raw: Any,
+    *,
+    target_digest: str | None = None,
+    target_kind: str | None = None,
+    target_ref: str | None = None,
+    artifact_digests: Mapping[str, str] | None = None,
+    required_scope_paths: Sequence[str] | None = None,
+) -> ConsensusGateProof:
     if not isinstance(raw, dict):
         raise ConsensusGateProofError("ConsensusGateProof must be a JSON object")
     _reject_forbidden_fields_recursive(raw, "proof")
@@ -91,8 +116,14 @@ def validate_consensus_gate_proof(raw: Any, *, target_digest: str | None = None)
     if target_digest is not None and proof_target_digest != _required_digest(target_digest, "expected target_digest"):
         raise ConsensusGateProofError("target_digest_mismatch")
 
-    target_kind = _required_identity(raw.get("target_kind"), "target_kind")
-    target_ref = _required_text(raw.get("target_ref"), "target_ref")
+    proof_target_kind = _required_identity(raw.get("target_kind"), "target_kind")
+    if proof_target_kind in MECHANICAL_TARGET_KINDS:
+        raise ConsensusGateProofError(f"mechanical target_kind is outside ConsensusGateProof scope: {proof_target_kind}")
+    if target_kind is not None and proof_target_kind != _required_identity(target_kind, "expected target_kind"):
+        raise ConsensusGateProofError("target_kind_mismatch")
+    proof_target_ref = _required_text(raw.get("target_ref"), "target_ref")
+    if target_ref is not None and proof_target_ref != _required_text(target_ref, "expected target_ref"):
+        raise ConsensusGateProofError("target_ref_mismatch")
     decision_producer_id = _required_identity(raw.get("decision_producer_id"), "decision_producer_id")
     required_roles = _parse_required_roles(raw.get("required_roles"))
     verdict_rule = _required_text(raw.get("verdict_rule"), "verdict_rule")
@@ -102,11 +133,13 @@ def validate_consensus_gate_proof(raw: Any, *, target_digest: str | None = None)
     evidence = _parse_evidence(raw.get("evidence"))
     _validate_producer_independence(decision_producer_id, evidence)
     _validate_role_coverage(required_roles, verdict_rule, evidence)
+    _validate_artifact_digest_bindings(evidence, artifact_digests or {})
     scope_paths = _parse_scope_paths(raw.get("scope_paths", []))
+    _validate_required_scope_paths(scope_paths, required_scope_paths or ())
 
     return ConsensusGateProof(
-        target_kind=target_kind,
-        target_ref=target_ref,
+        target_kind=proof_target_kind,
+        target_ref=proof_target_ref,
         target_digest=proof_target_digest,
         decision_producer_id=decision_producer_id,
         evidence=evidence,
@@ -229,6 +262,18 @@ def _validate_role_coverage(
         raise ConsensusGateProofError("verdict_rule_failed: reject_zero_approve_one")
 
 
+def _validate_artifact_digest_bindings(
+    evidence: tuple[ConsensusGateEvidence, ...],
+    artifact_digests: Mapping[str, str],
+) -> None:
+    for item in evidence:
+        if item.artifact not in artifact_digests:
+            continue
+        actual = _required_digest(artifact_digests[item.artifact], f"artifact_digests[{item.artifact}]")
+        if item.artifact_digest != actual:
+            raise ConsensusGateProofError(f"artifact_digest_mismatch: {item.artifact}")
+
+
 def _parse_scope_paths(value: Any) -> tuple[str, ...]:
     if value in (None, []):
         return ()
@@ -244,11 +289,23 @@ def _parse_scope_paths(value: Any) -> tuple[str, ...]:
     return tuple(paths)
 
 
+def _validate_required_scope_paths(scope_paths: tuple[str, ...], required_scope_paths: Sequence[str]) -> None:
+    if not required_scope_paths:
+        return
+    required = set(_parse_scope_paths(list(required_scope_paths)))
+    actual = set(scope_paths)
+    missing = sorted(required - actual)
+    if missing:
+        raise ConsensusGateProofError(f"missing_scope_paths: {', '.join(missing)}")
+
+
 __all__ = [
     "ConsensusGateEvidence",
     "ConsensusGateProof",
     "ConsensusGateProofError",
     "FORBIDDEN_CONSENSUS_PROOF_FIELDS",
+    "MECHANICAL_TARGET_KINDS",
     "consensus_gate_digest",
+    "consensus_gate_file_digest",
     "validate_consensus_gate_proof",
 ]
