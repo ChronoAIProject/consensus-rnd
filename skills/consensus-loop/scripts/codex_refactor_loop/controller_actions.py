@@ -1288,9 +1288,9 @@ class ControllerActions:
         )
         if branch_admission is not None:
             return branch_admission
-        diff_ready = self._require_publish_implementation_diff(worktree)
-        if diff_ready != 0:
-            return diff_ready
+        already_open_current = self._matching_current_implementation_pr(head_ref, issue_target, worktree)
+        if already_open_current is not None:
+            return 0
         title_error = self._implementation_pr_title_error(action, issue_target)
         if title_error:
             sys.stderr.write(f"publish_implementation_output: {title_error}\n")
@@ -1299,6 +1299,9 @@ class ControllerActions:
         if body_error:
             sys.stderr.write(f"publish_implementation_output: {body_error}\n")
             return 2
+        diff_ready = self._require_publish_implementation_diff(worktree)
+        if diff_ready != 0:
+            return diff_ready
         committed = self._commit_publish_implementation_diff(action, issue_target, head_ref, worktree)
         if committed != 0:
             return committed
@@ -1339,6 +1342,31 @@ class ControllerActions:
             if updated != 0:
                 return updated
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
+
+    def _matching_current_implementation_pr(self, head_ref: str, issue_target: str, worktree: Path) -> int | None:
+        error, pr_target, pr_head_sha = self._matching_implementation_pr_with_head(head_ref, issue_target)
+        if error or pr_target is None:
+            return None
+        if not _is_full_sha(pr_head_sha):
+            return None
+        local = self._git_in(worktree, ["rev-parse", "HEAD"], check=False)
+        if local.returncode != 0:
+            return None
+        local_head = local.stdout.strip()
+        if not _is_full_sha(local_head):
+            return None
+        status = self._git_in(worktree, ["status", "--porcelain"], check=False)
+        if status.returncode != 0 or status.stdout.strip():
+            return None
+        remote_head = pr_head_sha
+        for _attempt in range(1):
+            if remote_head == local_head:
+                return pr_target
+            remote = self._git_in(worktree, ["rev-parse", "--verify", f"refs/remotes/origin/{head_ref}"], check=False)
+            remote_head = remote.stdout.strip() if remote.returncode == 0 else ""
+        if remote_head == local_head:
+            return pr_target
+        return None
 
     def _update_existing_implementation_pr(
         self,
@@ -2323,41 +2351,45 @@ class ControllerActions:
         return labels.MANAGED in labels.normalize_label_set(names).canonical
 
     def _matching_implementation_pr(self, head_ref: str, issue_target: str) -> tuple[str | None, int | None]:
+        error, number, _head_sha = self._matching_implementation_pr_with_head(head_ref, issue_target)
+        return error, number
+
+    def _matching_implementation_pr_with_head(self, head_ref: str, issue_target: str) -> tuple[str | None, int | None, str]:
         result = self.gh(
-            ["pr", "list", "--state", "open", "--head", head_ref, "--json", "number,baseRefName,headRefName,labels,body"],
+            ["pr", "list", "--state", "open", "--head", head_ref, "--json", "number,baseRefName,headRefName,headRefOid,labels,body"],
             check=False,
         )
         if result.returncode != 0:
-            return "matching_pr_unavailable", None
+            return "matching_pr_unavailable", None, ""
         try:
             payload = json.loads(result.stdout or "[]")
         except json.JSONDecodeError:
-            return "matching_pr_invalid_json", None
+            return "matching_pr_invalid_json", None, ""
         if not isinstance(payload, list):
-            return "matching_pr_invalid_json", None
+            return "matching_pr_invalid_json", None, ""
         if len(payload) == 0:
-            return None, None
+            return None, None, ""
         if len(payload) > 1:
-            return "multiple_matching_open_pr", None
+            return "multiple_matching_open_pr", None, ""
         pr = payload[0]
         if not isinstance(pr, dict):
-            return "matching_pr_invalid_json", None
+            return "matching_pr_invalid_json", None, ""
         number = pr.get("number")
         if not isinstance(number, int) or number <= 0:
-            return "matching_pr_invalid_json", None
+            return "matching_pr_invalid_json", None, ""
         if str(pr.get("headRefName") or "") != head_ref:
-            return "matching_pr_head_mismatch", None
+            return "matching_pr_head_mismatch", None, ""
         if str(pr.get("baseRefName") or "") != self.integration_branch:
-            return "matching_pr_base_mismatch", None
+            return "matching_pr_base_mismatch", None, ""
         raw_labels = pr.get("labels")
         if not isinstance(raw_labels, list):
-            return "matching_pr_not_managed", None
+            return "matching_pr_not_managed", None, ""
         names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
         if labels.MANAGED not in labels.normalize_label_set(names).canonical:
-            return "matching_pr_not_managed", None
+            return "matching_pr_not_managed", None, ""
         if _single_linked_issue(str(pr.get("body") or "")) != issue_target:
-            return "matching_pr_issue_mismatch", None
-        return None, number
+            return "matching_pr_issue_mismatch", None, ""
+        return None, number, str(pr.get("headRefOid") or "").strip()
 
     def _run_host_command(self, name: str, cwd: Path) -> int:
         command = str(self.ctx.env_for_subprocess().get(name) or "").strip()
@@ -2976,6 +3008,10 @@ def _review_fix_log_has_exit_zero(path: Path) -> bool:
 
 def _safe_branch_name(value: str) -> bool:
     return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)
+
+
+def _is_full_sha(value: str) -> bool:
+    return bool(re.fullmatch(r"[0-9a-f]{40}", value.strip()))
 
 
 def _implementation_cluster_id(action: Mapping[str, object], issue_target: str) -> str:
