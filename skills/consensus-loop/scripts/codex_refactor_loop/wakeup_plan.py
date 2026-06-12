@@ -3137,6 +3137,8 @@ def safe_head_ref(value: str | None) -> str | None:
         return None
     if any(ch.isspace() or ord(ch) < 32 for ch in value):
         return None
+    if ":" in value:
+        return None
     return value
 
 
@@ -5063,7 +5065,11 @@ def _implementation_head_ref(action: dict[str, Any], target: tuple[str, int] | N
         return None
     marker = str(action.get("source_marker") or "")
     candidates: list[str] = []
-    marker_id = marker.removeprefix("IMPLEMENT_DONE:").removesuffix(":ok").strip(":")
+    marker_id = marker.removeprefix("IMPLEMENT_DONE:")
+    marker_parts = marker_id.split(":")
+    if len(marker_parts) == 2 and marker_parts[1] in {"ok", "partial", "blocked"}:
+        marker_id = marker_parts[0]
+    marker_id = marker_id.strip(":")
     if marker_id:
         candidates.append(marker_id)
     candidates.append(f"issue-{target[1]}")
