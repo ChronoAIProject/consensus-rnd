@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .context import LoopContext, LoopContextError
-from .daemon_singleton import probe as probe_daemon_singleton
+from .daemon_singleton import probe as probe_daemon_singleton, symbolic_repo_path
 from .restart import (
     DaemonProcessInventory,
     DaemonTarget,
@@ -194,7 +194,7 @@ def _project_target(
         canonical_child_pids=instance.canonical_child_pids,
         orphan_child_pids=instance.orphan_child_pids,
         bounded_lock_holder_pids=instance.bounded_lock_holder_pids,
-        singleton_lock_path=str(instance.singleton.lock_path),
+        singleton_lock_path=symbolic_repo_path(ctx.repo_root, instance.singleton.lock_path),
         singleton_lock_state=instance.singleton.state,
         singleton_lock_holder_pid=instance.singleton.holder_pid,
         singleton_lock_metadata_valid=instance.singleton.metadata_valid,

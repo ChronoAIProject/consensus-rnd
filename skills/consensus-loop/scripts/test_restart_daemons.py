@@ -330,6 +330,10 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         payload = json.loads(target.singleton_lock_file.read_text(encoding="utf-8"), object_pairs_hook=dict)
 
         self.assertEqual(list(METADATA_FIELD_ORDER), list(payload))
+        self.assertEqual("$REPO_ROOT", payload["repo_root"])
+        self.assertEqual("$REPO_ROOT/.refactor-loop/heartbeats/concurrency_monitor.ts", payload["heartbeat_file"])
+        self.assertEqual("$REPO_ROOT/.refactor-loop/locks/concurrency_monitor.fingerprint.json", payload["fingerprint_file"])
+        self.assertNotIn(str(self.ctx.repo_root), target.singleton_lock_file.read_text(encoding="utf-8"))
         self.assertEqual(metadata, read_metadata(target.singleton_lock_file))
 
     def test_restart_commands_use_single_cli_entrypoint_and_daemon_flag(self) -> None:
@@ -919,10 +923,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         helper.start_daemon("phase9_router_daemon", FAKE_COMMAND)
 
         new_pid = self.read_pid("phase9_router_daemon")
-        self.assertEqual(
-            [(orphan_child_pid, self.config.stop_grace_seconds)],
-            [item for item in self.runtime.terminated if item[0] == orphan_child_pid],
-        )
+        self.assertEqual([(orphan_child_pid, self.config.stop_grace_seconds)], self.runtime.terminated)
         self.assertNotEqual(old_wrapper_pid, new_pid)
         self.assert_start_count("phase9_router_daemon", 2)
 

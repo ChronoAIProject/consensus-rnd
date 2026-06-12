@@ -9,7 +9,7 @@ import re
 import time
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 METADATA_FIELD_ORDER = (
@@ -26,6 +26,7 @@ METADATA_FIELD_ORDER = (
 METADATA_STATUS_STATES = ("missing", "free", "held", "held-malformed", "probe-error")
 _DAEMON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_REPO_ROOT_SYMBOL = "$REPO_ROOT"
 
 
 @dataclass(frozen=True)
@@ -53,10 +54,10 @@ class DaemonSingletonMetadata:
     ) -> "DaemonSingletonMetadata":
         return cls(
             daemon_name=daemon_name,
-            repo_root=str(repo_root.resolve()),
+            repo_root=_REPO_ROOT_SYMBOL,
             actor_pid=actor_pid if actor_pid is not None else os.getpid(),
-            heartbeat_file=str(heartbeat_file),
-            fingerprint_file=str(fingerprint_file),
+            heartbeat_file=symbolic_repo_path(repo_root, heartbeat_file),
+            fingerprint_file=symbolic_repo_path(repo_root, fingerprint_file),
             command_sha256=command_sha256,
             started_at=started_at if started_at is not None else int(time.time()),
             lock_generation=1,
@@ -76,13 +77,13 @@ class DaemonSingletonMetadata:
             not isinstance(daemon_name, str)
             or not _valid_daemon_name(daemon_name)
             or not isinstance(repo_root, str)
-            or not _valid_metadata_string(repo_root)
+            or repo_root != _REPO_ROOT_SYMBOL
             or not isinstance(actor_pid, int)
             or actor_pid <= 0
             or not isinstance(heartbeat_file, str)
-            or not _valid_metadata_string(heartbeat_file)
+            or not _valid_repo_symbolic_path(heartbeat_file)
             or not isinstance(fingerprint_file, str)
-            or not _valid_metadata_string(fingerprint_file, allow_empty=True)
+            or not _valid_repo_symbolic_path(fingerprint_file, allow_empty=True)
             or not isinstance(command_sha256, str)
             or not _valid_command_sha256(command_sha256)
             or not isinstance(started_at, int)
@@ -165,6 +166,13 @@ def lock_path(repo_root: Path, daemon_name: str) -> Path:
     return repo_root / ".refactor-loop" / "locks" / f"{daemon_name}.singleton.lock"
 
 
+def symbolic_repo_path(repo_root: Path, path: Path) -> str:
+    root = repo_root.resolve()
+    resolved = path if path.is_absolute() else root / path
+    rel = resolved.resolve().relative_to(root)
+    return f"{_REPO_ROOT_SYMBOL}/{rel.as_posix()}"
+
+
 def _valid_daemon_name(value: str) -> bool:
     return bool(_DAEMON_NAME_PATTERN.fullmatch(value))
 
@@ -177,6 +185,19 @@ def _valid_metadata_string(value: str, *, allow_empty: bool = False) -> bool:
 
 def _valid_command_sha256(value: str) -> bool:
     return value == "" or bool(_SHA256_PATTERN.fullmatch(value))
+
+
+def _valid_repo_symbolic_path(value: str, *, allow_empty: bool = False) -> bool:
+    if value == "" and allow_empty:
+        return True
+    if not _valid_metadata_string(value):
+        return False
+    if value == _REPO_ROOT_SYMBOL:
+        return True
+    if not value.startswith(f"{_REPO_ROOT_SYMBOL}/"):
+        return False
+    rel = value[len(f"{_REPO_ROOT_SYMBOL}/") :]
+    return rel != "" and ".." not in PurePosixPath(rel).parts
 
 
 def read_metadata(path: Path) -> DaemonSingletonMetadata | None:
@@ -232,4 +253,5 @@ __all__ = [
     "lock_path",
     "probe",
     "read_metadata",
+    "symbolic_repo_path",
 ]
