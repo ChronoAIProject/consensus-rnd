@@ -58,7 +58,8 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "host_env_sha256",
             "never host.env plaintext",
             "pid alive",
-            "fingerprint current",
+            "current fingerprint",
+            "held valid singleton lock by the live managed child",
             "missing/malformed/mismatch fail-closed",
             "actor-loop progress lease",
             "current child has had one heartbeat freshness window",
@@ -230,7 +231,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "## anti-stop-restart-helper-49",
             "helper-private launch fingerprints",
             ".refactor-loop/locks/<daemon>.fingerprint.json",
-            "pid alive plus fresh heartbeat plus current fingerprint plus zero duplicate canonical live wrapper",
+            "pid alive plus fresh heartbeat plus current fingerprint plus held valid singleton lock by the live managed child plus zero duplicate canonical live wrapper",
             "repo_root plus daemon name plus restart wrapper shape",
             "same resolved static allowlist command",
             "read-only daemon-status projection",
@@ -249,6 +250,12 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.runtime_exceptions)
+
+    def test_fresh_skip_contract_rejects_stale_four_fact_phrase(self) -> None:
+        stale_phrase = "pid alive plus fresh heartbeat plus current fingerprint plus zero duplicate canonical live wrapper"
+        for source_name, source in (("SKILL.md", self.skill), ("runtime-exceptions.md", self.runtime_exceptions)):
+            with self.subTest(source=source_name):
+                self.assertNotIn(stale_phrase, source)
 
 
 if __name__ == "__main__":
