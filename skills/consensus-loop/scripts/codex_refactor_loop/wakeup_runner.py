@@ -72,6 +72,7 @@ from .worker_markers import read_worker_terminal_marker
 RUNNER_AUTHORITY = "wakeup-runner-396"
 APPLY_AUTHORITY = "wakeup-runner-396-only"
 INVALID_HARNESS_CLEANUP_LIMIT_PER_TICK = 50
+REBASE_RESOLVE_HELPER_EXIT_SUPPRESSION_THRESHOLD = 3
 FORBIDDEN_ACTION_FIELDS = {
     "argv",
     "args",
@@ -381,6 +382,13 @@ class WakeupRunner:
         action_id = str(action.get("action_id") or "")
         if not action_id:
             return self._blocked(action, "missing_action_id")
+        suppressed_exit_count = self._rebase_resolve_helper_exit_2_blocked_count(action)
+        if suppressed_exit_count >= REBASE_RESOLVE_HELPER_EXIT_SUPPRESSION_THRESHOLD:
+            self._append_pending_event(
+                "WAKEUP_RUNNER_HELPER_EXIT_SUPPRESSED:"
+                f"{action_id}:dispatch_pr_rebase_resolve:2:{suppressed_exit_count}"
+            )
+            return self._record(RunnerResult(action_id, "skipped", "suppressed:helper_exit:2"), action)
         if self._ledger_suppresses_retry(action):
             return self._record(RunnerResult(action_id, "skipped", "duplicate"), action)
         if action.get("kind") == "harness-spawn-intent-invalid":
@@ -2031,6 +2039,24 @@ class WakeupRunner:
             ):
                 return True
         return False
+
+    def _rebase_resolve_helper_exit_2_blocked_count(self, action: Mapping[str, Any]) -> int:
+        action_id = str(action.get("action_id") or "")
+        if not action_id or action.get("controller_action") != "dispatch_pr_rebase_resolve":
+            return 0
+        if not self.ledger_path.exists():
+            return 0
+        count = 0
+        for line in self.ledger_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("action_id") != action_id:
+                continue
+            if row.get("status") == "blocked" and row.get("reason") == "helper_exit:2":
+                count += 1
+        return count
 
     def _applied_row_current_effect_suppresses_retry(self, action: Mapping[str, Any]) -> bool:
         controller_action = str(action.get("controller_action") or "")
