@@ -48,6 +48,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     existing_issue_actions,
     has_dispatchable_action,
     harness_spawn_intent_line_digest,
+    highest_complete_required_review_round,
     load_github_items_with_status,
     marker_from_completed_log,
     meta_escalation_stuck_seconds,
@@ -1880,6 +1881,15 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "\n".join(log_lines) + "\n",
             encoding="utf-8",
         )
+
+    def actions_cleanup_for_review_pr(self, pr_number: int) -> None:
+        for directory, suffix in (
+            (self.repo / ".refactor-loop" / "runs", ".md"),
+            (self.repo / ".refactor-loop" / "prompts", ".md"),
+            (self.logs, ".log"),
+        ):
+            for path in directory.glob(f"review-pr{pr_number}-*-r*{suffix}"):
+                path.unlink(missing_ok=True)
 
     def write_issue_decomposition_artifacts(self, *, issue: int = 403, round_no: int = 6) -> tuple[str, str]:
         runs = self.repo / ".refactor-loop" / "runs"
@@ -4821,6 +4831,47 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         gate = next(item for item in plan["actions"] if item.get("controller_action") == "review_gate")
         self.assertEqual(gate["head_sha"], "a" * 40)
+        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+
+    def test_review_gate_completion_uses_latest_live_head_per_role_across_independent_rounds(self) -> None:
+        live = "a" * 40
+        self.write_review_evidence(role="tests", verdict="reject", round_number=14, head_sha=live)
+        self.write_review_evidence(role="quality", verdict="comment", round_number=14, head_sha=live)
+        self.write_review_evidence(role="architect", verdict="reject", round_number=15, head_sha=live)
+        self.write_review_evidence(role="architect", verdict="approve", round_number=16, head_sha=live)
+
+        completion = highest_complete_required_review_round(self.repo, 480, live)
+        self.assertIsNotNone(completion)
+        self.assertEqual(completion.round_number, 16)
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        gate = next(item for item in plan["actions"] if item.get("controller_action") == "review_gate")
+        self.assertEqual(gate["head_sha"], live)
+        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+
+    def test_review_gate_completion_requires_each_role_to_have_live_head_valid_evidence(self) -> None:
+        live = "a" * 40
+        stale = "b" * 40
+        self.write_review_evidence(role="architect", verdict="approve", round_number=4, head_sha=live)
+        self.write_review_evidence(role="tests", verdict="approve", round_number=4, head_sha=live)
+        self.write_review_evidence(role="quality", verdict="comment", round_number=4, head_sha=stale)
+
+        self.assertIsNone(highest_complete_required_review_round(self.repo, 480, live))
+        plan = self.run_plan(fixture="open_pr_480")
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["stale_review_roles"], ["quality"])
+
+        self.actions_cleanup_for_review_pr(480)
+        self.write_review_evidence(role="architect", verdict="approve", round_number=4, head_sha=live)
+        self.write_review_evidence(role="tests", verdict="approve", round_number=4, head_sha=live)
+        (self.logs / "review-pr480-quality-r5.log").write_text(
+            f"head_sha: {live}\nREVIEW_DONE:480:quality:comment\n",
+            encoding="utf-8",
+        )
+
+        self.assertIsNone(highest_complete_required_review_round(self.repo, 480, live))
+        plan = self.run_plan(fixture="open_pr_480")
         self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
 
     def test_review_redispatch_targets_only_missing_role_for_candidate_round(self) -> None:
