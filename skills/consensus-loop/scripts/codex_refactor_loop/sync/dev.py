@@ -901,7 +901,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.once:
         run_dev_sync_reconcile_tick(IntegrationSyncDaemon.from_config(config))
         return 0
-    with singleton_lock(config.lock_file):
+    lease = DaemonHeartbeatLease("dev_sync_daemon", config.main_repo, singleton=True)
+    with lease.daemon_lifetime():
         log(
             "dev_sync_daemon (Python) started: "
             f"interval={config.interval}s worktree={config.worktree} "
@@ -916,7 +917,7 @@ def main(argv: list[str] | None = None) -> int:
         ):
             log("FATAL: cannot ensure worktree, exiting")
             return 1
-        lease = DaemonHeartbeatLease("dev_sync_daemon", config.main_repo)
+        lease.beat()
         daemon = IntegrationSyncDaemon.from_config(config)
         while True:
             try:

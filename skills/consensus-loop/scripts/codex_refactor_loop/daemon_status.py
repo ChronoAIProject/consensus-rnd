@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .context import LoopContext, LoopContextError
+from .daemon_singleton import probe as probe_daemon_singleton, symbolic_repo_path
 from .restart import (
     DaemonProcessInventory,
     DaemonTarget,
@@ -40,6 +41,11 @@ class DaemonStatusProjection:
     canonical_child_pids: tuple[int, ...] = ()
     orphan_child_pids: tuple[int, ...] = ()
     bounded_lock_holder_pids: tuple[int, ...] = ()
+    singleton_lock_path: str = ""
+    singleton_lock_state: str = ""
+    singleton_lock_holder_pid: int | None = None
+    singleton_lock_metadata_valid: bool = False
+    singleton_lock_reason: str = ""
     process_inventory_status: str = "available"
     process_inventory_error: str = ""
     heartbeat_status: str = ""
@@ -62,6 +68,11 @@ class DaemonStatusProjection:
             "canonical_child_pids": list(self.canonical_child_pids),
             "orphan_child_pids": list(self.orphan_child_pids),
             "bounded_lock_holder_pids": list(self.bounded_lock_holder_pids),
+            "singleton_lock_path": self.singleton_lock_path,
+            "singleton_lock_state": self.singleton_lock_state,
+            "singleton_lock_holder_pid": self.singleton_lock_holder_pid,
+            "singleton_lock_metadata_valid": self.singleton_lock_metadata_valid,
+            "singleton_lock_reason": self.singleton_lock_reason,
             "process_inventory_status": self.process_inventory_status,
             "process_inventory_error": self.process_inventory_error,
             "active_controller": self.active_controller,
@@ -130,6 +141,7 @@ def _project_target(
         died_file=target.died_file,
         command=target.command,
         lock_files=daemon_lock_files(ctx, target.name),
+        singleton=probe_daemon_singleton(ctx.repo_root, target.name),
         is_alive=pid_alive,
     )
     duplicate_count = instance.duplicate_wrapper_count
@@ -143,6 +155,8 @@ def _project_target(
         and duplicate_count == 0
         and orphan_lock_holder_count == 0
         and instance.process_inventory_status == "available"
+        and instance.singleton.state == "held"
+        and instance.singleton.holder_pid in set(instance.live_managed_child_pids)
     )
     status = _daemon_status(
         active_status["active_controller"],
@@ -153,6 +167,7 @@ def _project_target(
         duplicate_count,
         orphan_lock_holder_count,
         instance.process_inventory_status,
+        instance.singleton.state,
     )
     stale_reason = _stale_reason(
         status=status,
@@ -164,6 +179,8 @@ def _project_target(
         orphan_lock_holder_count=orphan_lock_holder_count,
         process_inventory_status=instance.process_inventory_status,
         process_inventory_error=instance.process_inventory_error,
+        singleton_lock_state=instance.singleton.state,
+        singleton_lock_reason=instance.singleton.reason,
     )
     return DaemonStatusProjection(
         name=target.name,
@@ -177,6 +194,11 @@ def _project_target(
         canonical_child_pids=instance.canonical_child_pids,
         orphan_child_pids=instance.orphan_child_pids,
         bounded_lock_holder_pids=instance.bounded_lock_holder_pids,
+        singleton_lock_path=symbolic_repo_path(ctx.repo_root, instance.singleton.lock_path),
+        singleton_lock_state=instance.singleton.state,
+        singleton_lock_holder_pid=instance.singleton.holder_pid,
+        singleton_lock_metadata_valid=instance.singleton.metadata_valid,
+        singleton_lock_reason=instance.singleton.reason,
         process_inventory_status=instance.process_inventory_status,
         process_inventory_error=instance.process_inventory_error,
         active_controller=active_status["active_controller"],
@@ -196,12 +218,15 @@ def _daemon_status(
     duplicate_count: int,
     orphan_lock_holder_count: int,
     process_inventory_status: str,
+    singleton_lock_state: str,
 ) -> str:
     if active_controller.startswith("noop:not-owner"):
         return "not-owner"
     if running:
         return "running"
     if process_inventory_status != "available":
+        return "stale"
+    if singleton_lock_state == "held-malformed":
         return "stale"
     if orphan_lock_holder_count:
         return "stale"
@@ -225,6 +250,8 @@ def _stale_reason(
     orphan_lock_holder_count: int,
     process_inventory_status: str,
     process_inventory_error: str,
+    singleton_lock_state: str,
+    singleton_lock_reason: str,
 ) -> str:
     if status == "running":
         return ""
@@ -233,6 +260,8 @@ def _stale_reason(
     if process_inventory_status != "available":
         reason = process_inventory_error or "unknown"
         return f"process-inventory-unavailable:{reason}"
+    if singleton_lock_state == "held-malformed":
+        return singleton_lock_reason
     if orphan_lock_holder_count:
         return f"orphan-lock-holders:{orphan_lock_holder_count}"
     if pid is None:
