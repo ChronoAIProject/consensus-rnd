@@ -1011,10 +1011,11 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "active-controller owner",
             "`wakeup-plan` evidence-bound closed action projection",
             "clean `EXIT=0` source marker",
-            "review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`",
+            "review truth table `reject==0 && approve>=1 && all required reviewers present && all required GitHub-visible final-sentinel reviewer comment heads equal live PR head`",
             "target-required PR merge-readiness checks",
-            "missing/stale per-reviewer head SHA",
+            "missing/stale per-reviewer GitHub comment head SHA",
             "`wakeup-plan` action `head_sha` is not reviewer-head authority",
+            "local `.refactor-loop/runs/review-pr<N>-<role>-r<R>.md` and `.refactor-loop/logs/review-pr<N>-<role>-r<R>.log` files are diagnostics",
             "raw PR-head check buckets or advisory check buckets are display-only diagnostics, not merge/fix lifecycle authority",
             "remote-ci worker only for target-required failed checks with `target_required_checks_red`",
             "merge PR under review truth table plus target-required readiness",
@@ -1067,8 +1068,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertNotRegex(skill_entry, r"\breserve\b")
 
         self.assertIn("action `head_sha` cannot substitute for reviewer-head authority", entry)
-        self.assertIn("all required reviewer heads equal live PR head", entry)
-        self.assertIn("all required reviewer heads equal live PR head", self.skill)
+        self.assertIn("all required GitHub-visible final-sentinel reviewer comment heads equal live PR head", entry)
+        self.assertIn("all required GitHub-visible final-sentinel reviewer comment heads equal live PR head", self.skill)
         for required in (
             "effect-adapter boundary",
             "owner-local admission contract",

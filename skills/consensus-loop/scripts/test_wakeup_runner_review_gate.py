@@ -64,11 +64,31 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.pr_worktree.mkdir(parents=True, exist_ok=True)
         self.actions = FakeActions()
         self.supervisor = FakeSupervisor()
+        self.github_comments: list[dict[str, object]] = []
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def write_review(self, role: str, verdict: str, *, head_sha: str = "a" * 40, round_number: int = 1, exit_zero: bool = True) -> None:
+    def github_review_comment(self, role: str, verdict: str, *, head_sha: str = "a" * 40, round_number: int = 1) -> dict[str, object]:
+        return {
+            "body": (
+                f"review_round: {round_number}\n"
+                f"head_sha: {head_sha}\n"
+                f"REVIEW_DONE:12:{role}:{verdict}\n\n"
+                "⟦AI:AUTO-LOOP⟧"
+            )
+        }
+
+    def write_review(
+        self,
+        role: str,
+        verdict: str,
+        *,
+        head_sha: str = "a" * 40,
+        round_number: int = 1,
+        exit_zero: bool = True,
+        post_comment: bool = True,
+    ) -> None:
         (self.repo / ".refactor-loop/runs" / f"review-pr12-{role}-r{round_number}.md").write_text(
             f"---\nverdict: {verdict}\n---\nhead_sha: {head_sha}\nREVIEW_DONE:12:{role}:{verdict}\n",
             encoding="utf-8",
@@ -77,6 +97,15 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
             f"head_sha: {head_sha}\nREVIEW_DONE:12:{role}:{verdict}\n" + ("EXIT=0\n" if exit_zero else "EXIT=1\n"),
             encoding="utf-8",
         )
+        if post_comment:
+            marker_prefix = f"REVIEW_DONE:12:{role}:"
+            round_prefix = f"review_round: {round_number}\n"
+            self.github_comments = [
+                comment
+                for comment in self.github_comments
+                if marker_prefix not in str(comment.get("body") or "") or not str(comment.get("body") or "").startswith(round_prefix)
+            ]
+            self.github_comments.append(self.github_review_comment(role, verdict, head_sha=head_sha, round_number=round_number))
 
     def action(self, **overrides) -> dict:
         log = self.repo / ".refactor-loop/logs/review-pr12-architect-r1.log"
@@ -126,6 +155,8 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
                     json.dumps({"mergeable": mergeable, "isDraft": is_draft, "changedFiles": changed_files}),
                     "",
                 )
+            if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/issues/12/comments?per_page=100":
+                return subprocess.CompletedProcess(command, 0, json.dumps([self.github_comments]), "")
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/12":
                 return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": live_head}}), "")
             if command[:3] == ["gh", "pr", "view"] and "baseRefName,headRefOid,mergeStateStatus" in command:
@@ -331,7 +362,17 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
 
         self.assertEqual(result.status, "blocked")
         self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:missing_reviewers")
-        runner = WakeupRunner(self.ctx, actions=self.actions, supervisor=self.supervisor, command_runner=lambda command: subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", ""))
+        runner = WakeupRunner(
+            self.ctx,
+            actions=self.actions,
+            supervisor=self.supervisor,
+            command_runner=lambda command: subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps([self.github_comments]) if command[:2] == ["gh", "api"] else "a" * 40 + "\n",
+                "",
+            ),
+        )
         gate = runner._review_gate(12)
         self.assertEqual({"architect": "a" * 40, "tests": "a" * 40}, gate["heads_by_role"])
         self.assertNotIn("quality", gate["heads_by_role"])
@@ -350,6 +391,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
                 f"REVIEW_DONE:12:{role}:{verdict}\nEXIT=0\n",
                 encoding="utf-8",
             )
+            self.github_comments.append(self.github_review_comment(role, verdict))
 
         result = self.run_action()
 
@@ -373,6 +415,13 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         for role, verdict in (("tests", "approve"), ("quality", "comment")):
             with (self.repo / ".refactor-loop/runs" / f"review-pr12-{role}-r1.md").open("a", encoding="utf-8") as handle:
                 handle.write(f"REVIEW_DONE:12:{role}:{verdict}\n")
+        self.github_comments.extend(
+            [
+                self.github_review_comment("architect", "approve"),
+                self.github_review_comment("tests", "approve"),
+                self.github_review_comment("quality", "comment"),
+            ]
+        )
 
         result = self.run_action()
 
@@ -393,9 +442,8 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
 
         result = self.run_action()
 
-        self.assertEqual(result.status, "blocked")
-        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:invalid_review_marker:quality")
-        self.assertEqual(self.actions.merged, [])
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.merged, ["12"])
 
     def test_target_required_ci_pending_or_failed_fails_closed_without_merge(self) -> None:
         for status, conclusion, reason in (
@@ -404,6 +452,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         ):
             with self.subTest(reason=reason):
                 self.actions.merged.clear()
+                self.github_comments.clear()
                 self.write_review("architect", "approve")
                 self.write_review("tests", "approve")
                 self.write_review("quality", "comment")
@@ -432,6 +481,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         ):
             with self.subTest(status=status, conclusion=conclusion):
                 self.actions.merged.clear()
+                self.github_comments.clear()
                 self.write_review("architect", "approve")
                 self.write_review("tests", "approve")
                 self.write_review("quality", "comment")
@@ -468,11 +518,12 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
             "head_sha: " + "a" * 40 + "\nREVIEW_DONE:12:quality:banana\nEXIT=0\n",
             encoding="utf-8",
         )
+        self.github_comments.append({"body": f"review_round: 1\nhead_sha: {'a' * 40}\nREVIEW_DONE:12:quality:banana\n\n⟦AI:AUTO-LOOP⟧"})
 
         result = self.run_action()
 
         self.assertEqual(result.status, "blocked")
-        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:invalid_verdict:quality")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:invalid_review_marker:quality")
         self.assertEqual(self.actions.merged, [])
 
     def test_reviewer_artifact_without_clean_exit_waits_without_merge(self) -> None:
@@ -482,9 +533,8 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
 
         result = self.run_action()
 
-        self.assertEqual(result.status, "blocked")
-        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:terminal_failed:quality")
-        self.assertEqual(self.actions.merged, [])
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.merged, ["12"])
 
     def test_pending_reviewer_log_waits_then_valid_completion_merges_original_round(self) -> None:
         self.write_review("architect", "approve")
@@ -496,8 +546,9 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
 
         pending = self.run_action()
         self.assertEqual(pending.status, "blocked")
-        self.assertEqual(pending.reason, "WAIT_OR_REDISPATCH:pending_reviewer_evidence:pending_exit_zero:quality")
+        self.assertEqual(pending.reason, "WAIT_OR_REDISPATCH:missing_reviewers")
         self.assertEqual(self.actions.merged, [])
+        self.github_comments.append(self.github_review_comment("quality", "comment"))
 
         (self.repo / ".refactor-loop/runs" / "review-pr12-quality-r1.md").write_text(
             f"---\nverdict: comment\n---\nhead_sha: {'a' * 40}\nREVIEW_DONE:12:quality:comment\n",

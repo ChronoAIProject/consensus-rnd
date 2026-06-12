@@ -2000,11 +2000,12 @@ class WakeupRunnerContractTests(unittest.TestCase):
         wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")
         combined = "\n".join((review_gate, wakeup_runner))
         for needle in (
-            "missing/stale per-reviewer head SHA",
-            "every required reviewer head SHA equals the live PR head",
-            "Review artifact verdict authority does not bypass current-head binding; merge readiness requires every required reviewer artifact to bind to the live PR head.",
-            "review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`",
+            "missing/stale per-reviewer GitHub comment head SHA",
+            "all required GitHub-visible final-sentinel reviewer comment heads equal live PR head",
+            "Local review artifact verdicts do not bypass current-head binding; merge readiness requires every required reviewer comment to bind to the live PR head.",
+            "review truth table `reject==0 && approve>=1 && all required reviewers present && all required GitHub-visible final-sentinel reviewer comment heads equal live PR head`",
             "`wakeup-plan` action `head_sha` is not reviewer-head authority",
+            "local `.refactor-loop/runs/review-pr<N>-<role>-r<R>.md` and `.refactor-loop/logs/review-pr<N>-<role>-r<R>.log` files are diagnostics",
             "target-required PR merge-readiness checks",
             "raw PR-head check buckets or advisory check buckets are display-only diagnostics, not merge/fix lifecycle authority",
             "target-required CI pending/fail/missing/unavailable",

@@ -78,6 +78,7 @@ class ReviewGateEndToEndTests(unittest.TestCase):
         self.pr_worktree = self.repo / ".worktrees" / "pr480"
         self.pr_worktree.mkdir(parents=True, exist_ok=True)
         self.actions = FakeActions(self.repo)
+        self.github_comments: list[dict[str, object]] = []
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -96,6 +97,16 @@ class ReviewGateEndToEndTests(unittest.TestCase):
             (self.repo / ".refactor-loop/logs" / f"review-pr480-{role}-r1.log").write_text(
                 f"REVIEW_DONE:480:{role}:{verdict}\nEXIT=0\n",
                 encoding="utf-8",
+            )
+            self.github_comments.append(
+                {
+                    "body": (
+                        f"review_round: 1\n"
+                        f"head_sha: {HEAD_SHA}\n"
+                        f"REVIEW_DONE:480:{role}:{verdict}\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    )
+                }
             )
 
     def project_review_gate_action(self) -> dict:
@@ -138,6 +149,8 @@ class ReviewGateEndToEndTests(unittest.TestCase):
                 )
             if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft,changedFiles" in command:
                 return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": is_draft, "changedFiles": 1}), "")
+            if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/issues/480/comments?per_page=100":
+                return subprocess.CompletedProcess(command, 0, json.dumps([self.github_comments]), "")
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/480":
                 pull_attempts += 1
                 if transient_pull_failure and pull_attempts == 2:
@@ -291,6 +304,8 @@ class ReviewGateEndToEndTests(unittest.TestCase):
             )
         if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft,changedFiles" in command:
             return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": is_draft, "changedFiles": 1}), "")
+        if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/issues/480/comments?per_page=100":
+            return subprocess.CompletedProcess(command, 0, json.dumps([self.github_comments]), "")
         if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/480":
             return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": HEAD_SHA}}), "")
         if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/branches/canonical-integration/protection/required_status_checks":
@@ -335,6 +350,8 @@ class ReviewGateEndToEndTests(unittest.TestCase):
             if command == ["gh", "api", f"repos/owner/repo/commits/{HEAD_SHA}/check-runs", "--paginate", "--slurp"]:
                 payload = {"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+            if command == ["gh", "api", "repos/owner/repo/issues/480/comments?per_page=100", "--paginate", "--slurp"]:
+                return subprocess.CompletedProcess(command, 0, json.dumps([self.github_comments]), "")
             if command == ["gh", "pr", "view", "480", "--repo", "owner/repo", "--json", "mergeable,isDraft,changedFiles"]:
                 return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False, "changedFiles": 1}), "")
             return subprocess.CompletedProcess(command, 1, "", f"unexpected command: {command!r}")
@@ -357,6 +374,7 @@ class ReviewGateEndToEndTests(unittest.TestCase):
         self.assertEqual(self.actions.rendered_fixes, [])
         self.assertEqual(self.actions.merged, ["480"])
         self.assertIn(["gh", "api", "repos/owner/repo/pulls/480"], calls)
+        self.assertIn(["gh", "api", "repos/owner/repo/issues/480/comments?per_page=100", "--paginate", "--slurp"], calls)
         self.assertIn(["gh", "api", "repos/owner/repo/branches/canonical-integration/protection/required_status_checks"], calls)
         self.assertIn(["gh", "api", f"repos/owner/repo/commits/{HEAD_SHA}/check-runs", "--paginate", "--slurp"], calls)
         self.assertIn(["gh", "pr", "view", "480", "--repo", "owner/repo", "--json", "mergeable,isDraft,changedFiles"], calls)

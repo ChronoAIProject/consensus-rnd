@@ -92,6 +92,8 @@ REVIEW_DONE_RE = re.compile(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*
 REVIEW_ARTIFACT_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.md$")
 REVIEW_LOG_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.log$")
 REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
+REVIEW_ROUND_RE = re.compile(r"(?im)^(?:review[-_ ]?round|round)\s*[:=]\s*([1-9][0-9]*)\s*$")
+AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
 CONSENSUS_JUDGE_ARTIFACT_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.md$")
 TARGET_TEXT_PATTERNS = (
     (re.compile(r"(?i)\bPR\s*#([1-9][0-9]*)\b"), "PR"),
@@ -1839,6 +1841,48 @@ class WakeupRunner:
         return ReviewGateCandidate(selected, invalid, pending, terminal_failed_roles)
 
     def _review_evidences(self, pr_number: int) -> list[ReviewEvidence]:
+        github_evidences = self._github_review_evidences(pr_number)
+        if github_evidences is not None:
+            return github_evidences
+        return [
+            ReviewEvidence(
+                role,
+                1,
+                "",
+                "",
+                "github:issues/comments",
+                False,
+                f"github_review_comments_unavailable:{role}",
+            )
+            for role in REQUIRED_REVIEW_ROLES
+        ]
+
+    def _github_review_evidences(self, pr_number: int) -> list[ReviewEvidence] | None:
+        if not self.ctx.gh_repo_slug:
+            return None
+        result = self.command_runner(
+            ["gh", "api", f"repos/{self.ctx.gh_repo_slug}/issues/{pr_number}/comments?per_page=100", "--paginate", "--slurp"]
+        )
+        if result.returncode != 0:
+            return None
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError:
+            return _invalid_github_review_evidences("github_review_comments_invalid_json")
+        comments = _github_comment_items(payload)
+        if comments is None:
+            return _invalid_github_review_evidences("github_review_comments_invalid_json")
+        evidences: list[ReviewEvidence] = []
+        for index, comment in enumerate(comments):
+            if not isinstance(comment, Mapping):
+                continue
+            body = str(comment.get("body") or "")
+            evidence = _review_evidence_from_github_comment(body, pr_number, source=f"github:issues/comments[{index}]")
+            if evidence is not None:
+                evidences.append(evidence)
+        return evidences
+
+    def _diagnostic_local_review_evidences(self, pr_number: int) -> list[ReviewEvidence]:
         evidences: list[ReviewEvidence] = []
         artifact_keys: set[tuple[str, int]] = set()
         for path in sorted(self.ctx.paths.runs.glob(f"review-pr{pr_number}-*-r*.md")):
@@ -2336,6 +2380,82 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
 def _extract_review_head_sha(text: str) -> str:
     match = REVIEW_HEAD_RE.search(text)
     return match.group(1) if match else ""
+
+
+def _extract_review_round(text: str) -> int | None:
+    match = REVIEW_ROUND_RE.search(text)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _github_comment_items(payload: object) -> list[object] | None:
+    if isinstance(payload, list):
+        if all(isinstance(page, list) for page in payload):
+            return [item for page in payload for item in page]
+        return payload
+    if isinstance(payload, Mapping):
+        comments = payload.get("comments")
+        if isinstance(comments, list):
+            return comments
+    return None
+
+
+def _invalid_github_review_evidences(reason: str) -> list[ReviewEvidence]:
+    return [
+        ReviewEvidence(
+            role,
+            1,
+            "",
+            "",
+            "github:issues/comments",
+            False,
+            f"{reason}:{role}",
+        )
+        for role in REQUIRED_REVIEW_ROLES
+    ]
+
+
+def _has_final_ai_sentinel(text: str) -> bool:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return bool(lines) and lines[-1] == AI_SENTINEL
+
+
+def _review_evidence_from_github_comment(body: str, pr_number: int, *, source: str) -> ReviewEvidence | None:
+    if "REVIEW_DONE:" not in body:
+        return None
+    marker_matches = [REVIEW_DONE_RE.fullmatch(line.strip()) for line in body.splitlines()]
+    marker_matches = [match for match in marker_matches if match is not None]
+    if not marker_matches:
+        role = _loose_review_marker_role(body) or "github"
+        return ReviewEvidence(role, 1, "", "", source, False, f"invalid_review_marker:{role}")
+    marker = marker_matches[0]
+    role = marker.group(2)
+    verdict = marker.group(3)
+    if len(marker_matches) != 1:
+        return ReviewEvidence(role, 1, "", "", source, False, f"invalid_review_marker:{role}")
+    if marker.group(1) != str(pr_number):
+        return ReviewEvidence(role, 1, "", "", source, False, f"invalid_review_marker:{role}")
+    if not _has_final_ai_sentinel(body):
+        return ReviewEvidence(role, 1, verdict, "", source, False, f"missing_final_ai_sentinel:{role}")
+    round_number = _extract_review_round(body)
+    if round_number is None:
+        return ReviewEvidence(role, 1, verdict, "", source, False, f"missing_review_round:{role}")
+    head_sha = _extract_review_head_sha(body)
+    if not head_sha:
+        return ReviewEvidence(role, round_number, verdict, "", source, False, f"missing_reviewed_head_sha:{role}")
+    return ReviewEvidence(role, round_number, verdict, head_sha, source)
+
+
+def _loose_review_marker_role(body: str) -> str:
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("REVIEW_DONE:"):
+            continue
+        parts = stripped.split(":")
+        if len(parts) >= 3:
+            return parts[2]
+    return ""
 
 
 def _single_linked_issue_from_body(body: str) -> int | None:
