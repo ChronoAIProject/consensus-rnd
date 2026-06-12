@@ -46,7 +46,7 @@ from codex_refactor_loop.issue_decomposition import (
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.phase9.progress import issue_has_terminal_consensus_judge
 from codex_refactor_loop.pr_checks import PrMergeReadinessProjection
-from codex_refactor_loop.review_gate_selection import select_latest_live_head_review_evidence
+from codex_refactor_loop.review_gate_selection import parse_github_review_evidence, select_latest_live_head_review_evidence
 from codex_refactor_loop.release.candidate_liveness import classify_release_candidate_liveness
 from codex_refactor_loop.release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from codex_refactor_loop.release.gate import decide_release_artifact
@@ -273,6 +273,9 @@ class ReviewCompletionEvidence:
     pending: bool = False
     terminal_failed: bool = False
     reason: str = ""
+    created_at: str = ""
+    source_index: int = 0
+    comment_id: int | None = None
 
 
 RELEASE_ROLLUP_LIVE_PR_LIST_TIMEOUT_SECONDS = 15
@@ -2323,6 +2326,74 @@ def _reviewed_head_sha_from_file(path: Path) -> str:
     return match.group(1) if match else ""
 
 
+def _github_comment_items(payload: object) -> list[object] | None:
+    if isinstance(payload, list):
+        if all(isinstance(page, list) for page in payload):
+            return [item for page in payload for item in page]
+        return payload
+    if isinstance(payload, Mapping):
+        comments = payload.get("comments")
+        if isinstance(comments, list):
+            return comments
+    return None
+
+
+def _github_comment_id(comment: Mapping[str, Any]) -> int | None:
+    raw_comment_id = comment.get("id")
+    if isinstance(raw_comment_id, int) and raw_comment_id > 0:
+        return raw_comment_id
+    if isinstance(raw_comment_id, str) and raw_comment_id.isdigit():
+        comment_id = int(raw_comment_id)
+        return comment_id if comment_id > 0 else None
+    return None
+
+
+def _github_review_completion_evidences(repo_root: Path, pr_number: int) -> list[ReviewCompletionEvidence]:
+    slug = github_repo_slug()
+    if not slug:
+        return []
+    try:
+        payload = run_json(
+            ["gh", "api", f"repos/{slug}/issues/{pr_number}/comments?per_page=100", "--paginate", "--slurp"],
+            cwd=repo_root,
+        )
+    except Exception:
+        return []
+    comments = _github_comment_items(payload)
+    if comments is None:
+        return []
+    evidences: list[ReviewCompletionEvidence] = []
+    for index, comment in enumerate(comments):
+        if not isinstance(comment, Mapping):
+            continue
+        body = str(comment.get("body") or "")
+        evidence = parse_github_review_evidence(
+            body,
+            pr_number,
+            source=f"github:issues/comments[{index}]",
+            created_at=str(comment.get("created_at") or comment.get("createdAt") or ""),
+            source_index=index + 1,
+            comment_id=_github_comment_id(comment),
+        )
+        if evidence is None:
+            continue
+        evidences.append(
+            ReviewCompletionEvidence(
+                role=evidence.role,
+                round_number=evidence.round_number,
+                head_sha=evidence.head_sha,
+                valid=evidence.valid,
+                pending=evidence.pending,
+                terminal_failed=evidence.terminal_failed,
+                reason=evidence.reason,
+                created_at=evidence.created_at,
+                source_index=evidence.source_index,
+                comment_id=evidence.comment_id,
+            )
+        )
+    return evidences
+
+
 def _review_done_action_head_sha(repo_root: Path, log_path: Path, marker: str, gh_items: list[GhItem] | None) -> str:
     match = re.match(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*):(approve|comment|reject)(?::real)?$", marker)
     if match is None:
@@ -2462,6 +2533,7 @@ def highest_complete_required_review_round(repo_root: Path, pr_number: int, head
     if not head_sha:
         return None
     evidences: list[ReviewCompletionEvidence] = []
+    evidences.extend(_github_review_completion_evidences(repo_root, pr_number))
     artifact_keys: set[tuple[str, int]] = set()
     runs_dir = repo_root / ".refactor-loop" / "runs"
     logs_dir = repo_root / ".refactor-loop" / "logs"
