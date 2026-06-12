@@ -127,7 +127,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             ast.literal_eval(assignments["METADATA_FIELD_ORDER"]),
         )
         self.assertEqual(
-            frozenset({"missing", "free", "held", "held-malformed", "probe-error"}),
+            ("missing", "free", "held", "held-malformed", "probe-error"),
             ast.literal_eval(assignments["METADATA_STATUS_STATES"]),
         )
         self.assertIn("def canonical_json_line", singleton_source)
