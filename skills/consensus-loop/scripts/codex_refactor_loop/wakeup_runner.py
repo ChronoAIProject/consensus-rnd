@@ -48,7 +48,7 @@ from .issue_decomposition import (
 )
 from .pr_checks import PrMergeReadinessProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
-from .review_gate_selection import select_latest_live_head_review_evidence
+from .review_gate_selection import extract_review_head_sha, parse_github_review_evidence, select_latest_live_head_review_evidence
 from .release.gate import AutoReleaseGate
 from .release.commits import write_release_commits
 from .release.candidate_liveness import classify_release_candidate_liveness
@@ -90,9 +90,6 @@ FORBIDDEN_ACTION_FIELDS = {
 }
 REQUIRED_REVIEW_ROLES = ("architect", "tests", "quality")
 REVIEW_DONE_RE = re.compile(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*):(approve|comment|reject)$")
-REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
-REVIEW_ROUND_RE = re.compile(r"(?im)^(?:review[-_ ]?round|round)\s*[:=]\s*([1-9][0-9]*)\s*$")
-AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
 CONSENSUS_JUDGE_ARTIFACT_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.md$")
 TARGET_TEXT_PATTERNS = (
     (re.compile(r"(?i)\bPR\s*#([1-9][0-9]*)\b"), "PR"),
@@ -201,6 +198,9 @@ class ReviewEvidence:
     reason: str = ""
     terminal_failed: bool = False
     pending: bool = False
+    created_at: str = ""
+    source_index: int = 0
+    comment_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1803,7 +1803,16 @@ class WakeupRunner:
             if not isinstance(comment, Mapping):
                 continue
             body = str(comment.get("body") or "")
-            evidence = _review_evidence_from_github_comment(body, pr_number, source=f"github:issues/comments[{index}]")
+            created_at = str(comment.get("created_at") or comment.get("createdAt") or "")
+            comment_id = _github_comment_id(comment)
+            evidence = _review_evidence_from_github_comment(
+                body,
+                pr_number,
+                source=f"github:issues/comments[{index}]",
+                created_at=created_at,
+                source_index=index + 1,
+                comment_id=comment_id,
+            )
             if evidence is not None:
                 evidences.append(evidence)
         return evidences
@@ -2239,15 +2248,13 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
 
 
 def _extract_review_head_sha(text: str) -> str:
-    match = REVIEW_HEAD_RE.search(text)
-    return match.group(1) if match else ""
+    return extract_review_head_sha(text)
 
 
 def _extract_review_round(text: str) -> int | None:
-    match = REVIEW_ROUND_RE.search(text)
-    if match is None:
-        return None
-    return int(match.group(1))
+    from .review_gate_selection import extract_review_round
+
+    return extract_review_round(text)
 
 
 def _github_comment_items(payload: object) -> list[object] | None:
@@ -2259,6 +2266,16 @@ def _github_comment_items(payload: object) -> list[object] | None:
         comments = payload.get("comments")
         if isinstance(comments, list):
             return comments
+    return None
+
+
+def _github_comment_id(comment: Mapping[str, Any]) -> int | None:
+    raw_comment_id = comment.get("id")
+    if isinstance(raw_comment_id, int) and raw_comment_id > 0:
+        return raw_comment_id
+    if isinstance(raw_comment_id, str) and raw_comment_id.isdigit():
+        comment_id = int(raw_comment_id)
+        return comment_id if comment_id > 0 else None
     return None
 
 
@@ -2277,46 +2294,39 @@ def _invalid_github_review_evidences(reason: str) -> list[ReviewEvidence]:
     ]
 
 
-def _has_final_ai_sentinel(text: str) -> bool:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return bool(lines) and lines[-1] == AI_SENTINEL
-
-
-def _review_evidence_from_github_comment(body: str, pr_number: int, *, source: str) -> ReviewEvidence | None:
-    if "REVIEW_DONE:" not in body:
+def _review_evidence_from_github_comment(
+    body: str,
+    pr_number: int,
+    *,
+    source: str,
+    created_at: str = "",
+    source_index: int = 0,
+    comment_id: int | None = None,
+) -> ReviewEvidence | None:
+    parsed = parse_github_review_evidence(
+        body,
+        pr_number,
+        source=source,
+        created_at=created_at,
+        source_index=source_index,
+        comment_id=comment_id,
+    )
+    if parsed is None:
         return None
-    marker_matches = [REVIEW_DONE_RE.fullmatch(line.strip()) for line in body.splitlines()]
-    marker_matches = [match for match in marker_matches if match is not None]
-    if not marker_matches:
-        role = _loose_review_marker_role(body) or "github"
-        return ReviewEvidence(role, 1, "", "", source, False, f"invalid_review_marker:{role}")
-    marker = marker_matches[0]
-    role = marker.group(2)
-    verdict = marker.group(3)
-    if len(marker_matches) != 1:
-        return ReviewEvidence(role, 1, "", "", source, False, f"invalid_review_marker:{role}")
-    if marker.group(1) != str(pr_number):
-        return ReviewEvidence(role, 1, "", "", source, False, f"invalid_review_marker:{role}")
-    if not _has_final_ai_sentinel(body):
-        return ReviewEvidence(role, 1, verdict, "", source, False, f"missing_final_ai_sentinel:{role}")
-    round_number = _extract_review_round(body)
-    if round_number is None:
-        return ReviewEvidence(role, 1, verdict, "", source, False, f"missing_review_round:{role}")
-    head_sha = _extract_review_head_sha(body)
-    if not head_sha:
-        return ReviewEvidence(role, round_number, verdict, "", source, False, f"missing_reviewed_head_sha:{role}")
-    return ReviewEvidence(role, round_number, verdict, head_sha, source)
-
-
-def _loose_review_marker_role(body: str) -> str:
-    for line in body.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("REVIEW_DONE:"):
-            continue
-        parts = stripped.split(":")
-        if len(parts) >= 3:
-            return parts[2]
-    return ""
+    return ReviewEvidence(
+        parsed.role,
+        parsed.round_number,
+        parsed.verdict,
+        parsed.head_sha,
+        parsed.source,
+        parsed.valid,
+        parsed.reason,
+        parsed.terminal_failed,
+        parsed.pending,
+        parsed.created_at,
+        parsed.source_index,
+        parsed.comment_id,
+    )
 
 
 def _single_linked_issue_from_body(body: str) -> int | None:
