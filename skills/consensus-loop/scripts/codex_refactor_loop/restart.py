@@ -17,6 +17,7 @@ from typing import Any, Callable, Protocol, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from .context import LoopContext, LoopContextError
+from .daemon_singleton import DaemonSingletonProjection, lock_path as daemon_singleton_lock_path, probe as probe_daemon_singleton
 from .gh_accounting import accounting_env
 from .runtime_retention import retain_runtime, runtime_retention_enabled
 from .update_check import maybe_run_update_check
@@ -86,6 +87,7 @@ class DaemonTarget:
     heartbeat_file: Path
     fingerprint_file: Path
     died_file: Path
+    singleton_lock_file: Path
 
 
 @dataclass(frozen=True)
@@ -203,6 +205,7 @@ class DaemonInstanceProjection:
     canonical_child_pids: tuple[int, ...]
     orphan_child_pids: tuple[int, ...]
     bounded_lock_holder_pids: tuple[int, ...]
+    singleton: DaemonSingletonProjection
     process_inventory_status: str = "available"
     process_inventory_error: str = ""
 
@@ -225,11 +228,11 @@ class DaemonInstanceProjection:
         return self.bounded_lock_holder_pids
 
     @property
-    def stale_lockless_orphan_child_pids(self) -> tuple[int, ...]:
-        excluded = set(self.bounded_lock_holder_pids)
-        if self.pid_file_pid is not None:
-            excluded.add(self.pid_file_pid)
-        return tuple(sorted(pid for pid in self.orphan_child_pids if pid not in excluded))
+    def singleton_holder_pids(self) -> tuple[int, ...]:
+        holder = self.singleton.holder_pid
+        if holder is None or holder <= 0:
+            return ()
+        return (holder,)
 
     @property
     def repair_pids(self) -> tuple[int, ...]:
@@ -296,9 +299,11 @@ class DaemonProcessInventory:
         died_file: Path,
         command: Sequence[str],
         lock_files: Sequence[Path] = (),
+        singleton: DaemonSingletonProjection | None = None,
         is_alive=None,
     ) -> DaemonInstanceProjection:
         alive = is_alive or pid_alive
+        singleton_projection = singleton or probe_daemon_singleton(repo_root, name)
         live_wrappers = self.live_restart_wrappers(
             name=name,
             repo_root=repo_root,
@@ -328,6 +333,7 @@ class DaemonProcessInventory:
             canonical_child_pids=canonical_child_pids,
             orphan_child_pids=orphan_child_pids,
             bounded_lock_holder_pids=lock_holder_pids,
+            singleton=singleton_projection,
             process_inventory_status=self.status,
             process_inventory_error=self.error,
         )
@@ -470,15 +476,17 @@ def daemon_target(ctx: LoopContext, name: str, command_template: Sequence[str]) 
         heartbeat_file=ctx.paths.heartbeats / f"{name}.ts",
         fingerprint_file=ctx.paths.refactor_loop / "locks" / f"{name}.fingerprint.json",
         died_file=ctx.paths.logs / f"{name}.died",
+        singleton_lock_file=daemon_singleton_lock_path(ctx.repo_root, name),
     )
 
 
 def daemon_lock_files(ctx: LoopContext, name: str) -> tuple[Path, ...]:
+    generic = (daemon_singleton_lock_path(ctx.repo_root, name),)
     relative_paths = {
         "dev_sync_daemon": (Path(".refactor-loop/dev-sync-daemon.lock"),),
         "phase9_router_daemon": (Path(".refactor-loop/phase9-router.lock"),),
     }.get(name, ())
-    return tuple(ctx.repo_root / relative_path for relative_path in relative_paths)
+    return generic + tuple(ctx.repo_root / relative_path for relative_path in relative_paths)
 
 
 def daemon_targets(ctx: LoopContext, target: str = "all") -> tuple[DaemonTarget, ...]:
@@ -555,6 +563,9 @@ class RestartDaemonRuntime(Protocol):
     def collect_inventory(self) -> DaemonProcessInventory:
         ...
 
+    def probe_singleton(self, target: DaemonTarget) -> DaemonSingletonProjection:
+        ...
+
     def terminate_pid(self, pid: int, grace: int) -> None:
         ...
 
@@ -571,6 +582,9 @@ class RestartDaemonRuntime(Protocol):
 
 
 class RealRestartDaemonRuntime:
+    def __init__(self, repo_root: Path) -> None:
+        self.repo_root = repo_root
+
     def now(self) -> int:
         return int(time.time())
 
@@ -585,6 +599,9 @@ class RealRestartDaemonRuntime:
 
     def collect_inventory(self) -> DaemonProcessInventory:
         return DaemonProcessInventory.collect()
+
+    def probe_singleton(self, target: DaemonTarget) -> DaemonSingletonProjection:
+        return probe_daemon_singleton(self.repo_root, target.name)
 
     def terminate_pid(self, pid: int, grace: int) -> None:
         _terminate_pid(pid, grace)
@@ -632,7 +649,7 @@ class RestartDaemons:
     ) -> None:
         self.ctx = ctx
         self.config = config or RestartConfig()
-        self.runtime = runtime or RealRestartDaemonRuntime()
+        self.runtime = runtime or RealRestartDaemonRuntime(ctx.repo_root)
         self.lock_dir = ctx.paths.refactor_loop / "locks" / "restart-daemons.lock"
         self._wrappers: list[Any] = []
         self._package_digest_cache: tuple[str, int] | None = None
@@ -674,9 +691,10 @@ class RestartDaemons:
                 died_file=target.died_file,
                 command=target.command,
                 lock_files=daemon_lock_files(self.ctx, name),
+                singleton=self.runtime.probe_singleton(target),
                 is_alive=self.runtime.pid_alive,
             )
-            pids = tuple(sorted(set(instance.repair_pids).union(instance.stale_lockless_orphan_child_pids)))
+            pids = tuple(sorted(set(instance.singleton_holder_pids).union(instance.repair_pids)))
             self._terminate_pids(pids)
             target.pid_file.unlink(missing_ok=True)
             if pids:
@@ -699,11 +717,14 @@ class RestartDaemons:
             died_file=died_file,
             command=target.command,
             lock_files=daemon_lock_files(self.ctx, name),
+            singleton=self.runtime.probe_singleton(target),
             is_alive=self.runtime.pid_alive,
         )
-        self._terminate_pids(instance.stale_lockless_orphan_child_pids)
         if instance.has_singleton_wrapper and self._singleton_check_fresh(target, current_fingerprint, instance):
             self._log(f"{name} skip: alive pid={pid_file.read_text(encoding='utf-8').strip()} heartbeat=fresh")
+            return
+        if self._singleton_lock_blocks_restart(instance):
+            self._log(f"{name} skip: singleton-lock-held-without-reclaimable-holder reason={instance.singleton.reason}")
             return
         self._stop_existing_daemon(target, instance=instance)
         wrapper_code = WRAPPER_CODE
@@ -721,6 +742,10 @@ class RestartDaemons:
                 "RESTART_DAEMON_HEARTBEAT_INTERVAL": str(self.config.heartbeat_interval),
                 "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": str(self.config.heartbeat_fresh_seconds),
                 "RESTART_DAEMONS_STOP_GRACE_SECONDS": str(self.config.stop_grace_seconds),
+                "RESTART_DAEMON_SINGLETON_LOCK": "1",
+                "RESTART_DAEMON_SINGLETON_LOCK_FILE": str(target.singleton_lock_file),
+                "RESTART_DAEMON_FINGERPRINT_FILE": str(target.fingerprint_file),
+                "RESTART_DAEMON_COMMAND_SHA256": _command_digest(target.command),
                 "PYTHONPATH": f"{self.ctx.skill_root / 'scripts'}{os.pathsep}{env.get('PYTHONPATH', '')}",
             }
         )
@@ -812,6 +837,8 @@ class RestartDaemons:
             and self._heartbeat_is_fresh(target.name)
             and stored_fingerprint is not None
             and stored_fingerprint.matches(current_fingerprint)
+            and instance.singleton.state == "held"
+            and instance.singleton.holder_pid in set(instance.live_managed_child_pids)
         )
 
     def _heartbeat_is_fresh(self, name: str) -> bool:
@@ -819,8 +846,13 @@ class RestartDaemons:
         return heartbeat_is_fresh(target, self.config, now=self.runtime.now())
 
     def _stop_existing_daemon(self, target: DaemonTarget, *, instance: DaemonInstanceProjection) -> None:
-        self._terminate_pids(instance.repair_pids)
+        self._terminate_pids(instance.singleton_holder_pids)
+        self._terminate_pids(pid for pid in instance.repair_pids if pid not in set(instance.singleton_holder_pids))
         target.pid_file.unlink(missing_ok=True)
+
+    @staticmethod
+    def _singleton_lock_blocks_restart(instance: DaemonInstanceProjection) -> bool:
+        return instance.singleton.state == "held-malformed"
 
     def _terminate_pids(self, pids: Sequence[int]) -> None:
         for existing_pid in pids:
@@ -1007,6 +1039,7 @@ class _RestartWrapperRuntime:
                 heartbeat_file=self.heartbeat_file,
                 fingerprint_file=self.pid_file.with_suffix(".fingerprint.json"),
                 died_file=self.died_file,
+                singleton_lock_file=self.repo_root / ".refactor-loop" / "locks" / f"{self.name}.singleton.lock",
             ),
             RestartConfig(heartbeat_fresh_seconds=self.heartbeat_fresh_seconds),
             now=int(self.clock()),
@@ -1144,6 +1177,17 @@ def _read_lock_holder_pid(path: Path) -> int | None:
         return None
     if raw.isdigit():
         return int(raw)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        for key in ("actor_pid", "holder_pid", "pid"):
+            value = payload.get(key)
+            if isinstance(value, int) and value > 0:
+                return value
+            if isinstance(value, str) and value.isdigit():
+                return int(value)
     for line in raw.splitlines():
         stripped = line.strip()
         if not stripped.startswith("pid="):
@@ -1152,6 +1196,14 @@ def _read_lock_holder_pid(path: Path) -> int | None:
         if value.isdigit():
             return int(value)
     return None
+
+
+def _command_digest(command: Sequence[str]) -> str:
+    digest = hashlib.sha256()
+    for part in command:
+        digest.update(str(part).encode("utf-8", errors="replace"))
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def _file_digest(path: Path) -> str:

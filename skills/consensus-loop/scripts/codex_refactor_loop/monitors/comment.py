@@ -63,13 +63,15 @@ class CommentMonitor:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         if not self.state_file.exists():
             self.state_file.write_text("{}\n", encoding="utf-8")
-        self.heartbeat = DaemonHeartbeatLease("comment-monitor", ctx.repo_root)
+        self.heartbeat = DaemonHeartbeatLease("comment-monitor", ctx.repo_root, singleton=True)
 
     def run_forever(self) -> int:
-        while True:
-            self.heartbeat.run_with_lease(lambda: run_comment_monitor_reconcile_tick(self))
+        with self.heartbeat.daemon_lifetime():
             self.heartbeat.beat()
-            self.heartbeat.sleep_with_lease(self.interval)
+            while True:
+                self.heartbeat.run_with_lease(lambda: run_comment_monitor_reconcile_tick(self))
+                self.heartbeat.beat()
+                self.heartbeat.sleep_with_lease(self.interval)
 
     def tick(self) -> None:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):

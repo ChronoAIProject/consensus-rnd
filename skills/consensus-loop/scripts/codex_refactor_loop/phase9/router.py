@@ -2231,11 +2231,12 @@ def main(argv: list[str] | None = None, command_runner: Callable[[dict[str, obje
     if not repo_root.is_absolute():
         raise SystemExit("--repo-root must be absolute")
     router = Phase9Router(repo_root, dry_run=args.dry_run, command_runner=command_runner)
-    with router.singleton():
+    lease = DaemonHeartbeatLease("phase9_router_daemon", repo_root, singleton=True)
+    with lease.daemon_lifetime():
         if args.once:
             run_phase9_router_reconcile_tick(router)
             return 0
-        lease = DaemonHeartbeatLease("phase9_router_daemon", repo_root)
+        lease.beat()
         while True:
             try:
                 lease.run_with_lease(lambda: run_phase9_router_reconcile_tick(router))

@@ -18,6 +18,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.heartbeat import DaemonHeartbeatLease
+from codex_refactor_loop.daemon_singleton import probe as probe_singleton
 
 REAL_CONDITION = real_threading.Condition
 REAL_EVENT = real_threading.Event
@@ -243,6 +244,75 @@ class DaemonHeartbeatLeaseTests(unittest.TestCase):
         finally:
             os.environ.clear()
             os.environ.update(old_env)
+
+    def test_singleton_lock_blocks_second_actor_until_first_exits(self) -> None:
+        first = DaemonHeartbeatLease("python-daemon", self.repo, singleton=True, clock=lambda: 3000)
+        second = DaemonHeartbeatLease("python-daemon", self.repo, singleton=True, clock=lambda: 3001)
+
+        with first.daemon_lifetime():
+            first.beat()
+            projection = probe_singleton(self.repo, "python-daemon")
+            self.assertEqual("held", projection.state)
+            self.assertEqual(os.getpid(), projection.holder_pid)
+            with self.assertRaisesRegex(RuntimeError, "daemon singleton lock held"):
+                with second.daemon_lifetime():
+                    pass
+
+        with second.daemon_lifetime():
+            second.beat()
+
+        self.assertEqual("3001", (self.repo / ".refactor-loop" / "heartbeats" / "python-daemon.ts").read_text().strip())
+
+    def test_singleton_mode_requires_lock_before_heartbeat_write(self) -> None:
+        lease = DaemonHeartbeatLease("python-daemon", self.repo, singleton=True, clock=lambda: 3100)
+
+        with self.assertRaisesRegex(RuntimeError, "requires held daemon singleton lock"):
+            lease.beat()
+
+        self.assertFalse((self.repo / ".refactor-loop" / "heartbeats" / "python-daemon.ts").exists())
+
+    def test_held_malformed_singleton_metadata_is_fail_closed(self) -> None:
+        lease = DaemonHeartbeatLease("python-daemon", self.repo, singleton=True, clock=lambda: 3200)
+
+        with lease.daemon_lifetime():
+            lock = self.repo / ".refactor-loop" / "locks" / "python-daemon.singleton.lock"
+            lock.write_text("not-json\n", encoding="utf-8")
+            projection = probe_singleton(self.repo, "python-daemon")
+
+        self.assertEqual("held-malformed", projection.state)
+        self.assertIsNone(projection.holder_pid)
+        self.assertFalse(projection.metadata_valid)
+
+    def test_probe_reports_missing_singleton_lock_file(self) -> None:
+        projection = probe_singleton(self.repo, "python-daemon")
+
+        self.assertEqual("missing", projection.state)
+        self.assertEqual("lock-missing", projection.reason)
+        self.assertIsNone(projection.holder_pid)
+        self.assertFalse(projection.metadata_valid)
+
+    def test_probe_reports_free_singleton_lock_metadata(self) -> None:
+        lease = DaemonHeartbeatLease("python-daemon", self.repo, singleton=True, clock=lambda: 3300)
+
+        with lease.daemon_lifetime():
+            pass
+        projection = probe_singleton(self.repo, "python-daemon")
+
+        self.assertEqual("free", projection.state)
+        self.assertEqual("lock-free", projection.reason)
+        self.assertEqual(os.getpid(), projection.holder_pid)
+        self.assertTrue(projection.metadata_valid)
+
+    def test_probe_reports_filesystem_error(self) -> None:
+        lock = self.repo / ".refactor-loop" / "locks" / "python-daemon.singleton.lock"
+        lock.mkdir(parents=True)
+
+        projection = probe_singleton(self.repo, "python-daemon")
+
+        self.assertEqual("probe-error", projection.state)
+        self.assertEqual("probe-error:IsADirectoryError", projection.reason)
+        self.assertIsNone(projection.holder_pid)
+        self.assertFalse(projection.metadata_valid)
 
     def test_heartbeat_source_has_no_cwd_repo_root_default(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "heartbeat.py").read_text(encoding="utf-8")

@@ -109,6 +109,32 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
     def write_generated_files_plan(self, *items: object) -> None:
         self.write_plan({"kind": "RuntimeRetentionPlan", "generated_files": list(items)})
 
+    def write_spawn_task_lock(
+        self,
+        task_id: str,
+        *,
+        log_path: Path | None = None,
+        age_hours: float = 25,
+        payload_overrides: dict[str, object] | None = None,
+        basename: str | None = None,
+    ) -> Path:
+        lock_dir = self.refactor_loop / "locks" / "spawn-tasks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = basename or f"{task_id}.lock"
+        path = lock_dir / safe_name
+        payload: dict[str, object] = {
+            "task_id": task_id,
+            "log_path": str((log_path or (self.refactor_loop / "logs" / f"{task_id}.log")).resolve()),
+            "pid": 123456,
+            "acquired_at": "2026-06-06T00:00:00Z",
+        }
+        if payload_overrides:
+            payload.update(payload_overrides)
+        path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        ts = time.time() - age_hours * 60 * 60
+        os.utime(path, (ts, ts))
+        return path
+
     def git_recheck_runner(
         self,
         commands: list[tuple[str, ...]],
@@ -224,6 +250,126 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(path.exists())
         self.assertTrue(any("reason=legacy_generated_files_ignored" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+
+    def test_completed_spawn_task_lock_with_repo_log_exit_marker_is_removed(self) -> None:
+        log = self.write_file(".refactor-loop/logs/implement-issue879.log", "worker output\nEXIT=0\n", 25)
+        lock = self.write_spawn_task_lock("implement-issue879", log_path=log)
+
+        result = retain_runtime(self.repo, enabled=True)
+
+        self.assertEqual(1, result.removed_spawn_task_locks)
+        self.assertEqual(1, result.deleted)
+        self.assertFalse(lock.exists())
+        self.assertTrue(log.exists())
+        self.assertFalse(any("spawn_task_lock_" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+
+    def test_spawn_task_lock_cleanup_does_not_use_plan_or_delete_worker_artifacts(self) -> None:
+        log = self.write_file(".refactor-loop/logs/implement-issue879.log", "worker output\nEXIT=1\n", 25)
+        lock = self.write_spawn_task_lock("implement-issue879", log_path=log)
+        prompt = self.write_file(".refactor-loop/prompts/implement-issue879.md", "prompt\n", 25)
+        run = self.write_file(".refactor-loop/runs/implement-issue879.md", "summary\n", 25)
+
+        result = retain_runtime(self.repo, enabled=True)
+
+        self.assertEqual(1, result.removed_spawn_task_locks)
+        self.assertFalse(lock.exists())
+        self.assertTrue(log.exists())
+        self.assertTrue(prompt.exists())
+        self.assertTrue(run.exists())
+
+    def test_spawn_task_lock_cleanup_keeps_missing_log_even_with_companion_artifact(self) -> None:
+        runs = self.refactor_loop / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (runs / "implement-issue879.md").write_text("IMPLEMENT_DONE:issue-879:ok\n", encoding="utf-8")
+        log = self.refactor_loop / "logs" / "implement-issue879.log"
+        lock = self.write_spawn_task_lock("implement-issue879", log_path=log)
+
+        result = retain_runtime(self.repo, enabled=True)
+
+        self.assertEqual(0, result.removed_spawn_task_locks)
+        self.assertTrue(lock.exists())
+        self.assertTrue(
+            any("reason=spawn_task_lock_log_missing" in diagnostic for diagnostic in result.diagnostics),
+            result.diagnostics,
+        )
+
+    def test_spawn_task_lock_cleanup_keeps_unsafe_cases_with_diagnostics(self) -> None:
+        inside_log = self.write_file(".refactor-loop/logs/inside.log", "done\nEXIT=0\n", 25)
+        outside_log = self.write_file("outside.log", "done\nEXIT=0\n", 25)
+        non_terminal_log = self.write_file(".refactor-loop/logs/non-terminal.log", "still running\n", 25)
+        cases: list[tuple[str, str, dict[str, object]]] = [
+            (
+                "unsafe-basename",
+                "spawn_task_lock_unsafe_basename",
+                {"task_id": "bad", "basename": "bad name.lock", "log_path": inside_log},
+            ),
+            (
+                "young",
+                "spawn_task_lock_young",
+                {"task_id": "young", "age_hours": 1, "log_path": inside_log},
+            ),
+            (
+                "malformed",
+                "spawn_task_lock_malformed",
+                {"task_id": "malformed", "payload_overrides": {"pid": "not-int"}, "log_path": inside_log},
+            ),
+            (
+                "basename-mismatch",
+                "spawn_task_lock_basename_mismatch",
+                {"task_id": "claimed", "basename": "other.lock", "log_path": inside_log},
+            ),
+            (
+                "relative-log",
+                "spawn_task_lock_log_path_relative",
+                {"task_id": "relative-log", "payload_overrides": {"log_path": ".refactor-loop/logs/inside.log"}},
+            ),
+            (
+                "escaped-log",
+                "spawn_task_lock_log_path_escaped",
+                {"task_id": "escaped-log", "log_path": outside_log},
+            ),
+            (
+                "missing-log",
+                "spawn_task_lock_log_missing",
+                {"task_id": "missing-log", "log_path": self.refactor_loop / "logs" / "missing.log"},
+            ),
+            (
+                "not-terminal",
+                "spawn_task_lock_log_not_terminal",
+                {"task_id": "not-terminal", "log_path": non_terminal_log},
+            ),
+        ]
+        locks = []
+        for name, _reason, kwargs in cases:
+            with self.subTest(create=name):
+                locks.append(self.write_spawn_task_lock(**kwargs))
+        symlink = self.refactor_loop / "locks" / "spawn-tasks" / "symlink.lock"
+        symlink.symlink_to(inside_log)
+
+        result = retain_runtime(self.repo, enabled=True)
+
+        self.assertEqual(0, result.removed_spawn_task_locks)
+        for lock in locks + [symlink]:
+            with self.subTest(lock=lock):
+                self.assertTrue(lock.exists())
+        for _name, reason, _kwargs in cases:
+            with self.subTest(reason=reason):
+                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+        self.assertTrue(any("reason=spawn_task_lock_non_regular" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+
+    def test_spawn_task_lock_unlink_failure_keeps_diagnostic(self) -> None:
+        log = self.write_file(".refactor-loop/logs/implement-issue879.log", "done\nEXIT=0\n", 25)
+        lock = self.write_spawn_task_lock("implement-issue879", log_path=log)
+
+        with mock.patch("codex_refactor_loop.runtime_retention._unlink_spawn_task_lock", side_effect=OSError("denied")):
+            result = retain_runtime(self.repo, enabled=True)
+
+        self.assertEqual(0, result.removed_spawn_task_locks)
+        self.assertTrue(lock.exists())
+        self.assertTrue(
+            any("reason=spawn_task_lock_unlink_failed" in diagnostic and "denied" in diagnostic for diagnostic in result.diagnostics),
+            result.diagnostics,
+        )
 
     def test_pending_events_compaction_preserves_same_inode_tail(self) -> None:
         pending = self.refactor_loop / ".controller-pending-events.log"
@@ -494,6 +640,11 @@ class RuntimeRetentionSourceRegressionTests(unittest.TestCase):
             "same-inode",
             "generated_files",
             "legacy_generated_files_ignored",
+            "SPAWN_TASK_LOCKS_PATH",
+            "read_spawn_task_lock_metadata",
+            "spawn_task_log_has_exit_marker",
+            "removed_spawn_task_locks",
+            "spawn_task_lock_log_missing",
             '"worktree", "remove"',
             '"worktree", "prune"',
             "no_in_flight",
@@ -507,7 +658,7 @@ class RuntimeRetentionSourceRegressionTests(unittest.TestCase):
         for forbidden in ("gh ", "gh-", '"fetch"', '"push"', '"merge"', '"reset"', '"rebase"', '"commit"', '"label"', '"release"', "archive", "index"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)
-        for forbidden in ("GENERATED_FILE_PROOF_TRUTHS", "path.unlink(", "os.replace", "NamedTemporaryFile"):
+        for forbidden in ("GENERATED_FILE_PROOF_TRUTHS", "RuntimeRetentionPlan.spawn_task_locks", "path.unlink(", "os.replace", "NamedTemporaryFile"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, text)
 

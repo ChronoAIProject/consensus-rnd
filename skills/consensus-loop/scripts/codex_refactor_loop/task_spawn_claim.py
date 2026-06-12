@@ -26,6 +26,21 @@ class TaskSpawnClaim:
     acquired: bool
 
 
+class TaskSpawnClaimMetadataError(TaskSpawnClaimError):
+    def __init__(self, reason: str, lock_path: Path, detail: object = "") -> None:
+        self.reason = reason
+        suffix = f": {detail}" if detail else ""
+        super().__init__(f"spawn claim metadata {reason}: {lock_path}{suffix}")
+
+
+@dataclass(frozen=True)
+class SpawnTaskLockMetadata:
+    task_id: str
+    log_path: Path
+    pid: int
+    acquired_at: str
+
+
 class TaskSpawnClaimStore:
     def __init__(self, repo_root: Path) -> None:
         self.lock_dir = repo_root / ".refactor-loop" / "locks" / "spawn-tasks"
@@ -79,34 +94,14 @@ class TaskSpawnClaimStore:
 
     def _existing_claim_is_recyclable(self, lock_path: Path, *, task_id: str, log_path: Path) -> bool:
         metadata = self._read_metadata(lock_path)
-        claimed_task = metadata.get("task_id")
-        claimed_log = metadata.get("log_path")
-        if claimed_task != task_id or claimed_log != str(log_path):
+        if metadata.task_id != task_id or str(metadata.log_path) != str(log_path):
             raise TaskSpawnClaimError(f"spawn claim metadata mismatch: {lock_path}")
-        claimed_log_path = Path(claimed_log)
-        if _worker_terminal_completion_marker_found(claimed_log_path):
+        if _worker_terminal_completion_marker_found(metadata.log_path):
             return True
-        # A dead holder means the spawn crashed or exited without releasing the lock.
-        # Recycling prevents permanent SPAWN_CLAIM_HELD when the log was cleared for fresh re-dispatch.
         return not _holder_process_alive(metadata)
 
-    def _read_metadata(self, lock_path: Path) -> dict[str, object]:
-        try:
-            payload = json.loads(lock_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            raise
-        except (OSError, json.JSONDecodeError) as exc:
-            raise TaskSpawnClaimError(f"spawn claim metadata unreadable: {lock_path}: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise TaskSpawnClaimError(f"spawn claim metadata invalid: {lock_path}")
-        task_id = payload.get("task_id")
-        log_path = payload.get("log_path")
-        if not isinstance(task_id, str) or not isinstance(log_path, str):
-            raise TaskSpawnClaimError(f"spawn claim metadata invalid: {lock_path}")
-        safe_task_id_from_task(task_id)
-        if not log_path:
-            raise TaskSpawnClaimError(f"spawn claim metadata invalid: {lock_path}")
-        return payload
+    def _read_metadata(self, lock_path: Path) -> SpawnTaskLockMetadata:
+        return read_spawn_task_lock_metadata(lock_path)
 
     def _remove_recyclable_lock(self, lock_path: Path) -> None:
         try:
@@ -128,19 +123,53 @@ def safe_task_id_from_task(task_id: str) -> str:
     return safe
 
 
+def read_spawn_task_lock_metadata(lock_path: Path) -> SpawnTaskLockMetadata:
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise TaskSpawnClaimMetadataError("unreadable", lock_path, exc) from exc
+    except json.JSONDecodeError as exc:
+        raise TaskSpawnClaimMetadataError("malformed", lock_path, exc) from exc
+    if not isinstance(payload, dict):
+        raise TaskSpawnClaimMetadataError("malformed", lock_path, type(payload).__name__)
+    task_id = payload.get("task_id")
+    log_path = payload.get("log_path")
+    pid = payload.get("pid")
+    acquired_at = payload.get("acquired_at")
+    if not isinstance(task_id, str) or not isinstance(log_path, str) or not log_path:
+        raise TaskSpawnClaimMetadataError("malformed", lock_path)
+    try:
+        safe_task_id = safe_task_id_from_task(task_id)
+    except TaskSpawnClaimError as exc:
+        raise TaskSpawnClaimMetadataError("malformed", lock_path, exc) from exc
+    if safe_task_id != task_id:
+        raise TaskSpawnClaimMetadataError("malformed", lock_path, task_id)
+    if lock_path.name != f"{safe_task_id}.lock":
+        raise TaskSpawnClaimMetadataError("basename_mismatch", lock_path, task_id)
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        raise TaskSpawnClaimMetadataError("malformed", lock_path, "pid")
+    if not isinstance(acquired_at, str) or not acquired_at.strip():
+        raise TaskSpawnClaimMetadataError("malformed", lock_path, "acquired_at")
+    return SpawnTaskLockMetadata(task_id=safe_task_id, log_path=Path(log_path), pid=pid, acquired_at=acquired_at)
+
+
+def spawn_task_log_has_exit_marker(path: Path) -> bool:
+    return _log_has_exit_marker(path)
+
+
 def _worker_terminal_completion_marker_found(path: Path) -> bool:
     marker_read = read_worker_terminal_marker(path)
     if marker_read.found:
         return True
     if not path.is_file():
         return _marker_from_companion_artifact(path).found
-    return _log_has_exit_marker(path)
+    return spawn_task_log_has_exit_marker(path)
 
 
-def _holder_process_alive(metadata: dict[str, object]) -> bool:
-    pid = metadata.get("pid")
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return False
+def _holder_process_alive(metadata: SpawnTaskLockMetadata) -> bool:
+    pid = metadata.pid
     try:
         os.kill(pid, 0)
     except PermissionError:

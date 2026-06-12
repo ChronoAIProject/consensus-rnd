@@ -1405,14 +1405,16 @@ class ConcurrencyMonitor:
 
     def run_forever(self) -> int:
         log(f"concurrency_monitor (Python) started: interval={self.interval}s")
-        lease = DaemonHeartbeatLease("concurrency_monitor", self.repo_root)
-        while True:
-            try:
-                lease.run_with_lease(lambda: run_concurrency_reconcile_tick(self))
-            except Exception as exc:
-                log(f"EXCEPTION in tick: {exc!r}")
+        lease = DaemonHeartbeatLease("concurrency_monitor", self.repo_root, singleton=True)
+        with lease.daemon_lifetime():
             lease.beat()
-            lease.sleep_with_lease(self.interval)
+            while True:
+                try:
+                    lease.run_with_lease(lambda: run_concurrency_reconcile_tick(self))
+                except Exception as exc:
+                    log(f"EXCEPTION in tick: {exc!r}")
+                lease.beat()
+                lease.sleep_with_lease(self.interval)
 
 
 def run_concurrency_reconcile_tick(monitor: ConcurrencyMonitor) -> None:

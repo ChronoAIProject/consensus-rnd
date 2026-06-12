@@ -2434,13 +2434,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     plan_loader = (lambda _repo_root: load_plan_file(Path(args.plan_file))) if args.plan_file else None
     runner = WakeupRunner(ctx, dry_run=bool(args.dry_run), plan_loader=plan_loader)
     if args.daemon:
-        lease = DaemonHeartbeatLease("wakeup_runner_daemon", ctx.repo_root)
-        lease.beat()
+        lease = DaemonHeartbeatLease("wakeup_runner_daemon", ctx.repo_root, singleton=True)
         interval = max(1, int(args.interval_seconds))
-        while True:
-            results = lease.run_with_lease(lambda: run_wakeup_runner_reconcile_tick(runner))
-            _log_tick_status("wakeup-runner", _wakeup_tick_action(results))
-            lease.sleep_with_lease(interval)
+        with lease.daemon_lifetime():
+            lease.beat()
+            while True:
+                results = lease.run_with_lease(lambda: run_wakeup_runner_reconcile_tick(runner))
+                _log_tick_status("wakeup-runner", _wakeup_tick_action(results))
+                lease.sleep_with_lease(interval)
     results = run_wakeup_runner_reconcile_tick(runner)
     _log_tick_status("wakeup-runner", _wakeup_tick_action(results))
     blocked = [result for result in results if result.status == "blocked"]

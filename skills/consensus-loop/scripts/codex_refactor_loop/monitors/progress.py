@@ -60,14 +60,16 @@ class ProgressReporter:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         if not self.state_file.exists():
             self.state_file.write_text("{}\n", encoding="utf-8")
-        self.heartbeat = DaemonHeartbeatLease("codex-progress-reporter", ctx.repo_root)
+        self.heartbeat = DaemonHeartbeatLease("codex-progress-reporter", ctx.repo_root, singleton=True)
 
     def run_forever(self) -> int:
-        while True:
-            self.log_msg("tick")
-            self.heartbeat.run_with_lease(lambda: run_progress_reporter_reconcile_tick(self))
+        with self.heartbeat.daemon_lifetime():
             self.heartbeat.beat()
-            self.heartbeat.sleep_with_lease(self.interval)
+            while True:
+                self.log_msg("tick")
+                self.heartbeat.run_with_lease(lambda: run_progress_reporter_reconcile_tick(self))
+                self.heartbeat.beat()
+                self.heartbeat.sleep_with_lease(self.interval)
 
     def tick(self) -> None:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):

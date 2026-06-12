@@ -372,9 +372,16 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             ".refactor-loop/state/runtime-retention-plan.json",
             "git worktree remove <path>",
             "git worktree prune",
+            ".refactor-loop/locks/spawn-tasks/<safe-task-id>.lock",
+            "metadata is valid and matches the basename",
+            "`log_path` resolves under `$REPO_ROOT/.refactor-loop/logs/`",
+            "TTL has elapsed",
+            "terminal `EXIT=` marker",
             "no `git fetch`",
             "no GitHub write or lifecycle authority",
             "worker artifact deletion",
+            "`RuntimeRetentionPlan.spawn_task_locks`",
+            "missing-log companion/plan proof",
             "test_runtime_retention.py",
         ):
             with self.subTest(needle=needle):
