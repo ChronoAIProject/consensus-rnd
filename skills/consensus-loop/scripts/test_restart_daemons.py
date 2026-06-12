@@ -1239,6 +1239,24 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual([], self.runtime.terminated)
         self.assert_start_count("concurrency_monitor", 1)
 
+    def test_held_malformed_singleton_lock_skips_restart_without_reaping_or_launching(self) -> None:
+        self.run_helper()
+        wrapper_pid = self.read_pid("concurrency_monitor")
+        target = restart.daemon_target(self.ctx, "concurrency_monitor", FAKE_COMMAND)
+        original_pid_file = target.pid_file.read_text(encoding="utf-8")
+        target.singleton_lock_file.write_text("{not-json\n", encoding="utf-8")
+        self.stale_heartbeat("concurrency_monitor")
+        before_start_count = self.start_count("concurrency_monitor")
+
+        helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
+        helper.start_daemon("concurrency_monitor", FAKE_COMMAND)
+
+        self.assertEqual(original_pid_file, target.pid_file.read_text(encoding="utf-8"))
+        self.assertEqual(wrapper_pid, self.read_pid("concurrency_monitor"))
+        self.assertEqual([], self.runtime.terminated)
+        self.assert_start_count("concurrency_monitor", before_start_count)
+        self.assertEqual("held-malformed", self.runtime.probe_singleton(target).state)
+
     def test_macos_framework_python_orphan_child_lock_holder_is_reaped_and_restarted_once(self) -> None:
         self.run_helper()
         old_wrapper_pid = self.read_pid("phase9_router_daemon")

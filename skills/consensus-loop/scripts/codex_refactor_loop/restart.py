@@ -582,6 +582,9 @@ class RestartDaemonRuntime(Protocol):
 
 
 class RealRestartDaemonRuntime:
+    def __init__(self, repo_root: Path) -> None:
+        self.repo_root = repo_root
+
     def now(self) -> int:
         return int(time.time())
 
@@ -598,7 +601,7 @@ class RealRestartDaemonRuntime:
         return DaemonProcessInventory.collect()
 
     def probe_singleton(self, target: DaemonTarget) -> DaemonSingletonProjection:
-        return probe_daemon_singleton(target.singleton_lock_file.parent.parent.parent, target.name)
+        return probe_daemon_singleton(self.repo_root, target.name)
 
     def terminate_pid(self, pid: int, grace: int) -> None:
         _terminate_pid(pid, grace)
@@ -646,7 +649,7 @@ class RestartDaemons:
     ) -> None:
         self.ctx = ctx
         self.config = config or RestartConfig()
-        self.runtime = runtime or RealRestartDaemonRuntime()
+        self.runtime = runtime or RealRestartDaemonRuntime(ctx.repo_root)
         self.lock_dir = ctx.paths.refactor_loop / "locks" / "restart-daemons.lock"
         self._wrappers: list[Any] = []
         self._package_digest_cache: tuple[str, int] | None = None

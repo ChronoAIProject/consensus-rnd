@@ -12,9 +12,6 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-LOCK_STATES = ("missing", "free", "held", "held-malformed", "probe-error")
-
-
 @dataclass(frozen=True)
 class DaemonSingletonMetadata:
     daemon_name: str
@@ -151,10 +148,6 @@ def lock_path(repo_root: Path, daemon_name: str) -> Path:
     return repo_root / ".refactor-loop" / "locks" / f"{daemon_name}.singleton.lock"
 
 
-def acquire(repo_root: Path, daemon_name: str, metadata: DaemonSingletonMetadata) -> DaemonSingletonLock:
-    return DaemonSingletonLock(lock_path(repo_root, daemon_name), metadata)
-
-
 def read_metadata(path: Path) -> DaemonSingletonMetadata | None:
     try:
         raw = path.read_text(encoding="utf-8").strip()
@@ -203,7 +196,6 @@ __all__ = [
     "DaemonSingletonLock",
     "DaemonSingletonMetadata",
     "DaemonSingletonProjection",
-    "acquire",
     "lock_path",
     "probe",
     "read_metadata",
