@@ -37,8 +37,10 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER,
     RELEASE_ROLLUP_LIVE_PR_LIST_TIMEOUT_SECONDS,
     _extract_implementation_owner,
+    _implementation_head_ref,
     _release_rollup_event_satisfied,
     _revive_stale_redispatchable_implement_log,
+    _stale_publish_implementation_reason,
     ci_red_actions,
     close_projection_actions,
     force_revive_stuck_implements,
@@ -63,6 +65,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     review_evidence_redispatch_actions,
     restore_hard_gate_for_dispatchable_actions,
     resolve_repo_root,
+    safe_head_ref,
     stale_revival_seconds,
     suppress_stale_unexecutable_actions,
     concurrency_plan,
@@ -3334,6 +3337,51 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["suppressed_reason"], "implementation_worktree_missing")
         self.assertNotIn("runner_authority", action)
         self.assertNotIn("no_generic_command", action)
+
+    def test_safe_head_ref_rejects_colon_refs(self) -> None:
+        self.assertIsNone(safe_head_ref("refactor/iter20-issue-20:partial"))
+        self.assertEqual("refactor/iter20-issue-20", safe_head_ref("refactor/iter20-issue-20"))
+
+    def test_implementation_head_ref_strips_terminal_result_statuses(self) -> None:
+        for status in ("ok", "partial", "blocked"):
+            with self.subTest(status=status):
+                action = {"source_marker": f"IMPLEMENT_DONE:issue-20:{status}"}
+                self.assertEqual(
+                    "refactor/iter20-issue-20",
+                    _implementation_head_ref(action, ("issue", 20)),
+                )
+
+    def test_stale_publish_partial_and_blocked_markers_find_canonical_worktree(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter20-issue-20"
+        worktree.mkdir(parents=True)
+        open_targets = {("issue", 20)}
+        worktrees = {"refactor/iter20-issue-20": worktree}
+
+        for status in ("partial", "blocked"):
+            with self.subTest(status=status):
+                action = {
+                    "source_marker": f"IMPLEMENT_DONE:issue-20:{status}",
+                    "source_artifact": ".refactor-loop/logs/implement-issue20.log",
+                    "target_kind": "issue",
+                    "target_number": 20,
+                    "head_ref": "",
+                }
+
+                with mock.patch(
+                    "codex_refactor_loop.wakeup_plan.classify_implement_attempt",
+                    return_value=SimpleNamespace(redispatch=False, in_flight=False),
+                ):
+                    reason = _stale_publish_implementation_reason(
+                        action,
+                        self.repo,
+                        open_targets,
+                        worktrees,
+                        [],
+                    )
+
+                self.assertNotEqual("implementation_worktree_missing", reason)
+                self.assertEqual("refactor/iter20-issue-20", action["head_ref"])
+                self.assertEqual(str(worktree), action["worktree"])
 
     def test_publish_implementation_marker_with_verified_local_head_remains_executable(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
