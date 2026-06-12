@@ -255,6 +255,10 @@ class ControllerActionsTests(unittest.TestCase):
             "publish-implementation-fallback",
             "publish_implementation_output: delegated fallback resolver",
             "def _matching_implementation_pr",
+            "def _matching_current_implementation_pr",
+            "headRefOid",
+            '["rev-parse", "HEAD"]',
+            '["rev-parse", "--verify", f"refs/remotes/origin/{head_ref}"]',
             "matching_pr_issue_mismatch",
             "pr_unverified",
             "implementation_produced_no_diff",
@@ -277,6 +281,9 @@ class ControllerActionsTests(unittest.TestCase):
                 self.assertNotIn(removed, source)
         self.assertNotIn("def _open_pr_for_head", source)
         self.assertIn("open_pr_with_label", publish_body)
+        self.assertLess(publish_body.index("_matching_current_implementation_pr"), publish_body.index("_require_publish_implementation_diff"))
+        self.assertLess(publish_body.index("_matching_current_implementation_pr"), publish_body.index("_implementation_pr_title_error"))
+        self.assertLess(publish_body.index("_matching_current_implementation_pr"), publish_body.index("_implementation_pr_body_error"))
         self.assertNotIn("open_pr_with_label", dispatch_body)
         self.assertNotIn("_matching_implementation_pr", dispatch_body)
         self.assertNotIn("_placeholder_implementation_pr_body", source)
@@ -579,6 +586,7 @@ class ControllerActionsTests(unittest.TestCase):
                     "number": pr_number,
                     "baseRefName": "canonical-integration",
                     "headRefName": head_ref,
+                    "headRefOid": "",
                     "labels": [{"name": labels.MANAGED}],
                     "body": f"Closes #{issue}\n",
                 }
@@ -1695,7 +1703,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args[:4] == ["pr", "list", "--state", "open"]:
                 pr_list_calls += 1
                 sequence.append(f"gh:pr-list:{pr_list_calls}")
-                if pr_list_calls == 1:
+                if pr_list_calls <= 2:
                     return mock.Mock(returncode=0, stdout="[]", stderr="")
                 return mock.Mock(returncode=0, stdout=self.matching_implementation_pr_payload(77, "refactor/iter77-issue-77"), stderr="")
             raise AssertionError(f"unexpected gh call: {args}")
@@ -1767,6 +1775,7 @@ class ControllerActionsTests(unittest.TestCase):
                 "git:branch",
                 "git:branch",
                 "git:branch",
+                "gh:pr-list:1",
                 "git:diff-head",
                 "git:status",
                 "git:add",
@@ -1780,9 +1789,9 @@ class ControllerActionsTests(unittest.TestCase):
                 "git:push-fetch",
                 "git:push-behind",
                 "git:push",
-                "gh:pr-list:1",
-                "open_pr",
                 "gh:pr-list:2",
+                "open_pr",
+                "gh:pr-list:3",
                 "dispatch_reviewers",
             ],
         )
@@ -1816,7 +1825,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args[:4] == ["pr", "list", "--state", "open"]:
                 pr_list_calls += 1
                 sequence.append(f"gh:pr-list:{pr_list_calls}")
-                if pr_list_calls == 1:
+                if pr_list_calls <= 2:
                     return mock.Mock(returncode=0, stdout="[]", stderr="")
                 return mock.Mock(returncode=0, stdout=self.matching_implementation_pr_payload(77, "refactor/iter77-issue-77"), stderr="")
             raise AssertionError(f"unexpected gh call: {args}")
@@ -1870,6 +1879,7 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(
             [
                 "git:branch",
+                "gh:pr-list:1",
                 "git:diff-head-clean",
                 "git:origin-base",
                 "git:merge-base",
@@ -1881,9 +1891,9 @@ class ControllerActionsTests(unittest.TestCase):
                 "host:true",
                 "host:python3 -m unittest discover -s skills/consensus-loop/scripts -p 'test_*.py'",
                 "safe_push",
-                "gh:pr-list:1",
-                "open_pr",
                 "gh:pr-list:2",
+                "open_pr",
+                "gh:pr-list:3",
             ],
             sequence,
         )
@@ -1980,6 +1990,139 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertLess(sequence.index("gh:edit-pr"), sequence.index("dispatch_reviewers"))
         self.assertIn("dispatch_reviewers", sequence)
 
+    def test_publish_implementation_output_noops_when_existing_pr_already_represents_head(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+        current_sha = "a" * 40
+        sequence: list[str] = []
+        action = {
+            "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+            "target_kind": "issue",
+            "target_number": 77,
+            "head_ref": "refactor/iter77-issue-77",
+            "worktree": str(worktree),
+        }
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["issue", "view", "77", "--json", "labels,body"]:
+                sequence.append("gh:issue-view")
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                sequence.append("gh:pr-list")
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        [
+                            {
+                                "number": 414,
+                                "baseRefName": "canonical-integration",
+                                "headRefName": "refactor/iter77-issue-77",
+                                "headRefOid": current_sha,
+                                "labels": [{"name": labels.MANAGED}],
+                                "body": "Closes #77\n",
+                            }
+                        ]
+                    ),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+            if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                sequence.append("git:branch")
+                return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                sequence.append("git:local-head")
+                return mock.Mock(returncode=0, stdout=f"{current_sha}\n", stderr="")
+            if args == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                sequence.append("git:status-clean")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"heavy publish path should not run: {args!r}")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                    with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("must not push")):
+                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("must not open PR")):
+                            with mock.patch.object(self.actions, "_update_existing_implementation_pr", side_effect=AssertionError("must not edit PR")):
+                                with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=AssertionError("must not dispatch reviewers")):
+                                    self.assertEqual(0, self.actions.publish_implementation_output(action))
+
+        self.assertEqual(
+            ["gh:issue-view", "git:branch", "gh:pr-list", "git:local-head", "git:status-clean"],
+            sequence,
+        )
+
+    def test_publish_implementation_output_uses_one_remote_head_visibility_retry_before_noop(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+        current_sha = "b" * 40
+        stale_sha = "c" * 40
+        sequence: list[str] = []
+        action = {
+            "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+            "target_kind": "issue",
+            "target_number": 77,
+            "head_ref": "refactor/iter77-issue-77",
+            "worktree": str(worktree),
+        }
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["issue", "view", "77", "--json", "labels,body"]:
+                sequence.append("gh:issue-view")
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                sequence.append("gh:pr-list")
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        [
+                            {
+                                "number": 414,
+                                "baseRefName": "canonical-integration",
+                                "headRefName": "refactor/iter77-issue-77",
+                                "headRefOid": stale_sha,
+                                "labels": [{"name": labels.MANAGED}],
+                                "body": "Closes #77\n",
+                            }
+                        ]
+                    ),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+            if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                sequence.append("git:branch")
+                return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                sequence.append("git:local-head")
+                return mock.Mock(returncode=0, stdout=f"{current_sha}\n", stderr="")
+            if args == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                sequence.append("git:status-clean")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "--verify", "refs/remotes/origin/refactor/iter77-issue-77"]:
+                sequence.append("git:remote-head")
+                return mock.Mock(returncode=0, stdout=f"{current_sha}\n", stderr="")
+            raise AssertionError(f"unexpected subprocess call: {args!r}")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                    with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("must not push")):
+                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("must not open PR")):
+                            with mock.patch.object(self.actions, "_update_existing_implementation_pr", side_effect=AssertionError("must not edit PR")):
+                                with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=AssertionError("must not dispatch reviewers")):
+                                    self.assertEqual(0, self.actions.publish_implementation_output(action))
+
+        self.assertEqual(
+            ["gh:issue-view", "git:branch", "gh:pr-list", "git:local-head", "git:status-clean", "git:remote-head"],
+            sequence,
+        )
+
     def test_publish_implementation_output_fails_closed_when_existing_pr_update_fails(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
@@ -2059,6 +2202,8 @@ class ControllerActionsTests(unittest.TestCase):
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
             if args == ["issue", "view", "77", "--json", "labels,body"]:
                 return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
             raise AssertionError(f"unexpected gh call: {args}")
 
         def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
@@ -2273,6 +2418,8 @@ class ControllerActionsTests(unittest.TestCase):
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
             if args == ["issue", "view", "77", "--json", "labels,body"]:
                 return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
             raise AssertionError(f"unexpected gh call: {args}")
 
         def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
@@ -2331,6 +2478,8 @@ class ControllerActionsTests(unittest.TestCase):
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
             if args == ["issue", "view", "77", "--json", "labels,body"]:
                 return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
             raise AssertionError(f"unexpected gh call: {args}")
 
         def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
