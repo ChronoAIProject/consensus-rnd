@@ -17,7 +17,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.cross_instance_stand_down import CrossInstanceAdmission
 from codex_refactor_loop.github_actor import GitHubActorAdmission
-from codex_refactor_loop.wakeup_runner import WakeupRunner
+from codex_refactor_loop.wakeup_runner import ReviewEvidence, WakeupRunner
 
 
 class FakeActions:
@@ -250,6 +250,32 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(result.reason, f"WAIT_OR_REDISPATCH:invalid_reviewer_evidence:{reason}")
         self.assertEqual(self.actions.merged, [])
 
+    def runner_for_gate(self, *, live_head: str = "a" * 40) -> WakeupRunner:
+        def command_runner(command):
+            if command[:3] == ["gh", "pr", "view"] and ".headRefOid" in command:
+                return subprocess.CompletedProcess(command, 0, live_head + "\n", "")
+            if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft,changedFiles" in command:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"mergeable": "MERGEABLE", "isDraft": False, "changedFiles": 1}),
+                    "",
+                )
+            if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/branches/main/protection/required_status_checks":
+                return subprocess.CompletedProcess(command, 0, json.dumps({"contexts": []}), "")
+            if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/rules/branches/main":
+                return subprocess.CompletedProcess(command, 1, "", "404 Not Found")
+            if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/issues/12/comments?per_page=100":
+                return subprocess.CompletedProcess(command, 0, json.dumps([self.github_comments]), "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        return WakeupRunner(
+            self.ctx,
+            actions=self.actions,
+            supervisor=self.supervisor,
+            command_runner=command_runner,
+        )
+
     def test_review_gate_merge_only_when_reject_zero_approve_one_and_all_present(self) -> None:
         self.write_review("architect", "approve")
         self.write_review("tests", "comment")
@@ -300,6 +326,114 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(Path(launch.call_args.kwargs["log"]).resolve(), (self.repo / ".refactor-loop/logs/fix.log").resolve())
         self.assertEqual(Path(launch.call_args.kwargs["cd"]).resolve(), self.pr_worktree.resolve())
         self.assertEqual(self.supervisor.calls, 0)
+
+    def test_review_gate_assembles_latest_live_head_per_role_across_rounds_and_routes_reject_to_fix(self) -> None:
+        live = "c" * 40
+        self.write_review("tests", "approve", head_sha="d" * 40, round_number=13)
+        self.write_review("tests", "reject", head_sha=live, round_number=14)
+        self.write_review("quality", "comment", head_sha=live, round_number=14)
+        self.write_review("architect", "reject", head_sha=live, round_number=15)
+        self.write_review("architect", "approve", head_sha=live, round_number=16)
+
+        gate = self.runner_for_gate(live_head=live)._review_gate(12)
+        self.assertTrue(gate["all_present"])
+        self.assertEqual(gate["reviewed_head_sha"], live)
+        self.assertEqual(gate["reject"], 1)
+        self.assertEqual(gate["approve"], 1)
+        self.assertEqual(gate["comment"], 1)
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            result = self.run_action(self.action(head_sha=live), live_head=live, required_checks=())
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.merged, [])
+        self.assertEqual(self.actions.rendered, [(12, 1)])
+        launch.assert_called_once()
+
+    def test_review_gate_latest_same_role_verdict_supersedes_older_same_head_verdict(self) -> None:
+        live = "e" * 40
+        self.write_review("architect", "reject", head_sha=live, round_number=15)
+        self.write_review("architect", "approve", head_sha=live, round_number=16)
+        self.write_review("tests", "approve", head_sha=live, round_number=14)
+        self.write_review("quality", "comment", head_sha=live, round_number=14)
+
+        gate = self.runner_for_gate(live_head=live)._review_gate(12)
+        self.assertEqual(gate["verdicts"]["architect"], "approve")
+        self.assertEqual(gate["reject"], 0)
+        self.assertEqual(gate["approve"], 2)
+
+        result = self.run_action(self.action(head_sha=live), live_head=live, required_checks=())
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.merged, ["12"])
+        self.assertEqual(self.actions.rendered, [])
+
+    def test_review_gate_newer_pending_wave_does_not_block_completion_when_role_has_valid_verdict(self) -> None:
+        live = "f" * 40
+        evidences = [
+            ReviewEvidence("architect", 4, "approve", live, "test"),
+            ReviewEvidence("architect", 5, "approve", live, "test", pending=True, reason="pending:architect"),
+            ReviewEvidence("architect", 5, "approve", live, "test", pending=True, reason="pending:architect"),
+            ReviewEvidence("tests", 4, "approve", live, "test"),
+            ReviewEvidence("quality", 4, "comment", live, "test"),
+        ]
+        runner = self.runner_for_gate(live_head=live)
+        with (
+            mock.patch.object(runner, "_review_evidences", return_value=evidences),
+            mock.patch.object(runner, "_review_gate_ci_error", return_value=None),
+        ):
+            decision = runner._review_gate_decision(self.action(head_sha=live))
+
+        self.assertEqual(decision["decision"], "MERGE_WITH_COMMENTS")
+        self.assertTrue(decision["gate"]["all_present"])
+        self.assertEqual(decision["gate"]["verdicts"]["architect"], "approve")
+        self.assertEqual(decision["gate"]["reviewed_head_sha"], live)
+        self.assertEqual(decision["gate"]["invalid"], [])
+        self.assertEqual(decision["gate"]["pending"], [])
+
+    def test_review_gate_duplicate_same_role_same_round_fails_closed(self) -> None:
+        live = "a" * 40
+        self.github_comments = [
+            self.github_review_comment("architect", "approve", head_sha=live, round_number=2),
+            self.github_review_comment("architect", "reject", head_sha=live, round_number=2),
+            self.github_review_comment("tests", "approve", head_sha=live, round_number=2),
+            self.github_review_comment("quality", "comment", head_sha=live, round_number=2),
+        ]
+
+        result = self.run_action()
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:duplicate_reviewer_evidence:architect")
+        self.assertEqual(self.actions.merged, [])
+        self.assertEqual(self.actions.rendered, [])
+
+    def test_review_gate_role_with_only_stale_head_remains_incomplete(self) -> None:
+        self.write_review("architect", "approve")
+        self.write_review("tests", "approve")
+        self.write_review("quality", "comment", head_sha="b" * 40)
+
+        result = self.run_action()
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:stale_reviewed_head_sha:quality")
+        self.assertEqual(self.actions.merged, [])
+        self.assertEqual(self.actions.rendered, [])
+
+    def test_review_gate_role_with_only_pending_live_head_blocks(self) -> None:
+        live = "a" * 40
+        evidences = [
+            ReviewEvidence("architect", 4, "approve", live, "test"),
+            ReviewEvidence("tests", 4, "approve", live, "test"),
+            ReviewEvidence("quality", 5, "comment", live, "test", pending=True, reason="pending:quality"),
+        ]
+        runner = self.runner_for_gate(live_head=live)
+        with mock.patch.object(runner, "_review_evidences", return_value=evidences):
+            decision = runner._review_gate_decision(self.action(head_sha=live))
+
+        self.assertEqual(decision["decision"], "WAIT_OR_REDISPATCH")
+        self.assertEqual(decision["reason"], "pending_reviewer_evidence:pending:quality")
+        self.assertEqual(self.actions.merged, [])
+        self.assertEqual(self.actions.rendered, [])
 
     def test_missing_reviewer_fails_closed(self) -> None:
         self.write_review("architect", "approve")
@@ -454,20 +588,19 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:stale_reviewed_head_sha:architect")
         self.assertEqual(self.actions.merged, [])
 
-    def test_review_gate_uses_complete_lower_round_despite_higher_inflight_same_head(self) -> None:
+    def test_review_gate_higher_valid_same_head_supersedes_lower_complete_round(self) -> None:
         self.write_review("architect", "approve", head_sha="a" * 40, round_number=4)
         self.write_review("tests", "approve", head_sha="a" * 40, round_number=4)
         self.write_review("quality", "comment", head_sha="a" * 40, round_number=4)
-        (self.repo / ".refactor-loop/logs/review-pr12-architect-r5.log").write_text(
-            f"head_sha: {'a' * 40}\nREVIEW_DONE:12:architect:approve\n",
-            encoding="utf-8",
-        )
+        self.write_review("architect", "reject", head_sha="a" * 40, round_number=5)
 
-        result = self.run_action()
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            result = self.run_action()
 
         self.assertEqual(result.status, "applied")
-        self.assertEqual(self.actions.merged, ["12"])
-        self.assertEqual(self.actions.rendered, [])
+        self.assertEqual(self.actions.merged, [])
+        self.assertEqual(self.actions.rendered, [(12, 1)])
+        launch.assert_called_once()
 
     def test_review_gate_lower_complete_reject_is_not_masked_by_higher_pending(self) -> None:
         self.write_review("architect", "reject", head_sha="a" * 40, round_number=4)

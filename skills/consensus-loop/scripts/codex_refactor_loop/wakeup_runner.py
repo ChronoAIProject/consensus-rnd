@@ -48,6 +48,7 @@ from .issue_decomposition import (
 )
 from .pr_checks import PrMergeReadinessProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
+from .review_gate_selection import select_latest_live_head_review_evidence
 from .release.gate import AutoReleaseGate
 from .release.commits import write_release_commits
 from .release.candidate_liveness import classify_release_candidate_liveness
@@ -1752,91 +1753,18 @@ class WakeupRunner:
         ).as_dict()
 
     def _review_gate_candidate_evidence(self, pr_number: int, live_head_sha: str) -> ReviewGateCandidate:
-        rounds: dict[int, dict[str, list[ReviewEvidence]]] = {}
-        for evidence in self._review_evidences(pr_number):
-            rounds.setdefault(evidence.round_number, {}).setdefault(evidence.role, []).append(evidence)
-        for round_number in sorted(rounds, reverse=True):
-            by_role = rounds[round_number]
-            selected: dict[str, ReviewEvidence] = {}
-            complete = True
-            for role in REQUIRED_REVIEW_ROLES:
-                items = by_role.get(role, [])
-                if len(items) != 1:
-                    complete = False
-                    break
-                evidence = items[0]
-                if not evidence.valid or evidence.pending or evidence.terminal_failed or evidence.head_sha != live_head_sha:
-                    complete = False
-                    break
-                selected[role] = evidence
-            if complete:
-                return ReviewGateCandidate(selected, [], [], [], complete_round=round_number)
-        if not rounds:
-            return ReviewGateCandidate({}, [], [], [])
-        candidate_round = self._highest_relevant_review_candidate_round(rounds, live_head_sha)
-        return self._diagnostic_review_gate_candidate(rounds[candidate_round], live_head_sha)
-
-    def _highest_relevant_review_candidate_round(
-        self,
-        rounds: Mapping[int, Mapping[str, list[ReviewEvidence]]],
-        live_head_sha: str,
-    ) -> int:
-        def score(round_number: int) -> tuple[int, int, int]:
-            by_role = rounds[round_number]
-            valid_live_roles = {
-                role
-                for role, evidences in by_role.items()
-                if len(evidences) == 1
-                and evidences[0].valid
-                and not evidences[0].pending
-                and not evidences[0].terminal_failed
-                and evidences[0].head_sha == live_head_sha
-            }
-            live_evidence_count = sum(
-                1
-                for evidences in by_role.values()
-                for evidence in evidences
-                if evidence.head_sha == live_head_sha
-            )
-            return (len(valid_live_roles), live_evidence_count, round_number)
-
-        return max(rounds, key=score)
-
-    def _diagnostic_review_gate_candidate(
-        self,
-        by_role: Mapping[str, list[ReviewEvidence]],
-        live_head_sha: str,
-    ) -> ReviewGateCandidate:
-        selected: dict[str, ReviewEvidence] = {}
-        invalid: list[str] = []
-        pending: list[str] = []
-        terminal_failed_roles: list[str] = []
-        for role in REQUIRED_REVIEW_ROLES:
-            items = list(by_role.get(role, []))
-            if len(items) > 1:
-                invalid.append(f"duplicate_reviewer_evidence:{role}")
-                continue
-            if not items:
-                continue
-            evidence = items[0]
-            if evidence.pending:
-                pending.append(evidence.reason or f"pending:{role}")
-                continue
-            if evidence.terminal_failed:
-                terminal_failed_roles.append(role)
-                invalid.append(evidence.reason or f"terminal_failed:{role}")
-                continue
-            if not evidence.valid:
-                invalid.append(evidence.reason or f"invalid:{role}")
-                continue
-            if not evidence.head_sha:
-                invalid.append(f"missing_reviewed_head_sha:{role}")
-                continue
-            if live_head_sha and evidence.head_sha != live_head_sha:
-                invalid.append(f"stale_reviewed_head_sha:{role}")
-                continue
-            selected[role] = evidence
-        return ReviewGateCandidate(selected, invalid, pending, terminal_failed_roles)
+        selection = select_latest_live_head_review_evidence(
+            self._review_evidences(pr_number),
+            live_head_sha=live_head_sha,
+            required_roles=REQUIRED_REVIEW_ROLES,
+        )
+        return ReviewGateCandidate(
+            dict(selection.by_role),
+            selection.invalid,
+            selection.pending,
+            selection.terminal_failed_roles,
+            complete_round=selection.complete_round,
+        )
 
     def _review_evidences(self, pr_number: int) -> list[ReviewEvidence]:
         github_evidences = self._github_review_evidences(pr_number)
