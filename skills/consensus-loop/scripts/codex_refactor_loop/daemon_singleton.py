@@ -11,6 +11,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+METADATA_FIELD_ORDER = (
+    "daemon_name",
+    "repo_root",
+    "actor_pid",
+    "heartbeat_file",
+    "fingerprint_file",
+    "command_sha256",
+    "started_at",
+    "lock_generation",
+)
+
 
 @dataclass(frozen=True)
 class DaemonSingletonMetadata:
@@ -96,6 +107,9 @@ class DaemonSingletonMetadata:
             "lock_generation": self.lock_generation,
         }
 
+    def canonical_json_line(self) -> str:
+        return json.dumps(self.to_json(), separators=(",", ":")) + "\n"
+
 
 @dataclass(frozen=True)
 class DaemonSingletonProjection:
@@ -127,7 +141,7 @@ class DaemonSingletonLock(AbstractContextManager["DaemonSingletonLock"]):
             raise RuntimeError(f"daemon singleton lock held: {self.path}") from exc
         handle.seek(0)
         handle.truncate()
-        handle.write(json.dumps(self.metadata.to_json(), sort_keys=True) + "\n")
+        handle.write(self.metadata.canonical_json_line())
         handle.flush()
         os.fsync(handle.fileno())
         self._handle = handle
@@ -196,6 +210,7 @@ __all__ = [
     "DaemonSingletonLock",
     "DaemonSingletonMetadata",
     "DaemonSingletonProjection",
+    "METADATA_FIELD_ORDER",
     "lock_path",
     "probe",
     "read_metadata",
