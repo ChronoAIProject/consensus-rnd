@@ -859,13 +859,13 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertTrue(section)
         for needle in (
             "codex_refactor_loop.worker_markers",
-            "detection, runner revalidation, implement readiness, and review completion evidence",
+            "local completion detection, implement readiness, prompt inputs, and redispatch hints",
             "standalone allowlisted terminal markers only after clean `EXIT=0`",
             "same-stem `.refactor-loop/runs/<stem>.md` companion artifact",
-            "Duplicate, malformed, or conflicting marker evidence fails closed",
+            "Duplicate, malformed, or conflicting local marker evidence fails closed",
             "Implement readiness recognizes `IMPLEMENT_DONE:*:ok`",
-            "Review-gate verdict authority remains artifact-frontmatter-first",
-            "`REVIEW_DONE` does not override frontmatter verdicts",
+            "Review-gate merge/fix authority is GitHub-comment-first",
+            "local review artifacts and logs do not authorize `FIX`, `MERGE`, or `MERGE_WITH_COMMENTS`",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
