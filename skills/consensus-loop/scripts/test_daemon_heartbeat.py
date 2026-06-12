@@ -283,6 +283,37 @@ class DaemonHeartbeatLeaseTests(unittest.TestCase):
         self.assertIsNone(projection.holder_pid)
         self.assertFalse(projection.metadata_valid)
 
+    def test_probe_reports_missing_singleton_lock_file(self) -> None:
+        projection = probe_singleton(self.repo, "python-daemon")
+
+        self.assertEqual("missing", projection.state)
+        self.assertEqual("lock-missing", projection.reason)
+        self.assertIsNone(projection.holder_pid)
+        self.assertFalse(projection.metadata_valid)
+
+    def test_probe_reports_free_singleton_lock_metadata(self) -> None:
+        lease = DaemonHeartbeatLease("python-daemon", self.repo, singleton=True, clock=lambda: 3300)
+
+        with lease.daemon_lifetime():
+            pass
+        projection = probe_singleton(self.repo, "python-daemon")
+
+        self.assertEqual("free", projection.state)
+        self.assertEqual("lock-free", projection.reason)
+        self.assertEqual(os.getpid(), projection.holder_pid)
+        self.assertTrue(projection.metadata_valid)
+
+    def test_probe_reports_filesystem_error(self) -> None:
+        lock = self.repo / ".refactor-loop" / "locks" / "python-daemon.singleton.lock"
+        lock.mkdir(parents=True)
+
+        projection = probe_singleton(self.repo, "python-daemon")
+
+        self.assertEqual("probe-error", projection.state)
+        self.assertEqual("probe-error:IsADirectoryError", projection.reason)
+        self.assertIsNone(projection.holder_pid)
+        self.assertFalse(projection.metadata_valid)
+
     def test_heartbeat_source_has_no_cwd_repo_root_default(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "heartbeat.py").read_text(encoding="utf-8")
         self.assertIn("LoopContext.load", source)
