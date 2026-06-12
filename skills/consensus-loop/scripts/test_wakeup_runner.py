@@ -2078,6 +2078,90 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.status for result in results], ["applied"])
         self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
 
+    def test_wakeup_runner_suppresses_repeated_rebase_resolve_helper_exit_2(self) -> None:
+        action = self.rebase_dispatch_action()
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.write_text(
+            "".join(
+                json.dumps(
+                    {
+                        "action_id": action["action_id"],
+                        "status": "blocked",
+                        "reason": "helper_exit:2",
+                        "kind": action["kind"],
+                    }
+                )
+                + "\n"
+                for _ in range(3)
+            ),
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
+
+        self.assertEqual([result.status for result in results], ["skipped"])
+        self.assertEqual(results[0].reason, "suppressed:helper_exit:2")
+        self.assertEqual([], actions.calls)
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(
+            "WAKEUP_RUNNER_HELPER_EXIT_SUPPRESSED:dispatch-pr-rebase-resolve:77:abc123:dispatch_pr_rebase_resolve:2:3",
+            pending.splitlines(),
+        )
+        self.assertNotIn("WAKEUP_RUNNER_HELPER_EXIT:dispatch-pr-rebase-resolve:77:abc123", pending)
+        ledger_rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(ledger_rows[-1]["status"], "skipped")
+        self.assertEqual(ledger_rows[-1]["reason"], "suppressed:helper_exit:2")
+
+    def test_suppressed_rebase_resolve_does_not_consume_medium_non_spawn_slot(self) -> None:
+        suppressed = self.rebase_dispatch_action(action_id="dispatch-pr-rebase-resolve:77:suppressed")
+        later = self.rebase_dispatch_action(action_id="dispatch-pr-rebase-resolve:77:later")
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.write_text(
+            "".join(
+                json.dumps(
+                    {
+                        "action_id": suppressed["action_id"],
+                        "status": "blocked",
+                        "reason": "helper_exit:2",
+                        "kind": suppressed["kind"],
+                    }
+                )
+                + "\n"
+                for _ in range(3)
+            ),
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        results = self.run_result(
+            self.batch_plan([suppressed, later], dispatch_required=1, deficit=1),
+            gh_state="OPEN",
+            actions=actions,
+        )
+
+        self.assertEqual([result.action_id for result in results], [suppressed["action_id"], later["action_id"]])
+        self.assertEqual([result.status for result in results], ["skipped", "applied"])
+        self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
+        self.assertEqual(actions.calls[0][1]["action_id"], later["action_id"])
+
+    def test_rebase_resolve_helper_exit_2_suppression_is_action_and_reason_scoped(self) -> None:
+        action = self.rebase_dispatch_action()
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        rows = [
+            {"action_id": action["action_id"], "status": "blocked", "reason": "helper_exit:2", "kind": action["kind"]},
+            {"action_id": action["action_id"], "status": "blocked", "reason": "helper_exit:3", "kind": action["kind"]},
+            {"action_id": "dispatch-pr-rebase-resolve:77:other", "status": "blocked", "reason": "helper_exit:2", "kind": action["kind"]},
+            {"action_id": action["action_id"], "status": "blocked", "reason": "helper_exit:2", "kind": action["kind"]},
+        ]
+        ledger.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
+
+        self.assertEqual([result.status for result in results], ["applied"])
+        self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
+
     def test_wakeup_runner_routes_false_done_rebase_recovery_dispatch(self) -> None:
         log = self.repo / ".refactor-loop/logs/rebase-resolve-pr77-r1.log"
         log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
