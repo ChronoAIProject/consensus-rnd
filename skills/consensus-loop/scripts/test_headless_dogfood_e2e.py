@@ -173,6 +173,7 @@ class HeadlessDogfoodFixture:
             "body": f"Closes #{number}",
             "mergeable": "MERGEABLE",
             "isDraft": False,
+            "comments": [],
         }
 
     def router(self) -> Phase9Router:
@@ -287,6 +288,12 @@ class HeadlessDogfoodFixture:
                     rows.append({"number": pr["number"], "title": pr["title"], "updated_at": "2026-06-05T00:00:00Z", "pull_request": {"url": "https://api.github.test/pr"}, "labels": [{"name": name} for name in pr["labels"]]})
             return subprocess.CompletedProcess(args, 0, json.dumps(rows), "")
         if path.startswith("repos/owner/repo/issues/") and path.endswith("/comments?per_page=20"):
+            return subprocess.CompletedProcess(args, 0, "[]", "")
+        if path.startswith("repos/owner/repo/issues/") and path.endswith("/comments?per_page=100"):
+            number = int(path.split("/issues/", 1)[1].split("/", 1)[0])
+            pr = self.prs.get(number)
+            if pr is not None:
+                return subprocess.CompletedProcess(args, 0, json.dumps([pr.get("comments", [])]), "")
             return subprocess.CompletedProcess(args, 0, "[]", "")
         if path.startswith("repos/owner/repo/issues/"):
             number = int(path.rsplit("/", 1)[1])
@@ -426,6 +433,16 @@ class HeadlessDogfoodFixture:
             (self.logs / f"review-pr{pr}-{role}-r1.log").write_text(
                 f"REVIEW_DONE:{pr}:{role}:approve\nEXIT=0\n",
                 encoding="utf-8",
+            )
+            self.prs[pr].setdefault("comments", []).append(
+                {
+                    "body": (
+                        f"review_round: 1\n"
+                        f"head_sha: {head_sha}\n"
+                        f"REVIEW_DONE:{pr}:{role}:approve\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    )
+                }
             )
 
 

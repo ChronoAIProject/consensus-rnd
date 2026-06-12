@@ -312,11 +312,28 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
         self.supervisor = FakeSupervisor()
         self.expected_skill_root = SCRIPT_DIR.parent
+        self.review_comments: list[dict[str, object]] = []
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
         self.graphql_headroom_patch.stop()
         reset_graphql_budget_cache()
+
+    def add_review_comment(self, role: str, verdict: str, *, pr_number: int = 77, head_sha: str = "a" * 40, round_number: int = 1) -> None:
+        self.review_comments.append(
+            {
+                "body": (
+                    f"review_round: {round_number}\n"
+                    f"head_sha: {head_sha}\n"
+                    f"REVIEW_DONE:{pr_number}:{role}:{verdict}\n\n"
+                    "⟦AI:AUTO-LOOP⟧"
+                )
+            }
+        )
+
+    def add_review_comments(self, verdicts: dict[str, str], *, pr_number: int = 77, head_sha: str = "a" * 40, round_number: int = 1) -> None:
+        for role in ("architect", "tests", "quality"):
+            self.add_review_comment(role, verdicts[role], pr_number=pr_number, head_sha=head_sha, round_number=round_number)
 
     def test_run_command_injects_gh_repo_only_in_valid_subcommand_position(self) -> None:
         calls: list[list[str]] = []
@@ -858,6 +875,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, json.dumps({"permission": "write"}), "")
                 if endpoint.endswith("/timeline"):
                     return subprocess.CompletedProcess(command, 0, "[]", "")
+                if endpoint == "repos/owner/repo/issues/77/comments?per_page=100":
+                    return subprocess.CompletedProcess(command, 0, json.dumps([self.review_comments]), "")
                 if endpoint == "repos/owner/repo/pulls/77":
                     if gh_state is None:
                         return subprocess.CompletedProcess(command, 1, "", "not found")
@@ -2562,6 +2581,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([call[0] for call in actions.calls], ["close_managed_item_from_drop_marker"])
 
     def test_wakeup_runner_lifecycle_review_gate_not_starved_after_spawn_batch(self) -> None:
+        self.add_review_comments({"architect": "approve", "tests": "approve", "quality": "comment"})
         for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
             (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r1.md").write_text(
                 f"head_sha: {'a' * 40}\n",
@@ -2726,6 +2746,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         worktree = self.repo / ".worktrees" / "iter77-worker"
         worktree.mkdir(parents=True, exist_ok=True)
 
+        self.add_review_comments({"architect": "approve", "tests": "reject", "quality": "comment"})
         for role, verdict in (("architect", "approve"), ("tests", "reject"), ("quality", "comment")):
             (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r1.md").write_text(
                 f"head_sha: {'a' * 40}\n",
@@ -2756,6 +2777,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertNotIn("${", prompt.read_text(encoding="utf-8"))
 
     def test_wakeup_runner_headless_review_fix_fails_closed_when_pr_worktree_missing(self) -> None:
+        self.add_review_comments({"architect": "approve", "tests": "reject", "quality": "comment"})
         for role, verdict in (("architect", "approve"), ("tests", "reject"), ("quality", "comment")):
             (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r1.md").write_text(
                 f"head_sha: {'a' * 40}\n",
@@ -2776,6 +2798,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             repo_root = self.ctx.repo_root
             if command == ["gh", "api", "repos/owner/repo/pulls/77"]:
                 return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": "a" * 40}}), "")
+            if command == ["gh", "api", "repos/owner/repo/issues/77/comments?per_page=100", "--paginate", "--slurp"]:
+                return subprocess.CompletedProcess(command, 0, json.dumps([self.review_comments]), "")
             if command[:3] == ["gh", "api", f"repos/owner/repo/commits/{'a' * 40}/check-runs"]:
                 payload = [{"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}]
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
@@ -2808,6 +2832,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertIn("WAKEUP_RUNNER_REVIEW_FIX_WORKTREE_MISSING:77:refactor/iter77-worker", pending)
 
     def test_wakeup_runner_review_fix_worktree_gap_does_not_starve_later_ci_red_dispatch(self) -> None:
+        self.add_review_comments({"architect": "approve", "tests": "reject", "quality": "comment"})
         for role, verdict in (("architect", "approve"), ("tests", "reject"), ("quality", "comment")):
             (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r1.md").write_text(
                 f"head_sha: {'a' * 40}\n",
@@ -2837,6 +2862,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 endpoint = str(command[2]) if len(command) > 2 else ""
                 if endpoint in {"repos/owner/repo/pulls/77", "repos/owner/repo/pulls/78"}:
                     return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": "a" * 40}}), "")
+                if endpoint == "repos/owner/repo/issues/77/comments?per_page=100":
+                    return subprocess.CompletedProcess(command, 0, json.dumps([self.review_comments]), "")
                 if endpoint == f"repos/owner/repo/commits/{'a' * 40}/check-runs":
                     payload = [{"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}]
                     return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
@@ -5028,6 +5055,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(actions.calls[0][0], "dispatch_reviewers")
 
     def test_stale_review_dispatch_applied_row_suppresses_after_target_roles_current(self) -> None:
+        self.add_review_comment("architect", "approve", round_number=2)
+        self.add_review_comment("tests", "approve", round_number=2)
         for role in ("architect", "tests"):
             (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r2.md").write_text(
                 "reviewed-head-sha: " + "a" * 40 + "\n",
