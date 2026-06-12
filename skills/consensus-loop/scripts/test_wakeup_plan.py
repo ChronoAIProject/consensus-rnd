@@ -229,6 +229,37 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual([88], [item.number for item in candidates])
         run_json_mock.assert_called_once()
 
+    def test_default_issue_intake_projects_after_all_candidate_actions_are_suppressed(self) -> None:
+        self.set_host_env_value("DEFAULT_ISSUE_INTAKE_ENABLE", "true")
+        (self.logs / "implement-issue507.log").write_text(
+            "IMPLEMENT_DONE:issue-507:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="default_intake_after_suppressed_publish")
+
+        suppressed = completed_marker_action(plan, "completed-marker:implement-issue507")
+        self.assertTrue(suppressed["status_only"])
+        self.assertEqual("implementation_worktree_missing", suppressed["suppressed_reason"])
+        intake_actions = [action for action in plan["actions"] if action["kind"] == "default-issue-intake-claim"]
+        self.assertEqual([610], [action["target_number"] for action in intake_actions])
+        self.assertTrue(has_dispatchable_action(intake_actions))
+
+    def test_default_issue_intake_skips_when_dispatchable_action_remains(self) -> None:
+        self.set_host_env_value("DEFAULT_ISSUE_INTAKE_ENABLE", "true")
+        self.append_harness_spawn_intent(
+            intent_id="dispatchable-work",
+            task_id="issue #507",
+            prompt=".refactor-loop/prompts/dispatchable-work.md",
+            log=".refactor-loop/logs/dispatchable-work.log",
+        )
+
+        plan = self.run_plan(fixture="default_intake_blocked_by_dispatchable")
+
+        self.assertEqual([], [action for action in plan["actions"] if action["kind"] == "default-issue-intake-claim"])
+        self.assertTrue(any(action.get("intent_id") == "dispatchable-work" and not action.get("status_only") for action in plan["actions"]))
+        self.assertTrue(has_dispatchable_action(plan["actions"]))
+
     def test_rebase_resolve_actions_fetch_live_mergeability_for_snapshot_pr(self) -> None:
         item = GhItem(
             kind="PR",
@@ -882,6 +913,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    default_intake_after_suppressed_publish|default_intake_blocked_by_dispatchable)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":507,"title":"old implementation issue","updatedAt":"2026-05-02T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[{"number":610,"title":"unmanaged intake candidate","updatedAt":"2026-05-01T00:00:00Z","labels":[]}]\n'
+                      fi
+                      ;;
                     repository_fresh)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":506,"title":"fresh design issue","updatedAt":"2099-05-01T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
@@ -1330,6 +1368,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             ],
             "repository_stalled": [
                 issue(506, "old design issue", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto], updated_at="2026-05-01T00:00:00Z"),
+                issue(507, "old implementation issue", [managed, label_catalog.PHASE_IMPLEMENTING, auto], updated_at="2026-05-02T00:00:00Z"),
+            ],
+            "default_intake_after_suppressed_publish": [
+                issue(507, "old implementation issue", [managed, label_catalog.PHASE_IMPLEMENTING, auto], updated_at="2026-05-02T00:00:00Z"),
+            ],
+            "default_intake_blocked_by_dispatchable": [
                 issue(507, "old implementation issue", [managed, label_catalog.PHASE_IMPLEMENTING, auto], updated_at="2026-05-02T00:00:00Z"),
             ],
             "repository_fresh": [
