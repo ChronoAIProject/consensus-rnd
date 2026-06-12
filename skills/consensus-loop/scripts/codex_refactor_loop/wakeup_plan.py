@@ -5247,11 +5247,11 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         actions.extend(host_actions)
     actions.extend(release_countdown_actions(repo_root, gh_items))
     actions.extend(existing_issue_actions(gh_items, repo_root))
-    if gh_items_loaded and not has_dispatchable_action(actions):
-        actions.extend(default_issue_intake_actions(load_default_issue_intake_candidates(repo_root, ctx), ctx))
     suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)
     actions.extend(implementation_pr_artifact_repair_actions(actions, repo_root))
     suppress_publish_superseded_implementation_spawn_intents(actions)
+    if gh_items_loaded and not has_dispatchable_action(actions):
+        actions.extend(default_issue_intake_actions(load_default_issue_intake_candidates(repo_root, ctx), ctx))
     if gh_items_loaded and not has_dispatchable_action(actions):
         actions.extend(repository_stalled_meta_reflector_actions(repo_root, ctx, gh_items, monitor))
     serialize_conflicting_consensus_implementation_actions(actions)
