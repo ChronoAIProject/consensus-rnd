@@ -329,6 +329,58 @@ class DaemonStatusProjectionTests(unittest.TestCase):
         self.assertIsNone(daemon["singleton_lock_holder_pid"])
         self.assertFalse(daemon["singleton_lock_metadata_valid"])
 
+    def test_free_singleton_lock_metadata_is_diagnostic_status_only(self) -> None:
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+        ctx = LoopContext.load(
+            repo_root=self.tmp,
+            skill_root=SCRIPT_DIR.parent,
+            read_only=True,
+            env=env,
+        )
+        target = restart.daemon_target(
+            ctx,
+            "concurrency_monitor",
+            ("python3", "{skill_root}/scripts/consensus-rnd-cli", "concurrency", "--daemon"),
+        )
+        target.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
+        target.heartbeat_file.write_text("1000\n", encoding="utf-8")
+        target.pid_file.parent.mkdir(parents=True, exist_ok=True)
+        target.pid_file.write_text("848\n", encoding="utf-8")
+        restart.DaemonLaunchFingerprint.current(ctx, "concurrency_monitor", target.command).write(target.fingerprint_file)
+        wrapper_command = " ".join(
+            (
+                sys.executable,
+                "-c",
+                restart.WRAPPER_CODE,
+                "concurrency_monitor",
+                str(ctx.repo_root),
+                str(target.pid_file),
+                str(target.died_file),
+                *target.command,
+            )
+        )
+        inventory = restart.DaemonProcessInventory((restart.DaemonProcess(848, wrapper_command, 1),))
+        singleton = DaemonSingletonProjection(target.singleton_lock_file, "free", 857, True, "lock-free")
+        (self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=inventory):
+                with mock.patch("codex_refactor_loop.daemon_status.probe_daemon_singleton", return_value=singleton):
+                    with mock.patch("codex_refactor_loop.restart.time.time", return_value=1001):
+                        with mock.patch("codex_refactor_loop.daemon_status.pid_alive", side_effect=lambda candidate: candidate == 848):
+                            report = daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        daemon = next(item for item in report.to_json()["daemons"] if item["name"] == "concurrency_monitor")
+        self.assertEqual("stale", daemon["status"])
+        self.assertEqual("stale", daemon["stale_reason"])
+        self.assertEqual("free", daemon["singleton_lock_state"])
+        self.assertEqual(857, daemon["singleton_lock_holder_pid"])
+        self.assertTrue(daemon["singleton_lock_metadata_valid"])
+        self.assertEqual("lock-free", daemon["singleton_lock_reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

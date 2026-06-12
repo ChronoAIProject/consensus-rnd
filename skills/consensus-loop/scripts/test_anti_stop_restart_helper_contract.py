@@ -81,19 +81,58 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "Forbidden: the singleton lock must not create, close, reopen, edit, merge, label, commit, push, tag, release",
             "Fact source: the live open file lock is the mutual-exclusion fact",
             "Canonical metadata field order is `daemon_name`, `repo_root`, `actor_pid`, `heartbeat_file`, `fingerprint_file`, `command_sha256`, `started_at`, then `lock_generation`",
+            "Allowed characters: `daemon_name` is ASCII alphanumeric plus `_` and `-`",
+            "`command_sha256` is empty or lowercase 64-hex",
+            "status/reason values are the literal ASCII tokens listed here",
+            "canonical writes emit compact JSON in the documented field order plus trailing newline",
             "String fields must be non-empty except `fingerprint_file` and `command_sha256`, integer fields must be positive",
             "Status states are exactly `missing`, `free`, `held`, `held-malformed`, and `probe-error`",
             "`held-malformed` means another process holds the lock but metadata cannot validate",
+            "free valid metadata is diagnostic only and does not block restart",
             "Legacy read/migration policy: missing singleton locks are `missing`",
             "Runtime inputs `RESTART_DAEMON_SINGLETON_LOCK`, `RESTART_DAEMON_SINGLETON_LOCK_FILE`, `RESTART_DAEMON_FINGERPRINT_FILE`, and `RESTART_DAEMON_COMMAND_SHA256`",
             "`singleton_lock_path`, `singleton_lock_state`, `singleton_lock_holder_pid`, `singleton_lock_metadata_valid`, and `singleton_lock_reason`",
             "held-malformed singleton lock skip without reaping or launching",
+            "free singleton metadata diagnostic-only restart",
+            "singleton status fields including free metadata projection",
             "`test_daemon_heartbeat.py` 覆盖 deterministic lease sleep renewal and actor-held singleton lock states",
             "`test_daemon_status.py` 覆盖 singleton status fields",
             "actor-held singleton lock contract",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
+
+    def test_singleton_metadata_source_matches_skill_contract(self) -> None:
+        singleton_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "daemon_singleton.py").read_text(encoding="utf-8")
+        tree = ast.parse(singleton_source)
+        assignments = {
+            target.id: node.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+
+        self.assertEqual(
+            (
+                "daemon_name",
+                "repo_root",
+                "actor_pid",
+                "heartbeat_file",
+                "fingerprint_file",
+                "command_sha256",
+                "started_at",
+                "lock_generation",
+            ),
+            ast.literal_eval(assignments["METADATA_FIELD_ORDER"]),
+        )
+        self.assertEqual(
+            frozenset({"missing", "free", "held", "held-malformed", "probe-error"}),
+            ast.literal_eval(assignments["METADATA_STATUS_STATES"]),
+        )
+        self.assertIn("def canonical_json_line", singleton_source)
+        self.assertIn("separators=(\",\", \":\")", singleton_source)
+        self.assertNotIn("sort_keys=True", singleton_source)
 
     def test_scheduler_docs_use_single_cli_entrypoint(self) -> None:
         self.assertIn("consensus-rnd-cli restart-daemons", self.skill)

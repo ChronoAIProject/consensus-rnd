@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import time
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -21,6 +22,10 @@ METADATA_FIELD_ORDER = (
     "started_at",
     "lock_generation",
 )
+
+METADATA_STATUS_STATES = ("missing", "free", "held", "held-malformed", "probe-error")
+_DAEMON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -69,19 +74,21 @@ class DaemonSingletonMetadata:
         lock_generation = payload.get("lock_generation")
         if (
             not isinstance(daemon_name, str)
-            or not daemon_name
+            or not _valid_daemon_name(daemon_name)
             or not isinstance(repo_root, str)
-            or not repo_root
+            or not _valid_metadata_string(repo_root)
             or not isinstance(actor_pid, int)
             or actor_pid <= 0
             or not isinstance(heartbeat_file, str)
-            or not heartbeat_file
+            or not _valid_metadata_string(heartbeat_file)
             or not isinstance(fingerprint_file, str)
+            or not _valid_metadata_string(fingerprint_file, allow_empty=True)
             or not isinstance(command_sha256, str)
+            or not _valid_command_sha256(command_sha256)
             or not isinstance(started_at, int)
             or started_at <= 0
             or not isinstance(lock_generation, int)
-            or lock_generation <= 0
+            or lock_generation != 1
         ):
             raise ValueError("malformed daemon singleton metadata")
         return cls(
@@ -120,10 +127,6 @@ class DaemonSingletonProjection:
     reason: str
     metadata: DaemonSingletonMetadata | None = None
 
-    @property
-    def held(self) -> bool:
-        return self.state in {"held", "held-malformed"}
-
 
 class DaemonSingletonLock(AbstractContextManager["DaemonSingletonLock"]):
     def __init__(self, path: Path, metadata: DaemonSingletonMetadata) -> None:
@@ -160,6 +163,20 @@ class DaemonSingletonLock(AbstractContextManager["DaemonSingletonLock"]):
 
 def lock_path(repo_root: Path, daemon_name: str) -> Path:
     return repo_root / ".refactor-loop" / "locks" / f"{daemon_name}.singleton.lock"
+
+
+def _valid_daemon_name(value: str) -> bool:
+    return bool(_DAEMON_NAME_PATTERN.fullmatch(value))
+
+
+def _valid_metadata_string(value: str, *, allow_empty: bool = False) -> bool:
+    if not value and not allow_empty:
+        return False
+    return all(char >= " " and char != "\x7f" for char in value)
+
+
+def _valid_command_sha256(value: str) -> bool:
+    return value == "" or bool(_SHA256_PATTERN.fullmatch(value))
 
 
 def read_metadata(path: Path) -> DaemonSingletonMetadata | None:
@@ -211,6 +228,7 @@ __all__ = [
     "DaemonSingletonMetadata",
     "DaemonSingletonProjection",
     "METADATA_FIELD_ORDER",
+    "METADATA_STATUS_STATES",
     "lock_path",
     "probe",
     "read_metadata",
