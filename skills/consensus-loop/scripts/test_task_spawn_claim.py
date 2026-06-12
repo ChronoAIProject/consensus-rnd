@@ -15,7 +15,13 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.task_spawn_claim import TaskSpawnClaimError, TaskSpawnClaimStore, safe_task_id_from_task
+from codex_refactor_loop.task_spawn_claim import (
+    TaskSpawnClaimError,
+    TaskSpawnClaimMetadataError,
+    TaskSpawnClaimStore,
+    read_spawn_task_lock_metadata,
+    safe_task_id_from_task,
+)
 
 
 class TaskSpawnClaimStoreTests(unittest.TestCase):
@@ -177,6 +183,19 @@ class TaskSpawnClaimStoreTests(unittest.TestCase):
             self.store.acquire("phase9-issue490-r4-judge", log_path=self.log)
         self.assertTrue(claim.lock_path.is_file())
         self.assertEqual(mismatched_payload, claim.lock_path.read_text(encoding="utf-8"))
+
+    def test_shared_metadata_reader_requires_safe_task_id_and_matching_basename(self) -> None:
+        lock_path = self._write_claim_lock("implement-issue490", pid=os.getpid())
+
+        metadata = read_spawn_task_lock_metadata(lock_path)
+
+        self.assertEqual("implement-issue490", metadata.task_id)
+        self.assertEqual(self.log.resolve(), metadata.log_path)
+        wrong_basename = lock_path.with_name("other.lock")
+        wrong_basename.write_text(lock_path.read_text(encoding="utf-8"), encoding="utf-8")
+        with self.assertRaises(TaskSpawnClaimMetadataError) as raised:
+            read_spawn_task_lock_metadata(wrong_basename)
+        self.assertEqual("basename_mismatch", raised.exception.reason)
 
     def test_safe_task_id_rejects_empty_or_unsafe_values(self) -> None:
         self.assertEqual("review-pr490-tests-r1", safe_task_id_from_task("review-pr490 tests r1"))

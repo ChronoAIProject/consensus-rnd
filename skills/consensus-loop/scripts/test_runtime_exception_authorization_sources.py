@@ -419,11 +419,32 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "merged_or_missing_safe",
             "git worktree remove <path>",
             "git worktree prune",
+            ".refactor-loop/locks/spawn-tasks/<safe-task-id>.lock",
+            "TaskSpawnClaimStore",
+            "metadata task id matches basename",
+            "`log_path` resolves under `$REPO_ROOT/.refactor-loop/logs/`",
+            "TTL elapsed",
+            "terminal `EXIT=` marker",
+            "missing-log",
+            "companion/plan proof",
+            "dead-holder/no-in-flight",
+            "GitHub terminal-state",
+            "path-escape",
+            "unreadable",
+            "malformed",
+            "non-regular",
+            "unsafe-basename",
+            "young",
+            "unlink-failure",
             "no GitHub write",
             "no `git fetch`",
             "no branch deletion",
             "no `.refactor-loop/{logs,prompts,runs}` worker artifact deletion",
             "no `generated_files` deletion authority",
+            "no `RuntimeRetentionPlan.spawn_task_locks`",
+            "no missing-log companion/plan proof",
+            "no dead-holder/no-in-flight/GitHub terminal-state lock proof",
+            "no path-escaped lock logs",
             "no worktree cleanup without planner proof",
             "no generic lifecycle actor",
         ):
@@ -445,7 +466,12 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("RuntimeRetentionPlan", runtime_source)
         self.assertIn("generated_files", runtime_source)
         self.assertIn("legacy_generated_files_ignored", runtime_source)
+        self.assertIn("SPAWN_TASK_LOCKS_PATH", runtime_source)
+        self.assertIn("read_spawn_task_lock_metadata", runtime_source)
+        self.assertIn("spawn_task_log_has_exit_marker", runtime_source)
+        self.assertIn("removed_spawn_task_locks", runtime_source)
         self.assertNotIn("GENERATED_FILE_PROOF_TRUTHS", runtime_source)
+        self.assertNotIn("RuntimeRetentionPlan.spawn_task_locks", runtime_source)
         self.assertNotIn("path.unlink(", runtime_source)
 
     def test_issue_504_global_dashboard_card_is_fixed_issue_comment_patch_only(self) -> None:
