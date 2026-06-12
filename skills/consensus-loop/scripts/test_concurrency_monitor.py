@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Behavior tests for concurrency_monitor dispatch queue auto-topup."""
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess
