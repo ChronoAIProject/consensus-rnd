@@ -365,13 +365,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "$RUNTIME_RETENTION_ENABLE=true",
             "$REPO_ROOT/.refactor-loop/{logs,prompts,runs}",
             "generated_files",
-            "TTL-expired",
-            "regular non-symlink files",
-            "no_open_actionable",
-            "no_pending_intent",
-            "no_unconsumed_marker",
-            "no_recovery_surface",
-            "markerless recovery",
+            "compatibility input only",
+            "no delete authority",
             "same inode",
             ".controller-pending-events.log",
             ".refactor-loop/state/runtime-retention-plan.json",
@@ -379,6 +374,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "git worktree prune",
             "no `git fetch`",
             "no GitHub write or lifecycle authority",
+            "worker artifact deletion",
             "test_runtime_retention.py",
         ):
             with self.subTest(needle=needle):
