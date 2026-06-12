@@ -13,7 +13,9 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import labels
 from codex_refactor_loop.work_items import (
+    DESIGN_CONSENSUS_TERMINAL_PHASES,
     ManagedWorkProjection,
+    design_consensus_terminal_source,
     extract_closing_issue_numbers,
     linkage_mismatches,
 )
@@ -76,6 +78,64 @@ class WorkItemProjectionTests(unittest.TestCase):
             [("issue", 239), ("pr", 255), ("pr", 256)],
         )
 
+    def test_design_consensus_terminal_source_covers_phase_labels(self) -> None:
+        expected = {
+            labels.PHASE_CONSENSUS_REACHED,
+            labels.PHASE_IMPLEMENTING,
+            labels.PHASE_PR_OPEN,
+            labels.PHASE_MERGED,
+            labels.PHASE_CLOSED,
+        }
+
+        self.assertEqual(DESIGN_CONSENSUS_TERMINAL_PHASES, frozenset(expected))
+        for phase in expected:
+            with self.subTest(phase=phase):
+                self.assertEqual(
+                    design_consensus_terminal_source(239, labels=(labels.MANAGED, phase, labels.HUMAN_AUTO)),
+                    f"phase-label:{phase}",
+                )
+
+        self.assertIsNone(
+            design_consensus_terminal_source(
+                239,
+                labels=(labels.MANAGED, labels.PHASE_DESIGN_SOLVING, labels.HUMAN_AUTO),
+            )
+        )
+
+    def test_design_consensus_terminal_source_uses_exactly_one_open_managed_closing_pr(self) -> None:
+        self.assertEqual(
+            design_consensus_terminal_source(
+                239,
+                items=(
+                    {
+                        "kind": "PR",
+                        "number": 255,
+                        "labels": (labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO),
+                        "body": "Closes #239\n",
+                    },
+                ),
+            ),
+            "open-managed-closing-pr:255",
+        )
+
+    def test_design_consensus_terminal_source_rejects_ambiguous_closing_prs(self) -> None:
+        items = (
+            {
+                "kind": "PR",
+                "number": 255,
+                "labels": (labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO),
+                "body": "Closes #239\n",
+            },
+            {
+                "kind": "PR",
+                "number": 256,
+                "labels": (labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO),
+                "body": "Closes #239\n",
+            },
+        )
+
+        self.assertIsNone(design_consensus_terminal_source(239, items=items))
+
     def test_linkage_mismatch_reports_missing_multiple_and_merged_links(self) -> None:
         items = [
             {
@@ -124,6 +184,7 @@ class WorkItemProjectionTests(unittest.TestCase):
         self.assertIn("def represented_issue_numbers", source)
         self.assertIn("def effective_worker_items", source)
         self.assertIn("def linkage_mismatches", source)
+        self.assertIn("def design_consensus_terminal_source", source)
         self.assertIn("Closes\\s+#", source)
 
 
