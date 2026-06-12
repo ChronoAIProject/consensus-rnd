@@ -181,7 +181,7 @@ COMMANDS: dict[str, CommandSpec] = {
     "check-manifest": CommandSpec(manifest_main, "run manifest version sync check", ("read-source",)),
     "runtime-retention": CommandSpec(
         runtime_retention_main,
-        "run canonical RuntimeRetention for skill-private generated artifacts",
+        "run canonical RuntimeRetention for pending-events compaction and stale worktree cleanup",
         ("delete-runtime", "git-worktree"),
     ),
     "check-project-rules": CommandSpec(
