@@ -69,15 +69,30 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def github_review_comment(self, role: str, verdict: str, *, head_sha: str = "a" * 40, round_number: int = 1) -> dict[str, object]:
-        return {
+    def github_review_comment(
+        self,
+        role: str,
+        verdict: str,
+        *,
+        head_sha: str = "a" * 40,
+        round_number: int | None = 1,
+        created_at: str = "",
+        comment_id: int | None = None,
+    ) -> dict[str, object]:
+        round_line = f"review_round: {round_number}\n" if round_number is not None else "review_round: \n"
+        comment: dict[str, object] = {
             "body": (
-                f"review_round: {round_number}\n"
-                f"head_sha: {head_sha}\n"
-                f"REVIEW_DONE:12:{role}:{verdict}\n\n"
-                "⟦AI:AUTO-LOOP⟧"
+                round_line
+                + f"head_sha: {head_sha}\n"
+                + f"REVIEW_DONE:12:{role}:{verdict}\n\n"
+                + "⟦AI:AUTO-LOOP⟧"
             )
         }
+        if created_at:
+            comment["created_at"] = created_at
+        if comment_id is not None:
+            comment["id"] = comment_id
+        return comment
 
     def write_review(
         self,
@@ -368,6 +383,54 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(self.actions.merged, ["12"])
         self.assertEqual(self.actions.rendered, [])
 
+    def test_github_comment_empty_review_round_is_valid_and_gate_completes(self) -> None:
+        live = "a" * 40
+        self.github_comments = [
+            self.github_review_comment("architect", "approve", head_sha=live, round_number=None, created_at="2026-06-12T00:00:00Z", comment_id=101),
+            self.github_review_comment("tests", "approve", head_sha=live, round_number=None, created_at="2026-06-12T00:01:00Z", comment_id=102),
+            self.github_review_comment("quality", "comment", head_sha=live, round_number=None, created_at="2026-06-12T00:02:00Z", comment_id=103),
+        ]
+
+        result = self.run_action(required_checks=())
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.merged, ["12"])
+        self.assertEqual(self.actions.rendered, [])
+
+    def test_github_comment_ordered_same_role_latest_verdict_wins_without_duplicate(self) -> None:
+        live = "a" * 40
+        self.github_comments = [
+            self.github_review_comment("architect", "reject", head_sha=live, round_number=None, created_at="2026-06-12T00:00:00Z", comment_id=101),
+            self.github_review_comment("architect", "approve", head_sha=live, round_number=None, created_at="2026-06-12T00:05:00Z", comment_id=102),
+            self.github_review_comment("tests", "approve", head_sha=live, round_number=None, created_at="2026-06-12T00:01:00Z", comment_id=103),
+            self.github_review_comment("quality", "comment", head_sha=live, round_number=None, created_at="2026-06-12T00:02:00Z", comment_id=104),
+        ]
+
+        result = self.run_action(required_checks=())
+        gate = self.runner_for_gate(live_head=live)._review_gate(12)
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(gate["invalid"], [])
+        self.assertEqual(gate["verdicts"]["architect"], "approve")
+        self.assertEqual(self.actions.merged, ["12"])
+
+    def test_github_comment_later_reject_flip_flop_routes_to_fix(self) -> None:
+        live = "a" * 40
+        self.github_comments = [
+            self.github_review_comment("architect", "approve", head_sha=live, round_number=None, created_at="2026-06-12T00:00:00Z", comment_id=101),
+            self.github_review_comment("architect", "reject", head_sha=live, round_number=None, created_at="2026-06-12T00:05:00Z", comment_id=102),
+            self.github_review_comment("tests", "approve", head_sha=live, round_number=None, created_at="2026-06-12T00:01:00Z", comment_id=103),
+            self.github_review_comment("quality", "comment", head_sha=live, round_number=None, created_at="2026-06-12T00:02:00Z", comment_id=104),
+        ]
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            result = self.run_action(required_checks=())
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.merged, [])
+        self.assertEqual(self.actions.rendered, [(12, 1)])
+        launch.assert_called_once()
+
     def test_review_gate_newer_pending_wave_does_not_block_completion_when_role_has_valid_verdict(self) -> None:
         live = "f" * 40
         evidences = [
@@ -391,21 +454,111 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(decision["gate"]["invalid"], [])
         self.assertEqual(decision["gate"]["pending"], [])
 
-    def test_review_gate_duplicate_same_role_same_round_fails_closed(self) -> None:
+    def test_local_artifact_duplicate_same_role_same_round_still_fails_closed(self) -> None:
+        live = "a" * 40
+        evidences = [
+            ReviewEvidence("architect", 2, "approve", live, "test"),
+            ReviewEvidence("architect", 2, "reject", live, "test"),
+            ReviewEvidence("tests", 2, "approve", live, "test"),
+            ReviewEvidence("quality", 2, "comment", live, "test"),
+        ]
+        runner = self.runner_for_gate(live_head=live)
+        with mock.patch.object(runner, "_review_evidences", return_value=evidences):
+            decision = runner._review_gate_decision(self.action(head_sha=live))
+
+        self.assertEqual(decision["decision"], "WAIT_OR_REDISPATCH")
+        self.assertEqual(decision["reason"], "invalid_reviewer_evidence:duplicate_reviewer_evidence:architect")
+
+    def test_github_comment_identical_duplicate_marker_in_one_body_is_single_valid_evidence(self) -> None:
         live = "a" * 40
         self.github_comments = [
-            self.github_review_comment("architect", "approve", head_sha=live, round_number=2),
-            self.github_review_comment("architect", "reject", head_sha=live, round_number=2),
-            self.github_review_comment("tests", "approve", head_sha=live, round_number=2),
-            self.github_review_comment("quality", "comment", head_sha=live, round_number=2),
+            {
+                "id": 101,
+                "created_at": "2026-06-12T00:00:00Z",
+                "body": (
+                    f"review_round: \nhead_sha: {live}\n"
+                    "REVIEW_DONE:12:architect:approve\n"
+                    f"head_sha: {live}\n"
+                    "REVIEW_DONE:12:architect:approve\n\n"
+                    "⟦AI:AUTO-LOOP⟧"
+                ),
+            },
+            self.github_review_comment("tests", "approve", head_sha=live, round_number=None, created_at="2026-06-12T00:01:00Z", comment_id=102),
+            self.github_review_comment("quality", "comment", head_sha=live, round_number=None, created_at="2026-06-12T00:02:00Z", comment_id=103),
         ]
 
-        result = self.run_action()
+        gate = self.runner_for_gate(live_head=live)._review_gate(12)
+        result = self.run_action(required_checks=())
+
+        self.assertEqual(gate["invalid"], [])
+        self.assertEqual(gate["verdicts"]["architect"], "approve")
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.merged, ["12"])
+
+    def test_github_comment_conflicting_markers_in_one_body_fails_closed(self) -> None:
+        live = "a" * 40
+        self.github_comments = [
+            self.github_review_comment("architect", "approve", head_sha=live, round_number=None, created_at="2026-06-12T00:00:00Z", comment_id=101),
+            self.github_review_comment("quality", "comment", head_sha=live, round_number=None, created_at="2026-06-12T00:01:00Z", comment_id=102),
+            {
+                "id": 103,
+                "created_at": "2026-06-12T00:02:00Z",
+                "body": (
+                    f"review_round: \nhead_sha: {live}\n"
+                    "REVIEW_DONE:12:tests:approve\n"
+                    "REVIEW_DONE:12:tests:reject\n\n"
+                    "⟦AI:AUTO-LOOP⟧"
+                ),
+            },
+        ]
+
+        result = self.run_action(required_checks=())
 
         self.assertEqual(result.status, "blocked")
-        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:duplicate_reviewer_evidence:architect")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:invalid_review_marker:tests")
         self.assertEqual(self.actions.merged, [])
-        self.assertEqual(self.actions.rendered, [])
+
+    def test_github_comment_newer_conflicting_same_role_blocks_older_valid_live_head(self) -> None:
+        live = "a" * 40
+        self.github_comments = [
+            self.github_review_comment("architect", "approve", head_sha=live, round_number=None, created_at="2026-06-12T00:00:00Z", comment_id=100),
+            self.github_review_comment("tests", "approve", head_sha=live, round_number=None, created_at="2026-06-12T00:01:00Z", comment_id=101),
+            self.github_review_comment("quality", "comment", head_sha=live, round_number=None, created_at="2026-06-12T00:02:00Z", comment_id=102),
+            {
+                "id": 103,
+                "created_at": "2026-06-12T00:05:00Z",
+                "body": (
+                    f"review_round: \nhead_sha: {live}\n"
+                    "REVIEW_DONE:12:tests:approve\n"
+                    "REVIEW_DONE:12:tests:reject\n\n"
+                    "⟦AI:AUTO-LOOP⟧"
+                ),
+            },
+        ]
+
+        result = self.run_action(required_checks=())
+        gate = self.runner_for_gate(live_head=live)._review_gate(12)
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:invalid_review_marker:tests")
+        self.assertEqual(gate["invalid"], ["invalid_review_marker:tests"])
+        self.assertNotIn("tests", gate["verdicts"])
+        self.assertEqual(self.actions.merged, [])
+
+    def test_github_comment_missing_live_head_role_remains_incomplete(self) -> None:
+        live = "a" * 40
+        stale = "b" * 40
+        self.github_comments = [
+            self.github_review_comment("architect", "approve", head_sha=live, round_number=None, created_at="2026-06-12T00:00:00Z", comment_id=101),
+            self.github_review_comment("tests", "approve", head_sha=live, round_number=None, created_at="2026-06-12T00:01:00Z", comment_id=102),
+            self.github_review_comment("quality", "comment", head_sha=stale, round_number=None, created_at="2026-06-12T00:02:00Z", comment_id=103),
+        ]
+
+        result = self.run_action(required_checks=())
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:stale_reviewed_head_sha:quality")
+        self.assertEqual(self.actions.merged, [])
 
     def test_review_gate_role_with_only_stale_head_remains_incomplete(self) -> None:
         self.write_review("architect", "approve")
@@ -497,10 +650,6 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
             (
                 "missing_final_ai_sentinel:tests",
                 {"body": f"review_round: 1\nhead_sha: {'a' * 40}\nREVIEW_DONE:12:tests:approve"},
-            ),
-            (
-                "missing_review_round:tests",
-                {"body": f"head_sha: {'a' * 40}\nREVIEW_DONE:12:tests:approve\n\n⟦AI:AUTO-LOOP⟧"},
             ),
             (
                 "missing_reviewed_head_sha:tests",

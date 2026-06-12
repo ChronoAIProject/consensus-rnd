@@ -1153,7 +1153,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     exit 0
                   fi
                   if [[ "$api_flag1" == "--paginate" && "$api_flag2" == "--slurp" ]]; then
-                    if [[ "$fixture" == "ci_red" && "$api_path" == "repos/owner/repo/commits/ci-red-sha/check-runs" ]]; then
+                    api_comments_file="${WAKEUP_PLAN_REPO_ROOT:-.}/gh-api-${api_path//\\//-}-comments.json"
+                    if [[ -f "$api_comments_file" ]]; then
+                      cat "$api_comments_file"
+                    elif [[ "$fixture" == "ci_red" && "$api_path" == "repos/owner/repo/commits/ci-red-sha/check-runs" ]]; then
                       printf '[{"check_runs":[{"name":"unit","status":"completed","conclusion":"failure","html_url":"https://checks/unit"},{"name":"lint","status":"completed","conclusion":"success","html_url":"https://checks/lint"}]}]\n'
                     elif [[ ( "$fixture" == "draft_rollup_missing_snapshot_draft" || "$fixture" == "draft_rollup_only_missing_snapshot_draft" ) && ( "$api_path" == "repos/owner/repo/commits/integration-sha/check-runs" || "$api_path" == "repos/owner/repo/commits/integration-sha-2/check-runs" ) ]]; then
                       printf '[{"check_runs":[{"name":"contract-tests","status":"completed","conclusion":"success","html_url":"https://checks/contract-tests"}]}]\n'
@@ -4849,6 +4852,98 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         gate = next(item for item in plan["actions"] if item.get("controller_action") == "review_gate")
         self.assertEqual(gate["head_sha"], live)
         self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+
+    def test_review_gate_completion_uses_recency_resolved_github_comments_with_empty_rounds(self) -> None:
+        live = "a" * 40
+
+        def comment(role: str, verdict: str, created_at: str, comment_id: int) -> dict[str, object]:
+            return {
+                "id": comment_id,
+                "created_at": created_at,
+                "body": (
+                    f"review_round: \nhead_sha: {live}\n"
+                    f"REVIEW_DONE:480:{role}:{verdict}\n\n"
+                    "⟦AI:AUTO-LOOP⟧"
+                ),
+            }
+
+        comments = [
+            [
+                comment("architect", "reject", "2026-06-12T00:00:00Z", 101),
+                comment("architect", "approve", "2026-06-12T00:05:00Z", 102),
+                comment("tests", "approve", "2026-06-12T00:01:00Z", 103),
+                comment("quality", "comment", "2026-06-12T00:02:00Z", 104),
+                comment("quality", "comment", "2026-06-12T00:06:00Z", 105),
+            ]
+        ]
+
+        with (
+            mock.patch("codex_refactor_loop.wakeup_plan.github_repo_slug", return_value="owner/repo"),
+            mock.patch("codex_refactor_loop.wakeup_plan.run_json", return_value=comments),
+        ):
+            completion = highest_complete_required_review_round(self.repo, 480, live)
+        self.assertIsNotNone(completion)
+        self.assertEqual(completion.round_number, 1)
+
+        (self.repo / "gh-api-repos-owner-repo-issues-480-comments?per_page=100-comments.json").write_text(
+            json.dumps(comments),
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+        gates = [item for item in plan["actions"] if item.get("controller_action") == "review_gate"]
+        if gates:
+            self.assertEqual(gates[0]["head_sha"], live)
+
+    def test_review_gate_completion_latest_conflicting_github_comment_blocks_older_valid_role(self) -> None:
+        live = "a" * 40
+
+        def comment(role: str, verdict: str, created_at: str, comment_id: int) -> dict[str, object]:
+            return {
+                "id": comment_id,
+                "created_at": created_at,
+                "body": (
+                    f"review_round: \nhead_sha: {live}\n"
+                    f"REVIEW_DONE:480:{role}:{verdict}\n\n"
+                    "⟦AI:AUTO-LOOP⟧"
+                ),
+            }
+
+        comments = [
+            [
+                comment("architect", "approve", "2026-06-12T00:00:00Z", 101),
+                comment("tests", "approve", "2026-06-12T00:01:00Z", 102),
+                comment("quality", "comment", "2026-06-12T00:02:00Z", 103),
+                {
+                    "id": 104,
+                    "created_at": "2026-06-12T00:05:00Z",
+                    "body": (
+                        f"review_round: \nhead_sha: {live}\n"
+                        "REVIEW_DONE:480:tests:approve\n"
+                        "REVIEW_DONE:480:tests:reject\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+            ]
+        ]
+
+        with (
+            mock.patch("codex_refactor_loop.wakeup_plan.github_repo_slug", return_value="owner/repo"),
+            mock.patch("codex_refactor_loop.wakeup_plan.run_json", return_value=comments),
+        ):
+            completion = highest_complete_required_review_round(self.repo, 480, live)
+        self.assertIsNone(completion)
+
+        (self.repo / "gh-api-repos-owner-repo-issues-480-comments?per_page=100-comments.json").write_text(
+            json.dumps(comments),
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        self.assertFalse(any(item.get("controller_action") == "review_gate" for item in plan["actions"]))
 
     def test_review_gate_completion_requires_each_role_to_have_live_head_valid_evidence(self) -> None:
         live = "a" * 40
