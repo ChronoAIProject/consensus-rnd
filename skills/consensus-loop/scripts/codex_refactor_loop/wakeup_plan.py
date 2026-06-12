@@ -278,7 +278,15 @@ class ReviewCompletionEvidence:
     comment_id: int | None = None
 
 
+@dataclass(frozen=True)
+class CurrentImplementationPrProof:
+    current: bool
+    pr_number: int | None = None
+    reason: str = ""
+
+
 RELEASE_ROLLUP_LIVE_PR_LIST_TIMEOUT_SECONDS = 15
+IMPLEMENTATION_PR_HEAD_VISIBILITY_ATTEMPTS = 1
 
 
 def run_json(cmd: list[str], *, cwd: Path, timeout: float | None = None) -> Any:
@@ -1733,7 +1741,10 @@ def _latest_completed_marker_candidates(candidates: list[CompletedMarkerCandidat
             latest_keys[key] = rank
 
     kept: list[CompletedMarkerCandidate] = []
-    for candidate, record in zip(candidates, keyed, strict=True):
+    if len(candidates) != len(keyed):
+        raise RuntimeError("completed marker candidate key mismatch")
+    for index, candidate in enumerate(candidates):
+        record = keyed[index]
         if record is None:
             kept.append(candidate)
             continue
@@ -4760,12 +4771,24 @@ def _stale_publish_implementation_reason(
         return "in_flight_implement"
     action["head_ref"] = head_ref
     action["worktree"] = str(worktree)
-    artifact_reason = _implementation_pr_artifact_invalid_reason(action, repo_root)
-    if artifact_reason:
-        return artifact_reason
     match_error = _matching_open_pr_error(action, target, gh_items=gh_items, head_ref=head_ref)
     if match_error:
         return match_error
+    current_pr = _current_implementation_pr_proof(
+        repo_root,
+        worktree,
+        target,
+        gh_items=gh_items,
+        head_ref=head_ref,
+        command_runner=lambda command: git_text(list(command), cwd=repo_root),
+    )
+    if current_pr.current:
+        if current_pr.pr_number is not None:
+            action["target_pr_number"] = current_pr.pr_number
+        return "pr_already_open_current"
+    artifact_reason = _implementation_pr_artifact_invalid_reason(action, repo_root)
+    if artifact_reason:
+        return artifact_reason
     preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])
     for required in (
         "canonical_implementation_identity",
@@ -4928,6 +4951,73 @@ def _matching_open_pr_error(
         return "matching_pr_issue_mismatch"
     action["target_pr_number"] = pr.number
     return None
+
+
+def _current_implementation_pr_proof(
+    repo_root: Path,
+    worktree: Path,
+    target: tuple[str, int] | None,
+    *,
+    gh_items: list[GhItem],
+    head_ref: str,
+    command_runner: Any | None = None,
+) -> CurrentImplementationPrProof:
+    if target is None or target[0] != "issue":
+        return CurrentImplementationPrProof(False, reason="single_linked_managed_issue_missing")
+    matches = _matching_open_implementation_prs(gh_items, target[1], head_ref)
+    if len(matches) != 1:
+        return CurrentImplementationPrProof(False, reason="matching_pr_missing_or_ambiguous")
+    pr = matches[0]
+    if not _is_full_sha(pr.head_sha):
+        return CurrentImplementationPrProof(False, pr.number, "pr_head_unavailable")
+    local_head = _git_stdout(["git", "-C", str(worktree), "rev-parse", "HEAD"], cwd=repo_root, command_runner=command_runner)
+    if not _is_full_sha(local_head):
+        return CurrentImplementationPrProof(False, pr.number, "local_head_unavailable")
+    if not _git_status_clean(["git", "-C", str(worktree), "status", "--porcelain"], cwd=repo_root, command_runner=command_runner):
+        return CurrentImplementationPrProof(False, pr.number, "worktree_not_clean")
+    remote_head = pr.head_sha.strip()
+    for _attempt in range(IMPLEMENTATION_PR_HEAD_VISIBILITY_ATTEMPTS):
+        if remote_head == local_head:
+            return CurrentImplementationPrProof(True, pr.number)
+        remote_head = _git_stdout(
+            ["git", "-C", str(worktree), "rev-parse", "--verify", f"refs/remotes/origin/{head_ref}"],
+            cwd=repo_root,
+            command_runner=command_runner,
+        )
+    if remote_head == local_head:
+        return CurrentImplementationPrProof(True, pr.number)
+    return CurrentImplementationPrProof(False, pr.number, "remote_head_not_current")
+
+
+def _matching_open_implementation_prs(gh_items: list[GhItem], issue: int, head_ref: str) -> list[GhItem]:
+    matches: list[GhItem] = []
+    for item in gh_items:
+        if item.kind != "PR" or item.head_ref != head_ref:
+            continue
+        normalized = label_catalog.normalize_label_set(item.labels).canonical
+        if label_catalog.MANAGED not in normalized:
+            continue
+        if _single_linked_issue_from_body(item.body) != issue:
+            continue
+        matches.append(item)
+    return matches
+
+
+def _git_stdout(command: list[str], *, cwd: Path, command_runner: Any | None = None) -> str:
+    result = command_runner(command) if command_runner is not None else git_text(command, cwd=cwd)
+    stdout = getattr(result, "stdout", "")
+    return str(stdout).strip() if getattr(result, "returncode", 1) == 0 else ""
+
+
+def _git_status_clean(command: list[str], *, cwd: Path, command_runner: Any | None = None) -> bool:
+    result = command_runner(command) if command_runner is not None else git_text(command, cwd=cwd)
+    if getattr(result, "returncode", 1) != 0:
+        return False
+    return not str(getattr(result, "stdout", "")).strip()
+
+
+def _is_full_sha(value: str) -> bool:
+    return bool(re.fullmatch(r"[0-9a-f]{40}", value.strip()))
 
 
 def _retryable_create_pr_secondary_limit(repo_root: Path, action: dict[str, Any]) -> bool:

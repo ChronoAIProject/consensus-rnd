@@ -3851,6 +3851,239 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             )
         )
 
+    def test_current_matching_open_implementation_pr_suppresses_publish_action(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter20-issue-20"
+        worktree.mkdir(parents=True)
+        action = {
+            "kind": "completed-marker",
+            "action_id": "completed-marker:implement-issue20.log:IMPLEMENT_DONE:issue-20:ok",
+            "controller_action": "publish_implementation_output",
+            "target_kind": "issue",
+            "target_number": 20,
+            "source_artifact": ".refactor-loop/logs/implement-issue20.log",
+            "source_marker": "IMPLEMENT_DONE:issue-20:ok",
+            "head_ref": "refactor/iter20-issue-20",
+        }
+        current_sha = "a" * 40
+
+        def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                return subprocess.CompletedProcess(command, 0, stdout=f"{current_sha}\n", stderr="")
+            if command == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            raise AssertionError(f"unexpected git call: {command}")
+
+        with mock.patch("codex_refactor_loop.wakeup_plan._worktrees_by_branch", return_value={"refactor/iter20-issue-20": worktree}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.classify_implement_attempt", return_value=mock.Mock(redispatch=False, in_flight=False)):
+                with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+                    suppress_stale_unexecutable_actions(
+                        [action],
+                        repo_root=self.repo,
+                        gh_items=[
+                            GhItem(
+                                "issue",
+                                20,
+                                "open target",
+                                (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                            ),
+                            GhItem(
+                                "PR",
+                                320,
+                                "closing PR",
+                                (label_catalog.MANAGED, label_catalog.PHASE_REVIEWING, label_catalog.HUMAN_AUTO),
+                                head_ref="refactor/iter20-issue-20",
+                                head_sha=current_sha,
+                                body="Closes #20",
+                            ),
+                        ],
+                        gh_items_loaded=True,
+                    )
+
+        self.assertTrue(action["status_only"])
+        self.assertEqual("pr_already_open_current", action["suppressed_reason"])
+        self.assertEqual(320, action["target_pr_number"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertNotIn("runner_authority", action)
+
+    def test_current_matching_open_implementation_pr_requires_clean_worktree(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter20-issue-20"
+        worktree.mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
+        action = {
+            "kind": "completed-marker",
+            "action_id": "completed-marker:implement-issue20.log:IMPLEMENT_DONE:issue-20:ok",
+            "controller_action": "publish_implementation_output",
+            "target_kind": "issue",
+            "target_number": 20,
+            "source_artifact": ".refactor-loop/logs/implement-issue20.log",
+            "source_marker": "IMPLEMENT_DONE:issue-20:ok",
+            "head_ref": "refactor/iter20-issue-20",
+        }
+        current_sha = "a" * 40
+
+        def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                return subprocess.CompletedProcess(command, 0, stdout=f"{current_sha}\n", stderr="")
+            if command == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout=" M skills/consensus-loop/SKILL.md\n", stderr="")
+            raise AssertionError(f"unexpected git call: {command}")
+
+        with mock.patch("codex_refactor_loop.wakeup_plan._worktrees_by_branch", return_value={"refactor/iter20-issue-20": worktree}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.classify_implement_attempt", return_value=mock.Mock(redispatch=False, in_flight=False)):
+                with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+                    suppress_stale_unexecutable_actions(
+                        [action],
+                        repo_root=self.repo,
+                        gh_items=[
+                            GhItem(
+                                "issue",
+                                20,
+                                "open target",
+                                (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                            ),
+                            GhItem(
+                                "PR",
+                                320,
+                                "closing PR",
+                                (label_catalog.MANAGED, label_catalog.PHASE_REVIEWING, label_catalog.HUMAN_AUTO),
+                                head_ref="refactor/iter20-issue-20",
+                                head_sha=current_sha,
+                                body="Closes #20",
+                            ),
+                        ],
+                        gh_items_loaded=True,
+                    )
+
+        self.assertFalse(action.get("status_only"))
+        self.assertEqual("publish_implementation_output", action["controller_action"])
+        self.assertIn("clean_scoped_diff", action["preconditions"])
+
+    def test_current_matching_open_implementation_pr_allows_one_remote_visibility_retry(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter20-issue-20"
+        worktree.mkdir(parents=True)
+        action = {
+            "kind": "completed-marker",
+            "action_id": "completed-marker:implement-issue20.log:IMPLEMENT_DONE:issue-20:ok",
+            "controller_action": "publish_implementation_output",
+            "target_kind": "issue",
+            "target_number": 20,
+            "source_artifact": ".refactor-loop/logs/implement-issue20.log",
+            "source_marker": "IMPLEMENT_DONE:issue-20:ok",
+            "head_ref": "refactor/iter20-issue-20",
+        }
+        current_sha = "b" * 40
+        stale_sha = "c" * 40
+        git_calls: list[list[str]] = []
+
+        def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+            git_calls.append(command)
+            if command == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                return subprocess.CompletedProcess(command, 0, stdout=f"{current_sha}\n", stderr="")
+            if command == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            if command == ["git", "-C", str(worktree), "rev-parse", "--verify", "refs/remotes/origin/refactor/iter20-issue-20"]:
+                return subprocess.CompletedProcess(command, 0, stdout=f"{current_sha}\n", stderr="")
+            raise AssertionError(f"unexpected git call: {command}")
+
+        with mock.patch("codex_refactor_loop.wakeup_plan._worktrees_by_branch", return_value={"refactor/iter20-issue-20": worktree}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.classify_implement_attempt", return_value=mock.Mock(redispatch=False, in_flight=False)):
+                with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+                    suppress_stale_unexecutable_actions(
+                        [action],
+                        repo_root=self.repo,
+                        gh_items=[
+                            GhItem(
+                                "issue",
+                                20,
+                                "open target",
+                                (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                            ),
+                            GhItem(
+                                "PR",
+                                320,
+                                "closing PR",
+                                (label_catalog.MANAGED, label_catalog.PHASE_REVIEWING, label_catalog.HUMAN_AUTO),
+                                head_ref="refactor/iter20-issue-20",
+                                head_sha=stale_sha,
+                                body="Closes #20",
+                            ),
+                        ],
+                        gh_items_loaded=True,
+                    )
+
+        self.assertTrue(action["status_only"])
+        self.assertEqual("pr_already_open_current", action["suppressed_reason"])
+        self.assertEqual(
+            [
+                ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+                ["git", "-C", str(worktree), "status", "--porcelain"],
+                ["git", "-C", str(worktree), "rev-parse", "--verify", "refs/remotes/origin/refactor/iter20-issue-20"],
+            ],
+            git_calls,
+        )
+
+    def test_matching_open_implementation_pr_with_unknown_or_not_current_head_remains_executable(self) -> None:
+        cases = (
+            ("unknown", "", None, "d" * 40),
+            ("not-current", "e" * 40, "e" * 40, "f" * 40),
+        )
+        for name, snapshot_sha, remote_sha, local_sha in cases:
+            with self.subTest(name=name):
+                worktree = self.repo / ".worktrees" / f"iter20-issue-20-{name}"
+                worktree.mkdir(parents=True)
+                self.write_implementation_pr_artifacts()
+                action = {
+                    "kind": "completed-marker",
+                    "action_id": f"completed-marker:implement-issue20-{name}.log:IMPLEMENT_DONE:issue-20:ok",
+                    "controller_action": "publish_implementation_output",
+                    "target_kind": "issue",
+                    "target_number": 20,
+                    "source_artifact": f".refactor-loop/logs/implement-issue20-{name}.log",
+                    "source_marker": "IMPLEMENT_DONE:issue-20:ok",
+                    "head_ref": "refactor/iter20-issue-20",
+                }
+
+                def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+                    if command == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                        return subprocess.CompletedProcess(command, 0, stdout=f"{local_sha}\n", stderr="")
+                    if command == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+                    if command == ["git", "-C", str(worktree), "rev-parse", "--verify", "refs/remotes/origin/refactor/iter20-issue-20"]:
+                        if remote_sha is None:
+                            raise AssertionError("unknown PR head must not probe remote ref")
+                        return subprocess.CompletedProcess(command, 0, stdout=f"{remote_sha}\n", stderr="")
+                    raise AssertionError(f"unexpected git call: {command}")
+
+                with mock.patch("codex_refactor_loop.wakeup_plan._worktrees_by_branch", return_value={"refactor/iter20-issue-20": worktree}):
+                    with mock.patch("codex_refactor_loop.wakeup_plan.classify_implement_attempt", return_value=mock.Mock(redispatch=False, in_flight=False)):
+                        with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+                            suppress_stale_unexecutable_actions(
+                                [action],
+                                repo_root=self.repo,
+                                gh_items=[
+                                    GhItem(
+                                        "issue",
+                                        20,
+                                        "open target",
+                                        (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                                    ),
+                                    GhItem(
+                                        "PR",
+                                        320,
+                                        "closing PR",
+                                        (label_catalog.MANAGED, label_catalog.PHASE_REVIEWING, label_catalog.HUMAN_AUTO),
+                                        head_ref="refactor/iter20-issue-20",
+                                        head_sha=snapshot_sha,
+                                        body="Closes #20",
+                                    ),
+                                ],
+                                gh_items_loaded=True,
+                            )
+
+                self.assertFalse(action.get("status_only"))
+                self.assertEqual("publish_implementation_output", action["controller_action"])
+                self.assertIn("clean_scoped_diff", action["preconditions"])
+
     def test_committed_implementation_after_create_pull_request_rate_limit_stays_publishable(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
         self.write_implementation_pr_artifacts()
@@ -6465,11 +6698,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "implementation_head_ref_missing",
             "no_conflicting_open_implementation_pr",
             "multiple_matching_open_pr",
+            "pr_already_open_current",
             "status_only",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, projection.string_literals)
         self.assertIn("suppress_stale_unexecutable_actions", projection.function_names)
+        self.assertIn("_current_implementation_pr_proof", projection.function_names)
 
     def test_wakeup_plan_source_locks_clean_ok_stale_base_publish_recovery_not_redispatch(self) -> None:
         projection = wakeup_plan_projection()
