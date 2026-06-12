@@ -46,6 +46,7 @@ from codex_refactor_loop.issue_decomposition import (
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.phase9.progress import issue_has_terminal_consensus_judge
 from codex_refactor_loop.pr_checks import PrMergeReadinessProjection
+from codex_refactor_loop.review_gate_selection import select_latest_live_head_review_evidence
 from codex_refactor_loop.release.candidate_liveness import classify_release_candidate_liveness
 from codex_refactor_loop.release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from codex_refactor_loop.release.gate import decide_release_artifact
@@ -261,6 +262,17 @@ class ReviewRoundCompletion:
     round_number: int
     head_sha: str
     heads_by_role: dict[str, str]
+
+
+@dataclass(frozen=True)
+class ReviewCompletionEvidence:
+    role: str
+    round_number: int
+    head_sha: str
+    valid: bool
+    pending: bool = False
+    terminal_failed: bool = False
+    reason: str = ""
 
 
 RELEASE_ROLLUP_LIVE_PR_LIST_TIMEOUT_SECONDS = 15
@@ -2449,7 +2461,7 @@ def latest_valid_reviewer_rounds(repo_root: Path, pr_number: int) -> dict[str, t
 def highest_complete_required_review_round(repo_root: Path, pr_number: int, head_sha: str) -> ReviewRoundCompletion | None:
     if not head_sha:
         return None
-    by_round: dict[int, dict[str, list[str]]] = {}
+    evidences: list[ReviewCompletionEvidence] = []
     artifact_keys: set[tuple[str, int]] = set()
     runs_dir = repo_root / ".refactor-loop" / "runs"
     logs_dir = repo_root / ".refactor-loop" / "logs"
@@ -2465,7 +2477,7 @@ def highest_complete_required_review_round(repo_root: Path, pr_number: int, head
         if not _reviewer_log_has_exit_zero(log_path) or not _reviewer_log_has_valid_marker(log_path, pr_number, role):
             continue
         reviewed_head = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompts_dir / path.name) or _reviewed_head_sha_from_file(log_path)
-        by_round.setdefault(round_number, {}).setdefault(role, []).append(reviewed_head)
+        evidences.append(ReviewCompletionEvidence(role=role, round_number=round_number, head_sha=reviewed_head, valid=bool(reviewed_head)))
     for path in sorted(logs_dir.glob(f"review-pr{pr_number}-*-r*.log")):
         match = REVIEW_LOG_RE.match(path.name)
         if not match or int(match.group(1)) != pr_number:
@@ -2478,20 +2490,16 @@ def highest_complete_required_review_round(repo_root: Path, pr_number: int, head
             continue
         prompt_path = prompts_dir / path.with_suffix(".md").name
         reviewed_head = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompt_path)
-        by_round.setdefault(round_number, {}).setdefault(role, []).append(reviewed_head)
-    for round_number in sorted(by_round, reverse=True):
-        role_heads = by_round[round_number]
-        heads_by_role: dict[str, str] = {}
-        complete = True
-        for role in REQUIRED_REVIEW_ROLES:
-            heads = role_heads.get(role, [])
-            if len(heads) != 1 or heads[0] != head_sha:
-                complete = False
-                break
-            heads_by_role[role] = heads[0]
-        if complete:
-            return ReviewRoundCompletion(round_number=round_number, head_sha=head_sha, heads_by_role=heads_by_role)
-    return None
+        evidences.append(ReviewCompletionEvidence(role=role, round_number=round_number, head_sha=reviewed_head, valid=bool(reviewed_head)))
+    selection = select_latest_live_head_review_evidence(
+        evidences,
+        live_head_sha=head_sha,
+        required_roles=REQUIRED_REVIEW_ROLES,
+    )
+    if selection.complete_round is None:
+        return None
+    heads_by_role = {role: evidence.head_sha for role, evidence in selection.by_role.items()}
+    return ReviewRoundCompletion(round_number=selection.complete_round, head_sha=head_sha, heads_by_role=heads_by_role)
 
 
 def pending_or_fresh_review_evidence_exists(repo_root: Path, pr_number: int) -> bool:
