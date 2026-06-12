@@ -1073,7 +1073,10 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`", self.skill)
         self.assertIn("issue intake, triplet/converge/router-derived stalled continuation", self.skill)
         self.assertIn("wakeup-plan design-consensus completed-marker evidence is status-only", self.skill)
-        self.assertIn("design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only", self.skill)
+        self.assertIn(
+            "design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels or exactly-one open managed closing PR evidence",
+            self.skill,
+        )
         self.assertIn("state-only", self.skill)
         self.assertIn("labels-only terminal gate", self.skill)
         self.assertIn("phase9-source-not-open", self.skill)

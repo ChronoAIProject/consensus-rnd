@@ -32,6 +32,7 @@ from ..managed_work_snapshot import ManagedWorkSnapshotItem
 from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..prompt_rendering import render_prompt_text
 from ..transition_assessment import TransitionAssessment, TransitionAssessmentReader, projection_lines
+from ..work_items import design_consensus_terminal_source
 from ..worker_markers import log_has_clean_exit, read_worker_terminal_marker
 from ..workflow_stages import format_stage
 from .. import labels as label_catalog
@@ -298,6 +299,7 @@ class Phase9Router:
         self._source_issue_decisions: dict[str, Phase9SourceIssueDecision] = {}
         self._issue_source_snapshots: dict[str, IssueSourceSnapshot] = {}
         self._terminal_decisions: dict[str, Phase9TerminalDecision] = {}
+        self._managed_work_items: tuple[ManagedWorkSnapshotItem, ...] | None = None
         self._managed_work_items_by_number: dict[str, ManagedWorkSnapshotItem] | None = None
         self._managed_work_snapshot_loaded_ok: bool | None = None
         self._managed_work_snapshot_unavailable_reason: str | None = None
@@ -322,6 +324,7 @@ class Phase9Router:
         self._source_issue_decisions = {}
         self._issue_source_snapshots = {}
         self._terminal_decisions = {}
+        self._managed_work_items = None
         self._managed_work_items_by_number = None
         self._managed_work_snapshot_loaded_ok = None
         self._managed_work_snapshot_unavailable_reason = None
@@ -556,6 +559,7 @@ class Phase9Router:
         snapshot = load_open_managed_work_snapshot(self.ctx)
         self._managed_work_snapshot_loaded_ok = snapshot.loaded_ok
         self._managed_work_snapshot_unavailable_reason = snapshot.reason
+        self._managed_work_items = tuple(snapshot.items) if snapshot.loaded_ok else ()
         self._managed_work_items_by_number = {
             str(item.number): item for item in snapshot.items if snapshot.loaded_ok and item.kind == "issue"
         }
@@ -1443,6 +1447,7 @@ class Phase9Router:
     def _ensure_managed_work_items_loaded(self) -> bool:
         if self._managed_work_items_by_number is None:
             snapshot = load_open_managed_work_snapshot(self.ctx)
+            self._managed_work_items = tuple(snapshot.items) if snapshot.loaded_ok else ()
             self._managed_work_items_by_number = {}
             self._managed_work_snapshot_loaded_ok = snapshot.loaded_ok
             self._managed_work_snapshot_unavailable_reason = snapshot.reason
@@ -1568,6 +1573,9 @@ class Phase9Router:
         judge_source = self._terminal_consensus_judge_source(issue)
         if judge_source is not None:
             return Phase9TerminalDecision(False, "phase9-already-consensus", judge_source)
+        snapshot_source = self._managed_work_terminal_source(issue)
+        if snapshot_source is not None:
+            return Phase9TerminalDecision(False, "phase9-already-consensus", snapshot_source)
         live_source = self._live_terminal_issue_source(issue)
         if live_source is not None:
             return Phase9TerminalDecision(False, "phase9-already-consensus", live_source)
@@ -1576,10 +1584,7 @@ class Phase9Router:
     def _terminal_source_from_labels(self, issue_labels: Iterable[str] | None) -> str | None:
         if issue_labels is None:
             return None
-        phase = label_catalog.normalize_label_set(issue_labels).phase
-        if phase in self._terminal_phase_labels():
-            return f"phase-label:{phase}"
-        return None
+        return design_consensus_terminal_source(0, labels=issue_labels)
 
     def _terminal_consensus_judge_source(self, issue: str) -> str | None:
         patterns = (f"phase9-issue{issue}-r*-judge.log", f"meta-judge-issue{issue}-r*.log")
@@ -1632,14 +1637,25 @@ class Phase9Router:
             return self._terminal_source_from_labels(label for label in labels if isinstance(label, str))
         return None
 
-    def _terminal_phase_labels(self) -> frozenset[str]:
-        return frozenset(
-            {
-                label_catalog.PHASE_CONSENSUS_REACHED,
-                label_catalog.PHASE_IMPLEMENTING,
-                label_catalog.PHASE_MERGED,
-                label_catalog.PHASE_CLOSED,
-            }
+    def _managed_work_terminal_source(self, issue: str) -> str | None:
+        try:
+            issue_number = int(issue)
+        except ValueError:
+            return None
+        if not self._ensure_managed_work_items_loaded():
+            return None
+        return design_consensus_terminal_source(
+            issue_number,
+            items=(
+                {
+                    "kind": item.kind,
+                    "number": item.number,
+                    "labels": item.labels,
+                    "body": item.body,
+                    "state": item.state,
+                }
+                for item in (self._managed_work_items or ())
+            ),
         )
 
     def _append_terminal_fallback_event(

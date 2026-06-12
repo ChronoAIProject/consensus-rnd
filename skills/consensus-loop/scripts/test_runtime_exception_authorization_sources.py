@@ -1493,13 +1493,16 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "terminal design-consensus phase labels",
             "crnd:phase:consensus-reached",
             "crnd:phase:implementing",
+            "crnd:phase:pr-open",
             "crnd:phase:merged",
             "crnd:phase:closed",
+            "read-only open managed closing PR evidence from `ManagedWorkSnapshot`",
+            "exactly one open managed PR body contains `Closes #N`",
             "phase9-source-not-open",
             "phase9-source-state-unavailable",
             "phase9-terminal-eligibility:",
             "phase9-already-consensus",
-            "design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only",
+            "design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels or exactly-one open managed closing PR evidence",
             "HARNESS_SPAWN_INTENT",
             '`command: "spawn-codex"`',
             'dispatch_state="harness-intent"',
@@ -1567,6 +1570,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
         router_projection = python_projection(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py")
         wakeup_projection = python_projection(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        work_items_projection = python_projection(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "work_items.py")
         combined_authority = "\n".join((entry, self.skill))
 
         for token in (
@@ -1588,14 +1592,19 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for token in (
             "PHASE_CONSENSUS_REACHED",
             "PHASE_IMPLEMENTING",
+            "PHASE_PR_OPEN",
             "PHASE_MERGED",
             "PHASE_CLOSED",
         ):
             with self.subTest(token=token):
-                self.assertIn(token, router_projection.attribute_names)
+                self.assertIn(token, work_items_projection.attribute_names)
         self.assertIn("[.labels[].name]", router_projection.string_literals)
         self.assertNotIn("{state:.state,labels:[.labels[].name]}", router_projection.string_literals)
-        self.assertIn("DESIGN_CONSENSUS_TERMINAL_PHASES", wakeup_projection.assigned_names)
+        self.assertIn("DESIGN_CONSENSUS_TERMINAL_PHASES", wakeup_projection.imported_names)
+        self.assertIn("DESIGN_CONSENSUS_TERMINAL_PHASES", work_items_projection.assigned_names)
+        self.assertIn("design_consensus_terminal_source", work_items_projection.function_names)
+        self.assertIn("design_consensus_terminal_source", router_projection.imported_names)
+        self.assertIn("design_consensus_terminal_source", wakeup_projection.imported_names)
         self.assertIn("_design_consensus_marker_is_router_owned", wakeup_projection.function_names)
         self.assertIn("_is_design_consensus_solver_dispatch_intent", wakeup_projection.function_names)
         for token in (
@@ -1604,11 +1613,13 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`",
             "crnd:phase:consensus-reached",
             "crnd:phase:implementing",
+            "crnd:phase:pr-open",
             "crnd:phase:merged",
             "crnd:phase:closed",
             "clean consensus judge log",
             "terminal design-consensus phase labels",
-            "design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only",
+            "open managed closing PR evidence",
+            "design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels or exactly-one open managed closing PR evidence",
         ):
             with self.subTest(authority_token=token):
                 self.assertIn(token, combined_authority)
