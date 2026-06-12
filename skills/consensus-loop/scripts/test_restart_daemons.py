@@ -1200,6 +1200,20 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assert_start_count("concurrency_monitor", 1)
         self.assertEqual([], self.runtime.terminated)
 
+    def test_fresh_pid_heartbeat_fingerprint_requires_live_child_held_singleton_lock(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("concurrency_monitor")
+        target = restart.daemon_target(self.ctx, "concurrency_monitor", FAKE_COMMAND)
+        target.singleton_lock_file.unlink()
+        self.assertEqual("missing", self.runtime.probe_singleton(target).state)
+
+        helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
+        helper.start_daemon("concurrency_monitor", FAKE_COMMAND)
+
+        self.assertNotEqual(old_pid, self.read_pid("concurrency_monitor"))
+        self.assertEqual([(old_pid, self.config.stop_grace_seconds)], self.runtime.terminated)
+        self.assert_start_count("concurrency_monitor", 2)
+
     def test_fresh_singleton_skips_with_macos_framework_python_wrapper_and_child(self) -> None:
         target = restart.daemon_target(self.ctx, "concurrency_monitor", FAKE_COMMAND)
         pid = 505050
