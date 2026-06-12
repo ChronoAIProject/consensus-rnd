@@ -200,6 +200,56 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         )
         return runner.run_once()[0]
 
+    def run_action_with_comment_read(self, result: subprocess.CompletedProcess[str]) -> object:
+        def command_runner(command):
+            command = list(command)
+            repo_root = self.ctx.repo_root
+            if command[:3] == ["gh", "pr", "view"] and ".state" in command:
+                return subprocess.CompletedProcess(command, 0, "OPEN\n", "")
+            if command[:3] == ["gh", "pr", "view"] and ".headRefOid" in command:
+                return subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", "")
+            if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/issues/12/comments?per_page=100":
+                return result
+            if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/12":
+                return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": "a" * 40}}), "")
+            if command == ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    f"worktree {repo_root}\nbranch refs/heads/main\n\n"
+                    f"worktree {self.pr_worktree.resolve()}\nbranch refs/heads/refactor/pr12\n\n",
+                    "",
+                )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        runner = WakeupRunner(
+            self.ctx,
+            plan_loader=lambda _repo: {
+                "schema": "wakeup-plan",
+                "mode": "closed-action-projection",
+                "apply_authority": "wakeup-runner-396-only",
+                "no_lifecycle_authority": True,
+                "actions": [self.action()],
+            },
+            actions=self.actions,
+            supervisor=self.supervisor,
+            command_runner=command_runner,
+        )
+        return runner.run_once()[0]
+
+    def assert_github_comment_gate_blocks(self, comments: list[dict[str, object]], reason: str) -> None:
+        self.github_comments = [
+            self.github_review_comment("architect", "approve"),
+            self.github_review_comment("quality", "comment"),
+        ]
+        self.github_comments.extend(comments)
+
+        result = self.run_action()
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, f"WAIT_OR_REDISPATCH:invalid_reviewer_evidence:{reason}")
+        self.assertEqual(self.actions.merged, [])
+
     def test_review_gate_merge_only_when_reject_zero_approve_one_and_all_present(self) -> None:
         self.write_review("architect", "approve")
         self.write_review("tests", "comment")
@@ -260,6 +310,92 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(result.status, "blocked")
         self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:missing_reviewers")
         self.assertEqual(self.actions.merged, [])
+
+    def test_github_comment_api_unavailable_fails_closed_without_local_fallback(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
+            self.write_review(role, verdict, post_comment=False)
+
+        result = self.run_action_with_comment_read(
+            subprocess.CompletedProcess(
+                ["gh", "api", "repos/owner/repo/issues/12/comments?per_page=100", "--paginate", "--slurp"],
+                1,
+                "",
+                "temporary comments API failure",
+            )
+        )
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(
+            result.reason,
+            "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:github_review_comments_unavailable:architect",
+        )
+        self.assertEqual(self.actions.merged, [])
+
+    def test_github_comment_invalid_json_or_shape_fails_closed(self) -> None:
+        cases = (
+            subprocess.CompletedProcess(
+                ["gh", "api", "repos/owner/repo/issues/12/comments?per_page=100", "--paginate", "--slurp"],
+                0,
+                "{not-json",
+                "",
+            ),
+            subprocess.CompletedProcess(
+                ["gh", "api", "repos/owner/repo/issues/12/comments?per_page=100", "--paginate", "--slurp"],
+                0,
+                json.dumps({"items": []}),
+                "",
+            ),
+        )
+        for completed in cases:
+            with self.subTest(stdout=completed.stdout):
+                self.actions.merged.clear()
+                result = self.run_action_with_comment_read(completed)
+
+                self.assertEqual(result.status, "blocked")
+                self.assertEqual(
+                    result.reason,
+                    "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:github_review_comments_invalid_json:architect",
+                )
+                self.assertEqual(self.actions.merged, [])
+
+    def test_malformed_github_comment_evidence_fails_closed_without_merge(self) -> None:
+        invalid_cases = (
+            (
+                "missing_final_ai_sentinel:tests",
+                {"body": f"review_round: 1\nhead_sha: {'a' * 40}\nREVIEW_DONE:12:tests:approve"},
+            ),
+            (
+                "missing_review_round:tests",
+                {"body": f"head_sha: {'a' * 40}\nREVIEW_DONE:12:tests:approve\n\n⟦AI:AUTO-LOOP⟧"},
+            ),
+            (
+                "missing_reviewed_head_sha:tests",
+                {"body": "review_round: 1\nREVIEW_DONE:12:tests:approve\n\n⟦AI:AUTO-LOOP⟧"},
+            ),
+            (
+                "invalid_review_marker:tests",
+                {"body": f"review_round: 1\nhead_sha: {'a' * 40}\nREVIEW_DONE:13:tests:approve\n\n⟦AI:AUTO-LOOP⟧"},
+            ),
+            (
+                "invalid_review_marker:tests",
+                {"body": f"review_round: 1\nhead_sha: {'a' * 40}\nREVIEW_DONE:12:tests:banana\n\n⟦AI:AUTO-LOOP⟧"},
+            ),
+            (
+                "invalid_review_marker:tests",
+                {
+                    "body": (
+                        f"review_round: 1\nhead_sha: {'a' * 40}\n"
+                        "REVIEW_DONE:12:tests:approve\n"
+                        "REVIEW_DONE:12:tests:reject\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    )
+                },
+            ),
+        )
+        for reason, comment in invalid_cases:
+            with self.subTest(reason=reason):
+                self.actions.merged.clear()
+                self.assert_github_comment_gate_blocks([comment], reason)
 
     def test_missing_action_reviewed_head_fails_closed_without_merge(self) -> None:
         self.write_review("architect", "approve")

@@ -89,8 +89,6 @@ FORBIDDEN_ACTION_FIELDS = {
 }
 REQUIRED_REVIEW_ROLES = ("architect", "tests", "quality")
 REVIEW_DONE_RE = re.compile(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*):(approve|comment|reject)$")
-REVIEW_ARTIFACT_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.md$")
-REVIEW_LOG_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.log$")
 REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
 REVIEW_ROUND_RE = re.compile(r"(?im)^(?:review[-_ ]?round|round)\s*[:=]\s*([1-9][0-9]*)\s*$")
 AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
@@ -1881,71 +1879,6 @@ class WakeupRunner:
             if evidence is not None:
                 evidences.append(evidence)
         return evidences
-
-    def _diagnostic_local_review_evidences(self, pr_number: int) -> list[ReviewEvidence]:
-        evidences: list[ReviewEvidence] = []
-        artifact_keys: set[tuple[str, int]] = set()
-        for path in sorted(self.ctx.paths.runs.glob(f"review-pr{pr_number}-*-r*.md")):
-            match = REVIEW_ARTIFACT_RE.match(path.name)
-            if not match or int(match.group(1)) != pr_number:
-                continue
-            role = match.group(2)
-            round_number = int(match.group(3))
-            evidence = self._review_evidence_from_artifact(path, pr_number, role, round_number)
-            evidences.append(evidence)
-            artifact_keys.add((role, round_number))
-        for path in sorted(self.ctx.paths.logs.glob(f"review-pr{pr_number}-*-r*.log")):
-            match = REVIEW_LOG_RE.match(path.name)
-            if not match or int(match.group(1)) != pr_number:
-                continue
-            role = match.group(2)
-            round_number = int(match.group(3))
-            if (role, round_number) in artifact_keys:
-                continue
-            evidences.append(self._review_evidence_from_log(path, pr_number, role, round_number))
-        return evidences
-
-    def _review_evidence_from_artifact(self, path: Path, pr_number: int, role: str, round_number: int) -> ReviewEvidence:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        companion_log = self.ctx.paths.logs / f"review-pr{pr_number}-{role}-r{round_number}.log"
-        marker_read = read_worker_terminal_marker(companion_log)
-        if marker_read.reason == "log_unreadable":
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"log_unreadable:{role}")
-        if marker_read.reason == "missing_exit_zero":
-            if _reviewer_log_terminal_failed(companion_log):
-                return ReviewEvidence(role, round_number, "", "", str(path), False, f"terminal_failed:{role}", terminal_failed=True)
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"pending_exit_zero:{role}", pending=True)
-        verdict_lines = re.findall(r"(?m)^verdict:\s*([A-Za-z][A-Za-z0-9_-]*)\s*$", text)
-        if len(verdict_lines) != 1:
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_verdict_count:{role}")
-        verdict = verdict_lines[0]
-        if verdict not in {"approve", "comment", "reject"}:
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_verdict:{role}")
-        if marker_read.reason in {"duplicate_or_conflicting_log_marker", "duplicate_or_conflicting_artifact_marker"}:
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker:{role}")
-        if not REVIEW_DONE_RE.match(marker_read.marker) or marker_read.marker.split(":")[1:3] != [str(pr_number), role]:
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
-        prompt_path = self.ctx.paths.prompts / path.name
-        return ReviewEvidence(role, round_number, verdict, self._review_head_sha_for(prompt_path, companion_log, text), str(path))
-
-    def _review_evidence_from_log(self, path: Path, pr_number: int, role: str, round_number: int) -> ReviewEvidence:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        marker_read = read_worker_terminal_marker(path)
-        if marker_read.reason == "log_unreadable":
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"log_unreadable:{role}")
-        if marker_read.reason == "missing_exit_zero":
-            if _reviewer_log_terminal_failed(path):
-                return ReviewEvidence(role, round_number, "", "", str(path), False, f"terminal_failed:{role}", terminal_failed=True)
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"pending_exit_zero:{role}", pending=True)
-        if marker_read.reason in {"duplicate_or_conflicting_log_marker", "duplicate_or_conflicting_artifact_marker"}:
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker:{role}")
-        match = REVIEW_DONE_RE.match(marker_read.marker)
-        if match is None:
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
-        if match.group(1) != str(pr_number) or match.group(2) != role:
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
-        prompt_path = self.ctx.paths.prompts / path.with_suffix(".md").name
-        return ReviewEvidence(role, round_number, match.group(3), self._review_head_sha_for(prompt_path, path, text), str(path))
 
     def _review_head_sha_for(self, prompt_path: Path, log_path: Path, evidence_text: str) -> str:
         head_sha = _extract_review_head_sha(evidence_text)
