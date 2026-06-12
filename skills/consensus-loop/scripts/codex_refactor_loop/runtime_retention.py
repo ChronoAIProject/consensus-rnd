@@ -4,19 +4,28 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from .active_controller import require_active_controller
 from .context import LoopContext, LoopContextError
+from .task_spawn_claim import (
+    SAFE_TASK_ID_RE,
+    TaskSpawnClaimMetadataError,
+    read_spawn_task_lock_metadata,
+    spawn_task_log_has_exit_marker,
+)
 
 
 RETENTION_TTL_HOURS = 24
 PENDING_EVENTS_MAX_LINES = 2000
 RETENTION_PLAN_PATH = Path(".refactor-loop") / "state" / "runtime-retention-plan.json"
+SPAWN_TASK_LOCKS_PATH = Path(".refactor-loop") / "locks" / "spawn-tasks"
 
 
 @dataclass(frozen=True)
@@ -30,6 +39,7 @@ class RuntimeRetentionResult:
     target: Path
     missing: bool
     diagnostics: tuple[str, ...] = ()
+    removed_spawn_task_locks: int = 0
 
 
 @dataclass(frozen=True)
@@ -50,7 +60,6 @@ def retain_runtime(
     now: float | None = None,
     command_runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] | None = None,
 ) -> RuntimeRetentionResult:
-    del now
     repo_real = repo_root.resolve()
     refactor_loop = repo_real / ".refactor-loop"
     if not enabled:
@@ -61,7 +70,8 @@ def retain_runtime(
     diagnostics: list[str] = []
     compacted = _compact_pending_events(refactor_loop / ".controller-pending-events.log")
     plan = _read_retention_plan(repo_real / RETENTION_PLAN_PATH, diagnostics=diagnostics)
-    deleted = 0
+    removed_spawn_locks = _remove_completed_spawn_task_locks(repo_real, now=now, diagnostics=diagnostics)
+    deleted = removed_spawn_locks
     kept = _ignore_legacy_generated_files(plan.generated_files, diagnostics=diagnostics)
     runner = command_runner or _run_git
     removed = _remove_planner_stale_worktrees(repo_real, plan.stale_worktrees, command_runner=runner, diagnostics=diagnostics)
@@ -71,7 +81,18 @@ def retain_runtime(
         pruned = prune.returncode == 0
         if not pruned:
             diagnostics.append(_diagnostic(repo_real, "worktree_prune_failed", code=prune.returncode, stderr=prune.stderr))
-    return RuntimeRetentionResult(True, deleted, kept, compacted, removed, pruned, refactor_loop, False, tuple(diagnostics))
+    return RuntimeRetentionResult(
+        True,
+        deleted,
+        kept,
+        compacted,
+        removed,
+        pruned,
+        refactor_loop,
+        False,
+        tuple(diagnostics),
+        removed_spawn_task_locks=removed_spawn_locks,
+    )
 
 
 def _compact_pending_events(path: Path) -> bool:
@@ -118,6 +139,84 @@ def _ignore_legacy_generated_files(generated_files: Sequence[Any], *, diagnostic
     if generated_files:
         diagnostics.append(_diagnostic("generated_files", "legacy_generated_files_ignored", count=len(generated_files)))
     return len(generated_files)
+
+
+def _remove_completed_spawn_task_locks(repo_root: Path, *, now: float | None, diagnostics: list[str]) -> int:
+    lock_dir = repo_root / SPAWN_TASK_LOCKS_PATH
+    try:
+        entries = list(lock_dir.iterdir())
+    except FileNotFoundError:
+        return 0
+    except OSError as exc:
+        diagnostics.append(_diagnostic(lock_dir, "spawn_task_lock_dir_unreadable", error=exc))
+        return 0
+    removed = 0
+    for lock_path in sorted(entries):
+        if _unlinkable_completed_spawn_task_lock(repo_root, lock_path, now=now, diagnostics=diagnostics):
+            try:
+                _unlink_spawn_task_lock(lock_path)
+            except OSError as exc:
+                diagnostics.append(_diagnostic(lock_path, "spawn_task_lock_unlink_failed", error=exc))
+            else:
+                removed += 1
+    return removed
+
+
+def _unlinkable_completed_spawn_task_lock(repo_root: Path, lock_path: Path, *, now: float | None, diagnostics: list[str]) -> bool:
+    target = _relative_diagnostic_target(repo_root, lock_path)
+    try:
+        stat_result = lock_path.lstat()
+    except OSError as exc:
+        diagnostics.append(_diagnostic(target, "spawn_task_lock_unreadable", error=exc))
+        return False
+    if not stat.S_ISREG(stat_result.st_mode):
+        diagnostics.append(_diagnostic(target, "spawn_task_lock_non_regular"))
+        return False
+    task_id = lock_path.name.removesuffix(".lock") if lock_path.name.endswith(".lock") else ""
+    if not task_id or not SAFE_TASK_ID_RE.fullmatch(task_id) or lock_path.name != f"{task_id}.lock":
+        diagnostics.append(_diagnostic(target, "spawn_task_lock_unsafe_basename"))
+        return False
+    age_seconds = (now if now is not None else _current_time()) - stat_result.st_mtime
+    if age_seconds < RETENTION_TTL_HOURS * 60 * 60:
+        diagnostics.append(_diagnostic(target, "spawn_task_lock_young"))
+        return False
+    try:
+        metadata = read_spawn_task_lock_metadata(lock_path)
+    except TaskSpawnClaimMetadataError as exc:
+        diagnostics.append(_diagnostic(target, f"spawn_task_lock_{exc.reason}"))
+        return False
+    except FileNotFoundError:
+        diagnostics.append(_diagnostic(target, "spawn_task_lock_missing"))
+        return False
+    if metadata.task_id != task_id:
+        diagnostics.append(_diagnostic(target, "spawn_task_lock_basename_mismatch", task_id=metadata.task_id))
+        return False
+    log_path = metadata.log_path
+    if not log_path.is_absolute():
+        diagnostics.append(_diagnostic(target, "spawn_task_lock_log_path_relative", log_path=log_path))
+        return False
+    try:
+        resolved_log = log_path.resolve(strict=False)
+        resolved_log.relative_to((repo_root / ".refactor-loop" / "logs").resolve())
+    except (OSError, ValueError):
+        diagnostics.append(_diagnostic(target, "spawn_task_lock_log_path_escaped", log_path=log_path))
+        return False
+    if not resolved_log.is_file():
+        diagnostics.append(_diagnostic(target, "spawn_task_lock_log_missing", log_path=resolved_log))
+        return False
+    try:
+        has_exit = spawn_task_log_has_exit_marker(resolved_log)
+    except RuntimeError as exc:
+        diagnostics.append(_diagnostic(target, "spawn_task_lock_log_unreadable", log_path=resolved_log, error=exc))
+        return False
+    if not has_exit:
+        diagnostics.append(_diagnostic(target, "spawn_task_lock_log_not_terminal", log_path=resolved_log))
+        return False
+    return True
+
+
+def _unlink_spawn_task_lock(lock_path: Path) -> None:
+    os.unlink(lock_path)
 
 
 def _read_retention_plan(path: Path, *, diagnostics: list[str]) -> RuntimeRetentionPlan:
@@ -231,6 +330,17 @@ def _run_git(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(list(command), capture_output=True, text=True, check=False)
 
 
+def _current_time() -> float:
+    return time.time()
+
+
+def _relative_diagnostic_target(repo_root: Path, path: Path) -> Path | str:
+    try:
+        return path.resolve(strict=False).relative_to(repo_root)
+    except ValueError:
+        return path
+
+
 def _diagnostic(target: Path | str, reason: str, **facts: object) -> str:
     parts = [f"target={_one_line(target)}", f"reason={reason}"]
     for key, value in facts.items():
@@ -252,6 +362,7 @@ def _summary(result: RuntimeRetentionResult) -> str:
         f"runtime_retention: enabled={str(result.enabled).lower()} ttl_hours={RETENTION_TTL_HOURS} "
         f"deleted={result.deleted} kept={result.kept} compacted_events={str(result.compacted_events).lower()} "
         f"removed_worktrees={result.removed_worktrees} pruned_worktrees={str(result.pruned_worktrees).lower()} "
+        f"removed_spawn_task_locks={result.removed_spawn_task_locks} "
         f"target={result.target}{suffix} diagnostics={diagnostics}"
     )
 
