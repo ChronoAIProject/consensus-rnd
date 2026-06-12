@@ -1286,6 +1286,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 issue(332, "disjoint target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
             ],
             "open_issue_453": [issue(453, "solver target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_453_with_closing_pr": [issue(453, "solver target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_453_with_duplicate_closing_prs": [issue(453, "solver target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_403": [issue(403, "decompose target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_design_parent_537": [issue(537, "decomposition parent", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_537": [issue(537, "decompose handoff target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
@@ -1396,6 +1398,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
             ],
             "represented_parent": [pr(255, "child PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/issue239", body="Closes #239")],
+            "open_issue_453_with_closing_pr": [
+                pr(700, "implementation PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/issue453", body="Closes #453")
+            ],
+            "open_issue_453_with_duplicate_closing_prs": [
+                pr(700, "implementation PR A", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/issue453-a", body="Closes #453"),
+                pr(701, "implementation PR B", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/issue453-b", body="Closes #453"),
+            ],
             "milestone": [pr(30, "milestone PR", [managed, label_catalog.MILESTONE_CURRENT, reviewing, auto])],
             "non_action_statuses": [
                 pr(42, "non-red CI PR", [managed, ci_running, auto]),
@@ -2651,6 +2660,32 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan(fixture="open_issue_453")
 
         self.assertEqual([action["intent_id"] for action in self.harness_spawn_actions(plan)], ["failed-log-retry"])
+
+    def test_design_solver_spawn_intent_suppressed_by_exactly_one_open_managed_closing_pr(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="solver-replay",
+            route="converge_to_next_solvers",
+            task_id="phase9-issue453-r2-minimal",
+            prompt=".refactor-loop/prompts/phase9/phase9-issue453-r2-minimal.md",
+            log=".refactor-loop/logs/phase9-issue453-r2-minimal.log",
+        )
+
+        plan = self.run_plan(fixture="open_issue_453_with_closing_pr")
+
+        self.assertEqual([], [action["intent_id"] for action in self.harness_spawn_actions(plan)])
+
+    def test_design_solver_spawn_intent_not_suppressed_by_ambiguous_open_managed_closing_prs(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="solver-replay",
+            route="converge_to_next_solvers",
+            task_id="phase9-issue453-r2-minimal",
+            prompt=".refactor-loop/prompts/phase9/phase9-issue453-r2-minimal.md",
+            log=".refactor-loop/logs/phase9-issue453-r2-minimal.log",
+        )
+
+        plan = self.run_plan(fixture="open_issue_453_with_duplicate_closing_prs")
+
+        self.assertEqual([action["intent_id"] for action in self.harness_spawn_actions(plan)], ["solver-replay"])
 
     def test_harness_spawn_intent_suppresses_terminal_closed_blocked_marker(self) -> None:
         self.append_harness_spawn_intent(intent_id="closed-intent")
@@ -6300,22 +6335,15 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_wakeup_plan_source_locks_terminal_design_consensus_gate(self) -> None:
         projection = wakeup_plan_projection()
 
+        self.assertIn("DESIGN_CONSENSUS_TERMINAL_PHASES", projection.imported_names)
+        self.assertIn("design_consensus_terminal_source", projection.imported_names)
         for token in (
-            "PHASE_CONSENSUS_REACHED",
-            "PHASE_IMPLEMENTING",
-            "PHASE_MERGED",
-            "PHASE_CLOSED",
-        ):
-            with self.subTest(token=token):
-                self.assertIn(token, projection.attribute_names)
-        for token in (
-            "DESIGN_CONSENSUS_TERMINAL_PHASES",
             "_terminal_design_consensus_targets",
             "_is_design_consensus_solver_dispatch_intent",
             "_design_consensus_marker_is_router_owned",
         ):
             with self.subTest(token=token):
-                self.assertIn(token, projection.assigned_names | projection.function_names | projection.string_literals)
+                self.assertIn(token, projection.function_names)
         self.assertIn("status_only", projection.string_literals)
         for forbidden in ("gh issue edit", "gh issue close", "gh pr merge", "git push", "git commit"):
             with self.subTest(forbidden=forbidden):

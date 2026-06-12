@@ -123,6 +123,79 @@ class Phase9RouterOpenStateGateTests(unittest.TestCase):
         self.assertEqual([issue.number for issue in issues], ["416"])
         load_snapshot.assert_called_once()
 
+    def test_terminal_gate_reads_open_managed_closing_pr_from_snapshot(self) -> None:
+        snapshot = ManagedWorkSnapshotResult(
+            (
+                ManagedWorkSnapshotItem(
+                    kind="issue",
+                    number=858,
+                    title="design issue",
+                    labels=(label_catalog.MANAGED, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_AUTO),
+                    state="open",
+                ),
+                ManagedWorkSnapshotItem(
+                    kind="PR",
+                    number=900,
+                    title="implementation",
+                    labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING, label_catalog.HUMAN_AUTO),
+                    body="Closes #858\n",
+                    state="open",
+                ),
+            ),
+            True,
+            "cache:fresh",
+        )
+        with (
+            mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=snapshot),
+            mock.patch("codex_refactor_loop.phase9.router.subprocess.run") as run,
+        ):
+            decision = self.router(gh_repo_slug="owner/repo")._solver_dispatch_terminal_decision("858")
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual("phase9-already-consensus", decision.reason)
+        self.assertEqual("open-managed-closing-pr:900", decision.terminal_source)
+        run.assert_not_called()
+
+    def test_terminal_gate_does_not_guess_duplicate_open_managed_closing_prs(self) -> None:
+        snapshot = ManagedWorkSnapshotResult(
+            (
+                ManagedWorkSnapshotItem(
+                    kind="issue",
+                    number=858,
+                    title="design issue",
+                    labels=(label_catalog.MANAGED, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_AUTO),
+                    state="open",
+                ),
+                ManagedWorkSnapshotItem(
+                    kind="PR",
+                    number=900,
+                    title="implementation A",
+                    labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING, label_catalog.HUMAN_AUTO),
+                    body="Closes #858\n",
+                    state="open",
+                ),
+                ManagedWorkSnapshotItem(
+                    kind="PR",
+                    number=901,
+                    title="implementation B",
+                    labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING, label_catalog.HUMAN_AUTO),
+                    body="Closes #858\n",
+                    state="open",
+                ),
+            ),
+            True,
+            "cache:fresh",
+        )
+        with (
+            mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=snapshot),
+            mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=mock.Mock(returncode=1)),
+        ):
+            decision = self.router(gh_repo_slug="owner/repo")._solver_dispatch_terminal_decision("858")
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual("phase9-terminal-open", decision.reason)
+        self.assertIsNone(decision.terminal_source)
+
 
 if __name__ == "__main__":
     unittest.main()

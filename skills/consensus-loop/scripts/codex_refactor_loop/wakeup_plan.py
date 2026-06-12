@@ -65,7 +65,9 @@ from codex_refactor_loop.review_fix_dispatch import (
     validate_review_thread_completion,
 )
 from codex_refactor_loop.work_items import (
+    DESIGN_CONSENSUS_TERMINAL_PHASES,
     ManagedWorkProjection,
+    design_consensus_terminal_source,
     extract_closing_issue_numbers,
     is_draft_release_rollup_pr,
     open_actionable_managed_items,
@@ -194,14 +196,6 @@ NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_BLOCKED: "blocked",
     label_catalog.PHASE_MERGED: "merged",
 }
-DESIGN_CONSENSUS_TERMINAL_PHASES = frozenset(
-    {
-        label_catalog.PHASE_CONSENSUS_REACHED,
-        label_catalog.PHASE_IMPLEMENTING,
-        label_catalog.PHASE_MERGED,
-        label_catalog.PHASE_CLOSED,
-    }
-)
 REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
 REVIEW_ARTIFACT_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.md$")
 REVIEW_LOG_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.log$")
@@ -780,10 +774,21 @@ def _open_managed_issue_numbers(items: list[GhItem]) -> set[int]:
 
 
 def _terminal_design_consensus_targets(items: list[GhItem]) -> set[tuple[str, int]]:
+    managed_items = tuple(
+        {
+            "kind": item.kind,
+            "number": item.number,
+            "labels": item.labels,
+            "body": item.body,
+            "state": "open",
+        }
+        for item in items
+    )
     return {
         (item.kind, item.number)
         for item in items
-        if label_catalog.normalize_label_set(item.labels).phase in DESIGN_CONSENSUS_TERMINAL_PHASES
+        if item.kind == "issue"
+        and design_consensus_terminal_source(item.number, labels=item.labels, items=managed_items) is not None
     }
 
 
