@@ -39,6 +39,15 @@ NON_ACTION_OPEN_PHASES = frozenset(
         label_catalog.PHASE_MERGED,
     }
 )
+DESIGN_CONSENSUS_TERMINAL_PHASES = frozenset(
+    {
+        label_catalog.PHASE_CONSENSUS_REACHED,
+        label_catalog.PHASE_IMPLEMENTING,
+        label_catalog.PHASE_PR_OPEN,
+        label_catalog.PHASE_MERGED,
+        label_catalog.PHASE_CLOSED,
+    }
+)
 
 
 def extract_closing_issue_numbers(body: str) -> tuple[int, ...]:
@@ -167,6 +176,31 @@ def open_actionable_managed_items(items: Iterable[ManagedItem | Mapping[str, obj
 
 def has_open_actionable_managed_work(items: Iterable[ManagedItem | Mapping[str, object]]) -> bool:
     return bool(open_actionable_managed_items(items))
+
+
+def design_consensus_terminal_source(
+    issue_number: int,
+    *,
+    labels: Iterable[str] | None = None,
+    items: Iterable[ManagedItem | Mapping[str, object]] | None = None,
+) -> str | None:
+    if labels is not None:
+        phase = label_catalog.normalize_label_set(labels).phase
+        if phase in DESIGN_CONSENSUS_TERMINAL_PHASES:
+            return f"phase-label:{phase}"
+    if items is None:
+        return None
+    closing_prs = [
+        item
+        for item in (_coerce_item(row) for row in items)
+        if item.kind == "pr"
+        and item.state == "open"
+        and _is_managed(item)
+        and extract_closing_issue_numbers(item.body) == (issue_number,)
+    ]
+    if len(closing_prs) == 1:
+        return f"open-managed-closing-pr:{closing_prs[0].number}"
+    return None
 
 
 def is_draft_release_rollup_pr(item: ManagedItem) -> bool:
