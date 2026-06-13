@@ -1267,6 +1267,32 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual([], self.runtime.terminated)
         self.assert_start_count("concurrency_monitor", 1)
 
+    def test_orphan_holding_singleton_with_live_wrapper_is_reaped_and_restarted(self) -> None:
+        # #885: an old-instance orphan child (ppid=1) holds the singleton lock and
+        # renews the heartbeat while a current wrapper+child also exist. The fresh
+        # heartbeat must not let restart skip: the orphan is the live actor running
+        # stale code, so it must be reaped and the daemon restarted once.
+        self.run_helper()
+        wrapper_pid = self.read_pid("concurrency_monitor")
+        child_pid = self.runtime.child_pids_by_wrapper[wrapper_pid]
+        orphan_child_pid = 545454
+        target = restart.daemon_target(self.ctx, "concurrency_monitor", FAKE_COMMAND)
+        write_singleton_metadata(self.ctx.repo_root, target, actor_pid=orphan_child_pid, started_at=self.runtime.now())
+        self.runtime.live_pids.add(orphan_child_pid)
+        self.runtime.inventory_override = DaemonProcessInventory(
+            (
+                DaemonProcess(wrapper_pid, self.runtime.canonical_command(self.ctx, "concurrency_monitor", FAKE_COMMAND), 1),
+                DaemonProcess(child_pid, " ".join(target.command), wrapper_pid),
+                DaemonProcess(orphan_child_pid, " ".join(target.command), 1),
+            )
+        )
+
+        helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
+        helper.start_daemon("concurrency_monitor", FAKE_COMMAND)
+
+        self.assertIn((orphan_child_pid, self.config.stop_grace_seconds), self.runtime.terminated)
+        self.assert_start_count("concurrency_monitor", 2)
+
     def test_held_malformed_singleton_lock_skips_restart_without_reaping_or_launching(self) -> None:
         self.run_helper()
         wrapper_pid = self.read_pid("concurrency_monitor")

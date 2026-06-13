@@ -838,7 +838,11 @@ class RestartDaemons:
             and stored_fingerprint is not None
             and stored_fingerprint.matches(current_fingerprint)
             and instance.singleton.state == "held"
-            and instance.singleton.holder_pid in set(instance.live_managed_child_pids)
+            # #885: the singleton must be held by a canonical child of the current
+            # live wrapper. An orphan child (old instance, ppid=1) holding the lock
+            # and renewing the heartbeat must not let restart skip — it is the live
+            # actor running stale code/env and has to be reaped, not preserved.
+            and instance.singleton.holder_pid in set(instance.canonical_child_pids)
         )
 
     def _heartbeat_is_fresh(self, name: str) -> bool:
