@@ -2239,10 +2239,9 @@ def main(argv: list[str] | None = None, command_runner: Callable[[dict[str, obje
         lease.beat()
         while True:
             try:
-                lease.run_with_lease(lambda: run_phase9_router_reconcile_tick(router))
+                lease.run_tick(lambda: run_phase9_router_reconcile_tick(router))
             except Exception as exc:
                 print(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}] EXCEPTION in tick: {exc!r}", flush=True)
-            lease.beat()
             lease.sleep_with_lease(args.interval)
 
 

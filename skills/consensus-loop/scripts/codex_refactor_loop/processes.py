@@ -157,6 +157,43 @@ def launch_spawn_codex_supervisor(
     return 0
 
 
+def run_fixed_host_command(
+    command: str,
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    log: Path,
+) -> int:
+    """Run one fixed host command and capture all child output in a log."""
+    if not command.strip():
+        raise ValueError("fixed host command must not be empty")
+    log.parent.mkdir(parents=True, exist_ok=True)
+    started_at = _utc_now()
+    _append(log, f"COMMAND={command}\nSTARTED_AT={started_at}\n")
+    try:
+        result = subprocess.run(
+            ["bash", "-lc", command],
+            cwd=str(cwd),
+            env=dict(env),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        _append(log, f"SPAWN_FAILED={exc}\nEXIT=127\nDONE_AT={_utc_now()}\n")
+        return 127
+    if result.stdout:
+        _append(log, result.stdout)
+        if not result.stdout.endswith("\n"):
+            _append(log, "\n")
+    if result.stderr:
+        _append(log, result.stderr)
+        if not result.stderr.endswith("\n"):
+            _append(log, "\n")
+    _append(log, f"EXIT={result.returncode}\nDONE_AT={_utc_now()}\n")
+    return result.returncode
+
+
 def prompt_file_from_text(text: str) -> Path:
     fd, name = tempfile.mkstemp(prefix="codex-prompt.", dir="/tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as handle:

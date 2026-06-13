@@ -1436,7 +1436,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 "wakeup_runner.py",
                 "work_items.py",
             },
-            "COMMANDS": {"cli.py", "restart.py", "gh_accounting.py", "gh_invoke.py"},
+            "COMMANDS": {"cli.py", "restart.py", "gh_accounting.py", "gh_invoke.py", "publish_verification.py"},
             "WorkflowStage": {"workflow_stages.py", "workflow_spec.py"},
         }
         for token, allowed_paths in allowed.items():
@@ -1853,8 +1853,10 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "non-placeholder title/body",
             "`dispatch_consensus_implementation` only moves the issue to implementing phase",
             "spawns the implement worker; it does not commit, push, or open a PR",
-            "updates an existing matching open managed PR when exactly one exists",
-            "opens exactly one managed implementation PR and verifies it when zero matching PRs exist",
+            "update an existing matching open managed implementation PR when exactly one exists",
+            "open exactly one managed implementation PR and verify it when zero matching PRs exist",
+            "helper-private publish verification before `safe_push`",
+            "same issue/action/head_ref/worktree realpath/exact head SHA/BUILD+TEST command digest",
             "`suppressed_reason=pr_already_open_current`",
             "returns 0 before diff/build/test/push/PR edit/reviewer dispatch",
             "Remote ref proof is read-only and bounded",
@@ -1901,9 +1903,11 @@ class WakeupRunnerContractTests(unittest.TestCase):
         )
         combined = "\n".join(sections)
         for required in (
-            "`publish_implementation_output` updates exactly one matching open managed implementation PR or opens and verifies exactly one managed implementation PR when zero matching PRs exist",
-            "`publish_implementation_output` open or update exactly one managed implementation PR",
+            "`publish_implementation_output` runs helper-private publish verification",
+            "then it updates exactly one matching open managed implementation PR or opens and verifies exactly one managed implementation PR when zero matching PRs exist",
             "`publish_implementation_output` opens or updates exactly one managed implementation PR",
+            "helper-private publish verification",
+            "same issue/action/head_ref/worktree realpath/exact head SHA/build-test command digest",
             "`suppressed_reason=pr_already_open_current`",
             "Remote ref proof is read-only and bounded",
             "duplicate/multiple/mismatch/unmanaged PRs fail closed",

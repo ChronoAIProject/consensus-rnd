@@ -1054,8 +1054,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "helper-specific precondition",
             "`dispatch_consensus_implementation` only moves the issue to implementing phase",
             "spawns the implement worker; it does not commit, push, or open a PR",
-            "updates an existing matching open managed PR when exactly one exists",
-            "opens exactly one managed implementation PR and verifies it when zero matching PRs exist",
             "`suppressed_reason=pr_already_open_current`",
             "returns 0 before diff/build/test/push/PR edit/reviewer dispatch",
             "Remote ref proof is read-only and bounded",
@@ -1082,6 +1080,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+        for required in (
+            "helper-private publish verification before `safe_push`",
+            "same issue/action/head_ref/worktree realpath/exact head SHA/BUILD+TEST command digest",
+            "update an existing matching open managed implementation PR when exactly one exists",
+            "open exactly one managed implementation PR and verify it when zero matching PRs exist",
+        ):
+            with self.subTest(required=required):
                 self.assertIn(required, self.skill)
 
         for forbidden in (
@@ -1344,6 +1350,15 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+        for required in (
+            "DaemonTickProgress",
+            "daemon-tick-progress",
+            "fresh completed `DaemonTickProgress`",
+            "progress_status",
+            "progress-overdue repair",
+        ):
+            with self.subTest(required=required):
                 self.assertIn(required, self.skill)
 
         for forbidden in (

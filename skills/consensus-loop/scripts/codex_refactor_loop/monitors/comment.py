@@ -69,8 +69,7 @@ class CommentMonitor:
         with self.heartbeat.daemon_lifetime():
             self.heartbeat.beat()
             while True:
-                self.heartbeat.run_with_lease(lambda: run_comment_monitor_reconcile_tick(self))
-                self.heartbeat.beat()
+                self.heartbeat.run_tick(lambda: run_comment_monitor_reconcile_tick(self))
                 self.heartbeat.sleep_with_lease(self.interval)
 
     def tick(self) -> None:

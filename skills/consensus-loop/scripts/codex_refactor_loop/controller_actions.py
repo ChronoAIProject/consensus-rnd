@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -48,6 +49,7 @@ from .issue_decomposition import (
 from .managed_work_snapshot import invalidate_open_managed_work_snapshot, load_open_managed_work_snapshot
 from .prompt_rendering import render_prompt_text
 from .processes import launch_spawn_codex_supervisor
+from .publish_verification import verify_or_run as verify_publish_implementation
 from .release.publisher import ReleasePublisher
 from .release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from .runtime_copy import copy_for, current_work_language
@@ -103,6 +105,17 @@ REBASE_RESOLVE_BLOCKED_RE = re.compile(
 )
 ROLLUP_HEAD_PREFIX = "rollup/"
 ROLLUP_BODY_SENTINEL = "⟦AI:RELEASE-ROLLUP⟧"
+
+
+@dataclass(frozen=True)
+class _PublishVerificationFailure:
+    status: str
+    reason: str
+    evidence_file: Path
+
+    @property
+    def ok(self) -> bool:
+        return False
 
 
 class ControllerActions:
@@ -1308,9 +1321,12 @@ class ControllerActions:
         base_error = self._recover_publish_implementation_base(worktree)
         if base_error:
             return self._delegate_publish_implementation_fallback(action, issue_target, head_ref, worktree, base_error)
-        if self._run_host_command("BUILD_CMD", worktree, issue=issue_target) != 0:
-            return 3
-        if self._run_host_command("TEST_CMD", worktree, issue=issue_target) != 0:
+        verified = self._verify_publish_implementation_output(issue_target, action, head_ref, worktree)
+        if not verified.ok:
+            sys.stderr.write(
+                "publish_implementation_output: verification_failed "
+                f"reason={verified.reason} artifact={self.ctx.durable_artifact_path(verified.evidence_file)}\n"
+            )
             return 3
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
@@ -1535,6 +1551,32 @@ class ControllerActions:
         )
         sys.stderr.write(f"publish_implementation_output: delegated fallback resolver: {reason}\n")
         return PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
+
+    def _verify_publish_implementation_output(
+        self,
+        issue_target: str,
+        action: Mapping[str, object],
+        head_ref: str,
+        worktree: Path,
+    ):
+        head = self._git_in(worktree, ["rev-parse", "HEAD"], check=False)
+        if head.returncode != 0 or not _is_full_sha(head.stdout.strip()):
+            evidence = self.ctx.paths.state / "publish-verification" / f"issue-{issue_target}-{head_ref.replace('/', '__')}.json"
+            return _PublishVerificationFailure("failed", "head-sha-unavailable", evidence)
+        result = verify_publish_implementation(
+            repo_root=self.ctx.repo_root,
+            worktree=worktree,
+            issue=issue_target,
+            action=str(action.get("controller_action") or "publish_implementation_output"),
+            head_ref=head_ref,
+            head_sha=head.stdout.strip(),
+            env=self.ctx.env_for_subprocess(),
+        )
+        sys.stderr.write(
+            "publish_implementation_output: verification "
+            f"status={result.status} reason={result.reason} artifact={self.ctx.durable_artifact_path(result.evidence_file)}\n"
+        )
+        return result
 
     def dispatch_consensus_implementation(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("dispatch-consensus-implementation", code=3):

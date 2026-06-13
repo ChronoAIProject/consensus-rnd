@@ -921,10 +921,9 @@ def main(argv: list[str] | None = None) -> int:
         daemon = IntegrationSyncDaemon.from_config(config)
         while True:
             try:
-                run_dev_sync_reconcile_tick(daemon)
+                lease.run_tick(lambda: run_dev_sync_reconcile_tick(daemon))
             except Exception as exc:
                 log(f"EXCEPTION in tick: {exc!r}")
-            lease.beat()
             lease.sleep_with_lease(config.interval)
 
 

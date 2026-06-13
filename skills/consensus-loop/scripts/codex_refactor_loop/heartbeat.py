@@ -13,9 +13,9 @@ from typing import Callable, Iterator, TypeVar
 
 from .context import LoopContext
 from .daemon_singleton import DaemonSingletonLock, DaemonSingletonMetadata
+from .daemon_progress import begin_tick, complete_tick, fail_tick
 
 T = TypeVar("T")
-
 
 class DaemonHeartbeatLease:
     """Write and renew the daemon heartbeat from the actor process.
@@ -46,8 +46,12 @@ class DaemonHeartbeatLease:
             or default_heartbeat_file
         )
         self.heartbeat_interval = max(1, int(heartbeat_interval or os.environ.get("RESTART_DAEMON_HEARTBEAT_INTERVAL", "30")))
-        self.singleton_enabled = _truthy(os.environ.get("RESTART_DAEMON_SINGLETON_LOCK")) if singleton is None else singleton
-        env_singleton_file = os.environ.get("RESTART_DAEMON_SINGLETON_LOCK_FILE")
+        self.singleton_enabled = (
+            _truthy(os.environ.get("RESTART_DAEMON_SINGLETON_LOCK"))
+            if singleton is None and repo_root is None and heartbeat_file is None
+            else bool(singleton)
+        )
+        env_singleton_file = None if repo_root is not None else os.environ.get("RESTART_DAEMON_SINGLETON_LOCK_FILE")
         default_singleton_file = root / ".refactor-loop" / "locks" / f"{self.name}.singleton.lock" if root is not None else None
         self.singleton_lock_file = Path(singleton_lock_file or env_singleton_file or default_singleton_file) if self.singleton_enabled else None
         self.fingerprint_file = (
@@ -86,27 +90,6 @@ class DaemonHeartbeatLease:
             self.beat()
             remaining -= chunk
 
-    def run_with_lease(self, callback: Callable[[], T]) -> T:
-        """Renew the heartbeat periodically while callback is still running."""
-        self._require_singleton_if_enabled()
-        stop = threading.Event()
-
-        def renew_lease() -> None:
-            while not stop.wait(max(1.0, float(self.heartbeat_interval))):
-                self.beat()
-
-        renewer = threading.Thread(
-            target=renew_lease,
-            name=f"{self.name}-heartbeat-renewer",
-            daemon=True,
-        )
-        renewer.start()
-        try:
-            return callback()
-        finally:
-            stop.set()
-            renewer.join(timeout=1.0)
-
     @contextmanager
     def daemon_lifetime(self) -> Iterator["DaemonHeartbeatLease"]:
         """Hold the daemon singleton lock for the actor lifetime."""
@@ -136,6 +119,20 @@ class DaemonHeartbeatLease:
     def _require_singleton_if_enabled(self) -> None:
         if self.singleton_enabled and self._singleton_lock is None:
             raise RuntimeError(f"{self.name} heartbeat requires held daemon singleton lock")
+
+    def run_tick(self, callback: Callable[[], T]) -> T:
+        """Run one daemon tick with progress boundaries and a post-success heartbeat."""
+        if self.repo_root is None:
+            raise RuntimeError("daemon tick progress requires repo_root")
+        progress = begin_tick(self.repo_root, self.name)
+        try:
+            result = callback()
+        except Exception as exc:
+            fail_tick(self.repo_root, progress, message=f"{type(exc).__name__}:{exc}")
+            raise
+        complete_tick(self.repo_root, progress)
+        self.beat()
+        return result
 
 
 def beat(name: str | None = None, repo_root: Path | str | None = None) -> None:
