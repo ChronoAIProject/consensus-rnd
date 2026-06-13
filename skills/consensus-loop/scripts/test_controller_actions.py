@@ -653,6 +653,46 @@ class ControllerActionsTests(unittest.TestCase):
         self.run_git(worktree, ["config", "user.name", "Test User"])
         return worktree, head_ref
 
+    def init_rebase_repo_unpushed_resolution(self) -> tuple[Path, str]:
+        """Worktree already merged base locally (clean, committed) but the pushed
+        PR head is still behind base, so the resolution is committed yet unpushed."""
+        self.run_git(self.tmp, ["init", "--bare", "origin.git"])
+        source = self.tmp / "source"
+        self.run_git(self.tmp, ["init", str(source)])
+        self.run_git(source, ["config", "user.email", "test@example.com"])
+        self.run_git(source, ["config", "user.name", "Test User"])
+        (source / "file.txt").write_text("base\n", encoding="utf-8")
+        self.run_git(source, ["add", "file.txt"])
+        self.run_git(source, ["commit", "-m", "base"])
+        self.run_git(source, ["branch", "-M", "canonical-integration"])
+        self.run_git(source, ["remote", "add", "origin", str(self.tmp / "origin.git")])
+        self.run_git(source, ["push", "-u", "origin", "canonical-integration"])
+        head_ref = "refactor/iter77-stale"
+        self.run_git(source, ["checkout", "-b", head_ref])
+        (source / "head.txt").write_text("head\n", encoding="utf-8")
+        self.run_git(source, ["add", "head.txt"])
+        self.run_git(source, ["commit", "-m", "head change"])
+        # Pushed PR head: behind the base that advances next, no merge yet.
+        self.run_git(source, ["push", "-u", "origin", head_ref])
+        # Advance base with a non-conflicting change.
+        self.run_git(source, ["checkout", "canonical-integration"])
+        (source / "base-only.txt").write_text("new base\n", encoding="utf-8")
+        self.run_git(source, ["add", "base-only.txt"])
+        self.run_git(source, ["commit", "-m", "base advance"])
+        self.run_git(source, ["push", "origin", "canonical-integration"])
+        # Main checkout + worktree at the pushed head, then a local (unpushed) merge.
+        self.run_git(self.tmp, ["init"])
+        self.run_git(self.tmp, ["config", "user.email", "test@example.com"])
+        self.run_git(self.tmp, ["config", "user.name", "Test User"])
+        self.run_git(self.tmp, ["remote", "add", "origin", str(self.tmp / "origin.git")])
+        self.run_git(self.tmp, ["fetch", "origin"])
+        self.run_git(self.tmp, ["worktree", "add", str(self.tmp / ".worktrees" / "iter77-stale"), head_ref])
+        worktree = self.tmp / ".worktrees" / "iter77-stale"
+        self.run_git(worktree, ["config", "user.email", "test@example.com"])
+        self.run_git(worktree, ["config", "user.name", "Test User"])
+        self.run_git(worktree, ["merge", "--no-edit", "origin/canonical-integration"])
+        return worktree, head_ref
+
     def patch_rebase_owner_and_gh(self, head_ref: str):
         decision = mock.Mock(
             allowed=True,
@@ -729,6 +769,23 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(0, rc)
         self.assertEqual([], launch.mock_calls)
         self.assertEqual([], push.mock_calls)
+
+    def test_dispatch_pr_rebase_resolve_pushes_unpushed_base_resolution(self) -> None:
+        # Regression: the worktree already merged base locally but the pushed PR
+        # head is still behind base. The helper must push the stranded resolution
+        # instead of looping on an infinite "already contains base" noop.
+        worktree, head_ref = self.init_rebase_repo_unpushed_resolution()
+        pushes: list[dict[str, str]] = []
+        owner_patch, gh_patch = self.patch_rebase_owner_and_gh(head_ref)
+        with owner_patch, gh_patch, mock.patch.object(
+            self.actions,
+            "safe_push",
+            side_effect=lambda branch, worktree: pushes.append({"branch": branch, "worktree": str(worktree)}) or 0,
+        ), mock.patch("codex_refactor_loop.controller_actions.launch_spawn_codex_supervisor") as launch:
+            rc = self.actions.dispatch_pr_rebase_resolve({"target_kind": "PR", "target_number": 77, "head_ref": head_ref})
+        self.assertEqual(0, rc)
+        self.assertEqual([], launch.mock_calls)
+        self.assertEqual([{"branch": head_ref, "worktree": str(worktree.resolve())}], pushes)
 
     def test_dispatch_pr_rebase_resolve_rejects_nonmanaged_or_noncanonical_head_without_side_effects(self) -> None:
         decision = mock.Mock(
