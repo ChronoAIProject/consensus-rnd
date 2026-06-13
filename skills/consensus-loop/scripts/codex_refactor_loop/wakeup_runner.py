@@ -125,6 +125,13 @@ SUPPORTED_CONTROLLER_ACTIONS = {
 SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(
     {"spawn_codex_harness_background"}
 )
+SAME_TICK_TERMINAL_PR_WORKER_ACTIONS = frozenset(
+    {
+        "dispatch_reviewers",
+        "publish_review_fix_output_from_action",
+        "review_gate",
+    }
+)
 REMOTE_CI_FIX_ATTEMPT_CAP = 2
 REMOTE_CI_FIX_DONE_RE = re.compile(r"^REMOTE_CI_FIX_DONE:([^:]+):(ok|infra|blocked)$")
 SAFE_CI_CHECK_TOKEN_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -282,8 +289,10 @@ class WakeupRunner:
         self.command_runner = command_runner or self._run_command
         self.ledger_path = ctx.paths.state / "wakeup-runner-ledger.jsonl"
         self.pending_events_path = ctx.paths.pending_events
+        self._same_tick_terminal_prs: set[int] = set()
 
     def run_once(self) -> list[RunnerResult]:
+        self._same_tick_terminal_prs = set()
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
             return [RunnerResult("", "skipped", "graphql-backoff")]
         owner = require_active_controller(self.ctx, "wakeup-runner")
@@ -309,6 +318,9 @@ class WakeupRunner:
                 continue
             is_invalid_harness_cleanup = _is_invalid_harness_cleanup(action)
             if is_invalid_harness_cleanup and archived_invalid_harness_cleanups >= INVALID_HARNESS_CLEANUP_LIMIT_PER_TICK:
+                continue
+            if self._same_tick_terminal_target_reason(action):
+                results.append(self.apply_action(action))
                 continue
             is_spawn_action = budget.is_spawn_action(action)
             consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)
@@ -350,7 +362,8 @@ class WakeupRunner:
     def _actions_for_apply(self, actions: Sequence[Any], budget: WakeupApplyBudget) -> list[Any]:
         if not budget.hard_gate_active:
             return sorted(actions, key=self._ordinary_apply_priority)
-        return sorted(actions, key=self._hard_gate_apply_priority)
+        ordered = sorted(actions, key=self._hard_gate_apply_priority)
+        return self._with_merge_gate_preempting_same_pr_worker_dispatch(ordered)
 
     def _ordinary_apply_priority(self, action: Any) -> int:
         if isinstance(action, Mapping) and _is_invalid_harness_cleanup(action):
@@ -405,6 +418,9 @@ class WakeupRunner:
             ):
                 return self._record(RunnerResult(action_id, "skipped", error), action)
             return self._blocked(action, error)
+        same_tick_terminal_reason = self._same_tick_terminal_target_reason(action)
+        if same_tick_terminal_reason:
+            return self._record(RunnerResult(action_id, "skipped", same_tick_terminal_reason), action)
         if self.dry_run:
             return self._record(RunnerResult(action_id, "dry-run"), action)
         stand_down_reason = self._cross_instance_stand_down_reason(action)
@@ -429,6 +445,67 @@ class WakeupRunner:
         if exit_code != 0:
             self._append_pending_event(f"WAKEUP_RUNNER_HELPER_EXIT:{action_id}:{controller_action}:{exit_code}")
         return self._record(RunnerResult(action_id, status, reason), action)
+
+    def _with_merge_gate_preempting_same_pr_worker_dispatch(self, actions: list[Any]) -> list[Any]:
+        merge_gate_by_pr: dict[int, Any] = {}
+        for action in actions:
+            if not isinstance(action, Mapping):
+                continue
+            pr_number = self._merge_capable_review_gate_target(action)
+            if pr_number is not None and pr_number not in merge_gate_by_pr:
+                merge_gate_by_pr[pr_number] = action
+        if not merge_gate_by_pr:
+            return actions
+
+        moved: set[int] = set()
+        ordered: list[Any] = []
+        for action in actions:
+            if not isinstance(action, Mapping):
+                ordered.append(action)
+                continue
+            pr_number = self._same_tick_terminal_pr_worker_target(action)
+            gate = merge_gate_by_pr.get(pr_number) if pr_number is not None else None
+            if gate is not None and id(gate) not in moved and action is not gate:
+                ordered.append(gate)
+                moved.add(id(gate))
+            if id(action) not in moved:
+                ordered.append(action)
+                moved.add(id(action))
+        return ordered
+
+    def _merge_capable_review_gate_target(self, action: Mapping[str, Any]) -> int | None:
+        if str(action.get("controller_action") or "") != "review_gate":
+            return None
+        target = action.get("target_number")
+        if not isinstance(target, int) or target <= 0:
+            return None
+        if self._validate_action(action) is not None:
+            return None
+        decision = self._review_gate_decision(action)
+        if decision.get("decision") in {"MERGE", "MERGE_WITH_COMMENTS"}:
+            return target
+        return None
+
+    def _same_tick_terminal_target_reason(self, action: Mapping[str, Any]) -> str:
+        pr_number = self._same_tick_terminal_pr_worker_target(action)
+        if pr_number is None or pr_number not in self._same_tick_terminal_prs:
+            return ""
+        return "same_tick_terminal_target:MERGED"
+
+    def _same_tick_terminal_pr_worker_target(self, action: Mapping[str, Any]) -> int | None:
+        controller_action = str(action.get("controller_action") or "")
+        if controller_action == "spawn_codex_harness_background":
+            if not (_is_reviewer_harness_spawn_intent(action) or _is_fix_harness_spawn_intent(action)):
+                return None
+        elif controller_action not in SAME_TICK_TERMINAL_PR_WORKER_ACTIONS:
+            return None
+        target = self._github_target(action)
+        if target is None:
+            return None
+        kind, number = target
+        if kind.lower() != "pr" or number <= 0:
+            return None
+        return number
 
     def _validate_plan(self, plan: Mapping[str, Any]) -> str | None:
         if plan.get("schema") != "wakeup-plan":
@@ -1320,7 +1397,10 @@ class WakeupRunner:
             if decision["decision"] == "FIX":
                 return self._dispatch_review_fix(int(action["target_number"]))
             if decision["decision"] in {"MERGE", "MERGE_WITH_COMMENTS"}:
-                return self.actions.merge_pr(str(action["target_number"]))
+                merge_rc = self.actions.merge_pr(str(action["target_number"]))
+                if merge_rc == 0 and isinstance(action.get("target_number"), int):
+                    self._same_tick_terminal_prs.add(int(action["target_number"]))
+                return merge_rc
             self._append_pending_event(
                 f"WAKEUP_RUNNER_REVIEW_GATE_WAIT:{action.get('target_number')}:{decision['decision']}:{decision['reason']}"
             )
@@ -2378,6 +2458,18 @@ def _is_reviewer_harness_spawn_intent(action: Mapping[str, Any]) -> bool:
     if action.get("route") == "dispatch-reviewers":
         return True
     return str(action.get("intent_id") or "").startswith("dispatch-reviewers:")
+
+
+def _is_fix_harness_spawn_intent(action: Mapping[str, Any]) -> bool:
+    if action.get("kind") != "harness-spawn-intent":
+        return False
+    if action.get("controller_action") != "spawn_codex_harness_background":
+        return False
+    if action.get("route") in {"review-fix", "dispatch-review-fix"}:
+        return True
+    intent_id = str(action.get("intent_id") or "")
+    task_id = str(action.get("task_id") or "")
+    return intent_id.startswith("fix-pr") or task_id.startswith("fix-pr")
 
 
 def _terminal_blocked_reason(reason: str) -> bool:
