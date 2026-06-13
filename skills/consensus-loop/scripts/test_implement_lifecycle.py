@@ -57,7 +57,7 @@ class ImplementArtifactMarkerFallbackTests(unittest.TestCase):
             (logs / "audit-iter-9.log").write_text("worker output\nEXIT=0\n", encoding="utf-8")
             self.assertEqual(_implement_run_artifact_done_marker(logs / "audit-iter-9.log"), "")
 
-    def test_clean_blocked_or_partial_marker_is_terminal_not_redispatch(self) -> None:
+    def test_clean_blocked_or_partial_marker_is_retry_evidence_not_terminal(self) -> None:
         for status in ("blocked", "partial"):
             with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
                 logs, _runs = self._repo(tmp)
@@ -67,8 +67,9 @@ class ImplementArtifactMarkerFallbackTests(unittest.TestCase):
 
                 state = classify_implement_attempt(repo_root=repo, log_path=log)
 
-                self.assertTrue(state.terminal_non_ok)
-                self.assertFalse(state.redispatch)
+                self.assertTrue(state.redispatch)
+                self.assertTrue(state.non_ok_marker)
+                self.assertEqual(state.reason, "non_ok_marker")
                 self.assertFalse(state.publish_ready)
                 self.assertEqual(state.marker, f"IMPLEMENT_DONE:issue-537:{status}")
 

@@ -2873,7 +2873,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("spawn_codex_harness_background", action["controller_action"])
         self.assertEqual("dispatch-consensus-implementation:20", action["intent_id"])
 
-    def test_harness_spawn_intent_suppresses_terminal_non_ok_implement_result(self) -> None:
+    def test_harness_spawn_intent_retries_non_ok_implement_marker(self) -> None:
         for status in ("blocked", "partial"):
             with self.subTest(status=status):
                 self.tmp.cleanup()
@@ -2892,9 +2892,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
                 plan = self.run_plan(fixture="open_issue_20")
 
-                self.assertEqual(self.harness_spawn_actions(plan), [])
+                actions = self.harness_spawn_actions(plan)
+                self.assertEqual(1, len(actions))
+                self.assertNotIn("status_only", actions[0])
+                self.assertEqual("dispatch-consensus-implementation:20", actions[0]["intent_id"])
 
-    def test_terminal_non_ok_implement_with_valid_decomposition_plan_does_not_project_apply_action(self) -> None:
+    def test_non_ok_implement_marker_with_valid_decomposition_plan_does_not_project_apply_action(self) -> None:
         for status in ("partial", "blocked"):
             with self.subTest(status=status):
                 self.tmp.cleanup()
@@ -2916,20 +2919,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 ]
                 self.assertEqual(publish, [])
 
-    def test_terminal_non_ok_implement_result_does_not_count_expected_worker(self) -> None:
+    def test_non_ok_implement_marker_counts_expected_worker_until_redispatch(self) -> None:
         self.write_consensus_artifact(issue=537, round_no=5)
         self.write_implement_result(issue=537, status="partial")
 
         plan, stdout = self.run_plan_with_stdout(fixture="open_issue_537", ps_count=0)
 
-        self.assertNotIn(
+        self.assertIn(
             {"expected": 1, "id": "#537", "kind": "issue", "phase": label_catalog.PHASE_IMPLEMENTING},
             plan["concurrency"]["expected_breakdown"],
         )
-        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
-        self.assertFalse(plan["hard_gate"]["active"])
-        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
-        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 1)
+        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertGreaterEqual(plan["hard_gate"]["dispatch_required"], 1)
+        self.assertIn(f"HARD_GATE:dispatch_required={plan['hard_gate']['dispatch_required']}", stdout)
 
     def test_partial_implement_without_valid_decomposition_plan_does_not_project_apply_action(self) -> None:
         for name, mutate in (
@@ -6418,7 +6421,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual("pending_implement_intent", reason)
 
-    def test_consensus_implementation_readiness_terminal_non_ok_beats_pending_intent(self) -> None:
+    def test_consensus_implementation_readiness_non_ok_marker_waits_on_pending_intent(self) -> None:
         action = {
             "target_kind": "issue",
             "target_number": 537,
@@ -6438,7 +6441,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         reason = consensus_implementation_suppressed_reason(action, self.repo, monitor=None)
 
-        self.assertEqual("terminal_implement_result", reason)
+        self.assertEqual("pending_implement_intent", reason)
 
     def test_consensus_implementation_readiness_suppresses_worktree_log_pending_and_in_flight(self) -> None:
         cases = (
@@ -8727,11 +8730,11 @@ class StaleRevivalTests(unittest.TestCase):
         self.assertTrue(revived)
         self.assertFalse(log.exists())
 
-    def test_terminal_partial_implement_log_is_not_revived(self) -> None:
+    def test_stale_partial_implement_log_is_revived(self) -> None:
         log = self._write_partial(421)
         revived = _revive_stale_redispatchable_implement_log(log, now=time.time() + 10 * 3600)
-        self.assertFalse(revived)
-        self.assertTrue(log.exists())
+        self.assertTrue(revived)
+        self.assertFalse(log.exists())
 
     def test_fresh_partial_implement_log_is_not_revived(self) -> None:
         log = self._write_partial(421)
@@ -8832,17 +8835,17 @@ class StaleRevivalTests(unittest.TestCase):
         p494 = self._write_markerless(494)
         # an in_flight log (no terminal EXIT) with no monitor proof is left alone
         inflight = self._write_inflight(490)
-        terminal_partial = self._write_partial(495)
+        stale_partial = self._write_partial(495)
         revived = force_revive_stuck_implements(self.repo, monitor=None)
         names = {r["log"] for r in revived}
         self.assertIn("implement-issue-493.log", names)
         self.assertIn("implement-issue-494.log", names)
+        self.assertIn("implement-issue-495.log", names)
         self.assertNotIn("implement-issue-490.log", names)
-        self.assertNotIn("implement-issue-495.log", names)
         self.assertFalse(p493.exists())
         self.assertFalse(p494.exists())
+        self.assertFalse(stale_partial.exists())
         self.assertTrue(inflight.exists())
-        self.assertTrue(terminal_partial.exists())
 
 
 if __name__ == "__main__":

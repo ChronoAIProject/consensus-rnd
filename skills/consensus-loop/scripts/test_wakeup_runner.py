@@ -1908,7 +1908,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             pending,
         )
 
-    def test_wakeup_runner_stale_applied_spawn_ledger_does_not_retry_terminal_blocked_implement(self) -> None:
+    def test_wakeup_runner_stale_applied_spawn_ledger_retries_non_ok_implement_marker(self) -> None:
         log = self.repo / ".refactor-loop/logs/implement-issue-537.log"
         log.write_text("IMPLEMENT_DONE:issue-537:blocked\nEXIT=0\n", encoding="utf-8")
         action = self.spawn_action(
@@ -1926,13 +1926,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
             results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=FakeActions())
 
-        self.assertEqual(results[0].status, "skipped")
-        self.assertEqual(results[0].reason, "duplicate")
-        self.assertTrue(log.exists())
-        launch.assert_not_called()
+        self.assertEqual(results[0].status, "applied")
+        self.assertFalse(log.exists())
+        launch.assert_called_once()
         pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertNotIn(
-            "WAKEUP_RUNNER_STALE_SPAWN_LEDGER:harness-spawn-intent:dispatch-consensus-implementation:537",
+        self.assertIn(
+            "WAKEUP_RUNNER_STALE_SPAWN_LEDGER:harness-spawn-intent:dispatch-consensus-implementation:537:target-log-redispatchable:non_ok_marker",
             pending,
         )
 
@@ -4889,7 +4888,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertFalse(log.exists())
         launch.assert_called_once()
 
-    def test_spawn_apply_preserves_terminal_blocked_implement_log(self) -> None:
+    def test_spawn_apply_clears_non_ok_implement_log(self) -> None:
         log = self.repo / ".refactor-loop/logs/implement-issue-20.log"
         log.write_text("IMPLEMENT_DONE:issue-20:blocked\nEXIT=0\n", encoding="utf-8")
         actions = FakeActions()
@@ -4902,9 +4901,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
             results = self.run_result(self.base_plan(action), actions=actions)
 
-        self.assert_blocked_before_dispatch(results, action["action_id"], "target_log_exists", actions)
-        self.assertTrue(log.exists())
-        launch.assert_not_called()
+        self.assertEqual(results[0].status, "applied")
+        self.assertFalse(log.exists())
+        launch.assert_called_once()
 
     def test_spawn_apply_preserves_inflight_implement_log(self) -> None:
         log = self.repo / ".refactor-loop/logs/implement-issue-20.log"

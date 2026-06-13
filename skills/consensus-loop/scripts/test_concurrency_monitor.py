@@ -1061,7 +1061,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
         self.assertNotEqual("malformed-harness-spawn-intent:missing-queued_at", recovered[1])
 
-    def test_tick_terminal_implement_result_does_not_trigger_no_gap_expected_worker(self) -> None:
+    def test_tick_non_ok_implement_marker_triggers_no_gap_expected_worker(self) -> None:
         items = [
             {
                 "number": 581,
@@ -1083,7 +1083,10 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
                 self.monitor.tick()
 
-        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
+        pending = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("P0 no-gap-violation", pending)
+        snapshot = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["expected"], 1)
 
     def test_tick_publish_ready_implement_result_does_not_trigger_hard_gate(self) -> None:
         items = [
@@ -1120,7 +1123,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         snapshot = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
         self.assertEqual(snapshot["expected"], 0)
 
-    def test_tick_terminal_implement_result_does_not_suppress_design_expected_worker(self) -> None:
+    def test_tick_non_ok_implement_marker_does_not_suppress_design_expected_worker(self) -> None:
         items = [
             {
                 "number": 537,
