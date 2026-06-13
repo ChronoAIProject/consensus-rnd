@@ -1880,6 +1880,41 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("\nHARD_GATE:", stdout)
         self.assertIn("HARD_GATE:dispatch_required=5", stderr)
 
+    def test_wakeup_plan_cli_fetch_failed_snapshot_returns_json_with_diagnostic(self) -> None:
+        self.write_managed_work_snapshot_fixture("gh_failure")
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": f"{self.fakebin}{os.pathsep}{env.get('PATH', '')}",
+                "CODEX_FLOOR": "5",
+                "GH_REPO_SLUG": "owner/repo",
+                "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+                "WAKEUP_PLAN_GH_FIXTURE": "gh_failure",
+                "WAKEUP_PLAN_PS_COUNT": "5",
+                "WAKEUP_PLAN_REPO_ROOT": str(self.repo.resolve()),
+                "WAKEUP_PLAN_GIT_LOG": str(self.repo / "git-commands.log"),
+                "WAKEUP_PLAN_GH_QUERY_LOG": str(self.repo / "gh-query-labels.log"),
+            }
+        )
+
+        result = subprocess.run(
+            ["python3", str(WAKEUP_PLAN), "wakeup-plan", "--repo-root", str(self.repo)],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual("wakeup-plan", payload["schema"])
+        self.assertIn(
+            "managed-work-snapshot-unavailable caller=wakeup-plan.load-github-items reason=fetch-failed",
+            result.stderr,
+        )
+        self.assertNotIn("Traceback", result.stdout + result.stderr)
+
     def write_dispatch(self, priority: str, task_id: str) -> Path:
         priority_dir = self.repo / ".refactor-loop" / "dispatch-queue" / priority
         priority_dir.mkdir(parents=True, exist_ok=True)
