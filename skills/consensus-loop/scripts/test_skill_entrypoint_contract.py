@@ -188,6 +188,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
         ):
             with self.subTest(daemon=daemon):
                 self.assertIn(daemon, phase0)
+        self.assertIn("consensus-rnd-cli monitor-bridge-filter", phase0)
+        self.assertIn("repeated raw P0 streaks except first/escalation lines", phase0)
 
     def test_skill_bootstrap_requires_probe_before_actor_dispatch(self) -> None:
         # Refactor (iter218/issue-218):
@@ -218,6 +220,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         for token in (
             "Every controller session",
             "Arm or confirm the daemon-event Monitor bridge",
+            "consensus-rnd-cli monitor-bridge-filter",
             "task-notification",
             "ScheduleWakeup fallback",
         ):
@@ -243,6 +246,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "must arm or confirm the mounted persistent Monitor bridge before pending-event sweep",
             "Run `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root \"$REPO_ROOT\"` first",
             "Arm or confirm the persistent daemon-event Monitor bridge",
+            "consensus-rnd-cli monitor-bridge-filter",
+            "tail -20 .refactor-loop/.concurrency-alert.log",
             "Sweep GitHub comments and pending events",
             "Confirm daemon-owned dispatch evidence covers the next step",
             "directly spawn with harness background tasks only after the mechanical daemon-stuck predicate",
