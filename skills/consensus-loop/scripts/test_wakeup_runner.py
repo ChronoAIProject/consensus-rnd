@@ -505,7 +505,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertIn(archived_marker, pending)
         self.assertEqual(1, pending.count(archived_marker))
         ledger_rows = [
-            json.loads(line)
+            {key: value for key, value in json.loads(line).items() if key != "ts"}
             for line in (self.ctx.paths.state / "wakeup-runner-ledger.jsonl").read_text(encoding="utf-8").splitlines()
         ]
         self.assertEqual(
@@ -1908,7 +1908,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             pending,
         )
 
-    def test_wakeup_runner_stale_applied_spawn_ledger_does_not_retry_terminal_blocked_implement(self) -> None:
+    def test_wakeup_runner_stale_applied_spawn_ledger_retries_non_ok_implement_marker(self) -> None:
         log = self.repo / ".refactor-loop/logs/implement-issue-537.log"
         log.write_text("IMPLEMENT_DONE:issue-537:blocked\nEXIT=0\n", encoding="utf-8")
         action = self.spawn_action(
@@ -1926,13 +1926,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
             results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=FakeActions())
 
-        self.assertEqual(results[0].status, "skipped")
-        self.assertEqual(results[0].reason, "duplicate")
-        self.assertTrue(log.exists())
-        launch.assert_not_called()
+        self.assertEqual(results[0].status, "applied")
+        self.assertFalse(log.exists())
+        launch.assert_called_once()
         pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertNotIn(
-            "WAKEUP_RUNNER_STALE_SPAWN_LEDGER:harness-spawn-intent:dispatch-consensus-implementation:537",
+        self.assertIn(
+            "WAKEUP_RUNNER_STALE_SPAWN_LEDGER:harness-spawn-intent:dispatch-consensus-implementation:537:target-log-redispatchable:non_ok_marker",
             pending,
         )
 
@@ -3901,6 +3900,58 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             2,
         )
 
+    def _seed_publish_helper_exit_rows(self, action_id: str, *, count: int, ts: str) -> None:
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(
+            "".join(
+                json.dumps(
+                    {
+                        "action_id": action_id,
+                        "status": "blocked",
+                        "reason": "helper_exit:75",
+                        "kind": "completed-marker",
+                        "ts": ts,
+                    }
+                )
+                + "\n"
+                for _ in range(count)
+            ),
+            encoding="utf-8",
+        )
+
+    def test_publish_helper_exit_backoff_skips_within_cooldown(self) -> None:
+        # #876: 3 deterministic publish failures with a recent ts pace retries to
+        # at most one per cooldown, instead of a 15-minute publish-verify storm.
+        action = self.implementation_output_action()
+        recent = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self._seed_publish_helper_exit_rows(action["action_id"], count=3, ts=recent)
+        actions = FakeActions(publish_code=75)
+
+        results = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+
+        self.assertEqual([result.status for result in results], ["skipped"])
+        self.assertEqual(results[0].reason, "backoff:publish_helper_exit")
+        self.assertEqual([], actions.calls)
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(
+            f"WAKEUP_RUNNER_PUBLISH_BACKOFF:{action['action_id']}:publish_implementation_output:1800",
+            pending.splitlines(),
+        )
+
+    def test_publish_helper_exit_backoff_retries_after_cooldown(self) -> None:
+        # Once the cooldown has elapsed since the latest failure, the helper runs
+        # again so a later fix (or transient recovery) is never permanently blocked.
+        action = self.implementation_output_action()
+        old = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self._seed_publish_helper_exit_rows(action["action_id"], count=3, ts=old)
+        actions = FakeActions(publish_code=75)
+
+        results = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+
+        self.assertEqual([call[0] for call in actions.calls], ["publish_implementation_output"])
+        self.assertEqual(results[0].reason, "helper_exit:75")
+
     def test_publish_implementation_create_pull_request_rate_limit_blocked_ledger_retries(self) -> None:
         actions = FakeActions()
 
@@ -5002,7 +5053,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertFalse(log.exists())
         launch.assert_called_once()
 
-    def test_spawn_apply_preserves_terminal_blocked_implement_log(self) -> None:
+    def test_spawn_apply_clears_non_ok_implement_log(self) -> None:
         log = self.repo / ".refactor-loop/logs/implement-issue-20.log"
         log.write_text("IMPLEMENT_DONE:issue-20:blocked\nEXIT=0\n", encoding="utf-8")
         actions = FakeActions()
@@ -5015,10 +5066,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
             results = self.run_result(self.base_plan(action), actions=actions)
 
-        self.assertEqual([(result.action_id, result.status, result.reason) for result in results], [(action["action_id"], "skipped", "target_log_exists")])
-        self.assertEqual(actions.calls, [])
-        self.assertTrue(log.exists())
-        launch.assert_not_called()
+        self.assertEqual(results[0].status, "applied")
+        self.assertFalse(log.exists())
+        launch.assert_called_once()
 
     def test_spawn_apply_preserves_inflight_implement_log(self) -> None:
         log = self.repo / ".refactor-loop/logs/implement-issue-20.log"

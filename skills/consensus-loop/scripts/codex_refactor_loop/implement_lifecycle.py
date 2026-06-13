@@ -11,7 +11,7 @@ from typing import Callable, Mapping, Sequence
 from .worker_markers import read_worker_terminal_marker
 
 IMPLEMENT_DONE_OK_RE = re.compile(r"^IMPLEMENT_DONE:.+:ok$")
-IMPLEMENT_DONE_TERMINAL_NON_OK_RE = re.compile(r"^IMPLEMENT_DONE:.+:(?:partial|blocked)$")
+IMPLEMENT_DONE_NON_OK_RE = re.compile(r"^IMPLEMENT_DONE:.+:(?:partial|blocked)$")
 IMPLEMENT_LOG_RE = re.compile(r"^implement-(?P<cluster>[A-Za-z0-9._-]+)\.log$")
 IMPLEMENT_DONE_ISSUE_RE = re.compile(r"^IMPLEMENT_DONE:issue-?([1-9][0-9]*):(?:ok|partial|blocked)$")
 
@@ -44,8 +44,8 @@ class ImplementAttemptState:
         return self.status == "refresh_needed"
 
     @property
-    def terminal_non_ok(self) -> bool:
-        return self.status == "terminal_non_ok"
+    def non_ok_marker(self) -> bool:
+        return self.redispatch and self.reason == "non_ok_marker"
 
 
 def classify_implement_attempt(
@@ -76,8 +76,8 @@ def classify_implement_attempt(
         if exit_line is None:
             return ImplementAttemptState("in_flight", "no_terminal_exit")
         return ImplementAttemptState("redispatch", "nonzero_exit")
-    if IMPLEMENT_DONE_TERMINAL_NON_OK_RE.fullmatch(marker_read.marker):
-        return ImplementAttemptState("terminal_non_ok", "terminal_non_ok", marker=marker_read.marker)
+    if IMPLEMENT_DONE_NON_OK_RE.fullmatch(marker_read.marker):
+        return ImplementAttemptState("redispatch", "non_ok_marker", marker=marker_read.marker)
     marker = marker_read.marker if IMPLEMENT_DONE_OK_RE.fullmatch(marker_read.marker) else ""
     if not marker and marker_read.reason == "duplicate_or_conflicting_log_marker":
         marker = _implement_run_artifact_done_marker(log_path)
@@ -162,7 +162,7 @@ def implement_attempt_suppresses_expected_worker(
 
 
 def implement_attempt_is_terminal_or_noop_completion(state: ImplementAttemptState) -> bool:
-    return state.terminal_non_ok or state.reason == "empty_scoped_diff"
+    return state.reason == "empty_scoped_diff"
 
 
 def implement_attempt_satisfies_expected_worker(state: ImplementAttemptState) -> bool:

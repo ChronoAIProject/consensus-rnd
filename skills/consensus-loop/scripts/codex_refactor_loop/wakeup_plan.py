@@ -622,7 +622,7 @@ def _render_audit_fallback_prompt(ctx: LoopContext, prompt: Path, task_id: str) 
 def _harness_spawn_intent_log_suppresses_retry(log_path: Path) -> bool:
     if is_implement_log(log_path):
         state = classify_implement_attempt(repo_root=_repo_root_from_log(log_path), log_path=log_path)
-        return state.in_flight or state.terminal_non_ok or implement_attempt_is_terminal_or_noop_completion(state)
+        return state.in_flight or implement_attempt_is_terminal_or_noop_completion(state)
     if not log_path.exists():
         return False
     try:
@@ -4139,8 +4139,6 @@ def consensus_implementation_suppressed_reason(
     )
     if lifecycle.in_flight:
         return "in_flight_implement"
-    if lifecycle.terminal_non_ok:
-        return "terminal_implement_result"
     if lifecycle.publish_ready or lifecycle.refresh_needed:
         return "implementation_ready_to_publish"
     if (
