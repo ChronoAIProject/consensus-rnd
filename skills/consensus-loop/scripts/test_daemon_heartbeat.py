@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -94,6 +95,42 @@ class DaemonHeartbeatLeaseTests(unittest.TestCase):
         self.assertEqual("fail", progress.status)
         self.assertIn("RuntimeError:boom", progress.message)
         self.assertFalse((self.repo / ".refactor-loop" / "heartbeats" / "python-daemon.ts").exists())
+
+    def test_run_tick_keeps_heartbeat_fresh_during_long_callback(self) -> None:
+        # Regression guard: a slow tick callback (e.g. a reconcile making
+        # several gh/network calls) must NOT let the liveness heartbeat go
+        # stale and get the live actor reaped. The renewer thread must beat
+        # the heartbeat WHILE the callback is still running.
+        lease = DaemonHeartbeatLease(
+            "python-daemon",
+            self.repo,
+            heartbeat_interval=1,
+            clock=lambda: int(time.time()),
+        )
+        hb = self.repo / ".refactor-loop" / "heartbeats" / "python-daemon.ts"
+        beaten_during = {"seen": False}
+
+        def callback() -> str:
+            deadline = time.monotonic() + 4.0
+            while time.monotonic() < deadline:
+                if hb.exists():
+                    beaten_during["seen"] = True
+                    return "ok"
+                time.sleep(0.05)
+            return "timeout"
+
+        result = lease.run_tick(callback)
+
+        self.assertEqual("ok", result)
+        self.assertTrue(
+            beaten_during["seen"],
+            "heartbeat must be renewed DURING a long callback, not only after it completes",
+        )
+        progress = read_progress(self.repo, "python-daemon")
+        self.assertIsNotNone(progress)
+        assert progress is not None
+        self.assertEqual("complete", progress.status)
+        self.assertEqual([], list((self.repo / ".refactor-loop" / "heartbeats").glob("*.tmp.*")))
 
     def test_lease_requires_repo_root_context_or_explicit_heartbeat_file(self) -> None:
         old_env = os.environ.copy()
