@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .context import LoopContext, LoopContextError
+from .daemon_progress import classify_progress
 from .daemon_singleton import probe as probe_daemon_singleton, symbolic_repo_path
 from .restart import (
     DaemonProcessInventory,
@@ -50,6 +51,9 @@ class DaemonStatusProjection:
     process_inventory_error: str = ""
     heartbeat_status: str = ""
     stale_reason: str = ""
+    progress_status: str = ""
+    progress_age_seconds: int | None = None
+    progress_reason: str = ""
     current_github_login: str = ""
     identity_authority: str = "display-only"
 
@@ -61,6 +65,9 @@ class DaemonStatusProjection:
             "heartbeat_age_seconds": self.heartbeat_age_seconds,
             "heartbeat_status": self.heartbeat_status,
             "stale_reason": self.stale_reason,
+            "progress_status": self.progress_status,
+            "progress_age_seconds": self.progress_age_seconds,
+            "progress_reason": self.progress_reason,
             "heartbeat_fresh": self.heartbeat_fresh,
             "fingerprint_current": self.fingerprint_current,
             "duplicate_canonical_wrappers": self.duplicate_canonical_wrappers,
@@ -129,8 +136,14 @@ def _project_target(
 ) -> DaemonStatusProjection:
     pid = read_daemon_pid(target)
     heartbeat = read_heartbeat_status(target, config)
+    progress = classify_progress(
+        ctx.repo_root,
+        target.name,
+        max_age_seconds=config.progress_fresh_seconds,
+    )
     heartbeat_age = heartbeat.age_seconds
     heartbeat_fresh = heartbeat.fresh
+    progress_healthy = progress.healthy
     stored = read_stored_launch_fingerprint(target)
     expected = expected_launch_fingerprint(ctx, target)
     fingerprint_current = stored is not None and stored.matches(expected)
@@ -151,6 +164,7 @@ def _project_target(
         and instance.live_wrapper_pids == (pid,)
         and pid_alive(pid)
         and heartbeat_fresh
+        and progress_healthy
         and fingerprint_current
         and duplicate_count == 0
         and orphan_lock_holder_count == 0
@@ -163,6 +177,7 @@ def _project_target(
         pid,
         running,
         heartbeat_fresh,
+        progress_healthy,
         fingerprint_current,
         duplicate_count,
         orphan_lock_holder_count,
@@ -174,6 +189,8 @@ def _project_target(
         pid=pid,
         heartbeat_reason=heartbeat.reason,
         heartbeat_fresh=heartbeat_fresh,
+        progress_reason=progress.reason,
+        progress_healthy=progress_healthy,
         fingerprint_current=fingerprint_current,
         duplicate_count=duplicate_count,
         orphan_lock_holder_count=orphan_lock_holder_count,
@@ -204,6 +221,9 @@ def _project_target(
         active_controller=active_status["active_controller"],
         heartbeat_status=heartbeat.state,
         stale_reason=stale_reason,
+        progress_status=progress.state,
+        progress_age_seconds=progress.age_seconds,
+        progress_reason=progress.reason,
         current_github_login=active_status["current_github_login"],
         identity_authority=active_status["identity_authority"],
     )
@@ -214,6 +234,7 @@ def _daemon_status(
     pid: int | None,
     running: bool,
     heartbeat_fresh: bool,
+    progress_healthy: bool,
     fingerprint_current: bool,
     duplicate_count: int,
     orphan_lock_holder_count: int,
@@ -232,7 +253,7 @@ def _daemon_status(
         return "stale"
     if pid is None:
         return "dead"
-    if not heartbeat_fresh or not fingerprint_current or duplicate_count or orphan_lock_holder_count:
+    if not heartbeat_fresh or not progress_healthy or not fingerprint_current or duplicate_count or orphan_lock_holder_count:
         return "stale"
     if not pid_alive(pid):
         return "dead"
@@ -245,6 +266,8 @@ def _stale_reason(
     pid: int | None,
     heartbeat_reason: str,
     heartbeat_fresh: bool,
+    progress_reason: str,
+    progress_healthy: bool,
     fingerprint_current: bool,
     duplicate_count: int,
     orphan_lock_holder_count: int,
@@ -270,6 +293,8 @@ def _stale_reason(
         return "pid-dead"
     if not heartbeat_fresh:
         return heartbeat_reason
+    if not progress_healthy:
+        return progress_reason
     if not fingerprint_current:
         return "fingerprint-mismatch"
     if duplicate_count:

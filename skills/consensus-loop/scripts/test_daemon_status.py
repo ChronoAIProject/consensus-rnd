@@ -19,6 +19,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from codex_refactor_loop import daemon_status
 from codex_refactor_loop import restart
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.daemon_progress import begin_tick, complete_tick, fail_tick
 from codex_refactor_loop.daemon_singleton import DaemonSingletonProjection
 
 
@@ -65,6 +66,9 @@ class DaemonStatusProjectionTests(unittest.TestCase):
         self.assertEqual("display-only", payload["daemons"][0]["identity_authority"])
         self.assertIn("heartbeat_status", payload["daemons"][0])
         self.assertIn("stale_reason", payload["daemons"][0])
+        self.assertIn("progress_status", payload["daemons"][0])
+        self.assertIn("progress_age_seconds", payload["daemons"][0])
+        self.assertIn("progress_reason", payload["daemons"][0])
         self.assertIn("singleton_lock_path", payload["daemons"][0])
         self.assertIn("singleton_lock_state", payload["daemons"][0])
         self.assertIn("singleton_lock_holder_pid", payload["daemons"][0])
@@ -126,6 +130,92 @@ class DaemonStatusProjectionTests(unittest.TestCase):
         self.assertEqual("heartbeat-future", daemon["stale_reason"])
         self.assertEqual("456\n", pid.read_text(encoding="utf-8"))
         self.assertEqual("1200\n", heartbeat.read_text(encoding="utf-8"))
+
+    def test_overdue_progress_is_stale_even_when_heartbeat_is_fresh(self) -> None:
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+        ctx = LoopContext.load(
+            repo_root=self.tmp,
+            skill_root=SCRIPT_DIR.parent,
+            read_only=True,
+            env=env,
+        )
+        target = restart.daemon_target(
+            ctx,
+            "concurrency_monitor",
+            ("python3", "{skill_root}/scripts/consensus-rnd-cli", "concurrency", "--daemon"),
+        )
+        target.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
+        target.heartbeat_file.write_text("1000\n", encoding="utf-8")
+        target.pid_file.parent.mkdir(parents=True, exist_ok=True)
+        target.pid_file.write_text("848\n", encoding="utf-8")
+        restart.DaemonLaunchFingerprint.current(ctx, "concurrency_monitor", target.command).write(target.fingerprint_file)
+        progress = begin_tick(self.tmp, "concurrency_monitor", now=300, pid=857)
+        complete_tick(self.tmp, progress, now=300)
+        wrapper_command = " ".join(
+            (
+                sys.executable,
+                "-c",
+                restart.WRAPPER_CODE,
+                "concurrency_monitor",
+                str(ctx.repo_root),
+                str(target.pid_file),
+                str(target.died_file),
+                *target.command,
+            )
+        )
+        inventory = restart.DaemonProcessInventory(
+            (
+                restart.DaemonProcess(848, wrapper_command, 1),
+                restart.DaemonProcess(857, "python3 /tmp/old/consensus-rnd-cli concurrency --daemon", 848),
+            )
+        )
+        singleton = DaemonSingletonProjection(target.singleton_lock_file, "held", 857, True, "lock-held")
+        (self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=inventory):
+                with mock.patch("codex_refactor_loop.daemon_status.probe_daemon_singleton", return_value=singleton):
+                    with mock.patch("codex_refactor_loop.restart.time.time", return_value=1001):
+                        with mock.patch("codex_refactor_loop.daemon_status.pid_alive", side_effect=lambda candidate: candidate in {848, 857}):
+                            report = daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        daemon = next(item for item in report.to_json()["daemons"] if item["name"] == "concurrency_monitor")
+        self.assertEqual("stale", daemon["status"])
+        self.assertEqual("fresh", daemon["heartbeat_status"])
+        self.assertEqual("overdue", daemon["progress_status"])
+        self.assertEqual(701, daemon["progress_age_seconds"])
+        self.assertEqual("progress-overdue:701s", daemon["stale_reason"])
+
+    def test_failed_progress_is_stale_even_when_heartbeat_is_fresh(self) -> None:
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+        heartbeat = self.tmp / ".refactor-loop" / "heartbeats" / "comment-monitor.ts"
+        heartbeat.parent.mkdir(parents=True, exist_ok=True)
+        heartbeat.write_text("1000\n", encoding="utf-8")
+        pid = self.tmp / ".refactor-loop" / "locks" / "comment-monitor.pid"
+        pid.parent.mkdir(parents=True, exist_ok=True)
+        pid.write_text("456\n", encoding="utf-8")
+        progress = begin_tick(self.tmp, "comment-monitor", now=1000, pid=789)
+        fail_tick(self.tmp, progress, now=1000, message="RuntimeError:boom")
+        (self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect") as collect_inventory:
+                collect_inventory.return_value = daemon_status.DaemonProcessInventory(())
+                with mock.patch("codex_refactor_loop.restart.time.time", return_value=1001):
+                    with mock.patch("codex_refactor_loop.daemon_status.pid_alive", return_value=True):
+                        report = daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        daemon = next(item for item in report.to_json()["daemons"] if item["name"] == "comment-monitor")
+        self.assertEqual("stale", daemon["status"])
+        self.assertEqual("fresh", daemon["heartbeat_status"])
+        self.assertEqual("failed", daemon["progress_status"])
+        self.assertIn("progress-failed:RuntimeError:boom", daemon["stale_reason"])
 
     def test_orphan_child_lock_holder_is_stale_read_only_projection(self) -> None:
         env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
@@ -202,6 +292,8 @@ class DaemonStatusProjectionTests(unittest.TestCase):
             target.command,
         )
         fingerprint.write(self.tmp / ".refactor-loop" / "locks" / "phase9_router_daemon.fingerprint.json")
+        progress = begin_tick(self.tmp, "phase9_router_daemon", now=1000, pid=857)
+        complete_tick(self.tmp, progress, now=1000)
         wrapper_command = " ".join(
             (
                 sys.executable,
@@ -292,6 +384,8 @@ class DaemonStatusProjectionTests(unittest.TestCase):
         target.pid_file.parent.mkdir(parents=True, exist_ok=True)
         target.pid_file.write_text("848\n", encoding="utf-8")
         restart.DaemonLaunchFingerprint.current(ctx, "concurrency_monitor", target.command).write(target.fingerprint_file)
+        progress = begin_tick(self.tmp, "concurrency_monitor", now=1000, pid=857)
+        complete_tick(self.tmp, progress, now=1000)
         wrapper_command = " ".join(
             (
                 sys.executable,
@@ -348,6 +442,8 @@ class DaemonStatusProjectionTests(unittest.TestCase):
         target.pid_file.parent.mkdir(parents=True, exist_ok=True)
         target.pid_file.write_text("848\n", encoding="utf-8")
         restart.DaemonLaunchFingerprint.current(ctx, "concurrency_monitor", target.command).write(target.fingerprint_file)
+        progress = begin_tick(self.tmp, "concurrency_monitor", now=1000, pid=857)
+        complete_tick(self.tmp, progress, now=1000)
         wrapper_command = " ".join(
             (
                 sys.executable,

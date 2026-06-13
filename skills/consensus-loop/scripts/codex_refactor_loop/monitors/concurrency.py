@@ -1410,10 +1410,9 @@ class ConcurrencyMonitor:
             lease.beat()
             while True:
                 try:
-                    lease.run_with_lease(lambda: run_concurrency_reconcile_tick(self))
+                    lease.run_tick(lambda: run_concurrency_reconcile_tick(self))
                 except Exception as exc:
                     log(f"EXCEPTION in tick: {exc!r}")
-                lease.beat()
                 lease.sleep_with_lease(self.interval)
 
 
