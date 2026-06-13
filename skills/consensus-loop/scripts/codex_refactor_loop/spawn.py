@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from .gh_accounting import accounting_env
 from .processes import ProcessSupervisor, prompt_file_from_text
@@ -67,7 +69,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f"{exc}\n")
         return 2 if "task id" in str(exc) else 1
     if not claim.acquired:
-        sys.stderr.write(f"SPAWN_CLAIM_HELD:task={claim.task_id} lock={claim.lock_path}\n")
+        sys.stderr.write(json.dumps(_claim_held_diagnostic(claim.task_id, log_path, claim.lock_path)) + "\n")
         return 0
     child_env = accounting_env(os.environ, skill_root=Path(__file__).resolve().parents[2], repo_root=usage_repo, source=f"codex:{task_id}", force_source=True)
     banner = f"SPAWN: prompt={prompt_path} log={log_path} cd={args.cd} timeout={args.stall}s"
@@ -90,6 +92,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _task_id_from_log(log_path: Path) -> str:
     stem = log_path.name.rsplit(".", 1)[0]
     return safe_task_id_from_task(stem)
+
+
+def _claim_held_diagnostic(task_id: str, log_path: Path, lock_path: Path) -> dict[str, Any]:
+    return {
+        "task": task_id,
+        "log": str(log_path),
+        "lock": str(lock_path),
+        "source": "SPAWN_CLAIM_HELD",
+        "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "no_lifecycle_authority": True,
+    }
 
 
 if __name__ == "__main__":

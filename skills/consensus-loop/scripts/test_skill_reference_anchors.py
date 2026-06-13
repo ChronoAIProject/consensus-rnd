@@ -248,6 +248,25 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("Refactoring, issue-solving, and repository R&D are different entry surfaces", self.readme)
         self.assertIn("## Main path and fallback producer", self.skill)
 
+    def test_wake_source_documents_monitor_bridge_filter_and_pull_read_contract(self) -> None:
+        skeleton = section_after_heading(self.skill, "Wakeup Skeleton")
+        bootstrap = section_after_heading(self.skill, "Consensus-rnd Phase bootstrap — Bootstrap (session bootstrap)")
+        combined = f"{skeleton}\n{bootstrap}"
+        for needle in (
+            "consensus-rnd-cli monitor-bridge-filter",
+            ".refactor-loop/.controller-pending-events.log",
+            ".refactor-loop/.concurrency-alert.log",
+            "tail -20 .refactor-loop/.concurrency-alert.log",
+            "drops empty lines",
+            "`tail -F` headers",
+            "`HARD_GATE:dispatch_required`",
+            "pending P0 mirrors",
+            "known terminal runner blockers",
+            "repeated raw P0 streaks except first/escalation lines",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
     def test_project_rules_document_repo_python_code_policy(self) -> None:
         claude = read(REPO_ROOT / "CLAUDE.md")
         python_policy = section_after_heading(claude, "Python 代码规范")
@@ -399,7 +418,10 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             ".refactor-loop/locks/spawn-tasks/<safe-task-id>.lock",
             "O_CREAT|O_EXCL",
             "ProcessSupervisor.supervise(...)",
-            "SPAWN_CLAIM_HELD:task=<task_id> lock=<lock_path>",
+            "diagnostic-only JSONL",
+            "`task`, `log`, `lock`, `source`, `time`, and `no_lifecycle_authority`",
+            "`source` is `SPAWN_CLAIM_HELD`",
+            "`no_lifecycle_authority` is true",
             "exits 0 as skip/noop",
             "fail closed nonzero before supervisor launch",
             "log has an `EXIT=` marker",
@@ -413,6 +435,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("[Task spawn claim](#task-spawn-claim-490)", spawn_pattern)
         self.assertIn("Callers may use logs, readiness, pending intents, or process counts for planning", spawn_pattern)
         self.assertIn("not the enforcement point", spawn_pattern)
+        self.assertIn("retry source", section)
 
     def test_issue_504_global_dashboard_status_card_anchor_and_boundaries(self) -> None:
         section = section_after_heading(self.skill, "Named runtime exception - global-dashboard-status-card(per #504)")
@@ -1033,7 +1056,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "HARNESS_SPAWN_INTENT",
             '`command` field is exactly `"spawn-codex"` as a closed semantic enum',
             "not argv and not shell",
-            "actual CLI binary and argv construction live only in the controller/harness consumption layer",
+            "the #396 wakeup-runner consumes valid intent through the checked-in spawn helper",
+            "Controller/harness direct spawn is only a mechanical daemon-stuck fallback",
             'dispatch_state="harness-intent"',
         ):
             with self.subTest(token=token):

@@ -203,7 +203,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             "MANAGED_WORK_SNAPSHOT_TTL_SECONDS": ("300", "fresh read-only snapshot is reused"),
             "MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS": ("900", "discovery returns `loaded_ok=false`"),
             "PHASE9_ROUTER_INTERVAL_SECONDS": ("120", "phase9-router daemon command"),
-            "WAKEUP_RUNNER_INTERVAL_SECONDS": ("120", "wakeup-runner daemon command"),
+            "WAKEUP_RUNNER_INTERVAL_SECONDS": ("60", "wakeup-runner daemon command"),
             "PATROL_INSPECTOR_ENABLE": ("true", "host-owned explicit false/empty keeps it off"),
             "PATROL_INSPECTOR_INTERVAL_SECONDS": ("7200", "patrol-inspector daemon command"),
             "PATROL_INSPECTOR_MAX_FINDINGS": ("25", "findings per patrol tick"),

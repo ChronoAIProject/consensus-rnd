@@ -261,9 +261,16 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="example/repo"\nexport MAINTAINER_WHITELIST="maintainer"\n',
             encoding="utf-8",
         )
+        clean_env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"PHASE9_ROUTER_INTERVAL_SECONDS", "WAKEUP_RUNNER_INTERVAL_SECONDS"}
+        }
+        clean_env["CONSENSUS_RND_HOST_ENV"] = str(self.host_env_path)
         self.env_patch = mock.patch.dict(
             os.environ,
-            {"CONSENSUS_RND_HOST_ENV": str(self.host_env_path)},
+            clean_env,
+            clear=True,
         )
         self.env_patch.start()
         self.ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill)
@@ -359,7 +366,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         default_wakeup = restart.daemon_target(self.ctx, "wakeup_runner_daemon", wakeup_template)
 
         self.assertEqual("120", default_phase9.command[-1])
-        self.assertEqual("120", default_wakeup.command[-1])
+        self.assertEqual("60", default_wakeup.command[-1])
 
         self.host_env_path.write_text(
             f'export REPO_ROOT="{self.repo}"\n'
@@ -403,7 +410,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         invalid_wakeup = restart.daemon_target(invalid_ctx, "wakeup_runner_daemon", wakeup_template)
 
         self.assertEqual("120", invalid_phase9.command[-1])
-        self.assertEqual("120", invalid_wakeup.command[-1])
+        self.assertEqual("60", invalid_wakeup.command[-1])
 
     def test_restart_managed_daemon_names_projects_daemon_commands(self) -> None:
         self.assertEqual(tuple(name for name, _command in DAEMON_COMMANDS), restart_managed_daemon_names())

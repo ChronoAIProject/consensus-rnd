@@ -47,6 +47,7 @@ ALL_AUTHORITY_TOKENS = {
     "read-log",
     "read-process",
     "read-source",
+    "read-stdin",
     "read-state",
     "spawn",
     "spawn-daemon",
@@ -127,6 +128,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "gh-stats",
                 "holistic-status",
                 "labels",
+                "monitor-bridge-filter",
                 "patrol-inspector",
                 "concurrency",
                 "dev-sync",
@@ -432,6 +434,11 @@ class RuntimeCommandRouterTests(unittest.TestCase):
     def test_update_check_declares_exact_notify_only_authority(self) -> None:
         self.assertEqual(("read-source", "read-gh", "write-state"), COMMANDS["update-check"].authority)
         self.assertFalse(set(COMMANDS["update-check"].authority) & LIFECYCLE_TOKENS)
+
+    def test_monitor_bridge_filter_declares_read_stdin_only_authority(self) -> None:
+        self.assertEqual(("read-stdin",), COMMANDS["monitor-bridge-filter"].authority)
+        self.assertFalse(set(COMMANDS["monitor-bridge-filter"].authority) & MUTATION_TOKENS)
+        self.assertIn("filter daemon-event Monitor bridge stdin", COMMANDS["monitor-bridge-filter"].description)
 
     def test_runtime_retention_is_canonical_without_log_retention_alias(self) -> None:
         self.assertEqual(("delete-runtime", "git-worktree"), COMMANDS["runtime-retention"].authority)

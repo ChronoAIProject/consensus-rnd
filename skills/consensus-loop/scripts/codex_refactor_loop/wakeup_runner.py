@@ -136,6 +136,7 @@ REMOTE_CI_FIX_ATTEMPT_CAP = 2
 REMOTE_CI_FIX_DONE_RE = re.compile(r"^REMOTE_CI_FIX_DONE:([^:]+):(ok|infra|blocked)$")
 SAFE_CI_CHECK_TOKEN_RE = re.compile(r"[^A-Za-z0-9._-]+")
 NON_BLOCKING_VALIDATION_REASONS = frozenset({"publish_implementation_empty_scoped_diff"})
+NON_BLOCKING_SPAWN_VALIDATION_REASONS = frozenset({"target_log_exists"})
 STAND_DOWN_MANAGED_WRITE_ACTIONS = frozenset(
     {
         "safe_push",
@@ -410,6 +411,11 @@ class WakeupRunner:
         error = self._validate_action(action)
         if error:
             if error == "issue_decomposition_duplicate_sentinel" or error in NON_BLOCKING_VALIDATION_REASONS:
+                return self._record(RunnerResult(action_id, "skipped", error), action)
+            if (
+                action.get("controller_action") == "spawn_codex_harness_background"
+                and error in NON_BLOCKING_SPAWN_VALIDATION_REASONS
+            ):
                 return self._record(RunnerResult(action_id, "skipped", error), action)
             return self._blocked(action, error)
         same_tick_terminal_reason = self._same_tick_terminal_target_reason(action)
