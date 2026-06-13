@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from . import github_body, holistic_status, patrol, project_rules, spawn, statusline
+from . import github_body, holistic_status, monitor_bridge, patrol, project_rules, spawn, statusline
 from .closed_label_reconciler import main as closed_label_reconciler_main
 from .checks.degradation import main as degradation_main
 from .checks.manifest import main as manifest_main
@@ -162,6 +162,11 @@ COMMANDS: dict[str, CommandSpec] = {
         update_check_main,
         "run the notify-only version update check probe",
         ("read-source", "read-gh", "write-state"),
+    ),
+    "monitor-bridge-filter": CommandSpec(
+        monitor_bridge.main,
+        "filter daemon-event Monitor bridge stdin before controller wakeup",
+        ("read-stdin",),
     ),
     "render-github-body": CommandSpec(
         github_body.main,

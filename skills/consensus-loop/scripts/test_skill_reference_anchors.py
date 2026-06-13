@@ -248,6 +248,25 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("Refactoring, issue-solving, and repository R&D are different entry surfaces", self.readme)
         self.assertIn("## Main path and fallback producer", self.skill)
 
+    def test_wake_source_documents_monitor_bridge_filter_and_pull_read_contract(self) -> None:
+        skeleton = section_after_heading(self.skill, "Wakeup Skeleton")
+        bootstrap = section_after_heading(self.skill, "Consensus-rnd Phase bootstrap — Bootstrap (session bootstrap)")
+        combined = f"{skeleton}\n{bootstrap}"
+        for needle in (
+            "consensus-rnd-cli monitor-bridge-filter",
+            ".refactor-loop/.controller-pending-events.log",
+            ".refactor-loop/.concurrency-alert.log",
+            "tail -20 .refactor-loop/.concurrency-alert.log",
+            "drops empty lines",
+            "`tail -F` headers",
+            "`HARD_GATE:dispatch_required`",
+            "pending P0 mirrors",
+            "known terminal runner blockers",
+            "repeated raw P0 streaks except first/escalation lines",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
     def test_project_rules_document_repo_python_code_policy(self) -> None:
         claude = read(REPO_ROOT / "CLAUDE.md")
         python_policy = section_after_heading(claude, "Python 代码规范")
