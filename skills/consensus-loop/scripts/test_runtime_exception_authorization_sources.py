@@ -1036,6 +1036,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "wakeup-runner",
             "active-controller owner",
             "`wakeup-plan` evidence-bound closed action projection",
+            "valid `HARNESS_SPAWN_INTENT` ordinary execution is owned by #396 `wakeup-runner`",
+            "controller/harness direct spawn is only mechanical daemon-stuck fallback",
+            "duplicate or in-flight target-log spawn intents are diagnostic skipped actions",
+            "actual spawn helper launch failures remain blocked",
             "clean `EXIT=0` source marker",
             "review truth table `reject==0 && approve>=1 && all required reviewers present && all required GitHub-visible final-sentinel reviewer comment heads equal live PR head`",
             "target-required PR merge-readiness checks",
@@ -1165,7 +1169,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             ".refactor-loop/locks/spawn-tasks/<safe-task-id>.lock",
             "O_CREAT|O_EXCL",
             "ProcessSupervisor.supervise(...)",
-            "SPAWN_CLAIM_HELD:task=<task_id> lock=<lock_path>",
+            "diagnostic-only JSONL",
+            "`task`, `log`, `lock`, `source`, `time`, and `no_lifecycle_authority`",
+            "`source` is `SPAWN_CLAIM_HELD`",
+            "`no_lifecycle_authority` is true",
             "returns 0 skip/noop",
             "metadata matches the task/log path",
             "`EXIT=` marker",
@@ -1182,7 +1189,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
         for forbidden in (
             "no upstream read-lock preflight",
-            "no standalone authorization from the lock artifact",
+            "no standalone authorization from the lock artifact or `SPAWN_CLAIM_HELD` diagnostic",
+            "no treating claim-held as an authorization or retry source",
             "no cross-device per-work claim",
             "no lifecycle authority",
             "no host-defined lease scope",
@@ -1202,6 +1210,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(forbidden, entry)
 
         self.assertIn("TaskSpawnClaimStore(repo_root).acquire(task_id, log_path=log_path)", spawn_source)
+        self.assertIn("_claim_held_diagnostic", spawn_source)
+        self.assertNotIn("SPAWN_CLAIM_HELD:task=", spawn_source)
         self.assertLess(spawn_source.index("TaskSpawnClaimStore(repo_root).acquire"), spawn_source.index("ProcessSupervisor().supervise"))
         self.assertIn("os.O_CREAT | os.O_EXCL", claim_source)
         self.assertIn('return any(line.startswith("EXIT=") for line in tail)', claim_source)

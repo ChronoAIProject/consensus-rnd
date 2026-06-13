@@ -2921,10 +2921,42 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             results = self.run_result(self.batch_plan([first, blocked, later], dispatch_required=3, deficit=3))
 
         self.assertEqual([result.action_id for result in results], ["spawn:first", "spawn:blocked", "spawn:later"])
-        self.assertEqual([result.status for result in results], ["applied", "blocked", "applied"])
+        self.assertEqual([result.status for result in results], ["applied", "skipped", "applied"])
         self.assertEqual(results[1].reason, "target_log_exists")
         self.assertEqual(launch.call_count, 2)
-        self.assert_blocked_event("spawn:blocked", "target_log_exists")
+
+    def test_wakeup_runner_skips_duplicate_and_inflight_spawn_targets_then_continues_scanning(self) -> None:
+        duplicate = self.spawn_action(
+            action_id="spawn:duplicate",
+            log=str(self.repo / ".refactor-loop/logs/duplicate.log"),
+        )
+        inflight = self.spawn_action(
+            action_id="spawn:inflight",
+            log=str(self.repo / ".refactor-loop/logs/inflight.log"),
+        )
+        later = self.spawn_action(
+            action_id="spawn:later-after-covered-targets",
+            log=str(self.repo / ".refactor-loop/logs/later-after-covered-targets.log"),
+        )
+        Path(duplicate["log"]).write_text("already complete\nEXIT=0\n", encoding="utf-8")
+        Path(inflight["log"]).write_text("worker still running\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.batch_plan([duplicate, inflight, later], dispatch_required=3, deficit=3))
+
+        self.assertEqual(
+            [(result.action_id, result.status, result.reason) for result in results],
+            [
+                ("spawn:duplicate", "skipped", "target_log_exists"),
+                ("spawn:inflight", "skipped", "target_log_exists"),
+                ("spawn:later-after-covered-targets", "applied", ""),
+            ],
+        )
+        launch.assert_called_once()
+        self.assertEqual(Path(launch.call_args.kwargs["log"]).resolve(), Path(later["log"]).resolve())
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertNotIn("WAKEUP_RUNNER_BLOCKED:spawn:duplicate:target_log_exists", pending)
+        self.assertNotIn("WAKEUP_RUNNER_BLOCKED:spawn:inflight:target_log_exists", pending)
 
     def test_wakeup_runner_stops_on_spawn_launch_failure_without_scanning_later_actions(self) -> None:
         first = self.spawn_action(action_id="spawn:launch-fails", log=str(self.repo / ".refactor-loop/logs/launch-fails.log"))
@@ -2967,7 +2999,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         results = self.run_result(self.base_plan(action), actions=actions)
 
-        self.assert_blocked_before_dispatch(results, "spawn:target-log-exists", "target_log_exists", actions)
+        self.assertEqual([(result.action_id, result.status, result.reason) for result in results], [("spawn:target-log-exists", "skipped", "target_log_exists")])
+        self.assertEqual(actions.calls, [])
 
     def test_harness_spawn_failed_target_log_retries_supervisor(self) -> None:
         action = self.spawn_action(action_id="spawn:failed-target-log")
@@ -4902,7 +4935,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
             results = self.run_result(self.base_plan(action), actions=actions)
 
-        self.assert_blocked_before_dispatch(results, action["action_id"], "target_log_exists", actions)
+        self.assertEqual([(result.action_id, result.status, result.reason) for result in results], [(action["action_id"], "skipped", "target_log_exists")])
+        self.assertEqual(actions.calls, [])
         self.assertTrue(log.exists())
         launch.assert_not_called()
 
@@ -4919,7 +4953,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
             results = self.run_result(self.base_plan(action), actions=actions)
 
-        self.assert_blocked_before_dispatch(results, action["action_id"], "target_log_exists", actions)
+        self.assertEqual([(result.action_id, result.status, result.reason) for result in results], [(action["action_id"], "skipped", "target_log_exists")])
+        self.assertEqual(actions.calls, [])
         self.assertTrue(log.exists())
         launch.assert_not_called()
 
