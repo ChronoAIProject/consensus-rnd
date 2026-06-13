@@ -185,6 +185,36 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("wakeup-runner-396", action["runner_authority"])
         self.assertTrue(action["no_generic_command"])
 
+    def test_rebase_resolve_actions_project_behind_managed_pr(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="behind",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-behind",
+            head_sha="abc123",
+            mergeable="MERGEABLE",
+            merge_state_status="BEHIND",
+        )
+        ctx = mock.Mock(host_env={"INTEGRATION_BRANCH": "auto-refact-dev"})
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text") as git_text_mock:
+            git_text_mock.side_effect = [
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="head\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="base\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="oldbase\n", stderr=""),
+            ]
+            actions = rebase_resolve_actions(self.repo, ctx, [item], monitor=None)
+
+        action = actions[0]
+        self.assertEqual("dispatch_pr_rebase_resolve", action["controller_action"])
+        self.assertEqual("stale-base-conflicting-pr", action["kind"])
+        self.assertEqual(77, action["target_number"])
+        self.assertEqual("MERGEABLE", action["mergeable"])
+        self.assertEqual("BEHIND", action["mergeStateStatus"])
+        self.assertIn("conflicting_or_dirty_or_behind_mergeability", action["preconditions"])
+        self.assertTrue(action["no_generic_command"])
+
     def test_default_issue_intake_projects_named_action_for_open_not_managed_issue(self) -> None:
         ctx = mock.Mock(host_env={"DEFAULT_ISSUE_INTAKE_ENABLE": "true"})
         actions = default_issue_intake_actions(
@@ -3484,9 +3514,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["title_file"], ".refactor-loop/runs/implementation-pr-issue-20-title.txt")
         self.assertEqual(action["body_file"], ".refactor-loop/runs/implementation-pr-issue-20-body.md")
         self.assertIn("canonical_implementation_identity", action["preconditions"])
-        self.assertIn("fresh_integration_base", action["preconditions"])
         self.assertIn("worker_authored_pr_artifacts", action["preconditions"])
         self.assertIn("no_conflicting_open_implementation_pr", action["preconditions"])
+        self.assertNotIn("fresh_integration_base", action["preconditions"])
+        self.assertNotIn("host_checks_green", action["preconditions"])
         self.assertEqual(action["target_pr_number"], 320)
         self.assertNotIn("verified_pr_head", action["preconditions"])
 

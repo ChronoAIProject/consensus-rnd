@@ -144,7 +144,7 @@ class ReviewGateEndToEndTests(unittest.TestCase):
                 return subprocess.CompletedProcess(
                     command,
                     0,
-                    json.dumps({"baseRefName": "canonical-integration", "headRefOid": HEAD_SHA, "mergeStateStatus": "DIRTY"}),
+                    json.dumps({"baseRefName": "canonical-integration", "headRefOid": HEAD_SHA, "mergeStateStatus": "CLEAN"}),
                     "",
                 )
             if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft,changedFiles" in command:
@@ -270,19 +270,20 @@ class ReviewGateEndToEndTests(unittest.TestCase):
 
         with mock.patch.object(real_actions, "gh", side_effect=fake_gh):
             with mock.patch.object(real_actions, "git", side_effect=AssertionError("git should not be called")):
-                runner = WakeupRunner(
-                    self.ctx,
-                    plan_loader=lambda _repo: {
-                        "schema": "wakeup-plan",
-                        "mode": "closed-action-projection",
-                        "apply_authority": "wakeup-runner-396-only",
-                        "no_lifecycle_authority": True,
-                        "actions": [action],
-                    },
-                    actions=real_actions,
-                    command_runner=lambda command: self._review_gate_command(command, is_draft=True),
-                )
-                result = runner.run_once()[0]
+                with mock.patch.object(real_actions, "_merge_pr_ci_gate", return_value=0):
+                    runner = WakeupRunner(
+                        self.ctx,
+                        plan_loader=lambda _repo: {
+                            "schema": "wakeup-plan",
+                            "mode": "closed-action-projection",
+                            "apply_authority": "wakeup-runner-396-only",
+                            "no_lifecycle_authority": True,
+                            "actions": [action],
+                        },
+                        actions=real_actions,
+                        command_runner=lambda command: self._review_gate_command(command, is_draft=True),
+                    )
+                    result = runner.run_once()[0]
 
         self.assertEqual(result.status, "applied")
         ready_index = gh_calls.index(["pr", "ready", "480"])
@@ -299,7 +300,7 @@ class ReviewGateEndToEndTests(unittest.TestCase):
             return subprocess.CompletedProcess(
                 command,
                 0,
-                json.dumps({"baseRefName": "canonical-integration", "headRefOid": HEAD_SHA, "mergeStateStatus": "DIRTY"}),
+                json.dumps({"baseRefName": "canonical-integration", "headRefOid": HEAD_SHA, "mergeStateStatus": "CLEAN"}),
                 "",
             )
         if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft,changedFiles" in command:
@@ -338,7 +339,7 @@ class ReviewGateEndToEndTests(unittest.TestCase):
                 return subprocess.CompletedProcess(
                     command,
                     0,
-                    json.dumps({"baseRefName": "canonical-integration", "headRefOid": HEAD_SHA, "mergeStateStatus": "DIRTY"}),
+                    json.dumps({"baseRefName": "canonical-integration", "headRefOid": HEAD_SHA, "mergeStateStatus": "CLEAN"}),
                     "",
                 )
             if command == ["gh", "api", "repos/owner/repo/pulls/480"]:

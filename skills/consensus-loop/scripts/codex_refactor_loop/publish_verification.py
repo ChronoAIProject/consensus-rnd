@@ -1,4 +1,4 @@
-"""Helper-private publish implementation verification evidence."""
+"""Non-blocking publish implementation diagnostic evidence."""
 
 from __future__ import annotations
 
@@ -9,10 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .processes import run_fixed_host_command
-
-
-VERIFY_VERSION = 1
+VERIFY_VERSION = 2
 VERIFY_COMMANDS = ("BUILD_CMD", "TEST_CMD")
 
 
@@ -72,6 +69,27 @@ def verify_or_run(
     head_sha: str,
     env: Mapping[str, str],
 ) -> PublishVerificationResult:
+    return record_diagnostic(
+        repo_root=repo_root,
+        worktree=worktree,
+        issue=issue,
+        action=action,
+        head_ref=head_ref,
+        head_sha=head_sha,
+        env=env,
+    )
+
+
+def record_diagnostic(
+    *,
+    repo_root: Path,
+    worktree: Path,
+    issue: str,
+    action: str,
+    head_ref: str,
+    head_sha: str,
+    env: Mapping[str, str],
+) -> PublishVerificationResult:
     identity = PublishVerificationIdentity(
         issue=issue,
         action=action,
@@ -81,42 +99,27 @@ def verify_or_run(
         command_digest=command_digest(env),
     )
     path = evidence_path(repo_root, issue, head_ref)
-    if _evidence_matches(path, identity):
-        return PublishVerificationResult("ok", "reused", path)
     payload: dict[str, Any] = {
         "version": VERIFY_VERSION,
         **identity.to_json(),
         "commands": [],
+        "status": "diagnostic",
+        "reason": "post_pr_non_blocking",
+        "blocking": False,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    _write_json(path, payload)
     for command_name in VERIFY_COMMANDS:
         command = str(env.get(command_name) or "").strip()
-        if not command:
-            payload["status"] = "failed"
-            payload["reason"] = f"missing-{command_name}"
-            _write_json(path, payload)
-            return PublishVerificationResult("failed", payload["reason"], path)
-        log = path.with_name(f"{path.stem}-{command_name}.log")
-        exit_code = run_fixed_host_command(command, cwd=worktree, env=env, log=log)
-        command_record = {
+        command_record: dict[str, Any] = {
             "name": command_name,
             "command_sha256": _string_digest(command),
-            "exit": exit_code,
-            "log": _repo_relative(repo_root, log),
-            "exit_marker": _log_has_exit_zero(log),
+            "configured": bool(command),
         }
+        if command:
+            command_record["suggested_invocation"] = f"bash -lc \"${command_name}\""
         payload["commands"].append(command_record)
-        if exit_code != 0 or not command_record["exit_marker"]:
-            payload["status"] = "failed"
-            payload["reason"] = f"{command_name}-failed:{exit_code}"
-            _write_json(path, payload)
-            return PublishVerificationResult("failed", payload["reason"], path)
-        _write_json(path, payload)
-    payload["status"] = "ok"
-    payload["reason"] = "verified"
     _write_json(path, payload)
-    return PublishVerificationResult("ok", "verified", path)
+    return PublishVerificationResult("diagnostic", "post_pr_non_blocking", path)
 
 
 def _evidence_matches(path: Path, identity: PublishVerificationIdentity) -> bool:
@@ -168,5 +171,6 @@ __all__ = [
     "PublishVerificationResult",
     "command_digest",
     "evidence_path",
+    "record_diagnostic",
     "verify_or_run",
 ]

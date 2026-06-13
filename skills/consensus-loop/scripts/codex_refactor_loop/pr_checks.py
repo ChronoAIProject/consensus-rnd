@@ -248,9 +248,11 @@ class PrMergeReadinessProjection:
         *,
         runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] | None = None,
         cwd: Path | None = None,
+        required_checks: Sequence[str] | None = None,
     ) -> None:
         self._runner = runner
         self.cwd = cwd
+        self.required_checks = tuple(required_checks or ())
 
     def _run(self, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         if self._runner is not None:
@@ -374,9 +376,16 @@ class PrMergeReadinessProjection:
                 rules_payload = json.loads(rules.stdout)
             except json.JSONDecodeError:
                 return (), "invalid_required_rules_json"
-            return tuple(sorted(_required_names_from_rules(rules_payload))), None
+            rules_names = _required_names_from_rules(rules_payload)
+            if rules_names:
+                return tuple(sorted(rules_names)), None
+            if self.required_checks:
+                return tuple(sorted(set(self.required_checks))), None
+            return (), None
         if merge_state_status == "BLOCKED":
             return (), "required_rules_unavailable"
+        if self.required_checks:
+            return tuple(sorted(set(self.required_checks))), None
         if _not_found(classic) and _not_found(rules):
             return (), None
         if rules.returncode != 0 and not _not_found(rules):
@@ -453,8 +462,9 @@ def check_pr_merge_readiness(
     *,
     runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] | None = None,
     cwd: Path | None = None,
+    required_checks: Sequence[str] | None = None,
 ) -> PrMergeReadinessStatus:
-    return PrMergeReadinessProjection(runner=runner, cwd=cwd).check_pr(repo_slug, pr_number)
+    return PrMergeReadinessProjection(runner=runner, cwd=cwd, required_checks=required_checks).check_pr(repo_slug, pr_number)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

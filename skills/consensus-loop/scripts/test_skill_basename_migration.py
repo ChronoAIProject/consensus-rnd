@@ -41,7 +41,7 @@ def _git_tracked_files(repo_root: Path) -> list[Path]:
 def _old_skill_path_literal_offenders(repo_root: Path, allowed: set[str]) -> list[str]:
     offenders: list[str] = []
     for path in _git_tracked_files(repo_root):
-        if path.is_dir():
+        if not path.exists() or path.is_dir():
             continue
         relative = path.relative_to(repo_root).as_posix()
         if relative in allowed:

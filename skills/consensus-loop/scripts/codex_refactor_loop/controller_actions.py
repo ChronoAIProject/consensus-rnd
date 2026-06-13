@@ -47,9 +47,9 @@ from .issue_decomposition import (
     reconcile_issue_decomposition_tracking_children,
 )
 from .managed_work_snapshot import invalidate_open_managed_work_snapshot, load_open_managed_work_snapshot
+from .pr_checks import PrMergeReadinessProjection, PrMergeReadinessStatus
 from .prompt_rendering import render_prompt_text
 from .processes import launch_spawn_codex_supervisor
-from .publish_verification import verify_or_run as verify_publish_implementation
 from .release.publisher import ReleasePublisher
 from .release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from .runtime_copy import copy_for, current_work_language
@@ -105,17 +105,7 @@ REBASE_RESOLVE_BLOCKED_RE = re.compile(
 )
 ROLLUP_HEAD_PREFIX = "rollup/"
 ROLLUP_BODY_SENTINEL = "⟦AI:RELEASE-ROLLUP⟧"
-
-
-@dataclass(frozen=True)
-class _PublishVerificationFailure:
-    status: str
-    reason: str
-    evidence_file: Path
-
-    @property
-    def ok(self) -> bool:
-        return False
+MERGE_READY_STATE = "CLEAN"
 
 
 class ControllerActions:
@@ -420,6 +410,24 @@ class ControllerActions:
                 return ready.returncode
         return 0
 
+    def _merge_pr_ci_gate(self, pr_target: str) -> int:
+        if not self.ctx.gh_repo_slug:
+            line = f"merge_pr: ci_gate_blocked pr={pr_target} reason=missing_gh_repo_slug"
+            self._append_pending_event(line)
+            sys.stderr.write(f"{line}\n")
+            return 2
+        status = PrMergeReadinessProjection(
+            cwd=self.ctx.repo_root,
+            required_checks=required_release_checks(self.ctx.host_env),
+        ).check_pr(self.ctx.gh_repo_slug, pr_target)
+        reason = _pr_merge_ci_gate_block_reason(status)
+        if reason is None:
+            return 0
+        line = f"merge_pr: ci_gate_blocked pr={pr_target} reason={reason}"
+        self._append_pending_event(line)
+        sys.stderr.write(f"{line}\n")
+        return 2
+
     def _pr_changed_file_count(self, pr_target: str) -> tuple[int | None, str | None]:
         result = self.gh(["pr", "view", pr_target, "--json", "changedFiles"], check=False)
         if result.returncode != 0:
@@ -492,6 +500,9 @@ class ControllerActions:
         ready = self._ensure_pr_ready_for_merge(pr_target)
         if ready != 0:
             return ready
+        ci_ready = self._merge_pr_ci_gate(pr_target)
+        if ci_ready != 0:
+            return ci_ready
         merge = self.gh(["pr", "merge", pr_target, "--squash", "--delete-branch"], check=False)
         if merge.stdout:
             print(merge.stdout.splitlines()[-1])
@@ -1318,19 +1329,25 @@ class ControllerActions:
         committed = self._commit_publish_implementation_diff(action, issue_target, head_ref, worktree)
         if committed != 0:
             return committed
-        base_error = self._recover_publish_implementation_base(worktree)
-        if base_error:
-            return self._delegate_publish_implementation_fallback(action, issue_target, head_ref, worktree, base_error)
-        verified = self._verify_publish_implementation_output(issue_target, action, head_ref, worktree)
-        if not verified.ok:
-            sys.stderr.write(
-                "publish_implementation_output: verification_failed "
-                f"reason={verified.reason} artifact={self.ctx.durable_artifact_path(verified.evidence_file)}\n"
-            )
-            return 3
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
-            return pushed
+            pr_error, pr_target = self._matching_implementation_pr(head_ref, issue_target)
+            if pr_error:
+                sys.stderr.write(
+                    "publish_implementation_output: push_failed_matching_pr_unavailable "
+                    f"rc={pushed} reason={pr_error}\n"
+                )
+                return pushed
+            if pr_target is None:
+                return pushed
+            sys.stderr.write(
+                "publish_implementation_output: push_failed_existing_pr "
+                f"rc={pushed} pr={pr_target}; continuing_to_pr_stage\n"
+            )
+            updated = self._update_existing_implementation_pr(pr_target, action, issue_target)
+            if updated != 0:
+                return updated
+            return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
         pr_error, pr_target = self._matching_implementation_pr(head_ref, issue_target)
         if pr_error:
             sys.stderr.write(f"publish_implementation_output: {pr_error}\n")
@@ -1496,87 +1513,6 @@ class ControllerActions:
             sys.stderr.write(commit.stderr)
         sys.stderr.write("publish_implementation_output: publish_commit_failed\n")
         return 2
-
-    def _recover_publish_implementation_base(self, worktree: Path) -> str | None:
-        integration, _review_base = self._require_branch_config()
-        fetch = self._git_in(worktree, ["fetch", "origin"], check=False)
-        if fetch.returncode != 0:
-            return "publish_stale_base_fetch_failed"
-        merge_base = self._git_in(worktree, ["merge-base", "HEAD", f"origin/{integration}"], check=False)
-        current = self._git_in(worktree, ["rev-parse", "--verify", f"origin/{integration}"], check=False)
-        if merge_base.returncode != 0 or current.returncode != 0:
-            return "publish_stale_base_unavailable"
-        if merge_base.stdout.strip() != current.stdout.strip():
-            merge = self._git_in(worktree, ["merge", "--no-edit", f"origin/{integration}"], check=False)
-            if merge.returncode != 0:
-                return "publish_stale_base_merge_conflict"
-        return None
-
-    def _delegate_publish_implementation_fallback(
-        self,
-        action: Mapping[str, object],
-        issue_target: str,
-        head_ref: str,
-        worktree: Path,
-        reason: str,
-    ) -> int:
-        prompt = self.ctx.paths.prompts / f"publish-implementation-fallback-{issue_target}.md"
-        log = self.ctx.paths.logs / f"publish-implementation-fallback-{issue_target}.log"
-        output = self.ctx.paths.runs / f"publish-implementation-fallback-{issue_target}.md"
-        prompt.parent.mkdir(parents=True, exist_ok=True)
-        log.parent.mkdir(parents=True, exist_ok=True)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        self.render_template(
-            str(self.ctx.skill_root / "prompts" / "publish-implementation-fallback.md"),
-            str(prompt),
-            env={
-                "ISSUE_NUMBER": issue_target,
-                "WORKTREE_PATH": str(worktree),
-                "BRANCH": head_ref,
-                "BASE_BRANCH": self.integration_branch,
-                "FALLBACK_REASON": reason,
-                "PUBLISH_FALLBACK_OUTPUT_PATH": self.ctx.durable_artifact_path(output),
-                "SOURCE_MARKER": str(action.get("source_marker") or ""),
-            },
-        )
-        self._append_harness_spawn_intent(
-            intent_id=f"publish-implementation-fallback:{issue_target}",
-            task_id=f"publish-implementation-fallback-{issue_target}",
-            route="publish-implementation-fallback",
-            cd=worktree,
-            prompt=prompt,
-            log=log,
-            stall=5400,
-            reason=f"publish implementation fallback for issue #{issue_target}: {reason}",
-        )
-        sys.stderr.write(f"publish_implementation_output: delegated fallback resolver: {reason}\n")
-        return PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
-
-    def _verify_publish_implementation_output(
-        self,
-        issue_target: str,
-        action: Mapping[str, object],
-        head_ref: str,
-        worktree: Path,
-    ):
-        head = self._git_in(worktree, ["rev-parse", "HEAD"], check=False)
-        if head.returncode != 0 or not _is_full_sha(head.stdout.strip()):
-            evidence = self.ctx.paths.state / "publish-verification" / f"issue-{issue_target}-{head_ref.replace('/', '__')}.json"
-            return _PublishVerificationFailure("failed", "head-sha-unavailable", evidence)
-        result = verify_publish_implementation(
-            repo_root=self.ctx.repo_root,
-            worktree=worktree,
-            issue=issue_target,
-            action=str(action.get("controller_action") or "publish_implementation_output"),
-            head_ref=head_ref,
-            head_sha=head.stdout.strip(),
-            env=self.ctx.env_for_subprocess(),
-        )
-        sys.stderr.write(
-            "publish_implementation_output: verification "
-            f"status={result.status} reason={result.reason} artifact={self.ctx.durable_artifact_path(result.evidence_file)}\n"
-        )
-        return result
 
     def dispatch_consensus_implementation(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("dispatch-consensus-implementation", code=3):
@@ -3086,6 +3022,25 @@ def _single_line(value: str) -> str:
 
 def _line_count(value: str) -> int:
     return len(str(value or "").splitlines())
+
+
+def _pr_merge_ci_gate_block_reason(status: PrMergeReadinessStatus) -> str | None:
+    merge_state = status.merge_state_status.strip().upper()
+    if not status.ok:
+        if merge_state and merge_state != MERGE_READY_STATE:
+            return f"merge_state_{merge_state.lower()}"
+        return f"ci_unavailable:{status.reason or 'unknown'}"
+    if merge_state != MERGE_READY_STATE:
+        return f"merge_state_{merge_state.lower() or 'missing'}"
+    if status.missing_required:
+        return f"required_checks_missing:{','.join(status.missing_required)}"
+    if status.required_pending:
+        return f"required_checks_pending:{','.join(check.name for check in status.required_pending)}"
+    if status.required_failed:
+        return f"required_checks_failed:{','.join(check.name for check in status.required_failed)}"
+    if not status.required_check_names:
+        return "required_checks_missing_configuration"
+    return None
 
 
 def _format_key_value_suffix(fields: Mapping[str, object]) -> str:

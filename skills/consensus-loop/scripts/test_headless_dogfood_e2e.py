@@ -116,7 +116,7 @@ class HeadlessDogfoodFixture:
             mock.patch("codex_refactor_loop.phase9.router.write_active_controller_status", lambda _ctx, _decision: None),
             mock.patch("codex_refactor_loop.wakeup_runner.require_active_controller", return_value=FakeOwnerDecision()),
             mock.patch("codex_refactor_loop.wakeup_runner.write_active_controller_status", lambda _ctx, _decision: None),
-            mock.patch("codex_refactor_loop.wakeup_runner.PrMergeReadinessProjection", lambda runner=None: self),
+            mock.patch("codex_refactor_loop.wakeup_runner.PrMergeReadinessProjection", lambda runner=None, required_checks=None: self),
             mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", side_effect=self.fake_spawn_supervisor),
             mock.patch.dict(os.environ, self.env, clear=False),
         ]
@@ -144,6 +144,8 @@ class HeadlessDogfoodFixture:
                 "ok": True,
                 "reason": "",
                 "head_sha": self.pr_head_sha(pr_number),
+                "merge_state_status": "CLEAN",
+                "required_check_names": ("ci",),
                 "required_failed": (),
                 "required_pending": (),
                 "missing_required": (),

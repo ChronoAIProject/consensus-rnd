@@ -296,8 +296,24 @@ if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json changedFiles"* ]]; then
   printf '%s\\n' '{{"changedFiles":1}}'
   exit 0
 fi
+if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json baseRefName,headRefOid,mergeStateStatus"* ]]; then
+  printf '%s\\n' '{{"baseRefName":"auto-refact-dev","headRefOid":"abc123","mergeStateStatus":"CLEAN"}}'
+  exit 0
+fi
 if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json isDraft"* ]]; then
   printf '%s\\n' {json.dumps(is_draft)}
+  exit 0
+fi
+if [[ "$1 $2" == "api repos/test-owner/test-repo/branches/auto-refact-dev/protection/required_status_checks" ]]; then
+  printf '%s\\n' '{{"contexts":["ci"]}}'
+  exit 0
+fi
+if [[ "$1 $2" == "api repos/test-owner/test-repo/rules/branches/auto-refact-dev" ]]; then
+  printf 'Not Found\\n' >&2
+  exit 1
+fi
+if [[ "$1 $2" == "api repos/test-owner/test-repo/commits/abc123/check-runs" ]]; then
+  printf '%s\\n' '{{"check_runs":[{{"name":"ci","status":"completed","conclusion":"success"}}]}}'
   exit 0
 fi
 if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json labels,body"* ]]; then

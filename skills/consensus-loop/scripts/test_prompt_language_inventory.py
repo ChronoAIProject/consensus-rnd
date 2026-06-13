@@ -16,7 +16,6 @@ PUBLIC_LANGUAGE_PROMPTS = {
 }
 INTERNAL_OR_MARKER_ONLY_EXEMPTIONS = {
     "meta-reflector-stalled.md": "controller-private stalled reflection artifact consumed by router/controller",
-    "publish-implementation-fallback.md": "marker-only repair artifact consumed by controller",
     "rebase-resolve.md": "marker-only rebase resolution artifact consumed by controller",
     "remote-ci-fix.md": "marker-only CI fix artifact consumed by controller/review flow",
     "test-add.md": "marker-only test augmentation artifact consumed by controller",
@@ -43,7 +42,6 @@ class PromptLanguageInventoryTests(unittest.TestCase):
             set(INTERNAL_OR_MARKER_ONLY_EXEMPTIONS),
             {
                 "meta-reflector-stalled.md",
-                "publish-implementation-fallback.md",
                 "rebase-resolve.md",
                 "remote-ci-fix.md",
                 "test-add.md",

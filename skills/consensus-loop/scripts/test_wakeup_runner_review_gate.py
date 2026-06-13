@@ -151,6 +151,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         check_conclusion: str = "success",
         check_name: str = "ci",
         required_checks: tuple[str, ...] = ("ci",),
+        merge_state_status: str = "CLEAN",
         mergeable: str = "MERGEABLE",
         is_draft: bool = False,
         changed_files: int = 1,
@@ -178,7 +179,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
                 return subprocess.CompletedProcess(
                     command,
                     0,
-                    json.dumps({"baseRefName": "main", "headRefOid": live_head, "mergeStateStatus": "DIRTY"}),
+                    json.dumps({"baseRefName": "main", "headRefOid": live_head, "mergeStateStatus": merge_state_status}),
                     "",
                 )
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/branches/main/protection/required_status_checks":
@@ -186,7 +187,10 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/rules/branches/main":
                 return subprocess.CompletedProcess(command, 1, "", "404 Not Found")
             if command[:2] == ["gh", "api"] and command[2] == f"repos/owner/repo/commits/{live_head}/check-runs":
-                payload = {"check_runs": [{"name": check_name, "status": check_status, "conclusion": check_conclusion}]}
+                runs = [{"name": check_name, "status": check_status, "conclusion": check_conclusion}]
+                if check_name != "ci" and "ci" in required_checks:
+                    runs.append({"name": "ci", "status": "completed", "conclusion": "success"})
+                payload = {"check_runs": runs}
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
             if command == ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"]:
                 return subprocess.CompletedProcess(
@@ -358,7 +362,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(gate["comment"], 1)
 
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
-            result = self.run_action(self.action(head_sha=live), live_head=live, required_checks=())
+            result = self.run_action(self.action(head_sha=live), live_head=live)
 
         self.assertEqual(result.status, "applied")
         self.assertEqual(self.actions.merged, [])
@@ -377,7 +381,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(gate["reject"], 0)
         self.assertEqual(gate["approve"], 2)
 
-        result = self.run_action(self.action(head_sha=live), live_head=live, required_checks=())
+        result = self.run_action(self.action(head_sha=live), live_head=live)
 
         self.assertEqual(result.status, "applied")
         self.assertEqual(self.actions.merged, ["12"])
@@ -391,7 +395,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
             self.github_review_comment("quality", "comment", head_sha=live, round_number=None, created_at="2026-06-12T00:02:00Z", comment_id=103),
         ]
 
-        result = self.run_action(required_checks=())
+        result = self.run_action()
 
         self.assertEqual(result.status, "applied")
         self.assertEqual(self.actions.merged, ["12"])
@@ -406,7 +410,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
             self.github_review_comment("quality", "comment", head_sha=live, round_number=None, created_at="2026-06-12T00:02:00Z", comment_id=104),
         ]
 
-        result = self.run_action(required_checks=())
+        result = self.run_action()
         gate = self.runner_for_gate(live_head=live)._review_gate(12)
 
         self.assertEqual(result.status, "applied")
@@ -424,7 +428,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         ]
 
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
-            result = self.run_action(required_checks=())
+            result = self.run_action()
 
         self.assertEqual(result.status, "applied")
         self.assertEqual(self.actions.merged, [])
@@ -488,7 +492,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         ]
 
         gate = self.runner_for_gate(live_head=live)._review_gate(12)
-        result = self.run_action(required_checks=())
+        result = self.run_action()
 
         self.assertEqual(gate["invalid"], [])
         self.assertEqual(gate["verdicts"]["architect"], "approve")
@@ -512,7 +516,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
             },
         ]
 
-        result = self.run_action(required_checks=())
+        result = self.run_action()
 
         self.assertEqual(result.status, "blocked")
         self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:invalid_review_marker:tests")
@@ -536,7 +540,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
             },
         ]
 
-        result = self.run_action(required_checks=())
+        result = self.run_action()
         gate = self.runner_for_gate(live_head=live)._review_gate(12)
 
         self.assertEqual(result.status, "blocked")
@@ -554,7 +558,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
             self.github_review_comment("quality", "comment", head_sha=stale, round_number=None, created_at="2026-06-12T00:02:00Z", comment_id=103),
         ]
 
-        result = self.run_action(required_checks=())
+        result = self.run_action()
 
         self.assertEqual(result.status, "blocked")
         self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:stale_reviewed_head_sha:quality")
@@ -886,11 +890,33 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.write_review("tests", "approve")
         self.write_review("quality", "comment")
 
-        result = self.run_action(self.action(action_id="review:12:required-ci-missing"), check_name="docs")
+        result = self.run_action(
+            self.action(action_id="review:12:required-ci-missing"),
+            check_name="docs",
+            required_checks=("contract-tests",),
+        )
 
         self.assertEqual(result.status, "blocked")
         self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:required_ci_missing")
         self.assertEqual(self.actions.merged, [])
+
+    def test_non_clean_merge_state_fails_closed_without_merge(self) -> None:
+        for merge_state in ("DIRTY", "BLOCKED", "UNKNOWN", "UNSTABLE", "BEHIND", "HAS_HOOKS"):
+            with self.subTest(merge_state=merge_state):
+                self.actions.merged.clear()
+                self.github_comments.clear()
+                self.write_review("architect", "approve")
+                self.write_review("tests", "approve")
+                self.write_review("quality", "comment")
+
+                result = self.run_action(
+                    self.action(action_id=f"review:12:merge-state:{merge_state.lower()}"),
+                    merge_state_status=merge_state,
+                )
+
+                self.assertEqual(result.status, "blocked")
+                self.assertEqual(result.reason, f"WAIT_OR_REDISPATCH:merge_state_{merge_state.lower()}")
+                self.assertEqual(self.actions.merged, [])
 
     def test_advisory_ci_pending_or_failed_does_not_block_merge(self) -> None:
         for status, conclusion in (
@@ -908,7 +934,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
                     self.action(action_id=f"review:12:advisory:{status}:{conclusion or 'pending'}"),
                     check_status=status,
                     check_conclusion=conclusion,
-                    required_checks=(),
+                    check_name="advisory",
                 )
 
                 self.assertEqual(result.status, "applied")

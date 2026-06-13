@@ -23,6 +23,7 @@ from .consensus_gate import (
 )
 from .context import LoopContext, LoopContextError
 from .controller_actions import ControllerActions
+from .controller_actions import MERGE_READY_STATE
 from .cross_instance_stand_down import check_cross_instance_admission
 from .github_actor import GitHubAuthenticatedActor
 from .gh_invoke import build_gh_argv
@@ -54,6 +55,7 @@ from .release.commits import write_release_commits
 from .release.candidate_liveness import classify_release_candidate_liveness
 from .release.publish_preflight import ReleasePublishPreflight
 from .release.publisher import ReleasePublisher
+from .release.required_checks import required_release_checks
 from .safe_progress_scheduler import MEDIUM_NON_SPAWN_LIMIT_PER_TICK, validate_runner_action
 from .state import read_json
 from .work_items import extract_closing_issue_numbers
@@ -1116,9 +1118,7 @@ class WakeupRunner:
         for required in (
             "clean_exit_source_marker",
             "canonical_implementation_identity",
-            "fresh_integration_base",
             "clean_scoped_diff",
-            "host_checks_green",
             "single_linked_managed_issue",
             "worker_authored_pr_artifacts",
             "no_conflicting_open_implementation_pr",
@@ -1934,17 +1934,27 @@ class WakeupRunner:
     def _review_gate_ci_error(self, pr_number: int, live_head_sha: str) -> str | None:
         if not self.ctx.gh_repo_slug:
             return "missing_gh_repo_slug"
-        status = PrMergeReadinessProjection(runner=self.command_runner).check_pr(self.ctx.gh_repo_slug, pr_number)
+        status = PrMergeReadinessProjection(
+            runner=self.command_runner,
+            required_checks=required_release_checks(self.ctx.host_env),
+        ).check_pr(self.ctx.gh_repo_slug, pr_number)
+        merge_state = status.merge_state_status.strip().upper()
         if not status.ok:
+            if merge_state and merge_state != MERGE_READY_STATE:
+                return f"merge_state_{merge_state.lower()}"
             return f"ci_unavailable:{status.reason or 'unknown'}"
         if status.head_sha != live_head_sha:
             return "ci_stale_head_sha"
+        if merge_state != MERGE_READY_STATE:
+            return f"merge_state_{merge_state.lower() or 'missing'}"
         if status.missing_required:
             return "required_ci_missing"
         if status.required_pending:
             return "required_ci_pending"
         if status.required_failed:
             return "required_ci_failed"
+        if not status.required_check_names:
+            return "required_ci_missing_configuration"
         return None
 
     def _review_gate_mergeability_error(self, pr_number: int) -> str | None:

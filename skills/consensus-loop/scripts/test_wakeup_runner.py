@@ -938,7 +938,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     return subprocess.CompletedProcess(
                         command,
                         0,
-                        json.dumps({"baseRefName": "main", "headRefOid": "a" * 40, "mergeStateStatus": "DIRTY"}),
+                        json.dumps({"baseRefName": "main", "headRefOid": "a" * 40, "mergeStateStatus": "CLEAN"}),
                         "",
                     )
                 if ".headRefOid" in command:
@@ -1258,7 +1258,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "active_controller_owner",
                 "live_open_target_if_present",
                 "live_managed_target",
-                "conflicting_or_dirty_mergeability",
+                "conflicting_or_dirty_or_behind_mergeability",
                 "base_ahead_pr_branch",
             ],
             "source_artifact": "github-managed-pr-mergeability",
@@ -1370,9 +1370,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "active_controller_owner",
                 "clean_exit_source_marker",
                 "canonical_implementation_identity",
-                "fresh_integration_base",
                 "clean_scoped_diff",
-                "host_checks_green",
                 "single_linked_managed_issue",
                 "worker_authored_pr_artifacts",
                 "no_conflicting_open_implementation_pr",
@@ -2204,9 +2202,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
     def test_hard_gate_dispatch_pr_rebase_resolve_is_not_starved_by_spawn_budget(self) -> None:
         spawns = [
             self.spawn_action(
-                action_id=f"spawn:publish-implementation-fallback:{index}",
-                route="publish-implementation-fallback",
-                log=str(self.repo / f".refactor-loop/logs/publish-implementation-fallback-{index}.log"),
+                action_id=f"spawn:review-fix-backlog:{index}",
+                route="review-fix",
+                log=str(self.repo / f".refactor-loop/logs/review-fix-backlog-{index}.log"),
             )
             for index in range(3)
         ]
@@ -2358,7 +2356,6 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "active_controller_owner",
                 "clean_exit_source_marker",
                 "clean_scoped_diff",
-                "host_checks_green",
                 "single_linked_managed_issue",
                 "no_conflicting_open_implementation_pr",
             ],
@@ -2476,7 +2473,6 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "active_controller_owner",
                 "clean_exit_source_marker",
                 "clean_scoped_diff",
-                "host_checks_green",
                 "single_linked_managed_issue",
                 "no_conflicting_open_implementation_pr",
             ],
@@ -2560,7 +2556,6 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "active_controller_owner",
                 "clean_exit_source_marker",
                 "clean_scoped_diff",
-                "host_checks_green",
                 "single_linked_managed_issue",
                 "no_conflicting_open_implementation_pr",
             ],
@@ -2697,8 +2692,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         rollup = self.release_rollup_action(action_id="release-rollup-needed:priority-current")
         spawns = [
             self.spawn_action(
-                action_id=f"spawn:publish-implementation-fallback:{index}",
-                log=str(self.repo / f".refactor-loop/logs/publish-implementation-fallback-{index}.log"),
+                action_id=f"spawn:review-fix-backlog:{index}",
+                route="review-fix",
+                log=str(self.repo / f".refactor-loop/logs/review-fix-backlog-{index}.log"),
             )
             for index in range(2)
         ]
@@ -4457,21 +4453,19 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 None,
             ),
             (
-                "missing-host-checks",
+                "missing-worker-pr-artifacts",
                 self.implementation_output_action(
-                    action_id="publish-implementation:missing-host-checks",
+                    action_id="publish-implementation:missing-worker-pr-artifacts",
                     preconditions=[
                         "active_controller_owner",
                         "clean_exit_source_marker",
                         "canonical_implementation_identity",
-                        "fresh_integration_base",
                         "clean_scoped_diff",
                         "single_linked_managed_issue",
-                        "worker_authored_pr_artifacts",
                         "no_conflicting_open_implementation_pr",
                     ],
                 ),
-                "publish_implementation_missing_precondition:host_checks_green",
+                "publish_implementation_missing_precondition:worker_authored_pr_artifacts",
                 1,
                 None,
             ),

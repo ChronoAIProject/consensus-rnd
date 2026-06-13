@@ -3177,7 +3177,7 @@ def rebase_resolve_actions(
             item = _with_live_mergeability(repo_root, item)
         mergeable = item.mergeable.upper()
         merge_state = item.merge_state_status.upper()
-        if mergeable != "CONFLICTING" and merge_state != "DIRTY":
+        if mergeable != "CONFLICTING" and merge_state not in {"DIRTY", "BEHIND"}:
             continue
         head_ref = safe_head_ref(item.head_ref)
         if not head_ref or MANAGED_PR_HEAD_PATTERN.fullmatch(head_ref) is None:
@@ -3218,7 +3218,7 @@ def rebase_resolve_actions(
                     "active_controller_owner",
                     "live_open_target_if_present",
                     "live_managed_target",
-                    "conflicting_or_dirty_mergeability",
+                    "conflicting_or_dirty_or_behind_mergeability",
                     "base_ahead_pr_branch",
                 ],
                 "runner_authority": RUNNER_AUTHORITY,
@@ -3353,7 +3353,10 @@ def ci_red_actions(repo_root: Path, items: list[GhItem], ctx: LoopContext | None
         if is_release_rollup_pr(item, ctx):
             continue
         if projection is None:
-            projection = PrMergeReadinessProjection(cwd=repo_root)
+            projection = PrMergeReadinessProjection(
+                cwd=repo_root,
+                required_checks=required_release_checks(ctx.host_env if ctx else None),
+            )
         status = projection.check_pr(slug, item.number)
         if not status.ok:
             continue
@@ -4792,11 +4795,9 @@ def _stale_publish_implementation_reason(
     preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])
     for required in (
         "canonical_implementation_identity",
-        "fresh_integration_base",
         "single_linked_managed_issue",
         "worker_authored_pr_artifacts",
         "no_conflicting_open_implementation_pr",
-        "host_checks_green",
         "clean_scoped_diff",
     ):
         if required not in preconditions:
