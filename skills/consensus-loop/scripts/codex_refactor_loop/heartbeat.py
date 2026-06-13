@@ -121,15 +121,40 @@ class DaemonHeartbeatLease:
             raise RuntimeError(f"{self.name} heartbeat requires held daemon singleton lock")
 
     def run_tick(self, callback: Callable[[], T]) -> T:
-        """Run one daemon tick with progress boundaries and a post-success heartbeat."""
+        """Run one daemon tick with progress boundaries while keeping the
+        heartbeat liveness lease fresh during the callback.
+
+        Progress (begin/complete/fail_tick) tracks tick advancement; the
+        heartbeat tracks process liveness. They are SEPARATE concerns: an
+        independent renewer thread beats the heartbeat every
+        ``heartbeat_interval`` seconds while the callback runs, so a slow
+        callback (e.g. a reconcile tick making several gh/network calls) no
+        longer lets the heartbeat go stale and get the live actor reaped by
+        the restart supervisor."""
         if self.repo_root is None:
             raise RuntimeError("daemon tick progress requires repo_root")
         progress = begin_tick(self.repo_root, self.name)
+        stop = threading.Event()
+
+        def renew_lease() -> None:
+            while not stop.wait(max(1.0, float(self.heartbeat_interval))):
+                self.beat()
+
+        renewer = threading.Thread(
+            target=renew_lease,
+            name=f"{self.name}-heartbeat-renewer",
+            daemon=True,
+        )
+        renewer.start()
         try:
             result = callback()
         except Exception as exc:
+            stop.set()
+            renewer.join(timeout=1.0)
             fail_tick(self.repo_root, progress, message=f"{type(exc).__name__}:{exc}")
             raise
+        stop.set()
+        renewer.join(timeout=1.0)
         complete_tick(self.repo_root, progress)
         self.beat()
         return result
