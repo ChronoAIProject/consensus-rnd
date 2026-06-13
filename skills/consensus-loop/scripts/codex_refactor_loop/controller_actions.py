@@ -1860,6 +1860,11 @@ class ControllerActions:
             return 2
         base_ref = f"origin/{self.integration_branch}"
         if not self._branch_is_base_behind(worktree, base_ref):
+            if self._worktree_has_unpushed_base_resolution(worktree, head_ref, base_ref):
+                sys.stderr.write(
+                    f"dispatch_pr_rebase_resolve: pushing stranded base resolution for {head_ref}\n"
+                )
+                return self.safe_push(branch=head_ref, worktree=worktree)
             sys.stderr.write(f"dispatch_pr_rebase_resolve: branch already contains {base_ref}; noop\n")
             return 0
         merge = self._git_in(worktree, ["merge", "--no-commit", "--no-ff", base_ref], check=False)
@@ -2141,6 +2146,29 @@ class ControllerActions:
         merge_base = self._git_in(worktree, ["merge-base", "HEAD", base_ref], check=False)
         base = self._git_in(worktree, ["rev-parse", "--verify", base_ref], check=False)
         return merge_base.returncode == 0 and base.returncode == 0 and merge_base.stdout.strip() != base.stdout.strip()
+
+    def _worktree_has_unpushed_base_resolution(self, worktree: Path, head_ref: str, base_ref: str) -> bool:
+        """True when the worktree already merged base locally (clean, committed)
+        but the pushed PR head is still behind base, so a prior tick resolved the
+        stale base without pushing it. Without this, the helper noops forever on
+        the merged-but-unpushed worktree while the PR head stays conflicting and
+        starves the runner's other actions."""
+        pushed = f"origin/{head_ref}"
+        pushed_rev = self._git_in(worktree, ["rev-parse", "--verify", pushed], check=False)
+        if pushed_rev.returncode != 0:
+            return False
+        # Only push when the pushed head genuinely lacks base (it is the stale,
+        # conflicting head) and the worktree already carries base ahead of it.
+        pushed_contains_base = self._git_in(
+            worktree, ["merge-base", "--is-ancestor", base_ref, pushed], check=False
+        )
+        if pushed_contains_base.returncode == 0:
+            return False
+        ahead = self._git_in(worktree, ["rev-list", "--count", f"{pushed}..HEAD"], check=False)
+        try:
+            return int((ahead.stdout or "0").strip() or "0") > 0
+        except ValueError:
+            return False
 
     def _abort_merge_if_present(self, worktree: Path) -> None:
         if self._merge_in_progress(worktree):
