@@ -66,7 +66,7 @@ class UpdateCheckTests(unittest.TestCase):
         self.write_host_env('export UPDATE_CHECK_ENABLE="true"\nexport UPDATE_CHECK_INTERVAL_SECONDS="21600"\n')
 
         def runner(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-            self.assertEqual(["gh", "api", "repos", "ChronoAIProject/consensus-rnd", "releases", "latest"], cmd)
+            self.assertEqual(["gh", "api", "repos/ChronoAIProject/consensus-rnd/releases/latest"], cmd)
             return subprocess.CompletedProcess(cmd, 0, json.dumps({"tag_name": "v1.0.0-rc.1", "html_url": "https://example/release"}), "")
 
         result = UpdateCheckProbe(self.ctx(), now=lambda: NOW, runner=runner).maybe_run(startup=True)
@@ -83,16 +83,24 @@ class UpdateCheckTests(unittest.TestCase):
 
         def runner(cmd: list[str]) -> subprocess.CompletedProcess[str]:
             calls.append(list(cmd))
-            if cmd[-1] == "latest":
+            if cmd == ["gh", "api", "repos/ChronoAIProject/consensus-rnd/releases/latest"]:
                 return subprocess.CompletedProcess(cmd, 1, "", "not found")
-            return subprocess.CompletedProcess(cmd, 0, json.dumps([{"name": "v1.0.0-beta.4"}]), "")
+            self.assertEqual(["gh", "api", "repos/ChronoAIProject/consensus-rnd/tags"], cmd)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps([{"name": "v1.0.0-rc.1"}]), "")
 
         result = UpdateCheckProbe(self.ctx(), now=lambda: NOW, runner=runner).maybe_run(startup=True)
 
         self.assertEqual("ok", result["status"])
         self.assertEqual("github-tag", result["update_source"])
-        self.assertEqual("1.0.0-beta.4", result["latest_version"])
-        self.assertEqual(2, len(calls))
+        self.assertEqual("1.0.0-rc.1", result["latest_version"])
+        self.assertTrue(result["update_available"])
+        self.assertEqual(
+            [
+                ["gh", "api", "repos/ChronoAIProject/consensus-rnd/releases/latest"],
+                ["gh", "api", "repos/ChronoAIProject/consensus-rnd/tags"],
+            ],
+            calls,
+        )
 
     def test_github_error_writes_unknown_and_does_not_raise(self) -> None:
         self.write_host_env('export UPDATE_CHECK_ENABLE="true"\n')

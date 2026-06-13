@@ -153,7 +153,7 @@ class UpdateCheckProbe:
 
     def _latest_release_version(self, repository: str, *, timeout: int) -> GitHubReleaseVersion:
         try:
-            release = self._gh_api(["repos", repository, "releases", "latest"], timeout=timeout)
+            release = self._gh_api(f"repos/{repository}/releases/latest", timeout=timeout)
             tag_name = release.get("tag_name") if isinstance(release, dict) else None
             html_url = release.get("html_url") if isinstance(release, dict) else None
             version = normalize_tag_version(tag_name)
@@ -161,7 +161,7 @@ class UpdateCheckProbe:
                 return GitHubReleaseVersion(version=version, source="github-release", release_url=html_url if isinstance(html_url, str) else None)
         except RuntimeError:
             pass
-        tags = self._gh_api(["repos", repository, "tags"], timeout=timeout)
+        tags = self._gh_api(f"repos/{repository}/tags", timeout=timeout)
         first_tag = tags[0] if isinstance(tags, list) and tags else None
         tag_name = first_tag.get("name") if isinstance(first_tag, dict) else None
         version = normalize_tag_version(tag_name)
@@ -169,8 +169,8 @@ class UpdateCheckProbe:
             return GitHubReleaseVersion(version=version, source="github-tag", release_url=f"https://github.com/{repository}/releases/tag/v{version}")
         raise RuntimeError("no release or tag version found")
 
-    def _gh_api(self, args: Sequence[str], *, timeout: int) -> Any:
-        result = self.runner(["gh", "api", *args])
+    def _gh_api(self, endpoint: str, *, timeout: int) -> Any:
+        result = self.runner(["gh", "api", endpoint])
         if result.returncode != 0:
             raise RuntimeError((result.stderr or result.stdout or "gh api failed").strip())
         try:
