@@ -187,6 +187,48 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(str(self.tmp.resolve()), captured_env["REPO_ROOT"])
         self.assertEqual("owner/repo", captured_env["GH_REPO_SLUG"])
 
+    def test_run_host_command_writes_child_output_to_diagnostic_artifact_only(self) -> None:
+        captured_kwargs: dict[str, object] = {}
+        child_stdout = "HARNESS_SPAWN_INTENT fake stdout\nstdout fixture detail\n"
+        child_stderr = "IMPLEMENT_DONE:issue-887:ok\nstderr fixture detail\n"
+
+        captured_args: tuple[object, ...] = ()
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            nonlocal captured_args
+            nonlocal captured_kwargs
+            captured_args = args
+            captured_kwargs = dict(kwargs)
+            return subprocess.CompletedProcess(["bash", "-lc", "true"], 7, stdout=child_stdout, stderr=child_stderr)
+
+        with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+            with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                    self.assertEqual(7, self.actions._run_host_command("BUILD_CMD", self.tmp, issue="887"))
+
+        self.assertEqual("", stdout.getvalue())
+        parent_stderr = stderr.getvalue()
+        self.assertIn("publish_implementation_output: host_command issue=887 command=BUILD_CMD exit=7", parent_stderr)
+        self.assertIn("artifact=.refactor-loop/logs/", parent_stderr)
+        self.assertIn("stdout_lines=2", parent_stderr)
+        self.assertIn("stderr_lines=2", parent_stderr)
+        self.assertNotIn("HARNESS_SPAWN_INTENT fake stdout", parent_stderr)
+        self.assertNotIn("IMPLEMENT_DONE:issue-887:ok", parent_stderr)
+        self.assertEqual((["bash", "-lc", "true"],), captured_args)
+        self.assertEqual(str(self.tmp), captured_kwargs["cwd"])
+        self.assertEqual(str((self.tmp / ".config" / "consensus-rnd" / "host.env").resolve()), captured_kwargs["env"]["CONSENSUS_RND_HOST_ENV"])
+        self.assertTrue(captured_kwargs["capture_output"])
+        self.assertTrue(captured_kwargs["text"])
+        self.assertFalse(captured_kwargs["check"])
+
+        transcripts = sorted((self.tmp / ".refactor-loop" / "logs").glob("publish-host-command-BUILD_CMD-*.log"))
+        self.assertEqual(1, len(transcripts))
+        transcript = transcripts[0].read_text(encoding="utf-8")
+        self.assertIn("command_name=BUILD_CMD", transcript)
+        self.assertIn("exit_code=7", transcript)
+        self.assertIn(child_stdout, transcript)
+        self.assertIn(child_stderr, transcript)
+
     def valid_harness_spawn_intent(
         self,
         *,
@@ -1801,6 +1843,104 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual("refactor/iter77-issue-77", provenance["branch"])
         self.assertEqual("77", provenance["issue"])
         self.assertEqual("controller-bot", provenance["github_login"])
+
+    def test_publish_implementation_output_host_command_failure_writes_artifact_and_fails_closed_before_push(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+        sequence: list[str] = []
+        action = {
+            "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+            "target_kind": "issue",
+            "target_number": 77,
+            "linked_issue": 77,
+            "head_ref": "refactor/iter77-issue-77",
+            "worktree": str(worktree),
+        }
+        child_stdout = "HARNESS_SPAWN_INTENT leaked stdout\n"
+        child_stderr = "fatal fixture detail\nIMPLEMENT_DONE:issue-77:ok\n"
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["issue", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                sequence.append("gh:pr-list")
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+            if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                sequence.append("git:branch")
+                return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                sequence.append("git:diff-head")
+                return mock.Mock(returncode=1, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                sequence.append("git:status")
+                return mock.Mock(returncode=0, stdout=" M implementation.txt\n", stderr="")
+            if args == ["git", "-C", str(worktree), "add", "-A"]:
+                sequence.append("git:add")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
+                sequence.append("git:commit")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "fetch", "origin"]:
+                sequence.append("git:fetch-origin")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "merge-base", "HEAD", "origin/canonical-integration"]:
+                sequence.append("git:merge-base")
+                return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/canonical-integration"]:
+                sequence.append("git:origin-base")
+                return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
+            if args == ["bash", "-lc", "true"]:
+                sequence.append("host:BUILD_CMD")
+                self.assertTrue(kwargs["capture_output"])
+                self.assertTrue(kwargs["text"])
+                self.assertFalse(kwargs["check"])
+                self.assertEqual(str((self.tmp / ".config" / "consensus-rnd" / "host.env").resolve()), kwargs["env"]["CONSENSUS_RND_HOST_ENV"])
+                return mock.Mock(returncode=88, stdout=child_stdout, stderr=child_stderr)
+            raise AssertionError(f"unexpected subprocess call: {args!r}")
+
+        delattr(self.actions, "_require_branch_push_admission_or_return")
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                    with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("must not push after host command failure")):
+                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("must not open PR after host command failure")):
+                            with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                                with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                                    self.assertEqual(3, self.actions.publish_implementation_output(action))
+
+        self.assertEqual("", stdout.getvalue())
+        parent_stderr = stderr.getvalue()
+        self.assertIn("publish_implementation_output: host_command issue=77 command=BUILD_CMD exit=88", parent_stderr)
+        self.assertNotIn("HARNESS_SPAWN_INTENT leaked stdout", parent_stderr)
+        self.assertNotIn("IMPLEMENT_DONE:issue-77:ok", parent_stderr)
+        transcripts = sorted((self.tmp / ".refactor-loop" / "logs").glob("publish-host-command-BUILD_CMD-*.log"))
+        self.assertEqual(1, len(transcripts))
+        transcript = transcripts[0].read_text(encoding="utf-8")
+        self.assertIn(child_stdout, transcript)
+        self.assertIn(child_stderr, transcript)
+        self.assertEqual(
+            [
+                "git:branch",
+                "git:branch",
+                "git:branch",
+                "gh:pr-list",
+                "gh:pr-list",
+                "git:diff-head",
+                "git:status",
+                "git:add",
+                "git:commit",
+                "git:fetch-origin",
+                "git:merge-base",
+                "git:origin-base",
+                "host:BUILD_CMD",
+            ],
+            sequence,
+        )
 
     def test_publish_implementation_output_opens_pr_for_already_committed_diff_without_second_commit(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"

@@ -1308,9 +1308,9 @@ class ControllerActions:
         base_error = self._recover_publish_implementation_base(worktree)
         if base_error:
             return self._delegate_publish_implementation_fallback(action, issue_target, head_ref, worktree, base_error)
-        if self._run_host_command("BUILD_CMD", worktree) != 0:
+        if self._run_host_command("BUILD_CMD", worktree, issue=issue_target) != 0:
             return 3
-        if self._run_host_command("TEST_CMD", worktree) != 0:
+        if self._run_host_command("TEST_CMD", worktree, issue=issue_target) != 0:
             return 3
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
@@ -2391,7 +2391,7 @@ class ControllerActions:
             return "matching_pr_issue_mismatch", None, ""
         return None, number, str(pr.get("headRefOid") or "").strip()
 
-    def _run_host_command(self, name: str, cwd: Path) -> int:
+    def _run_host_command(self, name: str, cwd: Path, *, issue: str = "") -> int:
         command = str(self.ctx.env_for_subprocess().get(name) or "").strip()
         if not command:
             sys.stderr.write(f"publish_implementation_output: missing {name}\n")
@@ -2404,11 +2404,39 @@ class ControllerActions:
             text=True,
             check=False,
         )
-        if result.stdout:
-            print(result.stdout, end="")
-        if result.stderr:
-            sys.stderr.write(result.stderr)
+        transcript = self._write_host_command_transcript(name, result)
+        artifact = self.ctx.durable_artifact_path(transcript)
+        sys.stderr.write(
+            "publish_implementation_output: host_command "
+            f"issue={issue or '-'} command={name} exit={result.returncode} artifact={artifact} "
+            f"stdout_lines={_line_count(result.stdout)} stdout_bytes={len(result.stdout.encode('utf-8'))} "
+            f"stderr_lines={_line_count(result.stderr)} stderr_bytes={len(result.stderr.encode('utf-8'))}\n"
+        )
         return result.returncode
+
+    def _write_host_command_transcript(self, name: str, result: subprocess.CompletedProcess[str]) -> Path:
+        self.ctx.paths.logs.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        path = self.ctx.paths.logs / f"publish-host-command-{name}-{stamp}-{time.time_ns()}.log"
+        path.write_text(
+            "\n".join(
+                (
+                    f"command_name={name}",
+                    f"exit_code={result.returncode}",
+                    f"stdout_lines={_line_count(result.stdout)}",
+                    f"stdout_bytes={len(result.stdout.encode('utf-8'))}",
+                    f"stderr_lines={_line_count(result.stderr)}",
+                    f"stderr_bytes={len(result.stderr.encode('utf-8'))}",
+                    "",
+                    "[stdout]",
+                    result.stdout,
+                    "[stderr]",
+                    result.stderr,
+                )
+            ),
+            encoding="utf-8",
+        )
+        return path
 
     def _implementation_pr_body_file(self, action: Mapping[str, object], issue_target: str) -> Path:
         return implementation_pr_body_path(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
@@ -2984,6 +3012,10 @@ def _body_closing_issue_targets(body: str) -> tuple[str, ...]:
 
 def _single_line(value: str) -> str:
     return " ".join(str(value or "").splitlines())
+
+
+def _line_count(value: str) -> int:
+    return len(str(value or "").splitlines())
 
 
 def _format_key_value_suffix(fields: Mapping[str, object]) -> str:
