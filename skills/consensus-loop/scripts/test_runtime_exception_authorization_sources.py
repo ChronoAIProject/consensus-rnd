@@ -1333,7 +1333,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "same resolved static allowlist command",
             "duplicate canonical wrappers fail closed",
             "self-heal only its own static-allowlist child",
-            "Cron/launchd remains mandatory",
+            "cron/launchd is an optional outer keepalive only for unattended operation with no controller session",
             "stale reason/age",
             "read-only daemon-status projection",
             "repair/reload remains restart-daemons",
