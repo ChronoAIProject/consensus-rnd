@@ -43,7 +43,7 @@ DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 DAEMON_COMMAND_ENV_PLACEHOLDERS: dict[str, tuple[str, str]] = {
     "{phase9_router_interval_seconds}": ("PHASE9_ROUTER_INTERVAL_SECONDS", "120"),
-    "{wakeup_runner_interval_seconds}": ("WAKEUP_RUNNER_INTERVAL_SECONDS", "120"),
+    "{wakeup_runner_interval_seconds}": ("WAKEUP_RUNNER_INTERVAL_SECONDS", "60"),
 }
 
 
