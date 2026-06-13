@@ -399,7 +399,10 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             ".refactor-loop/locks/spawn-tasks/<safe-task-id>.lock",
             "O_CREAT|O_EXCL",
             "ProcessSupervisor.supervise(...)",
-            "SPAWN_CLAIM_HELD:task=<task_id> lock=<lock_path>",
+            "diagnostic-only JSONL",
+            "`task`, `log`, `lock`, `source`, `time`, and `no_lifecycle_authority`",
+            "`source` is `SPAWN_CLAIM_HELD`",
+            "`no_lifecycle_authority` is true",
             "exits 0 as skip/noop",
             "fail closed nonzero before supervisor launch",
             "log has an `EXIT=` marker",
@@ -413,6 +416,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("[Task spawn claim](#task-spawn-claim-490)", spawn_pattern)
         self.assertIn("Callers may use logs, readiness, pending intents, or process counts for planning", spawn_pattern)
         self.assertIn("not the enforcement point", spawn_pattern)
+        self.assertIn("retry source", section)
 
     def test_issue_504_global_dashboard_status_card_anchor_and_boundaries(self) -> None:
         section = section_after_heading(self.skill, "Named runtime exception - global-dashboard-status-card(per #504)")
@@ -1033,7 +1037,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "HARNESS_SPAWN_INTENT",
             '`command` field is exactly `"spawn-codex"` as a closed semantic enum',
             "not argv and not shell",
-            "actual CLI binary and argv construction live only in the controller/harness consumption layer",
+            "the #396 wakeup-runner consumes valid intent through the checked-in spawn helper",
+            "Controller/harness direct spawn is only a mechanical daemon-stuck fallback",
             'dispatch_state="harness-intent"',
         ):
             with self.subTest(token=token):

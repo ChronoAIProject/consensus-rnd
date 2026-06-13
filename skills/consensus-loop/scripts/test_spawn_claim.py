@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import sys
 import tempfile
@@ -52,8 +53,24 @@ class SpawnClaimIntegrationTests(unittest.TestCase):
         self.assertEqual(0, exit_code)
         supervisor.assert_not_called()
         stderr_text = "".join(call.args[0] for call in stderr.write.call_args_list)
-        self.assertIn("SPAWN_CLAIM_HELD:task=implement-issue490 lock=", stderr_text)
-        self.assertIn(".refactor-loop/locks/spawn-tasks/implement-issue490.lock", stderr_text)
+        diagnostic = json.loads(stderr_text)
+        self.assertEqual(
+            {
+                "lock",
+                "log",
+                "no_lifecycle_authority",
+                "source",
+                "task",
+                "time",
+            },
+            set(diagnostic),
+        )
+        self.assertEqual("SPAWN_CLAIM_HELD", diagnostic["source"])
+        self.assertEqual("implement-issue490", diagnostic["task"])
+        self.assertEqual(str(self.log), diagnostic["log"])
+        self.assertIn(".refactor-loop/locks/spawn-tasks/implement-issue490.lock", diagnostic["lock"])
+        self.assertIs(True, diagnostic["no_lifecycle_authority"])
+        self.assertNotIn("SPAWN_CLAIM_HELD:task=", stderr_text)
 
     def test_spawn_acquires_claim_before_supervisor(self) -> None:
         supervisor_instance = mock.Mock()
@@ -106,6 +123,14 @@ class SpawnClaimIntegrationTests(unittest.TestCase):
         self.assertEqual("phase9-issue490-r4-judge", spawn._task_id_from_log(Path("phase9-issue490-r4-judge.log")))
         self.assertEqual("review-pr490-fix", spawn._task_id_from_log(Path("review-pr490 fix!.log")))
         self.assertEqual("review-pr490-tests-r1", spawn._task_id_from_log(Path("review-pr490-tests-r1.log")))
+
+    def test_claim_held_diagnostic_is_not_wakeup_authorization_or_retry_source(self) -> None:
+        scripts = SCRIPT_DIR / "codex_refactor_loop"
+        wakeup_plan = (scripts / "wakeup_plan.py").read_text(encoding="utf-8")
+        wakeup_runner = (scripts / "wakeup_runner.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("SPAWN_CLAIM_HELD", wakeup_plan)
+        self.assertNotIn("SPAWN_CLAIM_HELD", wakeup_runner)
 
 
 if __name__ == "__main__":
