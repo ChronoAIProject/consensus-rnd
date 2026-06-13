@@ -2613,6 +2613,86 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(launch.call_count, 2)
         self.assertEqual(actions.calls, [("merge_pr", "77")])
 
+    def test_hard_gate_review_gate_merge_preempts_same_pr_review_dispatch_and_top_up_continues(self) -> None:
+        self.add_review_comments({"architect": "approve", "tests": "approve", "quality": "comment"})
+        same_pr_dispatch = self.reviewer_dispatch_action(
+            kind="review-evidence-redispatch",
+            action_id="review-evidence-redispatch:77:" + "a" * 40,
+            source_artifact="wakeup-plan",
+            source_marker="review-evidence-redispatch",
+            head_sha="a" * 40,
+            stale_review_roles=["architect"],
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "missing_or_stale_reviewer_head_evidence",
+            ],
+        )
+        other_pr_dispatch = self.reviewer_dispatch_action(
+            kind="review-evidence-redispatch",
+            action_id="review-evidence-redispatch:78:" + "b" * 40,
+            source_artifact="wakeup-plan",
+            source_marker="review-evidence-redispatch",
+            target_number=78,
+            target={"kind": "PR", "number": 78},
+            head_sha="b" * 40,
+            stale_review_roles=["tests"],
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "missing_or_stale_reviewer_head_evidence",
+            ],
+        )
+        gate = self.review_gate_action(action_id="review-gate:77:merge-before-reviewer-top-up")
+        actions = FakeActions()
+
+        results = self.run_result(
+            self.batch_plan([same_pr_dispatch, other_pr_dispatch, gate], dispatch_required=1, deficit=1),
+            actions=actions,
+        )
+
+        self.assertEqual(
+            [(result.action_id, result.status, result.reason) for result in results],
+            [
+                ("review-gate:77:merge-before-reviewer-top-up", "applied", ""),
+                ("review-evidence-redispatch:77:" + "a" * 40, "skipped", "same_tick_terminal_target:MERGED"),
+                ("review-evidence-redispatch:78:" + "b" * 40, "applied", ""),
+            ],
+        )
+        self.assertEqual([call[0] for call in actions.calls], ["merge_pr", "dispatch_reviewers"])
+        self.assertEqual(actions.calls[0][1], "77")
+        self.assertEqual(actions.calls[1][1]["target_number"], 78)
+
+    def test_same_tick_terminal_pr_skips_fix_worker_spawn_after_successful_merge(self) -> None:
+        self.add_review_comments({"architect": "approve", "tests": "approve", "quality": "approve"})
+        prompt = self.repo / ".refactor-loop/prompts/fixes/fix-pr77-round-1.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("fix prompt\n", encoding="utf-8")
+        fix_spawn = self.spawn_action(
+            kind="harness-spawn-intent",
+            action_id="harness-spawn-intent:fix-pr77-round-1",
+            route="review-fix",
+            intent_id="fix-pr77-round-1",
+            task_id="fix-pr77-round-1",
+            prompt=str(prompt),
+            log=str(self.repo / ".refactor-loop/logs/fix-pr77-round-1.log"),
+        )
+        gate = self.review_gate_action(action_id="review-gate:77:merge-before-fix-spawn")
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.batch_plan([fix_spawn, gate], dispatch_required=1, deficit=1), actions=actions)
+
+        self.assertEqual(
+            [(result.action_id, result.status, result.reason) for result in results],
+            [
+                ("review-gate:77:merge-before-fix-spawn", "applied", ""),
+                ("harness-spawn-intent:fix-pr77-round-1", "skipped", "same_tick_terminal_target:MERGED"),
+            ],
+        )
+        self.assertEqual(actions.calls, [("merge_pr", "77")])
+        launch.assert_not_called()
+
     def test_hard_gate_release_rollup_open_pr_is_not_starved_by_spawn_budget(self) -> None:
         rollup = self.release_rollup_action(action_id="release-rollup-needed:priority-current")
         spawns = [
