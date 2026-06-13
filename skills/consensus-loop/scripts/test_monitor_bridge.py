@@ -43,6 +43,8 @@ class MonitorBridgeFilterTests(unittest.TestCase):
 
     def test_raw_p0_forwarding_is_first_line_and_every_fifth_streak_only(self) -> None:
         cases = {
+            -1: True,
+            0: True,
             1: True,
             2: False,
             4: False,
