@@ -70,7 +70,9 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "$REPO_ROOT",
             "consensus-rnd-cli runtime-retention",
             "daemon-status",
-            "cron/launchd remains mandatory",
+            "Cron/launchd is an optional outer keepalive only for unattended operation with no controller session",
+            "The controller's periodic wakeup is the primary daemon supervisor",
+            "a host can run-and-use it without long-term babysitting",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
@@ -146,7 +148,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
         self.assertIn("launchctl bootout gui/$(id -u)", self.skill)
         self.assertIn("Do not add a second watchdog or installer", self.skill)
         self.assertIn("scheduler-backed anti-stop surface", self.skill)
-        self.assertIn("mandatory cron/launchd outer repair surface", self.skill)
+        self.assertIn("optional cron/launchd outer repair surface for unattended operation", self.skill)
 
     def test_restart_module_contains_singleton_and_heartbeat_checks(self) -> None:
         for needle in (
@@ -240,7 +242,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "Malformed/future actor heartbeat fails closed immediately",
             "missing/stale numeric heartbeat is measured against the current child generation spawn age",
             "after at least one wrapper poll interval",
-            "Cron/launchd remains mandatory",
+            "the controller's periodic wakeup is the primary supervisor that invokes restart-daemons",
             "runs canonical RuntimeRetention before daemon freshness checks",
             "no host-defined daemon registry",
             "generic process supervisor",
