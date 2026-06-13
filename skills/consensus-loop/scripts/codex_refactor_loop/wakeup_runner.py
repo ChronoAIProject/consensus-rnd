@@ -74,6 +74,14 @@ RUNNER_AUTHORITY = "wakeup-runner-396"
 APPLY_AUTHORITY = "wakeup-runner-396-only"
 INVALID_HARNESS_CLEANUP_LIMIT_PER_TICK = 50
 REBASE_RESOLVE_HELPER_EXIT_SUPPRESSION_THRESHOLD = 3
+# #876: deterministic-fail backoff for publish_implementation_output. After this
+# many recorded helper_exit failures for the same action_id, retries are paced to
+# at most one per cooldown window measured from the latest failure, instead of a
+# 15-minute publish-verify storm every tick. Time-based so it self-resets: once a
+# retry stops failing (or the cooldown elapses with no fresh failure) the action
+# is no longer backed off, so a later fix is never permanently blocked.
+PUBLISH_HELPER_EXIT_BACKOFF_THRESHOLD = 3
+PUBLISH_HELPER_EXIT_BACKOFF_COOLDOWN_SECONDS = 1800
 FORBIDDEN_ACTION_FIELDS = {
     "argv",
     "args",
@@ -404,6 +412,12 @@ class WakeupRunner:
                 f"{action_id}:dispatch_pr_rebase_resolve:2:{suppressed_exit_count}"
             )
             return self._record(RunnerResult(action_id, "skipped", "suppressed:helper_exit:2"), action)
+        if self._publish_helper_exit_backoff_active(action):
+            self._append_pending_event(
+                f"WAKEUP_RUNNER_PUBLISH_BACKOFF:{action_id}:publish_implementation_output:"
+                f"{PUBLISH_HELPER_EXIT_BACKOFF_COOLDOWN_SECONDS}"
+            )
+            return self._record(RunnerResult(action_id, "skipped", "backoff:publish_helper_exit"), action)
         if self._ledger_suppresses_retry(action):
             return self._record(RunnerResult(action_id, "skipped", "duplicate"), action)
         if action.get("kind") == "harness-spawn-intent-invalid":
@@ -2058,6 +2072,45 @@ class WakeupRunner:
                 count += 1
         return count
 
+    def _publish_helper_exit_backoff_active(self, action: Mapping[str, Any]) -> bool:
+        """#876: pace retries of a deterministically-failing publish helper.
+
+        Once ``publish_implementation_output`` has recorded at least
+        ``PUBLISH_HELPER_EXIT_BACKOFF_THRESHOLD`` ``helper_exit:*`` failures for an
+        action_id, skip retrying until ``PUBLISH_HELPER_EXIT_BACKOFF_COOLDOWN_SECONDS``
+        have elapsed since the latest failure. This stops the every-tick 15-minute
+        publish-verify storm while still retrying once per cooldown, so a later fix
+        (or transient recovery) is never permanently blocked. Legacy rows without a
+        parseable ``ts`` fail open (do not trigger backoff)."""
+        action_id = str(action.get("action_id") or "")
+        if not action_id or action.get("controller_action") != "publish_implementation_output":
+            return False
+        if not self.ledger_path.exists():
+            return False
+        count = 0
+        latest_ts: datetime | None = None
+        for line in self.ledger_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("action_id") != action_id:
+                continue
+            if row.get("status") != "blocked" or not str(row.get("reason") or "").startswith("helper_exit:"):
+                continue
+            count += 1
+            ts_text = str(row.get("ts") or "")
+            try:
+                ts = datetime.strptime(ts_text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            if latest_ts is None or ts > latest_ts:
+                latest_ts = ts
+        if count < PUBLISH_HELPER_EXIT_BACKOFF_THRESHOLD or latest_ts is None:
+            return False
+        elapsed = (datetime.now(timezone.utc) - latest_ts).total_seconds()
+        return elapsed < PUBLISH_HELPER_EXIT_BACKOFF_COOLDOWN_SECONDS
+
     def _applied_row_current_effect_suppresses_retry(self, action: Mapping[str, Any]) -> bool:
         controller_action = str(action.get("controller_action") or "")
         if controller_action == "spawn_codex_harness_background":
@@ -2245,6 +2298,7 @@ class WakeupRunner:
             "status": result.status,
             "reason": result.reason,
             "kind": action.get("kind") if action else None,
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         with self.ledger_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, sort_keys=True) + "\n")

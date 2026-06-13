@@ -505,7 +505,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertIn(archived_marker, pending)
         self.assertEqual(1, pending.count(archived_marker))
         ledger_rows = [
-            json.loads(line)
+            {key: value for key, value in json.loads(line).items() if key != "ts"}
             for line in (self.ctx.paths.state / "wakeup-runner-ledger.jsonl").read_text(encoding="utf-8").splitlines()
         ]
         self.assertEqual(
@@ -3900,6 +3900,58 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             pending.count("WAKEUP_RUNNER_HELPER_EXIT:publish-implementation:helper-failure:publish_implementation_output:75"),
             2,
         )
+
+    def _seed_publish_helper_exit_rows(self, action_id: str, *, count: int, ts: str) -> None:
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(
+            "".join(
+                json.dumps(
+                    {
+                        "action_id": action_id,
+                        "status": "blocked",
+                        "reason": "helper_exit:75",
+                        "kind": "completed-marker",
+                        "ts": ts,
+                    }
+                )
+                + "\n"
+                for _ in range(count)
+            ),
+            encoding="utf-8",
+        )
+
+    def test_publish_helper_exit_backoff_skips_within_cooldown(self) -> None:
+        # #876: 3 deterministic publish failures with a recent ts pace retries to
+        # at most one per cooldown, instead of a 15-minute publish-verify storm.
+        action = self.implementation_output_action()
+        recent = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self._seed_publish_helper_exit_rows(action["action_id"], count=3, ts=recent)
+        actions = FakeActions(publish_code=75)
+
+        results = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+
+        self.assertEqual([result.status for result in results], ["skipped"])
+        self.assertEqual(results[0].reason, "backoff:publish_helper_exit")
+        self.assertEqual([], actions.calls)
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(
+            f"WAKEUP_RUNNER_PUBLISH_BACKOFF:{action['action_id']}:publish_implementation_output:1800",
+            pending.splitlines(),
+        )
+
+    def test_publish_helper_exit_backoff_retries_after_cooldown(self) -> None:
+        # Once the cooldown has elapsed since the latest failure, the helper runs
+        # again so a later fix (or transient recovery) is never permanently blocked.
+        action = self.implementation_output_action()
+        old = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self._seed_publish_helper_exit_rows(action["action_id"], count=3, ts=old)
+        actions = FakeActions(publish_code=75)
+
+        results = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+
+        self.assertEqual([call[0] for call in actions.calls], ["publish_implementation_output"])
+        self.assertEqual(results[0].reason, "helper_exit:75")
 
     def test_publish_implementation_create_pull_request_rate_limit_blocked_ledger_retries(self) -> None:
         actions = FakeActions()
