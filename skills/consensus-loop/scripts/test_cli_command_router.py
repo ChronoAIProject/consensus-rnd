@@ -291,6 +291,9 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             "DaemonStatusReport",
             "read_daemon_pid",
             "read_heartbeat_age_seconds",
+            "progress_status",
+            "progress_age_seconds",
+            "progress_reason",
             "duplicate_canonical_wrappers",
         ):
             with self.subTest(token=token):
@@ -366,6 +369,9 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             )
             self.assertEqual("dead", payload["daemons"][0]["status"])
             self.assertIn("duplicate_canonical_wrappers", payload["daemons"][0])
+            self.assertIn("progress_status", payload["daemons"][0])
+            self.assertIn("progress_age_seconds", payload["daemons"][0])
+            self.assertIn("progress_reason", payload["daemons"][0])
 
             unknown = subprocess.run(
                 [sys.executable, str(CLI), "daemon-status", "not-allowlisted"],

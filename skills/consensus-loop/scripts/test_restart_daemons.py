@@ -20,6 +20,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import restart
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.daemon_progress import begin_tick, complete_tick, fail_tick
 from codex_refactor_loop.daemon_singleton import DaemonSingletonMetadata, DaemonSingletonProjection, METADATA_FIELD_ORDER, read_metadata
 from codex_refactor_loop.daemon_status import DaemonStatusProjection, collect as collect_daemon_status
 from codex_refactor_loop.restart import (
@@ -174,6 +175,7 @@ class FakeRestartDaemonRuntime:
         target.pid_file.write_text(f"{pid}\n", encoding="utf-8")
         target.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
         target.heartbeat_file.write_text(f"{self._now}\n", encoding="utf-8")
+        complete_tick(ctx.repo_root, begin_tick(ctx.repo_root, target.name, now=self._now, pid=child_pid), now=self._now)
         starts = ctx.paths.logs / f"{target.name}.starts"
         starts.parent.mkdir(parents=True, exist_ok=True)
         with starts.open("a", encoding="utf-8") as handle:
@@ -640,6 +642,41 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.run_helper()
         self.heartbeat_path("phase9_router_daemon").write_text("not-a-timestamp\n", encoding="utf-8")
         self.run_helper()
+        self.assertEqual(2, self.start_count("phase9_router_daemon"))
+
+    def test_restarts_when_progress_missing_even_with_fresh_heartbeat(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("concurrency_monitor")
+        (self.repo / ".refactor-loop" / "state" / "daemon-tick-progress" / "concurrency_monitor.json").unlink()
+        self.heartbeat_path("concurrency_monitor").write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+
+        self.run_helper()
+
+        self.assertNotEqual(old_pid, self.read_pid("concurrency_monitor"))
+        self.assertEqual(2, self.start_count("concurrency_monitor"))
+
+    def test_restarts_when_progress_overdue_even_with_fresh_heartbeat(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("comment-monitor")
+        progress = begin_tick(self.repo, "comment-monitor", now=self.runtime.now() - 700, pid=old_pid + 1)
+        complete_tick(self.repo, progress, now=self.runtime.now() - 700)
+        self.heartbeat_path("comment-monitor").write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+
+        self.run_helper()
+
+        self.assertNotEqual(old_pid, self.read_pid("comment-monitor"))
+        self.assertEqual(2, self.start_count("comment-monitor"))
+
+    def test_restarts_when_progress_failed_even_with_fresh_heartbeat(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("phase9_router_daemon")
+        progress = begin_tick(self.repo, "phase9_router_daemon", now=self.runtime.now(), pid=old_pid + 1)
+        fail_tick(self.repo, progress, now=self.runtime.now(), message="RuntimeError:boom")
+        self.heartbeat_path("phase9_router_daemon").write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+
+        self.run_helper()
+
+        self.assertNotEqual(old_pid, self.read_pid("phase9_router_daemon"))
         self.assertEqual(2, self.start_count("phase9_router_daemon"))
 
     def test_wrapper_self_heals_child_exit_with_same_resolved_command(self) -> None:
@@ -1229,6 +1266,11 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         target.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
         target.heartbeat_file.write_text(f"{self.runtime.now()}\n", encoding="utf-8")
         restart.DaemonLaunchFingerprint.current(self.ctx, "concurrency_monitor", target.command).write(target.fingerprint_file)
+        complete_tick(
+            self.ctx.repo_root,
+            begin_tick(self.ctx.repo_root, "concurrency_monitor", now=self.runtime.now(), pid=505051),
+            now=self.runtime.now(),
+        )
         write_singleton_metadata(self.ctx.repo_root, target, actor_pid=505051, started_at=self.runtime.now())
         self.runtime.live_pids.update({pid, 505051})
         self.runtime.inventory_override = DaemonProcessInventory(
@@ -1493,6 +1535,11 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         target.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
         target.heartbeat_file.write_text(f"{self.runtime.now()}\n", encoding="utf-8")
         restart.DaemonLaunchFingerprint.current(self.ctx, "phase9_router_daemon", target.command).write(target.fingerprint_file)
+        complete_tick(
+            self.ctx.repo_root,
+            begin_tick(self.ctx.repo_root, "phase9_router_daemon", now=self.runtime.now(), pid=child_pid),
+            now=self.runtime.now(),
+        )
         write_singleton_metadata(self.ctx.repo_root, target, actor_pid=child_pid, started_at=self.runtime.now())
         (self.repo / ".refactor-loop" / "state").mkdir(parents=True, exist_ok=True)
         (self.repo / ".refactor-loop" / "state" / "active-controller-status.json").write_text(

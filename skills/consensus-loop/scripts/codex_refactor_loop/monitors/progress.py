@@ -67,8 +67,7 @@ class ProgressReporter:
             self.heartbeat.beat()
             while True:
                 self.log_msg("tick")
-                self.heartbeat.run_with_lease(lambda: run_progress_reporter_reconcile_tick(self))
-                self.heartbeat.beat()
+                self.heartbeat.run_tick(lambda: run_progress_reporter_reconcile_tick(self))
                 self.heartbeat.sleep_with_lease(self.interval)
 
     def tick(self) -> None:

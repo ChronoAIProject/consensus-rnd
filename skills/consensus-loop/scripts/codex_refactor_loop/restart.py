@@ -18,6 +18,7 @@ from typing import Any, Callable, Protocol, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from .context import LoopContext, LoopContextError
 from .daemon_singleton import DaemonSingletonProjection, lock_path as daemon_singleton_lock_path, probe as probe_daemon_singleton
+from .daemon_progress import DaemonProgressHealth, classify_progress
 from .gh_accounting import accounting_env
 from .runtime_retention import retain_runtime, runtime_retention_enabled
 from .update_check import maybe_run_update_check
@@ -77,6 +78,7 @@ class RestartConfig:
     heartbeat_fresh_seconds: int = int(os.environ.get("RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS", "90"))
     heartbeat_interval: int = int(os.environ.get("RESTART_DAEMONS_HEARTBEAT_INTERVAL", "30"))
     stop_grace_seconds: int = int(os.environ.get("RESTART_DAEMONS_STOP_GRACE_SECONDS", "5"))
+    progress_fresh_seconds: int = int(os.environ.get("RESTART_DAEMONS_PROGRESS_FRESH_SECONDS", "600"))
 
 
 @dataclass(frozen=True)
@@ -830,11 +832,13 @@ class RestartDaemons:
     ) -> bool:
         pid = _read_pid(target.pid_file)
         stored_fingerprint = DaemonLaunchFingerprint.read(target.fingerprint_file)
+        progress = self._progress_health(target.name)
         return (
             pid is not None
             and instance.live_wrapper_pids == (pid,)
             and self.runtime.pid_alive(pid)
             and self._heartbeat_is_fresh(target.name)
+            and progress.healthy
             and stored_fingerprint is not None
             and stored_fingerprint.matches(current_fingerprint)
             and instance.singleton.state == "held"
@@ -848,6 +852,14 @@ class RestartDaemons:
     def _heartbeat_is_fresh(self, name: str) -> bool:
         target = daemon_target(self.ctx, name, ())
         return heartbeat_is_fresh(target, self.config, now=self.runtime.now())
+
+    def _progress_health(self, name: str) -> DaemonProgressHealth:
+        return classify_progress(
+            self.ctx.repo_root,
+            name,
+            now=self.runtime.now(),
+            max_age_seconds=self.config.progress_fresh_seconds,
+        )
 
     def _stop_existing_daemon(self, target: DaemonTarget, *, instance: DaemonInstanceProjection) -> None:
         self._terminate_pids(instance.singleton_holder_pids)

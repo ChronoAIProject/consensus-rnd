@@ -309,7 +309,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         with lease.daemon_lifetime():
             lease.beat()
             while True:
-                lease.run_with_lease(lambda: run_closed_label_reconciler_reconcile_tick(reconciler, beat=lease.beat))
+                lease.run_tick(lambda: run_closed_label_reconciler_reconcile_tick(reconciler))
                 lease.sleep_with_lease(interval)
     return run_closed_label_reconciler_reconcile_tick(reconciler)
 

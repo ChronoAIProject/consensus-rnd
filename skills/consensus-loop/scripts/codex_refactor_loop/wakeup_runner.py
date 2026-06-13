@@ -2591,7 +2591,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         with lease.daemon_lifetime():
             lease.beat()
             while True:
-                results = lease.run_with_lease(lambda: run_wakeup_runner_reconcile_tick(runner))
+                results = lease.run_tick(lambda: run_wakeup_runner_reconcile_tick(runner))
                 _log_tick_status("wakeup-runner", _wakeup_tick_action(results))
                 lease.sleep_with_lease(interval)
     results = run_wakeup_runner_reconcile_tick(runner)

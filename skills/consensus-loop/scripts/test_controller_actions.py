@@ -1810,7 +1810,10 @@ class ControllerActionsTests(unittest.TestCase):
         def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
             if args[:2] == ["bash", "-lc"]:
                 sequence.append(f"host:{args[2]}")
-                return mock.Mock(returncode=0, stdout="", stderr="")
+                return mock.Mock(returncode=0, stdout="ok\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                sequence.append("git:head")
+                return mock.Mock(returncode=0, stdout=f"{'a' * 40}\n", stderr="")
             if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
                 sequence.append("git:diff-head")
                 return mock.Mock(returncode=1, stdout="", stderr="")
@@ -1882,6 +1885,7 @@ class ControllerActionsTests(unittest.TestCase):
                 "git:fetch-origin",
                 "git:merge-base",
                 "git:origin-base",
+                "git:head",
                 "host:true",
                 "host:python3 -m unittest discover -s skills/consensus-loop/scripts -p 'test_*.py'",
                 "git:branch",
@@ -1951,11 +1955,11 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/canonical-integration"]:
                 sequence.append("git:origin-base")
                 return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                sequence.append("git:head")
+                return mock.Mock(returncode=0, stdout=f"{'b' * 40}\n", stderr="")
             if args == ["bash", "-lc", "true"]:
                 sequence.append("host:BUILD_CMD")
-                self.assertTrue(kwargs["capture_output"])
-                self.assertTrue(kwargs["text"])
-                self.assertFalse(kwargs["check"])
                 self.assertEqual(str((self.tmp / ".config" / "consensus-rnd" / "host.env").resolve()), kwargs["env"]["CONSENSUS_RND_HOST_ENV"])
                 return mock.Mock(returncode=88, stdout=child_stdout, stderr=child_stderr)
             raise AssertionError(f"unexpected subprocess call: {args!r}")
@@ -1972,10 +1976,10 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertEqual("", stdout.getvalue())
         parent_stderr = stderr.getvalue()
-        self.assertIn("publish_implementation_output: host_command issue=77 command=BUILD_CMD exit=88", parent_stderr)
+        self.assertIn("publish_implementation_output: verification_failed reason=BUILD_CMD-failed:88", parent_stderr)
         self.assertNotIn("HARNESS_SPAWN_INTENT leaked stdout", parent_stderr)
         self.assertNotIn("IMPLEMENT_DONE:issue-77:ok", parent_stderr)
-        transcripts = sorted((self.tmp / ".refactor-loop" / "logs").glob("publish-host-command-BUILD_CMD-*.log"))
+        transcripts = sorted((self.tmp / ".refactor-loop" / "state" / "publish-verification").glob("*-BUILD_CMD.log"))
         self.assertEqual(1, len(transcripts))
         transcript = transcripts[0].read_text(encoding="utf-8")
         self.assertIn(child_stdout, transcript)
@@ -1994,6 +1998,7 @@ class ControllerActionsTests(unittest.TestCase):
                 "git:fetch-origin",
                 "git:merge-base",
                 "git:origin-base",
+                "git:head",
                 "host:BUILD_CMD",
             ],
             sequence,
@@ -2034,6 +2039,9 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
                 sequence.append("git:branch")
                 return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                sequence.append("git:head")
+                return mock.Mock(returncode=0, stdout=f"{'c' * 40}\n", stderr="")
             if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
                 sequence.append("git:diff-head-clean")
                 return mock.Mock(returncode=0, stdout="", stderr="")
@@ -2085,6 +2093,7 @@ class ControllerActionsTests(unittest.TestCase):
                 "git:fetch-origin",
                 "git:merge-base",
                 "git:origin-base",
+                "git:head",
                 "host:true",
                 "host:python3 -m unittest discover -s skills/consensus-loop/scripts -p 'test_*.py'",
                 "safe_push",
@@ -2142,6 +2151,9 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
                 sequence.append("git:branch")
                 return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                sequence.append("git:head")
+                return mock.Mock(returncode=0, stdout=f"{'3' * 40}\n", stderr="")
             if args == ["git", "-C", str(worktree), "fetch", "origin"]:
                 sequence.append("git:fetch-origin")
                 return mock.Mock(returncode=0, stdout="", stderr="")
@@ -2354,6 +2366,9 @@ class ControllerActionsTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
                 return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                sequence.append("git:head")
+                return mock.Mock(returncode=0, stdout=f"{'4' * 40}\n", stderr="")
             if args == ["git", "-C", str(worktree), "fetch", "origin"]:
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "merge-base", "HEAD", "origin/canonical-integration"]:
@@ -2479,6 +2494,9 @@ class ControllerActionsTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
                 return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                sequence.append("git:head")
+                return mock.Mock(returncode=0, stdout=f"{'4' * 40}\n", stderr="")
             if args == ["git", "-C", str(worktree), "fetch", "origin"]:
                 sequence.append("git:fetch-origin")
                 return mock.Mock(returncode=0, stdout="", stderr="")
@@ -2514,7 +2532,17 @@ class ControllerActionsTests(unittest.TestCase):
                                 self.assertEqual(0, self.actions.publish_implementation_output(action))
 
         self.assertEqual(
-            ["git:diff-head", "git:status", "git:add", "git:commit", "git:fetch-origin", "git:merge-base", "git:origin-base", "git:merge-integration"],
+            [
+                "git:diff-head",
+                "git:status",
+                "git:add",
+                "git:commit",
+                "git:fetch-origin",
+                "git:merge-base",
+                "git:origin-base",
+                "git:merge-integration",
+                "git:head",
+            ],
             sequence,
         )
 
@@ -2560,6 +2588,9 @@ class ControllerActionsTests(unittest.TestCase):
         def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
             if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
                 return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                sequence.append("git:head")
+                return mock.Mock(returncode=0, stdout=f"{'6' * 40}\n", stderr="")
             if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
                 sequence.append("git:diff-head")
                 return mock.Mock(returncode=1, stdout="", stderr="")
@@ -2622,6 +2653,9 @@ class ControllerActionsTests(unittest.TestCase):
         def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
             if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
                 return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                sequence.append("git:head")
+                return mock.Mock(returncode=0, stdout=f"{'6' * 40}\n", stderr="")
             if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
                 return mock.Mock(returncode=1, stdout="", stderr="")
             raise AssertionError(f"no publish side effect should run: {args!r}")
@@ -2682,6 +2716,9 @@ class ControllerActionsTests(unittest.TestCase):
         def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
             if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
                 return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                sequence.append("git:head")
+                return mock.Mock(returncode=0, stdout=f"{'6' * 40}\n", stderr="")
             if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
                 return mock.Mock(returncode=1, stdout="", stderr="")
             raise AssertionError(f"no publish side effect should run: {args!r}")
@@ -2748,6 +2785,9 @@ class ControllerActionsTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
                 return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                sequence.append("git:head")
+                return mock.Mock(returncode=0, stdout=f"{'5' * 40}\n", stderr="")
             if args == ["git", "-C", str(worktree), "diff", "--quiet"]:
                 raise AssertionError("unstaged-only diff must not be used")
             if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
@@ -2785,7 +2825,17 @@ class ControllerActionsTests(unittest.TestCase):
                                 self.assertEqual(0, self.actions.publish_implementation_output(action))
 
         self.assertEqual(
-            ["git:diff-head", "git:status", "git:add", "git:commit", "git:fetch-origin", "git:merge-base", "git:origin-base", "git:merge-integration"],
+            [
+                "git:diff-head",
+                "git:status",
+                "git:add",
+                "git:commit",
+                "git:fetch-origin",
+                "git:merge-base",
+                "git:origin-base",
+                "git:merge-integration",
+                "git:head",
+            ],
             sequence,
         )
 
@@ -2834,6 +2884,9 @@ class ControllerActionsTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
                 return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
+                sequence.append("git:head")
+                return mock.Mock(returncode=0, stdout=f"{'6' * 40}\n", stderr="")
             if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
                 sequence.append("git:diff-head")
                 return mock.Mock(returncode=1, stdout="", stderr="")
@@ -2878,6 +2931,7 @@ class ControllerActionsTests(unittest.TestCase):
                 "git:merge-base",
                 "git:origin-base",
                 "git:merge-complete",
+                "git:head",
                 "host:true",
                 "host:python3 -m unittest discover -s skills/consensus-loop/scripts -p 'test_*.py'",
             ],
