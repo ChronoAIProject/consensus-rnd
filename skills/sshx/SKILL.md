@@ -88,6 +88,8 @@ Each `visible_inputs` value must include the same `GoalArtifact.normalized_goal`
 
 `abstain` is required when neither `codex-cli` nor `isolated-token-subagent` is available. Do not self-apply the triplet inside the caller context and present it as worker consensus.
 
+When `WorkerMode` resolves to `abstain`, the protocol terminates at `choose_worker_mode`: the caller emits a final `SshxResultEnvelope` whose `conclusion` records the `abstain` verdict, the reason, and any options, creates no thinking, implementation, or review flight, and runs no later stage. When a thinking, implementation, or review flight instead exhausts its bounded retries and fallback without terminal completion, that stage returns `abstain` rather than a synthesized worker conclusion or an incomplete triplet, the caller skips the remaining dependent stages, and the blocker is reported honestly. A thinking-stage exhaustion in particular skips `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done`.
+
 Every worker dispatch must create a prompt-level `SshxWorkerFlightRecord` before the worker is launched. The caller-carried transcript must keep these records under `worker_flights`, and each worker result record must reference the matching `flight_id` through `worker_flight_ref`.
 
 `SshxWorkerFlightRecord` has exactly these fields:
@@ -108,16 +110,20 @@ Every worker dispatch must create a prompt-level `SshxWorkerFlightRecord` before
 
 While any `SshxWorkerFlightRecord` for the same `work_target` is `in-flight` or `retrying`, the caller is read-only for that target. The caller must not mutate files, Git state, GitHub state, labels, releases, host configuration, lifecycle state, or the same external resource. The caller must not take over the same `work_target` because a process snapshot, log text, or workspace state appears quiet.
 
+For each `codex-cli` attempt, before launch the caller must choose unique caller-assigned `result_ref` and `completion_sentinel` paths for that flight or attempt and pass those exact paths in the worker brief; parallel workers must receive disjoint paths. The launch is a direct non-interactive worker-carrier invocation, not a helper script, daemon, or `consensus-rnd-cli`, and the exact command and sandbox flags are not part of this contract. The caller must not poll those paths while the worker is running. After the process exits, the caller performs one collection read of the assigned `result_ref` and `completion_sentinel`, and records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the envelope validates and the sentinel exists; completion and verdict recognition stay governed by the `## Worker Completion Contract`.
+
 `codex-cli` completion is recognized only when the caller has both a terminal `SshxResultEnvelope` and the worker-owned `completion_sentinel_ref` recorded on the matching flight. `pgrep`, process-table snapshots, log marker strings, and empty `git status` output are never completion evidence.
 
-If `codex-cli` exits abnormally without both the terminal envelope and the completion sentinel, the caller must stay read-only for that `work_target`, consume the finite same-carrier retry budget, and record the next attempt on the same `SshxWorkerFlightRecord`. If the bounded `codex-cli` retry path still lacks terminal completion, the caller may fall back to `isolated-token-subagent` when available. If no fallback carrier is available or the fallback cannot produce terminal completion, the result is `abstain`; the caller must not implement, repair, or otherwise mutate the same `work_target` itself.
+If `codex-cli` exits abnormally without both the terminal envelope and the completion sentinel, the caller must stay read-only for that `work_target`, consume the finite same-carrier retry budget, and record the next attempt on the same `SshxWorkerFlightRecord`. If the bounded `codex-cli` retry path still lacks terminal completion, the caller marks the exhausted `codex-cli` flight `abstained` with empty `result_envelope_ref` and `completion_sentinel_ref`, then may fall back to `isolated-token-subagent` when available by opening a new `SshxWorkerFlightRecord` for the same `stage`, `role`, and `work_target`; the caller stays read-only for that `work_target` until the fallback flight reaches `terminal` or `abstained`. If no fallback carrier is available or the fallback cannot produce terminal completion, the result is `abstain`; the caller must not implement, repair, or otherwise mutate the same `work_target` itself.
 
 ## Result Envelope
 
-`SshxResultEnvelope` is a prompt-level record, not a runtime API. Every caller-carried result from `thinking_triplet_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` must use exactly these top-level fields:
+`SshxResultEnvelope` is a prompt-level record, not a runtime API. Every `SshxResultEnvelope` returned by `thinking_triplet_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields:
 
 - `conclusion`: compact structured result consumed by the caller. It may include verdicts, decisions, blocking goal gaps, final decision points, changed-file evidence, and test evidence when applicable. It must not include process logs, step-by-step reasoning, raw transcripts, debug output, or same-round peer output.
-- `log_ref`: artifact reference for the non-inline worker, meta-judge, implementation, review, or fix log. The caller may open the referenced artifact on demand, but caller-carried transcripts and final reports must keep only the reference and must not inline the log body.
+- `log_ref`: artifact reference for the non-inline worker, meta-judge, implementation, review, or fix log, treated as an opaque diagnostic pointer. Caller-side routing, meta-judging, worker briefs, and final reports must not open, inline, summarize, or otherwise consume its content; they keep only the reference. Opening the artifact is allowed only for out-of-band debugging outside the consensus decision context.
+
+A caller-carried stage record wraps this envelope: it references the envelope's `conclusion` and `log_ref` and may add only the stage metadata named by `InlineConsensusProtocol` and the `## Transcript Template` (such as `role`, `bias`, `visible_inputs`, `worker_mode`, `worker_carrier`, `worker_flight_ref`, `verdict`, and the `meta_judge` and `fix_or_done` `exit`, `concrete_plan`, `goal_gap`, and `next_iteration_question`). The envelope payload itself stays exactly `conclusion` and `log_ref`. A stage record's `verdict` field, when present, is a read-only mirror of its envelope's `conclusion.verdict`; `conclusion.verdict` is the sole verdict source for routing, the two must be equal, and any mismatch fails closed.
 
 Logs are not inline in caller context. Final reports aggregate `conclusion` values only and retain `log_ref` references for optional inspection.
 
@@ -128,11 +134,14 @@ For `codex-cli` workers, caller-side completion and verdict routing must be deci
 - the worker carrier process has exited with status `0`;
 - the caller-assigned `result_ref` artifact exists;
 - the `result_ref` artifact parses as a valid `SshxResultEnvelope`;
+- the caller-assigned `completion_sentinel` artifact exists and is recorded as `completion_sentinel_ref` on the matching `SshxWorkerFlightRecord`;
 - `conclusion.verdict`, when the stage requires a verdict, is present and is one of that stage's allowed verdict values.
 
 A worker is not done while its carrier process is still running, even if a partial `result_ref` artifact already exists. A worker is not done when completion markers or verdict-looking text appear only in stdout, stderr, raw transcripts, final text, prompt echoes, `log_ref` content, or log tails. Those surfaces are diagnostic only and must not participate in done detection or verdict routing.
 
 `log_ref` remains required as a diagnostic artifact reference, but it is never a verdict source. Missing `conclusion`, missing `log_ref`, placeholder verdicts, and verdicts outside the stage's allowed set fail closed.
+
+For `isolated-token-subagent` workers, terminal completion is recognized only when the isolated subagent returns a valid `SshxResultEnvelope` to the caller, with any required `conclusion.verdict` in the stage's allowed set; this carrier runs in-context rather than as a separate process, so it has no completion sentinel and its `completion_sentinel_ref` is recorded as `n/a`. The same isolation, fail-closed, and no-stdout-evidence rules apply. Missing or invalid fallback output is not terminal completion: the flight becomes `abstained`, the result is `abstain`, and the caller must not mutate the `work_target`.
 
 ## No Context Pollution
 
@@ -150,13 +159,13 @@ Same-round thinking workers must not see one another's outputs before their own 
 
 Run three biased perspectives before choosing a plan:
 
-- `minimal`: smallest coherent change that satisfies the user goal.
+- `minimal`: smallest coherent change on the root-cause-resolving path that satisfies the user goal, not a surface patch that leaves the root cause in place.
 - `structural`: architecture and contract integrity under future growth.
 - `delete`: whether the feature, abstraction, or work should be removed, collapsed, or avoided.
 
-Before proposing, revising, rejecting, or abstaining, each thinking perspective must run a lightweight Reference-frame harness pass: identify the applicable mature theory, engineering principle, industry best practice, or constraint framework governing this class of problem, then compare its conclusion against that known-good shape. `no applicable mature theory found` is an acceptable explicit harness. The perspective must surface one short free-form note naming the reference frame in `SshxResultEnvelope.conclusion`. Harness discovery does not override `GoalArtifact`, the assigned bias, the thinking truth table, or the allowed verdict set, and it is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for valid `abstain` or `reject` outcomes.
+Before proposing, revising, rejecting, or abstaining, each thinking perspective must run a lightweight Reference-frame harness pass: identify the applicable mature theory, engineering principle, industry best practice, mature industry case, mature pattern, or constraint framework governing this class of problem, then surface that known-good shape and continue thinking by re-checking the candidate conclusion against it before settling the verdict. The perspective must surface one short free-form note naming the reference frame in `SshxResultEnvelope.conclusion`, stating the known-good shape and whether the candidate aligns with it, deviates for a reasoned goal-bound reason, or was revised because of the re-check. `no applicable mature theory found` is an acceptable explicit harness; in that case the note says so and still records the root-cause and minimal-path re-check against `GoalArtifact`. Harness discovery does not override `GoalArtifact`, the assigned bias, the thinking truth table, or the allowed verdict set, and it is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for valid `abstain` or `reject` outcomes.
 
-Every perspective must frame `propose`, `revise`, `reject`, or `abstain` as an answer to the current `GoalArtifact`: what satisfies it, what still differs from it, or why it cannot be satisfied. `revise` must name the goal gap and a next iteration question; it must not open an unrelated design search.
+Every perspective must first identify the problem essence or root cause implied by `GoalArtifact`, then frame `propose`, `revise`, `reject`, or `abstain` as an answer to it: what satisfies it, what still differs from it, or why it cannot be satisfied. A plan that only patches a surface symptom while leaving that root cause in place does not satisfy `minimal` or the thinking gate. `revise` must name the goal gap and a next iteration question; it must not open an unrelated design search.
 
 Each perspective returns one of:
 
@@ -180,6 +189,8 @@ The meta-judge applies this fixed thinking truth table:
 
 The convergence question must be "what still differs from `GoalArtifact`?" expressed against the fixed normalized goal, constraints, and success criteria. Do not generalize the convergence pass beyond that goal gap.
 
+Before any `implement` exit, the meta-judge must include in its `meta_judge.conclusion` a compact free-form ASCII relationship diagram built only from `GoalArtifact` and the returned `SshxResultEnvelope.conclusion` values: nodes are the goal subquestions or goal-gap items, the `minimal`, `structural`, and `delete` stances, and the concrete plan; edges are labeled `agree`, `conflict`, `depends-on`, `resolved-by`, or `converges-to`. The diagram rigidly constrains convergence: every surfaced subquestion or goal-gap node must appear, the concrete plan must resolve every `conflict` edge, and any unresolved `conflict` edge is an unclosed `GoalArtifact` goal gap, so the exit stays `meta-layer convergence` or `abstain/escalate with options`, never `implement`. The diagram is free-form prompt-level content synthesized from conclusions only; it must not inline worker full reasoning or same-round peer output, and it is not a parsed schema field, marker data, lifecycle authority, or a blocker for valid `abstain` or `reject fake consensus` exits.
+
 ## Implementation Worker
 
 Implement only the concrete plan approved by the thinking gate. Keep the implementation boundary narrow and state any deviation before making it.
@@ -196,7 +207,7 @@ After implementation, run three review perspectives:
 - `quality`: behavior, edge cases, failure modes, and user impact.
 - `tests`: coverage, determinism, and verification strength.
 
-Before approving, commenting, or rejecting, each reviewer must run a lightweight Reference-frame harness pass: identify the applicable mature theory, engineering principle, industry best practice, or constraint framework governing this class of implementation, then compare the implementation evidence against that known-good shape. `no applicable mature theory found` is an acceptable explicit harness. The reviewer must surface one short free-form note naming the reference frame in `SshxResultEnvelope.conclusion`. Harness discovery does not override `GoalArtifact`, the review focus, the review truth table, or the allowed verdict set, and it is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for valid `comment` or `reject` outcomes.
+Before approving, commenting, or rejecting, each reviewer must run a lightweight Reference-frame harness pass: identify the applicable mature theory, engineering principle, industry best practice, mature industry case, mature pattern, or constraint framework governing this class of implementation, then surface that known-good shape and continue thinking by re-checking the implementation evidence against it before settling the verdict. The reviewer must surface one short free-form note naming the reference frame in `SshxResultEnvelope.conclusion`, stating the known-good shape and whether the implementation aligns with it, deviates for a reasoned goal-bound reason, or needs correction because of the re-check. `no applicable mature theory found` is an acceptable explicit harness; in that case the note says so and still records the root-cause and minimal-path re-check against `GoalArtifact`. Harness discovery does not override `GoalArtifact`, the review focus, the review truth table, or the allowed verdict set, and it is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for valid `comment` or `reject` outcomes.
 
 Each reviewer returns one of:
 
@@ -218,11 +229,13 @@ Advisory comments do not count as approval. A reject blocks done until the issue
 
 ## Fix Or Done
 
-If review exits `fix`, ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap, and rerun the review triplet. Stop after a bounded number of fix passes and report remaining blockers honestly.
+If review exits `fix`, ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap by delegating it to a worker using the selected `WorkerMode` exactly as `## Implementation Worker` requires — open a new `SshxWorkerFlightRecord` for the same `work_target` and stay orchestration-only for the repair — then rerun the review triplet on the worker's returned `conclusion`. Stop after a bounded number of fix passes and report remaining blockers honestly.
 
 If review exits `done with advisory surfaced`, report the final outcome by aggregating `conclusion` values and include any non-blocking advisory feedback without inlining logs.
 
 If review exits `explicit user decision or another bounded review pass`, either run one more bounded pass with a concrete next iteration question tied to `GoalArtifact`, or ask the user to decide. Do not loop indefinitely.
+
+Every bounded pass in this skill — `meta-layer convergence`, a repeated review pass, and fix passes — defaults to at most one pass unless the user explicitly authorizes more, and the chosen bound is recorded before the first such pass.
 
 ## Boundaries
 
@@ -320,7 +333,7 @@ meta_judge:
   concrete_plan:
   goal_gap:
   next_iteration_question:
-  conclusion:
+  conclusion: # for an implement exit, includes the free-form ASCII relationship diagram (no separate diagram field)
   log_ref:
 implementation_worker:
   worker_mode:
@@ -329,19 +342,28 @@ implementation_worker:
   log_ref:
 review_triplet_workers:
   - role: architecture
+    bias:
+    visible_inputs:
     worker_mode:
+    worker_carrier:
     worker_flight_ref:
     verdict:
     conclusion:
     log_ref:
   - role: quality
+    bias:
+    visible_inputs:
     worker_mode:
+    worker_carrier:
     worker_flight_ref:
     verdict:
     conclusion:
     log_ref:
   - role: tests
+    bias:
+    visible_inputs:
     worker_mode:
+    worker_carrier:
     worker_flight_ref:
     verdict:
     conclusion:
