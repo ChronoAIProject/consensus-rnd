@@ -12,6 +12,7 @@ from typing import Any, Sequence
 
 from .gh_accounting import accounting_env
 from .processes import ProcessSupervisor, prompt_file_from_text
+from .secondary_mutation_backoff import currently_backing_off
 from .task_spawn_claim import TaskSpawnClaimError, TaskSpawnClaimStore, safe_task_id_from_task
 
 
@@ -63,6 +64,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     usage_repo = Path(os.environ.get("REPO_ROOT") or args.cd)
     repo_root = usage_repo.resolve()
+    try:
+        backoff = currently_backing_off(repo_root / ".refactor-loop" / "state")
+    except Exception:
+        backoff = None
+    if backoff is not None and backoff.active:
+        sys.stderr.write(f"SPAWN_CODEX_BACKOFF:secondary until={int(backoff.until_epoch)}\n")
+        return 3
     try:
         claim = TaskSpawnClaimStore(repo_root).acquire(task_id, log_path=log_path)
     except TaskSpawnClaimError as exc:

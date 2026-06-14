@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from .secondary_mutation_backoff import currently_backing_off
+
 
 STALL_EXIT_CODE = 137
 TIMEOUT_EXIT_CODE = STALL_EXIT_CODE
@@ -105,6 +107,16 @@ def launch_spawn_codex_supervisor(
     if stall <= 0:
         raise ValueError(f"total wall-clock timeout must be positive: {stall}")
     repo_root = repo_root.resolve()
+    try:
+        backoff = currently_backing_off(repo_root / ".refactor-loop" / "state")
+    except Exception:
+        backoff = None
+    if backoff is not None and backoff.active:
+        diagnostic = f"SPAWN_SUPERVISOR_BACKOFF:secondary until={int(backoff.until_epoch)}\n"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        _append(log, diagnostic)
+        sys.stderr.write(diagnostic)
+        return 3
     skill_root = skill_root.resolve()
     cli = skill_root / "scripts" / "consensus-rnd-cli"
     if not cli.is_file():

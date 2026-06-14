@@ -28,6 +28,7 @@ from ..safe_progress_scheduler import (
     MEDIUM_DISPATCH_LIMIT_PER_TICK,
     classify_dispatch_payload,
 )
+from ..secondary_mutation_backoff import currently_backing_off
 from ..state import read_json, write_json
 from ..task_spawn_claim import TaskSpawnClaimError, safe_task_id_from_task
 from ..update_check import parse_time
@@ -1223,6 +1224,15 @@ class ConcurrencyMonitor:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
             self.write_pending_event("DISPATCH_BACKOFF:graphql-headroom-low")
             log_tick_status("skip:graphql-backoff remaining=unknown")
+            return actual
+        try:
+            secondary_backoff = currently_backing_off(self.ctx.paths.state)
+        except Exception:
+            secondary_backoff = None
+        if secondary_backoff is not None and secondary_backoff.active:
+            until = int(secondary_backoff.until_epoch)
+            self.write_pending_event(f"DISPATCH_BACKOFF:secondary until={until}")
+            log_tick_status(f"skip:secondary-backoff until={until}")
             return actual
         max_dispatches = floor - actual
         dispatched = 0

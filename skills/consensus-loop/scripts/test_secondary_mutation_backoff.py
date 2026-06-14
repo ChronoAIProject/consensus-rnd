@@ -17,9 +17,13 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.secondary_mutation_backoff import (
+    STATE_FILE_NAME,
     STATE_RELATIVE_PATH,
     is_secondary_content_creation_failure,
+    record_backoff_from_gh_output,
     record_content_creation_backoff,
+    record_generic_secondary_backoff_from_gh_output,
+    currently_backing_off,
 )
 
 
@@ -78,6 +82,39 @@ class SecondaryMutationBackoffTests(unittest.TestCase):
         self.assertTrue(entry["not_live_state_fact_source"])
         self.assertTrue(entry["not_host_production_ssot"])
         self.assertTrue(entry["no_lifecycle_authority"])
+
+    def test_generic_secondary_needle_writes_shared_backoff_without_loop_context(self) -> None:
+        recorded = record_generic_secondary_backoff_from_gh_output(
+            self.ctx.paths.state,
+            "",
+            "You have exceeded a secondary rate limit",
+            now=100,
+            env={"SECONDARY_MUTATION_BACKOFF_SECONDS": "30"},
+        )
+
+        self.assertIsNotNone(recorded)
+        state = json.loads((self.ctx.paths.state / STATE_FILE_NAME).read_text(encoding="utf-8"))
+        entry = state["genericSecondary"]
+        self.assertEqual("genericSecondary", entry["operation"])
+        self.assertEqual(130, entry["until_epoch"])
+        self.assertEqual("You have exceeded a secondary rate limit", entry["reason"])
+        active = currently_backing_off(self.ctx.paths.state, now=101)
+        self.assertTrue(active.active)
+        self.assertEqual("genericSecondary", active.mutation)
+
+    def test_named_mutation_detector_still_uses_existing_mutation_state(self) -> None:
+        recorded = record_backoff_from_gh_output(
+            self.ctx.paths.state,
+            "",
+            "GraphQL: was submitted too quickly (createPullRequest)",
+            now=100,
+            env={"SECONDARY_MUTATION_BACKOFF_SECONDS": "30"},
+        )
+
+        self.assertIsNotNone(recorded)
+        state = json.loads((self.ctx.paths.state / STATE_FILE_NAME).read_text(encoding="utf-8"))
+        self.assertEqual("createPullRequest", state["mutationThrottle"]["mutation"])
+        self.assertEqual(130, state["mutationThrottle"]["until_epoch"])
 
 
 if __name__ == "__main__":

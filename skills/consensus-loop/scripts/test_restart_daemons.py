@@ -971,6 +971,34 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertNotEqual(old_wrapper_pid, new_pid)
         self.assert_start_count("phase9_router_daemon", 2)
 
+    def test_lockless_orphan_managed_children_are_reaped_on_restart(self) -> None:
+        self.run_helper()
+        old_wrapper_pid = self.read_pid("phase9_router_daemon")
+        old_child_pid = self.runtime.child_pids_by_wrapper[old_wrapper_pid]
+        orphan_child_pid = 515152
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)
+        self.stale_heartbeat("phase9_router_daemon")
+        self.runtime.live_pids.update({old_wrapper_pid, old_child_pid, orphan_child_pid})
+        self.runtime.inventory_override = DaemonProcessInventory(
+            (
+                DaemonProcess(old_wrapper_pid, self.runtime.canonical_command(self.ctx, "phase9_router_daemon", FAKE_COMMAND), 1),
+                DaemonProcess(old_child_pid, " ".join(target.command), old_wrapper_pid),
+                DaemonProcess(orphan_child_pid, " ".join(target.command), 1),
+            )
+        )
+
+        helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
+        with mock.patch("builtins.print") as print_mock:
+            helper.start_daemon("phase9_router_daemon", FAKE_COMMAND)
+
+        self.assertIn((old_child_pid, self.config.stop_grace_seconds), self.runtime.terminated)
+        self.assertIn((old_wrapper_pid, self.config.stop_grace_seconds), self.runtime.terminated)
+        self.assertIn((orphan_child_pid, self.config.stop_grace_seconds), self.runtime.terminated)
+        self.assertTrue(
+            any("ORPHAN_REAP daemon=phase9_router_daemon pids=515152" in str(call.args[0]) for call in print_mock.mock_calls)
+        )
+        self.assert_start_count("phase9_router_daemon", 2)
+
     def test_duplicate_canonical_matching_ignores_other_repo_and_non_allowlist_commands(self) -> None:
         command = self.runtime.canonical_command(self.ctx, "concurrency_monitor", FAKE_COMMAND)
         other_repo = command.replace(str(self.ctx.repo_root), "/tmp/other-repo")
@@ -1029,6 +1057,32 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual((222,), projection.bounded_lock_holder_pids)
         self.assertEqual((111, 222), projection.repair_pids)
         self.assertEqual((), projection.singleton_holder_pids)
+
+    def test_orphan_child_matching_requires_current_absolute_skill_command_path(self) -> None:
+        template = ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon")
+        target = restart.daemon_target(self.ctx, "phase9_router_daemon", template)
+        other_skill_command = " ".join(target.command).replace(
+            str(self.ctx.skill_root / "scripts" / "consensus-rnd-cli"),
+            "/tmp/other-skill/scripts/consensus-rnd-cli",
+        )
+        inventory = DaemonProcessInventory(
+            (
+                DaemonProcess(111, " ".join(target.command), 1),
+                DaemonProcess(222, other_skill_command, 1),
+            )
+        )
+        self.runtime.live_pids.update({111, 222})
+
+        projection = inventory.daemon_instance(
+            name="phase9_router_daemon",
+            repo_root=self.ctx.repo_root,
+            pid_file=target.pid_file,
+            died_file=target.died_file,
+            command=target.command,
+            is_alive=self.runtime.pid_alive,
+        )
+
+        self.assertEqual((111,), projection.orphan_child_pids)
 
     def test_daemon_instance_projects_lockless_orphans_excluding_pid_file_and_locks(self) -> None:
         target = restart.daemon_target(self.ctx, "phase9_router_daemon", FAKE_COMMAND)

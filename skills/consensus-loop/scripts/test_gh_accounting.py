@@ -30,12 +30,34 @@ from codex_refactor_loop.gh_accounting import (
     classify_subcommand,
     default_usage_path,
     load_records,
+    run_real_gh,
 )
 from codex_refactor_loop import spawn
 from codex_refactor_loop.cli import COMMANDS, CommandSpec, RuntimeCommandRouter
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.processes import ProcessSupervisor
 from codex_refactor_loop.restart import DAEMON_COMMANDS, DaemonProcessInventory, RestartConfig, RestartDaemons
+
+
+class StringBuffer:
+    def __init__(self) -> None:
+        self._raw = bytearray()
+
+    @property
+    def buffer(self) -> "StringBuffer":
+        return self
+
+    @property
+    def text(self) -> str:
+        return self._raw.decode("utf-8", errors="replace")
+
+    def write(self, value) -> int:
+        raw = value if isinstance(value, bytes) else str(value).encode("utf-8", errors="replace")
+        self._raw.extend(raw)
+        return len(raw)
+
+    def flush(self) -> None:
+        return None
 
 
 class GhAccountingBehaviorTests(unittest.TestCase):
@@ -133,6 +155,99 @@ class GhAccountingBehaviorTests(unittest.TestCase):
         self.assertEqual("daemon:comment-monitor", record["source"])
         self.assertEqual(23, record["exit_code"])
         self.assertEqual("unknown", record["pool"])
+
+    def test_shim_sleeps_for_active_secondary_backoff_before_real_gh(self) -> None:
+        state = self.repo / ".refactor-loop" / "state" / "secondary-mutation-backoff.json"
+        state.write_text(json.dumps({"until_epoch": 110, "mutation": "readThrottle", "reason": "unit"}) + "\n", encoding="utf-8")
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": f"{SHIM.parent}{os.pathsep}{self.realbin}{os.pathsep}{env.get('PATH', '')}",
+                "REPO_ROOT": str(self.repo),
+                "CRND_GH_SECONDARY_BACKOFF_JITTER_MAX_SECONDS": "0",
+            }
+        )
+        call_order: list[str] = []
+
+        class FakeProcess:
+            returncode = 0
+
+            def communicate(self) -> tuple[bytes, bytes]:
+                return (b"real stdout\n", b"real stderr\n")
+
+        def fake_sleep(seconds: float) -> None:
+            call_order.append(f"sleep:{seconds}")
+
+        def fake_popen(command: list[str], **_kwargs) -> FakeProcess:
+            call_order.append("popen:" + " ".join(command[1:]))
+            return FakeProcess()
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.gh_accounting.time.time", return_value=100):
+                with mock.patch("codex_refactor_loop.gh_accounting.time.sleep", side_effect=fake_sleep) as sleep:
+                    with mock.patch("codex_refactor_loop.gh_accounting.subprocess.Popen", side_effect=fake_popen):
+                        with mock.patch("codex_refactor_loop.gh_accounting.sys.stdout", new_callable=StringBuffer) as stdout:
+                            with mock.patch("codex_refactor_loop.gh_accounting.sys.stderr", new_callable=StringBuffer) as stderr:
+                                exit_code = run_real_gh(["issue", "view", "1"], argv0=str(SHIM))
+
+        self.assertEqual(0, exit_code)
+        sleep.assert_called_once_with(10.0)
+        self.assertEqual(["sleep:10.0", "popen:issue view 1"], call_order)
+        self.assertIn("real stdout", stdout.text)
+        self.assertIn("real stderr", stderr.text)
+        self.assertIn("ghwrap: secondary-backoff sleep=10.000s until=110", stderr.text)
+
+    def test_shim_records_secondary_rate_limit_from_read_command_output(self) -> None:
+        self.fake_gh.write_text(
+            "#!/usr/bin/env bash\nprintf 'You have exceeded a secondary rate limit\\n' >&2\nexit 1\n",
+            encoding="utf-8",
+        )
+        self.fake_gh.chmod(0o755)
+
+        result = self.run_shim(
+            ["issue", "view", "455"],
+            extra_env={"SECONDARY_MUTATION_BACKOFF_SECONDS": "30", "CRND_GH_SECONDARY_BACKOFF_JITTER_MAX_SECONDS": "0"},
+        )
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn("You have exceeded a secondary rate limit", result.stderr)
+        state = json.loads((self.repo / ".refactor-loop/state/secondary-mutation-backoff.json").read_text(encoding="utf-8"))
+        self.assertEqual("genericSecondary", state["genericSecondary"]["operation"])
+        self.assertEqual(30, state["genericSecondary"]["cooldown_seconds"])
+
+    def test_shim_records_named_secondary_mutation_from_write_command_output(self) -> None:
+        self.fake_gh.write_text(
+            "#!/usr/bin/env bash\nprintf 'GraphQL: was submitted too quickly (createPullRequest)\\n' >&2\nexit 1\n",
+            encoding="utf-8",
+        )
+        self.fake_gh.chmod(0o755)
+
+        result = self.run_shim(
+            ["pr", "create", "--title", "x"],
+            extra_env={"SECONDARY_MUTATION_BACKOFF_SECONDS": "30", "CRND_GH_SECONDARY_BACKOFF_JITTER_MAX_SECONDS": "0"},
+        )
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn("createPullRequest", result.stderr)
+        state = json.loads((self.repo / ".refactor-loop/state/secondary-mutation-backoff.json").read_text(encoding="utf-8"))
+        self.assertEqual("createPullRequest", state["mutationThrottle"]["mutation"])
+        self.assertEqual(30, state["mutationThrottle"]["cooldown_seconds"])
+
+    def test_shim_secondary_backoff_import_failure_fails_open_to_real_gh(self) -> None:
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": f"{SHIM.parent}{os.pathsep}{self.realbin}{os.pathsep}{env.get('PATH', '')}",
+                "REPO_ROOT": str(self.repo),
+            }
+        )
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.gh_accounting.secondary_state_dir_for_repo", side_effect=RuntimeError("boom")):
+                with mock.patch("codex_refactor_loop.gh_accounting.time.sleep", side_effect=AssertionError("must not sleep")):
+                    exit_code = run_real_gh(["issue", "view", "1"], argv0=str(SHIM))
+
+        self.assertEqual(0, exit_code)
 
     def test_accounting_failure_fails_open_after_real_gh(self) -> None:
         bad_parent = self.repo / "not-a-dir"
@@ -469,6 +584,40 @@ class GhAccountingBehaviorTests(unittest.TestCase):
         self.assertEqual(str(SKILL_ROOT / "scripts" / "ghwrap"), payload["path_head"])
         self.assertEqual(["exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-C", str(self.repo), "-"], payload["argv"])
 
+    def test_spawn_codex_main_defers_during_secondary_backoff_without_worker_launch(self) -> None:
+        prompt = self.tmp / "prompt.md"
+        log = self.tmp / "review-pr458-fix.log"
+        prompt.write_text("prompt\n", encoding="utf-8")
+        state = self.repo / ".refactor-loop" / "state" / "secondary-mutation-backoff.json"
+        state.write_text(json.dumps({"until_epoch": 110, "mutation": "readThrottle", "reason": "unit"}) + "\n", encoding="utf-8")
+        env = {
+            "PATH": f"{self.realbin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+            "REPO_ROOT": str(self.repo),
+            "CRND_GH_USAGE_PATH": str(self.usage),
+        }
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.secondary_mutation_backoff.time.time", return_value=100):
+                with mock.patch("codex_refactor_loop.spawn.ProcessSupervisor") as supervisor:
+                    with mock.patch("codex_refactor_loop.spawn.sys.stderr", new_callable=StringBuffer) as stderr:
+                        exit_code = spawn.main(
+                            [
+                                "--cd",
+                                str(self.repo),
+                                "--prompt",
+                                str(prompt),
+                                "--log",
+                                str(log),
+                                "--stall",
+                                "5",
+                            ]
+                        )
+
+        self.assertEqual(3, exit_code)
+        supervisor.assert_not_called()
+        self.assertIn("SPAWN_CODEX_BACKOFF:secondary until=110", stderr.text)
+        self.assertFalse(log.exists())
+
 
 class GhAccountingSourceRegressionTests(unittest.TestCase):
     def test_shim_transparent_forwarding_and_fail_open_contract_is_literal(self) -> None:
@@ -479,15 +628,18 @@ class GhAccountingSourceRegressionTests(unittest.TestCase):
             "run_real_gh(argv, argv0=sys.argv[0])",
             "record_gh_call(argv, exit_code)",
             "except Exception:\n        pass",
-            "subprocess.call([real, *sys.argv[1:]])",
+            "subprocess.Popen([real, *sys.argv[1:]], stdout=subprocess.PIPE, stderr=subprocess.PIPE)",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, source)
         for token in (
             "DEFAULT_ARTIFACT_RELATIVE = Path(\".refactor-loop\") / \"state\" / \"gh-usage.jsonl\"",
+            "SECONDARY_STATE_RELATIVE = Path(\".refactor-loop\") / \"state\"",
             "CRND_GH_USAGE_PATH",
             "_repo_contained_path",
             "resolved.relative_to(root)",
+            "currently_backing_off",
+            "record_generic_secondary_backoff_from_gh_output",
             "CRND_GH_USAGE_MAX_LINES",
             "1 <= value <= DEFAULT_RETENTION_LINES",
             "schema",

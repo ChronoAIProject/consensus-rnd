@@ -55,6 +55,7 @@ from .release.candidate_liveness import classify_release_candidate_liveness
 from .release.publish_preflight import ReleasePublishPreflight
 from .release.publisher import ReleasePublisher
 from .safe_progress_scheduler import MEDIUM_NON_SPAWN_LIMIT_PER_TICK, validate_runner_action
+from .secondary_mutation_backoff import SecondaryMutationBackoff, currently_backing_off
 from .state import read_json
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import (
@@ -440,12 +441,19 @@ class WakeupRunner:
         stand_down_reason = self._cross_instance_stand_down_reason(action)
         if stand_down_reason:
             return self._record(RunnerResult(action_id, "skipped", stand_down_reason), action)
+        controller_action = str(action.get("controller_action") or "")
+        if controller_action == "spawn_codex_harness_background":
+            secondary_backoff = self._secondary_backoff()
+            if secondary_backoff is not None and secondary_backoff.active:
+                until = int(secondary_backoff.until_epoch)
+                self._append_pending_event(f"WAKEUP_RUNNER_SPAWN_BACKOFF:{action_id}:secondary until={until}")
+                _log_tick_status("wakeup-runner", f"skip:secondary-backoff until={until}")
+                return self._record(RunnerResult(action_id, "skipped", "backoff:secondary"), action)
         if action.get("capability") == "release-rollup-body":
             self._prepare_release_rollup_body_prompt(action)
         if action.get("capability") == "implementation-pr-artifact-repair":
             self._prepare_implementation_pr_artifact_repair_prompt(action)
 
-        controller_action = str(action.get("controller_action") or "")
         try:
             exit_code = self._dispatch(controller_action, action)
         except Exception as exc:
@@ -1555,6 +1563,12 @@ class WakeupRunner:
         if exit_code != 0:
             self._append_pending_event(f"WAKEUP_RUNNER_SPAWN_LAUNCH_EXIT:{action.get('action_id', '')}:{exit_code}")
         return exit_code
+
+    def _secondary_backoff(self) -> SecondaryMutationBackoff | None:
+        try:
+            return currently_backing_off(self.ctx.paths.state)
+        except Exception:
+            return None
 
     def _spawn_log_suppresses_retry(self, log: Path) -> bool:
         if is_implement_log(log):
