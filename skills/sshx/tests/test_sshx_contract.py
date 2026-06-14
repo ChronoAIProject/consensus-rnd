@@ -1,4 +1,5 @@
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -41,6 +42,7 @@ def completed_worker_verdict(
     process_exited: bool,
     exit_code: int | None,
     result_artifact: dict[str, object] | None,
+    completion_sentinel_present: bool,
     allowed_verdicts: set[str],
 ) -> str:
     if not process_exited:
@@ -53,6 +55,8 @@ def completed_worker_verdict(
         raise ContractFailure("result_ref is not an SshxResultEnvelope")
     if not result_artifact["log_ref"]:
         raise ContractFailure("missing log_ref")
+    if not completion_sentinel_present:
+        raise ContractFailure("missing completion sentinel")
     conclusion = result_artifact["conclusion"]
     if not isinstance(conclusion, dict):
         raise ContractFailure("missing conclusion")
@@ -157,6 +161,11 @@ class SshxContractTests(unittest.TestCase):
             "ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap",
             text,
         )
+        self.assertIn(
+            "by delegating it to a worker using the selected `WorkerMode` exactly as `## Implementation Worker` requires",
+            text,
+        )
+        self.assertIn("stay orchestration-only for the repair", text)
         self.assertIn("next_iteration_question:", text)
 
     def test_sshx_triplets_require_harness_discovery_in_conclusion(self) -> None:
@@ -191,6 +200,16 @@ class SshxContractTests(unittest.TestCase):
             "not a blocker for valid `abstain` or `reject` outcomes",
         ]:
             self.assertIn(boundary, thinking_section)
+        self.assertIn("mature industry case, mature pattern", thinking_section)
+        self.assertIn(
+            "then surface that known-good shape and continue thinking by re-checking the candidate conclusion against it before settling the verdict",
+            thinking_section,
+        )
+        self.assertIn(
+            "whether the candidate aligns with it, deviates for a reasoned goal-bound reason, or was revised because of the re-check",
+            thinking_section,
+        )
+        self.assertIn("still records the root-cause and minimal-path re-check against `GoalArtifact`", thinking_section)
         self.assertLess(
             thinking_section.index("Reference-frame harness"),
             thinking_section.index("Each perspective returns one of:"),
@@ -219,9 +238,37 @@ class SshxContractTests(unittest.TestCase):
             "not a blocker for valid `comment` or `reject` outcomes",
         ]:
             self.assertIn(boundary, review_section)
+        self.assertIn("mature industry case, mature pattern", review_section)
+        self.assertIn(
+            "then surface that known-good shape and continue thinking by re-checking the implementation evidence against it before settling the verdict",
+            review_section,
+        )
+        self.assertIn(
+            "whether the implementation aligns with it, deviates for a reasoned goal-bound reason, or needs correction because of the re-check",
+            review_section,
+        )
+        self.assertIn("still records the root-cause and minimal-path re-check against `GoalArtifact`", review_section)
         self.assertLess(
             review_section.index("Reference-frame harness"),
             review_section.index("Each reviewer returns one of:"),
+        )
+
+    def test_sshx_thinking_anchors_root_cause_and_minimal_path(self) -> None:
+        text = read(SKILL)
+        thinking_start = text.index("## Thinking Triplet")
+        design_truth_start = text.index("## Design Truth Table")
+        thinking_section = text[thinking_start:design_truth_start]
+        self.assertIn(
+            "smallest coherent change on the root-cause-resolving path that satisfies the user goal, not a surface patch that leaves the root cause in place",
+            thinking_section,
+        )
+        self.assertIn(
+            "Every perspective must first identify the problem essence or root cause implied by `GoalArtifact`",
+            thinking_section,
+        )
+        self.assertIn(
+            "A plan that only patches a surface symptom while leaving that root cause in place does not satisfy `minimal` or the thinking gate",
+            thinking_section,
         )
 
     def test_sshx_worker_modes(self) -> None:
@@ -275,6 +322,25 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("codex_cli_capability_check:", text)
         self.assertIn("fallback_reason:", text)
 
+    def test_sshx_isolated_subagent_completion_rule(self) -> None:
+        text = read(SKILL)
+        self.assertIn("For `isolated-token-subagent` workers, terminal completion is recognized only when", text)
+        self.assertIn("its `completion_sentinel_ref` is recorded as `n/a`", text)
+        self.assertIn("the flight becomes `abstained`, the result is `abstain`", text)
+
+    def test_sshx_abstain_is_terminal_transition(self) -> None:
+        text = read(SKILL)
+        self.assertIn("When `WorkerMode` resolves to `abstain`, the protocol terminates at `choose_worker_mode`", text)
+        self.assertIn("creates no thinking, implementation, or review flight", text)
+        self.assertIn(
+            "When a thinking, implementation, or review flight instead exhausts its bounded retries and fallback without terminal completion",
+            text,
+        )
+        self.assertIn(
+            "A thinking-stage exhaustion in particular skips `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done`",
+            text,
+        )
+
     def test_sshx_worker_flight_record_contract(self) -> None:
         text = read(SKILL)
         self.assertIn("`SshxWorkerFlightRecord`", text)
@@ -296,6 +362,27 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(field, text)
         self.assertIn("`status` is one of `in-flight`, `retrying`, `terminal`, or `abstained`", text)
         self.assertIn("`retry_budget` is a finite integer decided before the first launch", text)
+
+    def test_sshx_worker_invocation_collection_contract(self) -> None:
+        text = read(SKILL)
+        wd_start = text.index("## Worker Delegation")
+        wd_end = text.index("## Result Envelope")
+        worker_delegation = text[wd_start:wd_end]
+        for contract_string in [
+            "before launch the caller must choose unique caller-assigned `result_ref` and `completion_sentinel` paths",
+            "pass those exact paths in the worker brief",
+            "parallel workers must receive disjoint paths",
+            "a direct non-interactive worker-carrier invocation, not a helper script, daemon, or `consensus-rnd-cli`",
+            "the exact command and sandbox flags are not part of this contract",
+            "The caller must not poll those paths while the worker is running",
+            "the caller performs one collection read of the assigned `result_ref` and `completion_sentinel`",
+            "completion and verdict recognition stay governed by the `## Worker Completion Contract`",
+        ]:
+            self.assertIn(contract_string, worker_delegation)
+        self.assertLess(
+            worker_delegation.index("one collection read of the assigned"),
+            worker_delegation.index("`codex-cli` completion is recognized only when"),
+        )
 
     def test_sshx_in_flight_worker_blocks_caller_mutation(self) -> None:
         text = read(SKILL)
@@ -360,6 +447,15 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("If `codex-cli` exits abnormally without both the terminal envelope and the completion sentinel", text)
         self.assertIn("consume the finite same-carrier retry budget", text)
         self.assertIn("fall back to `isolated-token-subagent` when available", text)
+        self.assertIn(
+            "marks the exhausted `codex-cli` flight `abstained` with empty `result_envelope_ref` and `completion_sentinel_ref`",
+            text,
+        )
+        self.assertIn(
+            "opening a new `SshxWorkerFlightRecord` for the same `stage`, `role`, and `work_target`",
+            text,
+        )
+        self.assertIn("until the fallback flight reaches `terminal` or `abstained`", text)
         self.assertIn("the result is `abstain`", text)
         self.assertIn("must not implement, repair, or otherwise mutate the same `work_target` itself", text)
 
@@ -437,11 +533,22 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("## Result Envelope", text)
         self.assertIn("`SshxResultEnvelope` is a prompt-level record, not a runtime API", text)
         self.assertIn(
-            "Every caller-carried result from `thinking_triplet_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` must use exactly these top-level fields",
+            "Every `SshxResultEnvelope` returned by `thinking_triplet_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields",
+            text,
+        )
+        self.assertIn("A caller-carried stage record wraps this envelope", text)
+        self.assertIn("The envelope payload itself stays exactly `conclusion` and `log_ref`", text)
+        self.assertIn("is a read-only mirror of its envelope's `conclusion.verdict`", text)
+        self.assertIn(
+            "`conclusion.verdict` is the sole verdict source for routing, the two must be equal, and any mismatch fails closed",
             text,
         )
         self.assertIn("`conclusion`: compact structured result consumed by the caller", text)
         self.assertIn("`log_ref`: artifact reference for the non-inline worker", text)
+        self.assertIn("treated as an opaque diagnostic pointer", text)
+        self.assertIn("must not open, inline, summarize, or otherwise consume its content", text)
+        self.assertIn("out-of-band debugging outside the consensus decision context", text)
+        self.assertNotIn("The caller may open the referenced artifact on demand", text)
         for forbidden_inline in [
             "process logs",
             "step-by-step reasoning",
@@ -462,6 +569,10 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("worker carrier process has exited with status `0`", text)
         self.assertIn("caller-assigned `result_ref` artifact exists", text)
         self.assertIn("parses as a valid `SshxResultEnvelope`", text)
+        self.assertIn(
+            "the caller-assigned `completion_sentinel` artifact exists and is recorded as `completion_sentinel_ref` on the matching `SshxWorkerFlightRecord`",
+            text,
+        )
         self.assertIn("`conclusion.verdict`", text)
         self.assertIn("A worker is not done while its carrier process is still running", text)
         for diagnostic_surface in [
@@ -491,6 +602,7 @@ class SshxContractTests(unittest.TestCase):
                 process_exited=True,
                 exit_code=0,
                 result_artifact=None,
+                completion_sentinel_present=True,
                 allowed_verdicts=THINKING_VERDICTS,
             )
         self.assertIn("VERDICT:propose", repr(log_only_fake_marker))
@@ -505,6 +617,7 @@ class SshxContractTests(unittest.TestCase):
                 process_exited=False,
                 exit_code=None,
                 result_artifact=valid_artifact,
+                completion_sentinel_present=True,
                 allowed_verdicts=THINKING_VERDICTS,
             )
 
@@ -517,6 +630,7 @@ class SshxContractTests(unittest.TestCase):
             process_exited=True,
             exit_code=0,
             result_artifact=valid_artifact,
+            completion_sentinel_present=True,
             allowed_verdicts=THINKING_VERDICTS,
         )
         self.assertEqual(verdict, "propose")
@@ -530,6 +644,7 @@ class SshxContractTests(unittest.TestCase):
             process_exited=True,
             exit_code=0,
             result_artifact=valid_artifact,
+            completion_sentinel_present=True,
             allowed_verdicts=THINKING_VERDICTS,
         )
         self.assertEqual(verdict, "reject")
@@ -550,8 +665,23 @@ class SshxContractTests(unittest.TestCase):
                         process_exited=True,
                         exit_code=0,
                         result_artifact=artifact,
+                        completion_sentinel_present=True,
                         allowed_verdicts=THINKING_VERDICTS,
                     )
+
+    def test_sshx_missing_completion_sentinel_fails_closed(self) -> None:
+        valid_artifact = {
+            "conclusion": {"verdict": "propose", "decision": "use artifact authority"},
+            "log_ref": "artifacts/sshx/minimal.log",
+        }
+        with self.assertRaisesRegex(ContractFailure, "missing completion sentinel"):
+            completed_worker_verdict(
+                process_exited=True,
+                exit_code=0,
+                result_artifact=valid_artifact,
+                completion_sentinel_present=False,
+                allowed_verdicts=THINKING_VERDICTS,
+            )
 
     def test_sshx_result_envelope_caller_context_excludes_inline_logs(self) -> None:
         caller_carried_transcript = {
@@ -684,6 +814,15 @@ class SshxContractTests(unittest.TestCase):
             transcript["worker_flights"][0]["flight_id"],
         )
 
+    def test_sshx_review_transcript_entries_have_full_fields(self) -> None:
+        text = read(SKILL)
+        review_start = text.index("review_triplet_workers:")
+        fix_start = text.index("fix_or_done:", review_start)
+        review_block = text[review_start:fix_start]
+        self.assertGreaterEqual(review_block.count("    bias:"), 3)
+        self.assertGreaterEqual(review_block.count("    visible_inputs:"), 3)
+        self.assertGreaterEqual(review_block.count("    worker_carrier:"), 3)
+
     def test_sshx_design_truth_table(self) -> None:
         text = read(SKILL)
         for row in [
@@ -695,6 +834,20 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(row, text)
         self.assertIn("stop with options instead of inventing agreement", text)
 
+    def test_sshx_meta_judge_requires_relationship_diagram(self) -> None:
+        text = read(SKILL)
+        design_truth_section = text[text.index("## Design Truth Table") : text.index("## Implementation Worker")]
+        for required in [
+            "compact free-form ASCII relationship diagram",
+            "edges are labeled `agree`, `conflict`, `depends-on`, `resolved-by`, or `converges-to`",
+            "any unresolved `conflict` edge is an unclosed `GoalArtifact` goal gap",
+            "never `implement`",
+            "not a parsed schema field, marker data, lifecycle authority, or a blocker for valid `abstain` or `reject fake consensus` exits",
+        ]:
+            self.assertIn(required, design_truth_section)
+        self.assertIn("includes the free-form ASCII relationship diagram (no separate diagram field)", text)
+        self.assertNotIn("relationship_diagram:", text)
+
     def test_sshx_review_truth_table(self) -> None:
         text = read(SKILL)
         for row in [
@@ -705,6 +858,10 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(row, text)
         self.assertIn("Advisory comments do not count as approval", text)
         self.assertIn("A reject blocks done", text)
+
+    def test_sshx_bounded_passes_have_default_bound(self) -> None:
+        text = read(SKILL)
+        self.assertIn("defaults to at most one pass unless the user explicitly authorizes more", text)
 
     def test_sshx_no_runtime_control_plane_leakage(self) -> None:
         text = read(SKILL)
@@ -740,7 +897,14 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(failure_mode, text)
         self.assertIn("source-owned contract or test evidence", text)
         self.assertIn("Do not track `.refactor-loop/` runtime artifacts", text)
-        self.assertFalse(BASELINE_ARTIFACT.exists())
+        tracked = subprocess.run(
+            ["git", "ls-files", "--", ".refactor-loop/runs/baseline-issue342-sshx.md"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(tracked, "")
 
     def test_sshx_docs_and_ci_discovery(self) -> None:
         self.assertRegex(read(README), r"\| `sshx` \|")
