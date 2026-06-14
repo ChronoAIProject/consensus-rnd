@@ -380,7 +380,7 @@ class DaemonProcessInventory:
                 continue
             if process.pid in canonical or process.ppid != 1:
                 continue
-            if not _restart_daemon_command_matches(process.command, command):
+            if not _restart_daemon_command_matches_strict_path(process.command, command):
                 continue
             pids.append(process.pid)
         return tuple(sorted(set(pids)))
@@ -862,8 +862,16 @@ class RestartDaemons:
         )
 
     def _stop_existing_daemon(self, target: DaemonTarget, *, instance: DaemonInstanceProjection) -> None:
+        singleton_holder_pids = set(instance.singleton_holder_pids)
+        repair_pids = set(instance.repair_pids)
         self._terminate_pids(instance.singleton_holder_pids)
-        self._terminate_pids(pid for pid in instance.repair_pids if pid not in set(instance.singleton_holder_pids))
+        self._terminate_pids(pid for pid in instance.repair_pids if pid not in singleton_holder_pids)
+        orphan_reap_pids = tuple(
+            pid for pid in instance.orphan_child_pids if pid not in singleton_holder_pids and pid not in repair_pids
+        )
+        if orphan_reap_pids:
+            self._log(f"ORPHAN_REAP daemon={target.name} pids={','.join(str(pid) for pid in orphan_reap_pids)}")
+            self._terminate_pids(orphan_reap_pids)
         target.pid_file.unlink(missing_ok=True)
 
     @staticmethod
@@ -1156,6 +1164,20 @@ def _restart_daemon_command_matches(actual_tail: str, expected: Sequence[str]) -
         if index == 0 and _is_python_launcher(actual_part) and _is_python_launcher(expected_part):
             continue
         if index == 1 and _is_consensus_cli_path(actual_part) and _is_consensus_cli_path(expected_part):
+            continue
+        if actual_part != expected_part:
+            return False
+    return True
+
+
+def _restart_daemon_command_matches_strict_path(actual_tail: str, expected: Sequence[str]) -> bool:
+    actual_parts = _normalize_process_command(actual_tail).split()
+    expected_parts = [_normalize_process_command(part) for part in expected]
+    if len(actual_parts) != len(expected_parts):
+        return False
+    for index, expected_part in enumerate(expected_parts):
+        actual_part = actual_parts[index]
+        if index == 0 and _is_python_launcher(actual_part) and _is_python_launcher(expected_part):
             continue
         if actual_part != expected_part:
             return False

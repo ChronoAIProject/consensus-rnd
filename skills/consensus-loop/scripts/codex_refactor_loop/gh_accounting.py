@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
+import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -17,8 +19,10 @@ from typing import Any, Iterable, Mapping, Sequence
 
 SCHEMA_VERSION = 1
 DEFAULT_ARTIFACT_RELATIVE = Path(".refactor-loop") / "state" / "gh-usage.jsonl"
+SECONDARY_STATE_RELATIVE = Path(".refactor-loop") / "state"
 DEFAULT_RETENTION_LINES = 20_000
 DEFAULT_WINDOW_MINUTES = 60
+DEFAULT_SECONDARY_BACKOFF_JITTER_MAX_SECONDS = 5.0
 GRAPHQL_COMMANDS = {
     "issue",
     "pr",
@@ -92,6 +96,13 @@ def default_usage_path(env: Mapping[str, str] | None = None, cwd: Path | None = 
         if bounded is not None:
             return bounded
     return usage_path_for_repo(repo_root)
+
+
+def secondary_state_dir_for_repo(env: Mapping[str, str] | None = None, cwd: Path | None = None) -> Path:
+    source_env = os.environ if env is None else env
+    repo_root = _repo_root(source_env, cwd=cwd)
+    bounded = _repo_contained_path(str(repo_root / SECONDARY_STATE_RELATIVE), repo_root=repo_root)
+    return bounded or (repo_root / SECONDARY_STATE_RELATIVE)
 
 
 def accounting_env(
@@ -174,11 +185,67 @@ def run_real_gh(argv: Sequence[str], *, argv0: str) -> int:
     if real_gh is None:
         sys.stderr.write("ghwrap: real gh not found after removing shim directory from PATH\n")
         return 127
+    _maybe_apply_secondary_backoff()
     try:
-        return subprocess.call([real_gh, *argv])
+        proc = subprocess.Popen([real_gh, *argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = proc.communicate()
     except OSError as exc:
         sys.stderr.write(f"ghwrap: failed to exec real gh: {exc}\n")
         return 127
+    sys.stdout.buffer.write(stdout)
+    sys.stdout.buffer.flush()
+    sys.stderr.buffer.write(stderr)
+    sys.stderr.buffer.flush()
+    _maybe_record_secondary_backoff(stdout, stderr)
+    return int(proc.returncode or 0)
+
+
+def _maybe_apply_secondary_backoff() -> None:
+    try:
+        from .secondary_mutation_backoff import currently_backing_off
+
+        state_dir = secondary_state_dir_for_repo()
+        backoff = currently_backing_off(state_dir)
+        if not backoff.active:
+            return
+        now = time.time()
+        jitter = random.uniform(0.0, _secondary_backoff_jitter_max(os.environ))
+        sleep_seconds = max(0.0, float(backoff.until_epoch) - now) + jitter
+        sys.stderr.write(f"ghwrap: secondary-backoff sleep={sleep_seconds:.3f}s until={int(backoff.until_epoch)}\n")
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+    except Exception:
+        return
+
+
+def _maybe_record_secondary_backoff(stdout: bytes, stderr: bytes) -> None:
+    try:
+        from .secondary_mutation_backoff import (
+            record_backoff_from_gh_output,
+            record_generic_secondary_backoff_from_gh_output,
+        )
+
+        stdout_text = stdout.decode("utf-8", errors="replace")
+        stderr_text = stderr.decode("utf-8", errors="replace")
+        state_dir = secondary_state_dir_for_repo()
+        recorded = record_backoff_from_gh_output(state_dir, stdout_text, stderr_text, env=os.environ)
+        if recorded is None:
+            record_generic_secondary_backoff_from_gh_output(state_dir, stdout_text, stderr_text, env=os.environ)
+    except Exception:
+        return
+
+
+def _secondary_backoff_jitter_max(env: Mapping[str, str]) -> float:
+    raw = str(env.get("CRND_GH_SECONDARY_BACKOFF_JITTER_MAX_SECONDS") or "").strip()
+    if not raw:
+        return DEFAULT_SECONDARY_BACKOFF_JITTER_MAX_SECONDS
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return DEFAULT_SECONDARY_BACKOFF_JITTER_MAX_SECONDS
+    if parsed < 0:
+        return 0.0
+    return min(parsed, 60.0)
 
 
 def classify_subcommand(argv: Sequence[str]) -> str:

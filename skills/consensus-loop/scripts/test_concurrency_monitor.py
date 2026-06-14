@@ -258,6 +258,27 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         archived = sorted((self.refactor_loop / "dispatch-dispatched").glob("*.json"))
         self.assertEqual([p.name for p in archived], ["audit-iter-5.json", "fix-pr44-round-3.json"])
 
+    def test_top_up_from_dispatch_queue_defers_during_secondary_backoff_and_preserves_queue(self) -> None:
+        dispatch = self.write_dispatch("p1", "fix-pr44-round-3")
+        (self.refactor_loop / "state").mkdir(parents=True, exist_ok=True)
+        (self.refactor_loop / "state" / "secondary-mutation-backoff.json").write_text(
+            '{"until_epoch": 9999999999, "mutation": "readThrottle", "reason": "unit"}\n',
+            encoding="utf-8",
+        )
+        calls: list[list[str]] = []
+
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+                actual = self.monitor.top_up_from_dispatch_queue(actual=0, floor=2)
+
+        self.assertEqual(0, actual)
+        self.assertEqual(calls, [])
+        self.assertTrue(dispatch.exists())
+        self.assertFalse((self.refactor_loop / "dispatch-dispatched").exists())
+        self.assertEqual([], self.harness_spawn_intents())
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("DISPATCH_BACKOFF:secondary until=9999999999", events)
+
     def test_dispatch_queue_rejects_high_risk_payload_and_continues_to_low(self) -> None:
         unsafe = self.write_dispatch("p0", "unsafe-task")
         payload = json.loads(unsafe.read_text(encoding="utf-8"))

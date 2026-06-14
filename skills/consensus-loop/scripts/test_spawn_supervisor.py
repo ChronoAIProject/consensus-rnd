@@ -297,6 +297,34 @@ class SpawnSupervisorTests(unittest.TestCase):
         self.assertIn("SPAWN_SUPERVISOR_CLI_MISSING:", text)
         self.assertIn(str((skill_root / "scripts" / "consensus-rnd-cli").resolve()), text)
 
+    def test_launch_spawn_codex_supervisor_defers_during_secondary_backoff_without_popen(self) -> None:
+        repo = self.tmp_root / "host-repo"
+        repo.mkdir()
+        skill_root = self.tmp_root / "installed-skill"
+        cli = skill_root / "scripts" / "consensus-rnd-cli"
+        cli.parent.mkdir(parents=True, exist_ok=True)
+        cli.write_text("#!/bin/sh\n", encoding="utf-8")
+        state_dir = repo / ".refactor-loop" / "state"
+        state_dir.mkdir(parents=True)
+        state_dir.joinpath("secondary-mutation-backoff.json").write_text(
+            '{"until_epoch": 9999999999, "mutation": "readThrottle", "reason": "unit"}\n',
+            encoding="utf-8",
+        )
+
+        with mock.patch("codex_refactor_loop.processes.subprocess.Popen") as popen:
+            exit_code = launch_spawn_codex_supervisor(
+                repo_root=repo,
+                skill_root=skill_root,
+                cd=repo,
+                prompt=self.prompt,
+                log=self.log,
+                stall=30,
+            )
+
+        self.assertEqual(3, exit_code)
+        popen.assert_not_called()
+        self.assertIn("SPAWN_SUPERVISOR_BACKOFF:secondary until=9999999999", self.log.read_text(encoding="utf-8"))
+
     def test_spawn_supervisor_source_preserves_claim_before_process_supervision(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "spawn.py").read_text(encoding="utf-8")
         self.assertIn("TaskSpawnClaimStore(repo_root).acquire(task_id, log_path=log_path)", source)

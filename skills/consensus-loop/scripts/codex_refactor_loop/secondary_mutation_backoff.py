@@ -18,6 +18,7 @@ STATE_FILE_NAME = "secondary-mutation-backoff.json"
 STATE_RELATIVE_PATH = Path(".refactor-loop/state") / STATE_FILE_NAME
 CONTENT_CREATION_KEY = "contentCreation"
 MUTATION_KEY = "mutationThrottle"
+GENERIC_SECONDARY_KEY = "genericSecondary"
 DEFAULT_COOLDOWN_SECONDS = 600
 DEFAULT_BACKOFF_SECONDS = 900
 SECONDARY_MUTATION_RE = re.compile(r"GraphQL:\s*was submitted too quickly\s*\(([A-Za-z][A-Za-z0-9_]*)\)")
@@ -82,6 +83,17 @@ def currently_backing_off(state_dir: Path, *, now: float | None = None) -> Secon
                     str(content_payload.get("reason") or ""),
                 )
             )
+    generic_payload = payload.get(GENERIC_SECONDARY_KEY)
+    if isinstance(generic_payload, dict):
+        generic_until = _float(generic_payload.get("until_epoch"))
+        if generic_until is not None:
+            entries.append(
+                (
+                    str(generic_payload.get("operation") or GENERIC_SECONDARY_KEY),
+                    generic_until,
+                    str(generic_payload.get("reason") or ""),
+                )
+            )
     active_entries = [(mutation, until, reason) for mutation, until, reason in entries if until > now_value]
     if not active_entries:
         return SecondaryMutationBackoff(active=False, mutation="", until_epoch=0.0, reason="")
@@ -136,6 +148,47 @@ def record_backoff_from_gh_output(
     if not mutation:
         return None
     return record_secondary_mutation_backoff(state_dir, mutation, output=output, now=now, env=env)
+
+
+def record_generic_secondary_backoff_from_gh_output(
+    state_dir: Path,
+    stdout: str,
+    stderr: str,
+    *,
+    now: float | None = None,
+    env: Mapping[str, str] | None = None,
+) -> SecondaryMutationBackoff | None:
+    """Detect non-mutation secondary-limit gh output and persist a shared cooldown."""
+
+    output = f"{stdout}\n{stderr}"
+    lowered = output.lower()
+    if not any(needle in lowered for needle in SECONDARY_LIMIT_NEEDLES):
+        return None
+    now_value = time.time() if now is None else now
+    cooldown = _cooldown_seconds(os.environ if env is None else env)
+    until = now_value + cooldown
+    path = _state_path(state_dir)
+    state = _read_state(path)
+    state[GENERIC_SECONDARY_KEY] = {
+        "operation": GENERIC_SECONDARY_KEY,
+        "until_epoch": until,
+        "recorded_at_epoch": now_value,
+        "cooldown_seconds": cooldown,
+        "reason": _one_line(output) or "secondary-rate-limit",
+        "not_live_state_fact_source": True,
+        "not_host_production_ssot": True,
+        "no_lifecycle_authority": True,
+    }
+    state.setdefault("mutation", GENERIC_SECONDARY_KEY)
+    state.setdefault("until_epoch", until)
+    state.setdefault("reason", _one_line(output) or "secondary-rate-limit")
+    _write_state(path, state)
+    return SecondaryMutationBackoff(
+        active=True,
+        mutation=GENERIC_SECONDARY_KEY,
+        until_epoch=until,
+        reason=str(state[GENERIC_SECONDARY_KEY]["reason"]),
+    )
 
 
 def record_content_creation_backoff(

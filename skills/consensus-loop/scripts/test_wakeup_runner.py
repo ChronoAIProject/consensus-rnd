@@ -4086,6 +4086,26 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         launch.assert_called_once()
 
+    def test_spawn_codex_defers_during_secondary_backoff_without_log_or_claim_creation(self) -> None:
+        action = self.design_consensus_spawn_action(action_id="harness-spawn-intent:phase9-router:104:2:secondary-backoff")
+        log_path = Path(action["log"])
+        (self.repo / ".refactor-loop/state/secondary-mutation-backoff.json").write_text(
+            '{"until_epoch": 9999999999, "mutation": "readThrottle", "reason": "unit"}\n',
+            encoding="utf-8",
+        )
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor") as launch:
+            results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=FakeActions())
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "backoff:secondary")
+        launch.assert_not_called()
+        self.assertFalse(log_path.exists())
+        self.assertFalse((self.repo / ".refactor-loop/locks/spawn-tasks").exists())
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("WAKEUP_RUNNER_SPAWN_BACKOFF:harness-spawn-intent:phase9-router:104:2:secondary-backoff:secondary until=9999999999", pending)
+        self.assertNotIn("WAKEUP_RUNNER_SPAWN_LAUNCH_EXIT", pending)
+
     def test_terminal_closed_target_block_suppresses_next_tick_retry(self) -> None:
         actions = FakeActions()
         action = self.reviewer_dispatch_action(action_id="stale-review:423:dedupe")
