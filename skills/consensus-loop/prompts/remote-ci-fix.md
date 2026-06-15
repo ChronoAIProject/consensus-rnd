@@ -62,7 +62,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 - The **only writable path outside the worktree** is `$REPO_ROOT/.refactor-loop/runs/remote-ci-fix-${CHECK_NAME}-${SHA_SHORT}.md`.
 - Do not commit, push, checkout, or install.
-- Do not disable tests or add `[Skip]` to make CI green.
+- Do not disable, skip, ignore, or mark tests as manual to make CI green.
 - Do not modify other cluster work outside the worktree.
 - Do not make hypothetical fixes; reproduce locally before editing.
 - Do not expand scope beyond code directly related to the failing test.
