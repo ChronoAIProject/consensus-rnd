@@ -6440,6 +6440,25 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual("pending_implement_intent", reason)
 
+    def test_consensus_implementation_readiness_fails_closed_without_context_for_pending_intent(self) -> None:
+        action = {
+            "target_kind": "issue",
+            "target_number": 20,
+            "iteration": "20",
+            "cluster_id": "issue-20",
+        }
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:20",
+            task_id="implement-issue-20",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-20.log",
+        )
+
+        reason = consensus_implementation_suppressed_reason(action, self.repo, monitor=None)
+
+        self.assertEqual("readiness_context_unavailable", reason)
+
     def test_consensus_implementation_readiness_uses_tick_context_under_poisoned_process_env(self) -> None:
         self.write_consensus_artifact()
         self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
