@@ -71,6 +71,36 @@ MARKER_ONLY_PROMPTS_RENDERED_UNDER_DEFAULT_EN = (
     "verify.md",
 )
 
+LANGUAGE_AGNOSTIC_CONTRACT_PROMPTS = (
+    "implement.md",
+    "remote-ci-fix.md",
+    "review-fix.md",
+    "reviewer-architect.md",
+    "reviewer-tests.md",
+    "solver-delete.md",
+    "solver-structural.md",
+)
+
+FORBIDDEN_HOST_FRAMEWORK_PROMPT_LITERALS = (
+    "--type cs",
+    "[Skip]",
+    'Trait("Category","Manual")',
+    "Assert.True",
+    ".Should().Be",
+    ".Should().NotBeNull",
+    "source.Should().NotContain",
+    "AddX_WhenY_ShouldZ",
+    "test_polling_allowlist",
+    "cluster-016",
+    "cluster-018",
+    "IAsyncEnumerable",
+    "Channel",
+    "actor inbox",
+    "*WriteActor",
+    "*ReadActor",
+    "*Store",
+)
+
 
 def has_han(text: str) -> bool:
     return any(HAN_START <= char <= HAN_END for char in text)
@@ -146,6 +176,18 @@ class PromptLanguageContractTests(unittest.TestCase):
                         self.assertEqual([], active_prompt_findings(rendered))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_language_agnostic_prompts_do_not_reintroduce_host_framework_literals(self) -> None:
+        for name in LANGUAGE_AGNOSTIC_CONTRACT_PROMPTS:
+            body = (PROMPTS_DIR / name).read_text(encoding="utf-8")
+            findings = [
+                literal
+                for literal in FORBIDDEN_HOST_FRAMEWORK_PROMPT_LITERALS
+                if literal in body
+            ]
+
+            with self.subTest(prompt=name):
+                self.assertEqual([], findings)
 
 
 if __name__ == "__main__":

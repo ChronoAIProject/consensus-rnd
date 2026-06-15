@@ -23,12 +23,12 @@ Before approving, commenting, or rejecting, run a lightweight reference-frame pa
 
 ## Your checklist (tests angle only)
 
-- [ ] **Behavior tests, not bump-line-count**: each test method must assert a business outcome (not `Assert.True(true)`, not "method returned without throwing"). Bump-only tests → comment or reject depending on density.
-- [ ] **No `sleep/delay` / `sleep/delay` test pacing** outside the allowlist. Adding entries to `test_polling_allowlist.txt` must have a documented reason.
-- [ ] **No `[Skip]` / `[Trait("Category","Manual")]`** added as a way to make CI green. Removing existing skips is allowed.
-- [ ] **No loosening assertions** of existing tests (turning `.Should().Be(X)` into `.Should().NotBeNull()`, etc.).
-- [ ] **Test names describe the behavior** (`AddX_WhenY_ShouldZ`), not the method (`TestAdd1`).
-- [ ] **Source-regression assertions** present when the cluster introduces a "no-regression" rule (e.g. cluster-016 dispatch guard, cluster-018 port guard). Look for `source.Should().NotContain(<forbidden token>)` in matching tests.
+- [ ] **Behavior tests, not bump-line-count**: each test method must assert a business outcome (not a no-op/tautological assertion, not a check that only proves the code ran without a meaningful assertion). Bump-only tests → comment or reject depending on density.
+- [ ] **No time-based test pacing**: no fixed-duration wait/delay-based assertion pacing outside the host-configured polling/stability allowlist. Adding polling/stability exceptions via `$CI_GUARDS` / `$PROJECT_RULES` must have a documented reason.
+- [ ] **No host-framework skip/disable/manual-test markers or metadata** added as a way to make CI green. Removing existing skips is allowed.
+- [ ] **No loosening assertions** of existing tests (turning exact value/behavior assertions into existence-only, non-null, or smoke assertions, etc.).
+- [ ] **Test names describe the behavior** per `${HOST_TEST_NAMING_RULE}` when set, otherwise the existing same-directory convention; names describe behavior/scenario/outcome, not merely the invoked method.
+- [ ] **Source-regression assertions** present when the work unit introduces a "no-regression" rule (for example a host forbidden-token or guardrail rule). Look for a host-framework assertion that the forbidden token/pattern is absent, using `${HOST_ARCHITECTURE_GREP_CHECKS}` / `$PROJECT_RULES` / diff evidence.
 - [ ] **Coverage on net-new production lines**: each new public method, new branch, new event type has at least one test. Schema/data-container exemptions require `${HOST_PROTO_POLICY}`, `$PROJECT_RULES`, or clear diff evidence.
 - [ ] **No mock-everything pseudo-coverage**: a test that only verifies "mock was called with X args" without exercising real logic is comment-worthy.
 
@@ -65,7 +65,7 @@ Verdict semantics:
 
 - **approve**: test coverage and quality are adequate for the diff.
 - **comment**: missing nice-to-have tests, minor naming issues, or polling-allowlist addition lacks justification but is plausible.
-- **reject**: real coverage gap on net-new logic, or `[Skip]` added to bypass failure, or `sleep/delay` added without allowlist entry, or assertions weakened.
+- **reject**: real coverage gap on net-new logic, or a skip/disable/manual marker added to bypass failure, or fixed-duration wait pacing added without a host-approved allowlist entry, or assertions weakened.
 - In-scope must-fix-before-merge findings must be `reject`.
 - Out-of-scope, non-flippable, or advisory findings must be `comment`.
 
