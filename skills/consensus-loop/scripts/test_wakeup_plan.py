@@ -5222,7 +5222,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
         self.assertEqual(action["target_number"], 480)
         self.assertEqual(action["head_sha"], "a" * 40)
-        self.assertEqual(action["stale_review_roles"], ["architect"])
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
         self.assertNotIn("status_only", action)
 
     def test_reviewing_pr_with_fresh_pending_reviewer_log_does_not_redispatch(self) -> None:
@@ -5235,7 +5235,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan = self.run_plan(fixture="open_pr_480")
 
-        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests"])
 
     def test_reviewing_pr_with_terminal_failed_reviewer_log_redispatches_only_that_role(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve")):
@@ -5248,7 +5249,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan(fixture="open_pr_480")
 
         action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
-        self.assertEqual(action["stale_review_roles"], ["quality"])
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
         self.assertNotIn("status_only", action)
 
     def test_reviewing_pr_with_stale_pending_reviewer_log_redispatches_only_that_role(self) -> None:
@@ -5265,7 +5266,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan(fixture="open_pr_480")
 
         action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
-        self.assertEqual(action["stale_review_roles"], ["quality"])
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
         self.assertNotIn("status_only", action)
 
     def test_reviewing_pr_with_complete_same_head_round_suppresses_duplicate_redispatch(self) -> None:
@@ -5274,24 +5275,47 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan = self.run_plan(fixture="open_pr_480")
 
-        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
 
-    def test_complete_lower_review_round_suppresses_higher_inflight_redispatch_for_same_head(self) -> None:
+    def test_github_complete_lower_review_round_suppresses_higher_inflight_redispatch_for_same_head(self) -> None:
+        live = "a" * 40
         for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
             self.write_review_evidence(role=role, verdict=verdict, round_number=4)
         for role in ("architect", "tests"):
             (self.logs / f"review-pr480-{role}-r5.log").write_text(
-                f"head_sha: {'a' * 40}\nREVIEW_DONE:480:{role}:approve\n",
+                f"head_sha: {live}\nREVIEW_DONE:480:{role}:approve\n",
                 encoding="utf-8",
             )
+        comments = [
+            [
+                {
+                    "id": 200 + index,
+                    "created_at": f"2026-06-12T00:0{index}:00Z",
+                    "body": (
+                        f"review_round: 4\nhead_sha: {live}\n"
+                        f"REVIEW_DONE:480:{role}:{verdict}\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                }
+                for index, (role, verdict) in enumerate(
+                    (("architect", "approve"), ("tests", "approve"), ("quality", "comment")),
+                    start=1,
+                )
+            ]
+        ]
+        (self.repo / "gh-api-repos-owner-repo-issues-480-comments?per_page=100-comments.json").write_text(
+            json.dumps(comments),
+            encoding="utf-8",
+        )
 
         plan = self.run_plan(fixture="open_pr_480")
 
         gate = next(item for item in plan["actions"] if item.get("controller_action") == "review_gate")
-        self.assertEqual(gate["head_sha"], "a" * 40)
+        self.assertEqual(gate["head_sha"], live)
         self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
 
-    def test_review_gate_completion_uses_latest_live_head_per_role_across_independent_rounds(self) -> None:
+    def test_review_gate_completion_ignores_local_artifacts_across_independent_rounds(self) -> None:
         live = "a" * 40
         self.write_review_evidence(role="tests", verdict="reject", round_number=14, head_sha=live)
         self.write_review_evidence(role="quality", verdict="comment", round_number=14, head_sha=live)
@@ -5299,14 +5323,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.write_review_evidence(role="architect", verdict="approve", round_number=16, head_sha=live)
 
         completion = highest_complete_required_review_round(self.repo, 480, live)
-        self.assertIsNotNone(completion)
-        self.assertEqual(completion.round_number, 16)
+        self.assertIsNone(completion)
 
         plan = self.run_plan(fixture="open_pr_480")
 
-        gate = next(item for item in plan["actions"] if item.get("controller_action") == "review_gate")
-        self.assertEqual(gate["head_sha"], live)
-        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
 
     def test_review_gate_completion_uses_recency_resolved_github_comments_with_empty_rounds(self) -> None:
         live = "a" * 40
@@ -5410,7 +5432,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIsNone(highest_complete_required_review_round(self.repo, 480, live))
         plan = self.run_plan(fixture="open_pr_480")
         action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
-        self.assertEqual(action["stale_review_roles"], ["quality"])
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
 
         self.actions_cleanup_for_review_pr(480)
         self.write_review_evidence(role="architect", verdict="approve", round_number=4, head_sha=live)
@@ -5422,7 +5444,58 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertIsNone(highest_complete_required_review_round(self.repo, 480, live))
         plan = self.run_plan(fixture="open_pr_480")
-        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests"])
+
+    def test_review_gate_completion_requires_github_comments_even_when_local_artifacts_are_complete(self) -> None:
+        live = "a" * 40
+        for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
+            self.write_review_evidence(role=role, verdict=verdict, round_number=7, head_sha=live)
+
+        self.assertIsNone(highest_complete_required_review_round(self.repo, 480, live))
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
+
+    def test_partial_github_review_evidence_redispatches_only_missing_roles_despite_local_artifacts(self) -> None:
+        live = "a" * 40
+        for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
+            self.write_review_evidence(role=role, verdict=verdict, round_number=7, head_sha=live)
+        comments = [
+            [
+                {
+                    "id": 301,
+                    "created_at": "2026-06-12T00:01:00Z",
+                    "body": (
+                        f"review_round: 7\nhead_sha: {live}\n"
+                        "REVIEW_DONE:480:architect:approve\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+                {
+                    "id": 302,
+                    "created_at": "2026-06-12T00:02:00Z",
+                    "body": (
+                        f"review_round: 7\nhead_sha: {live}\n"
+                        "REVIEW_DONE:480:tests:approve\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+            ]
+        ]
+        (self.repo / "gh-api-repos-owner-repo-issues-480-comments?per_page=100-comments.json").write_text(
+            json.dumps(comments),
+            encoding="utf-8",
+        )
+
+        self.assertIsNone(highest_complete_required_review_round(self.repo, 480, live))
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["stale_review_roles"], ["quality"])
 
     def test_review_redispatch_targets_only_missing_role_for_candidate_round(self) -> None:
         self.write_review_evidence(role="architect", verdict="approve", round_number=3)
@@ -5436,7 +5509,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
         self.assertEqual(action["head_sha"], "a" * 40)
-        self.assertEqual(action["stale_review_roles"], ["quality"])
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
 
     def test_review_redispatch_next_round_intent_projects_despite_stale_exit_zero_r1_log(self) -> None:
         stale = "b" * 40
@@ -5479,7 +5552,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(spawn["log"], str((self.logs / "review-pr480-architect-r2.log").resolve()))
         self.assertNotEqual(spawn["log"], str((self.logs / "review-pr480-architect-r1.log").resolve()))
 
-    def test_reviewing_pr_with_prompt_bound_valid_heads_does_not_redispatch_reviewers(self) -> None:
+    def test_reviewing_pr_with_prompt_bound_valid_heads_redispatches_until_github_completion_visible(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
             (self.repo / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
             (self.repo / ".refactor-loop" / "prompts").mkdir(parents=True, exist_ok=True)
@@ -5498,7 +5571,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan = self.run_plan(fixture="open_pr_480")
 
-        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
 
     def test_review_done_completed_marker_projects_prompt_bound_reviewed_head(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
@@ -5523,7 +5597,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target_kind"], "PR")
         self.assertEqual(action["target_number"], 480)
         self.assertEqual(action["head_sha"], "a" * 40)
-        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+        redispatch = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(redispatch["stale_review_roles"], ["architect", "tests", "quality"])
 
     def test_fix_done_without_review_thread_artifact_ignores_unrelated_unresolved_threads(self) -> None:
         self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
@@ -6990,7 +7065,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("review-evidence-redispatch", projection.set_members["EXECUTABLE_ACTION_KINDS"])
         self.assertIn('"action_id": f"review-evidence-redispatch:{item.number}:{item.head_sha}"', redispatch_source)
         self.assertIn('"head_sha": item.head_sha', redispatch_source)
-        self.assertIn("highest_complete_required_review_round", redispatch_source)
+        self.assertIn("github_review_completion_roles", redispatch_source)
 
     def test_wakeup_plan_source_locks_stale_unexecutable_status_only_suppression(self) -> None:
         projection = wakeup_plan_projection()
