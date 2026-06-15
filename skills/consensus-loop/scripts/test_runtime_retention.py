@@ -385,26 +385,18 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         self.assertEqual("event-500", lines[0])
         self.assertEqual("event-2499", lines[-1])
 
-    def test_concurrency_alert_compaction_preserves_same_inode_tail(self) -> None:
-        pending = self.refactor_loop / ".controller-pending-events.log"
+    def test_concurrency_alert_log_is_not_retention_compaction_surface(self) -> None:
         alert = self.refactor_loop / ".concurrency-alert.log"
-        pending.write_text("".join(f"event-{index}\n" for index in range(2500)), encoding="utf-8")
         alert.write_text("".join(f"alert-{index}\n" for index in range(2500)), encoding="utf-8")
-        pending_inode_before = pending.stat().st_ino
         alert_inode_before = alert.stat().st_ino
 
         result = retain_runtime(self.repo, enabled=True)
 
-        self.assertTrue(result.compacted_events)
-        self.assertEqual(pending_inode_before, pending.stat().st_ino)
+        self.assertFalse(result.compacted_events)
         self.assertEqual(alert_inode_before, alert.stat().st_ino)
-        pending_lines = pending.read_text(encoding="utf-8").splitlines()
         alert_lines = alert.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(2000, len(pending_lines))
-        self.assertEqual(2000, len(alert_lines))
-        self.assertEqual("event-500", pending_lines[0])
-        self.assertEqual("event-2499", pending_lines[-1])
-        self.assertEqual("alert-500", alert_lines[0])
+        self.assertEqual(2500, len(alert_lines))
+        self.assertEqual("alert-0", alert_lines[0])
         self.assertEqual("alert-2499", alert_lines[-1])
 
     def test_stale_worktree_requires_planner_proof_and_git_recheck(self) -> None:

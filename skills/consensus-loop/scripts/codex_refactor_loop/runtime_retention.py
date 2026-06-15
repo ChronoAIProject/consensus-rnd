@@ -26,11 +26,6 @@ RETENTION_TTL_HOURS = 24
 PENDING_EVENTS_MAX_LINES = 2000
 RETENTION_PLAN_PATH = Path(".refactor-loop") / "state" / "runtime-retention-plan.json"
 SPAWN_TASK_LOCKS_PATH = Path(".refactor-loop") / "locks" / "spawn-tasks"
-RETENTION_COMPACT_LOG_PATHS = (
-    ".controller-pending-events.log",
-    ".concurrency-alert.log",
-)
-
 
 @dataclass(frozen=True)
 class RuntimeRetentionResult:
@@ -100,10 +95,7 @@ def retain_runtime(
 
 
 def _compact_runtime_logs(refactor_loop: Path) -> bool:
-    compacted = False
-    for name in RETENTION_COMPACT_LOG_PATHS:
-        compacted = _compact_runtime_log(refactor_loop / name) or compacted
-    return compacted
+    return _compact_runtime_log(refactor_loop / ".controller-pending-events.log")
 
 
 def _compact_runtime_log(path: Path) -> bool:
