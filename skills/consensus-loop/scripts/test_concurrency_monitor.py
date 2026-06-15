@@ -1511,6 +1511,34 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(captured.getvalue().strip(), "2")
 
+    def test_process_reader_fail_open_for_timeout_oserror_permissionerror_and_nonzero(self) -> None:
+        cases = (
+            ("timeout", subprocess.TimeoutExpired(["ps"], timeout=1)),
+            ("oserror", OSError("ps unavailable")),
+            ("permission", PermissionError("ps denied")),
+            ("nonzero", mock.Mock(stdout="consensus-rnd-cli spawn-codex --cd . --log x\n", stderr="denied", returncode=1)),
+        )
+        for name, result in cases:
+            with self.subTest(name=name):
+                if isinstance(result, BaseException):
+                    runner = mock.Mock(side_effect=result)
+                else:
+                    runner = mock.Mock(return_value=result)
+                with mock.patch.object(self.monitor, "run", runner):
+                    self.assertEqual(self.monitor.list_in_flight_codex_lines(), [])
+                    self.assertEqual(self.monitor.count_in_flight_codex(), 0)
+
+    def test_long_unrelated_command_line_does_not_false_positive_as_spawn_codex(self) -> None:
+        noise = "x" * 20000
+        fake_ps = (
+            f"python3 unrelated.py --payload {noise} consensus-rnd-cli spawn-codex --prompt /tmp/no-cd.md\n"
+            f"python3 unrelated.py --payload {noise} --cd {self.repo} --log /tmp/no-spawn.log\n"
+        )
+
+        with mock.patch.object(self.monitor, "run", return_value=mock.Mock(stdout=fake_ps, stderr="", returncode=0)):
+            self.assertEqual(self.monitor.list_in_flight_codex_lines(), [])
+            self.assertEqual(self.monitor.count_in_flight_codex(), 0)
+
     def test_list_codex_cli_prints_one_supervisor_per_line(self) -> None:
         import io
         fake_ps = (

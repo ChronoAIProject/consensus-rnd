@@ -1077,8 +1077,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn(".controller-pending-events.log", self.skill)
         self.assertIn("no lifecycle authority", self.skill)
         self.assertIn("DesignConsensusIssueIntake", self.skill)
-        self.assertIn("queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`", self.skill)
-        self.assertIn("existing evidence/log/in-flight for one solver role suppresses only that role", self.skill)
+        self.assertIn("queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and validated pending target intent are absent as that role's r1 `HARNESS_SPAWN_INTENT`", self.skill)
+        self.assertIn("existing evidence/log/pending intent for one solver role suppresses only that role", self.skill)
         self.assertNotIn("with no r1 solver evidence", self.skill)
         self.assertIn("`ManagedWorkSnapshot` 发现 open managed `crnd:phase:design-solving` issue", self.skill)
         self.assertIn("`.refactor-loop/state/managed-work-snapshot.json`", self.skill)
@@ -1548,8 +1548,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces",
             "must not alter this allowlist or block the built-in router routes",
             "DesignConsensusIssueIntake",
-            "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
-            "existing evidence/log/in-flight for one solver role suppresses only that role",
+            "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and validated pending target intent are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
+            "existing evidence/log/pending intent for one solver role suppresses only that role",
             "SOLVER_DONE:<minimal|structural|delete>:*",
             "before queueing r(S+1) minimal/structural/delete solver intents",
             "router-owned stalled predicate",
@@ -1593,7 +1593,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("META_JUDGE_LOG_RE", router)
         self.assertIn("SOLVER_DONE:<role>:", combined)
         self.assertNotIn("SOLVER_DONE:<issue>:<round>:", combined)
-        self.assertIn("consensus-rnd-cli", helper)
+        self.assertIn("Stable controller-facing CLI for consensus-loop", helper)
 
     def test_phase9_converge_adjacent_round_helper_source_regression(self) -> None:
         # Refactor (iter6/issue-244): Old pattern: router/docs treated
@@ -1665,9 +1665,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "phase9-triplet-suppression:",
             "phase9-triplet-target-log-exists",
             "phase9-triplet-equivalent-log-exists",
-            "phase9-triplet-in-flight",
+            "phase9-triplet-pending-intent",
             "A solver-triplet-to-judge duplicate with `key` already in the ledger is silent",
-            "when the triplet is not ledgered but target log / equivalent legacy judge log / in-flight target suppresses dispatch",
+            "when the triplet is not ledgered but target log / equivalent legacy judge log / validated pending target intent suppresses dispatch",
+            "The router does not read the process table or spawn-task locks as dispatch predicates",
+            "TaskSpawnClaimStore.acquire(...)",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, combined)

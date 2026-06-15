@@ -86,6 +86,67 @@ class WorkerMarkerReaderTests(unittest.TestCase):
                 "duplicate_or_conflicting_log_marker",
             )
 
+    def test_solver_log_ignores_diff_added_replay_and_uses_same_stem_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            log = logs / "phase9-issue952-r2-minimal.log"
+            log.write_text(
+                "+SOLVER_DONE:minimal:propose:diff-echo\n"
+                "+ `SOLVER_DONE:minimal:reject:quoted-diff-echo`\n"
+                "worker prose embeds SOLVER_DONE:minimal:embedded:ignored\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            (runs / "phase9-issue952-r2-minimal.md").write_text(
+                "SOLVER_DONE:minimal:propose:artifact\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertTrue(marker.found)
+            self.assertEqual(marker.marker, "SOLVER_DONE:minimal:propose:artifact")
+            self.assertEqual(marker.source, "artifact")
+            self.assertEqual(marker.reason, "")
+
+    def test_solver_log_raw_wrong_role_marker_blocks_artifact_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            log = logs / "phase9-issue952-r2-minimal.log"
+            log.write_text(
+                "SOLVER_DONE:structural:propose:wrong-role\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            (runs / "phase9-issue952-r2-minimal.md").write_text(
+                "SOLVER_DONE:minimal:propose:artifact\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertFalse(marker.found)
+            self.assertEqual(marker.reason, "duplicate_or_conflicting_log_marker")
+
+    def test_solver_log_raw_malformed_marker_blocks_artifact_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            log = logs / "phase9-issue952-r2-minimal.log"
+            log.write_text(
+                "SOLVER_DONE:<role>:<verdict>:<summary>\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            (runs / "phase9-issue952-r2-minimal.md").write_text(
+                "SOLVER_DONE:minimal:propose:artifact\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertFalse(marker.found)
+            self.assertEqual(marker.reason, "malformed_log_marker")
+
     def test_reads_same_stem_artifact_when_log_markerless(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, runs = self.repo(tmp)
@@ -269,7 +330,10 @@ class WorkerMarkerReaderTests(unittest.TestCase):
             self.assertTrue(reflector_marker.found)
             self.assertEqual(reflector_marker.marker, "META_RESOLVED:drop:no-actionable-framing-after-3-rounds")
             self.assertEqual(reflector_marker.reason, "")
-            self.assertEqual(read_worker_terminal_marker(solver).reason, "duplicate_or_conflicting_log_marker")
+            solver_marker = read_worker_terminal_marker(solver)
+            self.assertTrue(solver_marker.found)
+            self.assertEqual(solver_marker.marker, "SOLVER_DONE:delete:abstain:no-current-deletion")
+            self.assertEqual(solver_marker.source, "log")
 
     def test_phase9_reflector_final_meta_resolved_tolerates_duplicate_identical_final_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

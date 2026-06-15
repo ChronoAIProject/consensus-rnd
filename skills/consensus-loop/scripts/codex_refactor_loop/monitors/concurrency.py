@@ -45,6 +45,8 @@ PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
 HEARTBEAT_STALE_SECONDS = 90
 DAEMON_SELF_DRIVE_HEARTBEATS = ("phase9_router_daemon", "wakeup_runner_daemon")
 TERMINAL_HARNESS_SPAWN_INTENT_BLOCKED_REASONS = ("target_not_open:CLOSED", "target_not_open:MERGED")
+PROCESS_SNAPSHOT_TIMEOUT_SECONDS = 2
+PROCESS_SNAPSHOT_MAX_LINE_CHARS = 4096
 PRIORITIES = ("p0", "p1", "p2")
 MUTABLE_DISPATCH_PREFIXES = ("implement-", "fix-pr", "remote-ci-fix", "test-add-", "verify-")
 MAIN_READONLY_DISPATCH_PREFIXES = ("audit-", "phase9-issue", "solver-", "meta-judge-", "review-pr", "reviewer-pr")
@@ -112,7 +114,8 @@ def log_tick_status(action: str) -> None:
 
 
 def _run(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(list(cmd), capture_output=True, text=True, check=False)
+    timeout = PROCESS_SNAPSHOT_TIMEOUT_SECONDS if list(cmd) == ["ps", "-eo", "command="] else None
+    return subprocess.run(list(cmd), capture_output=True, text=True, check=False, timeout=timeout)
 
 
 def _queue_state_empty(repo_root: Path, monitor: Any | None, queue_state: Any | None) -> bool:
@@ -352,12 +355,15 @@ class ConcurrencyMonitor:
 
     def list_in_flight_codex_lines(self) -> list[str]:
         lines: list[str] = []
-        try:
-            process_snapshot = self.run(["ps", "-eo", "command="])
-        except PermissionError as exc:
-            print(f"concurrency-monitor ps unavailable: {exc}", file=sys.stderr)
+        process_snapshot = self._read_process_snapshot()
+        if process_snapshot is None:
+            return []
+        if process_snapshot.returncode != 0:
+            print(f"concurrency-monitor ps unavailable: returncode={process_snapshot.returncode}", file=sys.stderr)
             return []
         for line in process_snapshot.stdout.splitlines():
+            if len(line) > PROCESS_SNAPSHOT_MAX_LINE_CHARS:
+                continue
             if "consensus-rnd-cli" not in line or "spawn-codex" not in line:
                 continue
             if " -c " in line:
@@ -387,6 +393,13 @@ class ConcurrencyMonitor:
                 continue
             lines.append(line)
         return lines
+
+    def _read_process_snapshot(self) -> subprocess.CompletedProcess[str] | None:
+        try:
+            return self.run(["ps", "-eo", "command="])
+        except (OSError, PermissionError, subprocess.TimeoutExpired) as exc:
+            print(f"concurrency-monitor ps unavailable: {exc}", file=sys.stderr)
+            return None
 
     def count_in_flight_codex(self) -> int:
         return len(self.list_in_flight_codex_lines())
