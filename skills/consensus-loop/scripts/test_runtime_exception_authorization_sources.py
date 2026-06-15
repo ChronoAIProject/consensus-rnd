@@ -411,6 +411,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "compatibility input only",
             "without delete authority",
             "same-inode compact",
+            ".concurrency-alert.log",
             ".refactor-loop/state/runtime-retention-plan.json",
             "no_in_flight",
             "no_open_issue_or_pr",
@@ -454,6 +455,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "#437 是唯一 skill-private runtime-retention local-GC carveout",
             "checked-in `RuntimeRetention` helper",
             "same-inode compact",
+            ".concurrency-alert.log",
             "`git worktree remove <path>` 与 `git worktree prune`",
             "禁止 `git fetch`",
         ):

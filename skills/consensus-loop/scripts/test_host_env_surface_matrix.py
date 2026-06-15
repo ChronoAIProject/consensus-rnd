@@ -193,7 +193,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             "UPDATE_CHECK_ENABLE": ("false", "disabled update-check state"),
             "UPDATE_CHECK_INTERVAL_SECONDS": ("21600", "fresh local update-check state"),
             "UPDATE_CHECK_TIMEOUT_SECONDS": ("5", "failures write unknown state"),
-            "RUNTIME_RETENTION_ENABLE": ("false", "same-inode pending-events compaction"),
+            "RUNTIME_RETENTION_ENABLE": ("false", "same-inode compaction for pending-events and concurrency-alert logs"),
             "AUDIT_FALLBACK_ENABLE": ("false", "disable audit fallback spawn actions"),
             "DEFAULT_ISSUE_INTAKE_ENABLE": ("true", "disable the #623 claim projection"),
             "DEFAULT_ISSUE_INTAKE_ACTIVE_DESIGN_CAP": ("3", "live managed design-solving issue count is below this cap"),
