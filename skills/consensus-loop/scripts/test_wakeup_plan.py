@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
@@ -4907,6 +4908,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("Path.cwd().resolve()", wakeup_source)
         self.assertIn("LoopContext.load(repo_root=arg_root", wakeup_source)
 
+    def test_pending_implement_intent_helper_has_no_hard_coded_context_load(self) -> None:
+        wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        tree = ast.parse(wakeup_source)
+        helper = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_pending_implement_intent_exists"
+        )
+        helper_literals = {
+            node.value
+            for node in ast.walk(helper)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        }
+
+        self.assertNotIn(".config/consensus-rnd/host.env", helper_literals)
+        self.assertNotIn("CONSENSUS_RND_HOST_ENV", helper_literals)
+        self.assertIn("LoopContext.load(repo_root=arg_root", wakeup_source)
+
     def test_wakeup_plan_bootstrap_uses_explicit_host_env_locator_not_legacy_path(self) -> None:
         (self.repo / ".refactor-loop" / "host.env").unlink(missing_ok=True)
         host_env = self.repo / ".config" / "consensus-rnd" / "host.env"
@@ -6417,10 +6435,90 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             route="dispatch-consensus-implementation",
             log=".refactor-loop/logs/implement-issue-20.log",
         )
+        ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.repo, read_only=True)
+
+        reason = consensus_implementation_suppressed_reason(action, self.repo, monitor=None, ctx=ctx)
+
+        self.assertEqual("pending_implement_intent", reason)
+
+    def test_consensus_implementation_readiness_fails_closed_without_context_for_pending_intent(self) -> None:
+        action = {
+            "target_kind": "issue",
+            "target_number": 20,
+            "iteration": "20",
+            "cluster_id": "issue-20",
+        }
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:20",
+            task_id="implement-issue-20",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-20.log",
+        )
 
         reason = consensus_implementation_suppressed_reason(action, self.repo, monitor=None)
 
-        self.assertEqual("pending_implement_intent", reason)
+        self.assertEqual("readiness_context_unavailable", reason)
+
+    def test_consensus_implementation_readiness_uses_tick_context_under_poisoned_process_env(self) -> None:
+        self.write_consensus_artifact()
+        self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
+        self.write_completed_log("review-pr331-architect-r1.log", "REVIEW_DONE:331:architect:approve")
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        (self.repo / ".refactor-loop" / "prompts" / "implement-issue-20.md").parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / ".refactor-loop" / "prompts" / "implement-issue-20.md").write_text("implement\n", encoding="utf-8")
+        tick_host_env = self.repo / ".config" / "consensus-rnd" / "tick-host.env"
+        tick_host_env.write_text(
+            f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\nINTEGRATION_BRANCH=auto-refact-dev\n",
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(
+            repo_root=self.repo,
+            env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/tick-host.env"},
+            cwd=self.repo,
+            read_only=True,
+        )
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:20",
+            task_id="implement-issue-20",
+            source="wakeup-plan",
+            route="dispatch-consensus-implementation",
+            prompt=".refactor-loop/prompts/implement-issue-20.md",
+            log=".refactor-loop/logs/implement-issue-20.log",
+        )
+        (self.repo / ".config" / "consensus-rnd" / "host.env").unlink()
+        gh_items = [
+            GhItem(kind="issue", number=20, title="open target", labels=(label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO)),
+            GhItem(kind="PR", number=331, title="unrelated review", labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING, label_catalog.HUMAN_AUTO)),
+        ]
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "REPO_ROOT": str(self.repo),
+                "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+            },
+        ):
+            actions = completed_marker_actions(
+                self.repo,
+                ctx=ctx,
+                open_targets={("issue", 20), ("PR", 331)},
+                gh_items=gh_items,
+                monitor=None,
+            )
+
+        implementation = next(
+            action for action in actions
+            if action.get("controller_action") == "dispatch_consensus_implementation"
+        )
+        self.assertTrue(implementation["status_only"])
+        self.assertEqual("pending_implement_intent", implementation["suppressed_reason"])
+        self.assertFalse(implementation["consensus_implementation_ready"])
+        unrelated = [
+            action for action in actions
+            if action.get("controller_action") == "review_gate" and action.get("target_number") == 331
+        ]
+        self.assertTrue(unrelated)
 
     def test_consensus_implementation_readiness_non_ok_marker_waits_on_pending_intent(self) -> None:
         action = {
@@ -6439,8 +6537,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         (self.logs / "implement-issue-537.log").write_text(
             "IMPLEMENT_DONE:issue-537:blocked\nEXIT=0\n", encoding="utf-8"
         )
+        ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.repo, read_only=True)
 
-        reason = consensus_implementation_suppressed_reason(action, self.repo, monitor=None)
+        reason = consensus_implementation_suppressed_reason(action, self.repo, monitor=None, ctx=ctx)
 
         self.assertEqual("pending_implement_intent", reason)
 
