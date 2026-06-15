@@ -1608,7 +1608,7 @@ class ControllerActions:
         if str(action.get("design_decision_path")) != str(action.get("consensus_artifact")):
             sys.stderr.write("dispatch_consensus_implementation: design_decision_path must match consensus_artifact\n")
             return 2
-        readiness_reason = consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root)
+        readiness_reason = consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root, ctx=self.ctx)
         if readiness_reason:
             sys.stderr.write(f"dispatch_consensus_implementation: target not ready: {readiness_reason}\n")
             return 2
