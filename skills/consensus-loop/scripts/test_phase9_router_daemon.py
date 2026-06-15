@@ -489,8 +489,6 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             self.tmp.cleanup()
             self.setUp()
             self.solver_triplet(issue=38, round_no=5)
-            target_log = self.router._log_path("38", 5, "judge")
-            ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {target_log} --stall 5400\n"
 
             with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=self.fake_subprocess_run_without_process_probe) as run:
                 self.router.tick()
@@ -708,7 +706,6 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         }
         self.router._log_path("417", 1, "minimal").write_text("already seeded\n", encoding="utf-8")
         self.write_ledger_key("417-1-structural")
-        delete_log = self.router._log_path("417", 1, "delete")
         pending = self.repo / ".refactor-loop/.controller-pending-events.log"
         pending.write_text(
             "2026-01-01T00:00:00Z HARNESS_SPAWN_INTENT "
