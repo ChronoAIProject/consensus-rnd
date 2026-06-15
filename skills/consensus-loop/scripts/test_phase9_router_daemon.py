@@ -282,6 +282,25 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn("phase9-issue505-r1-judge.log", intents)
         self.assertIn("505-1-judge", [entry["key"] for entry in self.ledger_entries()])
 
+    def test_phase9_router_ignores_solver_diff_replay_when_recovering_from_artifacts(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue952-r2-{role}.log",
+                f"+SOLVER_DONE:{role}:replay:diff",
+                f"+ `SOLVER_DONE:{role}:replay:quoted-diff`",
+                f"controller prose mentions SOLVER_DONE:{role}:replay:embedded",
+            )
+            self.write_run_artifact(
+                f"phase9-issue952-r2-{role}",
+                f"SOLVER_DONE:{role}:artifact:summary",
+            )
+
+        self.router.tick()
+
+        intents = " ".join(self.intent_text(command) for command in self.commands)
+        self.assertIn("phase9-issue952-r2-judge.log", intents)
+        self.assertIn("952-2-judge", [entry["key"] for entry in self.ledger_entries()])
+
     def test_phase9_router_companion_artifact_fallback_requires_clean_exit(self) -> None:
         log = self.write_log("phase9-issue506-r1-minimal.log", "markerless crash", exit_zero=False)
         self.write_run_artifact("phase9-issue506-r1-minimal", "SOLVER_DONE:minimal:artifact:summary")
@@ -485,15 +504,15 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(self.commands, [])
         self.assertEqual(self.ledger_entries(), [])
 
-    def test_phase9_router_accepts_standalone_marker_and_diff_added_marker_only(self) -> None:
+    def test_phase9_router_ignores_diff_added_solver_marker_without_artifact(self) -> None:
         self.write_log("phase9-issue38-r4-minimal.log", "+SOLVER_DONE:minimal:ok:x")
-        self.write_log("phase9-issue38-r4-structural.log", "SOLVER_DONE:structural:ok:x")
+        self.write_log("phase9-issue38-r4-structural.log", "+SOLVER_DONE:structural:ok:x")
         self.write_log("phase9-issue38-r4-delete.log", "+ SOLVER_DONE:delete:ok:x")
 
         self.router.tick()
 
-        self.assertEqual(len(self.commands), 1)
-        self.assertEqual(self.ledger_entries()[0]["key"], "38-4-judge")
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
 
     def test_phase9_router_accepts_standalone_solver_marker_followed_by_raw_prose(self) -> None:
         for role in ("minimal", "structural", "delete"):
