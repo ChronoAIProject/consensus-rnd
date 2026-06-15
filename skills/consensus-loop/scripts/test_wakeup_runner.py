@@ -335,6 +335,44 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         for role in ("architect", "tests", "quality"):
             self.add_review_comment(role, verdicts[role], pr_number=pr_number, head_sha=head_sha, round_number=round_number)
 
+    def default_issue_intake_claim_action(self, *, target_number: int = 77, active_design_cap: int = 3, title: str = "Fix stale default intake projection") -> dict:
+        return {
+            "kind": "default-issue-intake-claim",
+            "action_id": f"default-issue-intake-claim:issue:{target_number}",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "default_issue_intake_enabled",
+                "live_open_target",
+                "non_pr_issue",
+                "target_not_managed",
+                "github_comment_claim_protocol",
+                "default_issue_intake_admission_active_cap",
+                "default_issue_intake_admission_cooldown",
+                "default_issue_intake_admission_upstream_idle",
+                "default_issue_intake_admission_concrete_work_unit",
+            ],
+            "default_issue_intake_admission": {
+                "status": "accepted",
+                "proof": {
+                    "active_design_solving": 0,
+                    "active_design_cap": active_design_cap,
+                    "upstream_state": "upstream_idle",
+                    "claim_cooldown_remaining_seconds": 0,
+                    "concrete_work_unit": True,
+                },
+            },
+            "source_artifact": "github-open-default-issue-intake-candidates",
+            "source_marker": f"default-issue-intake-candidate:issue:{target_number}",
+            "target_kind": "issue",
+            "target_number": target_number,
+            "target": {"kind": "issue", "number": target_number},
+            "title": title,
+            "controller_action": "apply_default_issue_intake_claim",
+            "no_generic_command": True,
+            "no_lifecycle_authority": True,
+        }
+
     def test_run_command_injects_gh_repo_only_in_valid_subcommand_position(self) -> None:
         calls: list[list[str]] = []
 
@@ -498,6 +536,42 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual("blocked", result[0].status)
         self.assertEqual("default_issue_intake_admission_projection_missing", result[0].reason)
+        self.assertEqual([], actions.calls)
+
+    def test_apply_default_issue_intake_claim_revalidates_claim_cooldown_before_helper_dispatch(self) -> None:
+        action = self.default_issue_intake_claim_action()
+        (self.repo / ".refactor-loop/state/default-issue-intake-claims.json").write_text(
+            json.dumps({"last_claimed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}),
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        result = self.run_result(self.base_plan(action), gh_labels=[], actions=actions)
+
+        self.assertEqual("blocked", result[0].status)
+        self.assertEqual("default_issue_intake_admission:claim_cooldown_active", result[0].reason)
+        self.assertEqual([], actions.calls)
+
+    def test_apply_default_issue_intake_claim_revalidates_pending_spawn_intent_before_helper_dispatch(self) -> None:
+        action = self.default_issue_intake_claim_action()
+        pending_intent = {
+            "intent_id": "dispatch-consensus-implementation:77",
+            "task_id": "implement-issue-77",
+            "source": "wakeup-plan",
+            "route": "dispatch-consensus-implementation",
+            "queued_at": "2026-06-01T00:00:00Z",
+            "log": ".refactor-loop/logs/implement-issue-77.log",
+        }
+        self.ctx.paths.pending_events.write_text(
+            f"2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(pending_intent, sort_keys=True)}\n",
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        result = self.run_result(self.base_plan(action), gh_labels=[], actions=actions)
+
+        self.assertEqual("blocked", result[0].status)
+        self.assertEqual("default_issue_intake_admission:upstream_not_idle", result[0].reason)
         self.assertEqual([], actions.calls)
 
     def test_apply_action_skips_managed_write_on_cross_instance_stand_down(self) -> None:
