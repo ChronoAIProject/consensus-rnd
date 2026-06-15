@@ -2387,8 +2387,13 @@ def _github_comment_id(comment: Mapping[str, Any]) -> int | None:
     return None
 
 
-def _github_review_completion_evidences(repo_root: Path, pr_number: int) -> list[ReviewCompletionEvidence]:
-    slug = github_repo_slug()
+def _github_review_completion_evidences(
+    repo_root: Path,
+    pr_number: int,
+    *,
+    gh_repo_slug: str | None = None,
+) -> list[ReviewCompletionEvidence]:
+    slug = gh_repo_slug if gh_repo_slug is not None else github_repo_slug()
     if not slug:
         return []
     try:
@@ -2571,37 +2576,7 @@ def latest_valid_reviewer_rounds(repo_root: Path, pr_number: int) -> dict[str, t
 def highest_complete_required_review_round(repo_root: Path, pr_number: int, head_sha: str) -> ReviewRoundCompletion | None:
     if not head_sha:
         return None
-    evidences: list[ReviewCompletionEvidence] = []
-    evidences.extend(_github_review_completion_evidences(repo_root, pr_number))
-    artifact_keys: set[tuple[str, int]] = set()
-    runs_dir = repo_root / ".refactor-loop" / "runs"
-    logs_dir = repo_root / ".refactor-loop" / "logs"
-    prompts_dir = repo_root / ".refactor-loop" / "prompts"
-    for path in sorted(runs_dir.glob(f"review-pr{pr_number}-*-r*.md")):
-        match = REVIEW_ARTIFACT_RE.match(path.name)
-        if not match or int(match.group(1)) != pr_number:
-            continue
-        role = match.group(2)
-        round_number = int(match.group(3))
-        artifact_keys.add((role, round_number))
-        log_path = logs_dir / f"review-pr{pr_number}-{role}-r{round_number}.log"
-        if not _reviewer_log_has_exit_zero(log_path) or not _reviewer_log_has_valid_marker(log_path, pr_number, role):
-            continue
-        reviewed_head = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompts_dir / path.name) or _reviewed_head_sha_from_file(log_path)
-        evidences.append(ReviewCompletionEvidence(role=role, round_number=round_number, head_sha=reviewed_head, valid=bool(reviewed_head)))
-    for path in sorted(logs_dir.glob(f"review-pr{pr_number}-*-r*.log")):
-        match = REVIEW_LOG_RE.match(path.name)
-        if not match or int(match.group(1)) != pr_number:
-            continue
-        role = match.group(2)
-        round_number = int(match.group(3))
-        if (role, round_number) in artifact_keys:
-            continue
-        if not _reviewer_log_has_exit_zero(path) or not _reviewer_log_has_valid_marker(path, pr_number, role):
-            continue
-        prompt_path = prompts_dir / path.with_suffix(".md").name
-        reviewed_head = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompt_path)
-        evidences.append(ReviewCompletionEvidence(role=role, round_number=round_number, head_sha=reviewed_head, valid=bool(reviewed_head)))
+    evidences = _github_review_completion_evidences(repo_root, pr_number)
     selection = select_latest_live_head_review_evidence(
         evidences,
         live_head_sha=head_sha,
@@ -2673,6 +2648,24 @@ def valid_required_review_round_complete(repo_root: Path, pr_number: int, head_s
     return highest_complete_required_review_round(repo_root, pr_number, head_sha) is not None
 
 
+def github_review_completion_roles(
+    repo_root: Path,
+    pr_number: int,
+    head_sha: str,
+    *,
+    gh_repo_slug: str | None = None,
+) -> tuple[set[str], set[str], bool]:
+    evidences = _github_review_completion_evidences(repo_root, pr_number, gh_repo_slug=gh_repo_slug)
+    selection = select_latest_live_head_review_evidence(
+        evidences,
+        live_head_sha=head_sha,
+        required_roles=REQUIRED_REVIEW_ROLES,
+    )
+    complete_roles = set(selection.by_role)
+    github_roles = {evidence.role for evidence in evidences if evidence.role in REQUIRED_REVIEW_ROLES}
+    return complete_roles, github_roles, selection.complete_round is not None
+
+
 def pending_review_spawn_exists(
     repo_root: Path,
     pr_number: int,
@@ -2741,19 +2734,42 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem], 
             continue
         if not item.head_sha:
             continue
-        if highest_complete_required_review_round(repo_root, item.number, item.head_sha) is not None:
+        context_slug_value = getattr(ctx, "gh_repo_slug", None) if ctx is not None else None
+        context_slug = context_slug_value if isinstance(context_slug_value, str) and context_slug_value else None
+        if ctx is not None and not context_slug:
+            github_complete_roles: set[str] = set()
+            github_evidence_roles: set[str] = set()
+            github_round_complete = False
+        elif ctx is None:
+            github_complete_roles = set()
+            github_evidence_roles = set()
+            github_round_complete = False
+        else:
+            github_complete_roles, github_evidence_roles, github_round_complete = github_review_completion_roles(
+                repo_root,
+                item.number,
+                item.head_sha,
+                gh_repo_slug=context_slug,
+            )
+        if github_round_complete:
             continue
         heads = latest_reviewer_heads(repo_root, item.number)
         dead_roles = dead_reviewer_roles(repo_root, item.number)
         evidence_roles = reviewer_roles_with_evidence(repo_root, item.number)
         pending_roles = pending_or_fresh_review_evidence_roles(repo_root, item.number)
-        live_head_roles = {role for role, head in heads.items() if head == item.head_sha}
+        redispatch_candidate_roles = (evidence_roles | dead_roles | github_evidence_roles) - pending_roles
+        local_roles = evidence_roles | dead_roles
+        if github_evidence_roles:
+            redispatch_candidate_roles |= {
+                role
+                for role in local_roles
+                if heads.get(role, "") != item.head_sha or role in dead_roles
+            }
         stale_roles = [
             role
             for role in REQUIRED_REVIEW_ROLES
-            if heads.get(role, "") != item.head_sha
-            and role not in pending_roles
-            and (heads.get(role, "") or role in dead_roles or role in evidence_roles or live_head_roles)
+            if role not in github_complete_roles
+            and role in redispatch_candidate_roles
             and not pending_review_spawn_exists(repo_root, item.number, ctx, role=role, head_sha=item.head_sha)
         ]
         if not stale_roles:
