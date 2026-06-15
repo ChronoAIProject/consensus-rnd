@@ -196,6 +196,8 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             "RUNTIME_RETENTION_ENABLE": ("false", "same-inode compaction for pending-events and concurrency-alert logs"),
             "AUDIT_FALLBACK_ENABLE": ("false", "disable audit fallback spawn actions"),
             "DEFAULT_ISSUE_INTAKE_ENABLE": ("true", "disable the #623 claim projection"),
+            "DEFAULT_ISSUE_INTAKE_ACTIVE_DESIGN_CAP": ("3", "live managed design-solving issue count is below this cap"),
+            "DEFAULT_ISSUE_INTAKE_CLAIM_COOLDOWN_SECONDS": ("3600", "last-claim cooldown remains active"),
             "RELEASE_AUTO_MIN_INTERVAL_HOURS": ("24", "hours since last release decision"),
             "CODEX_FLOOR": ("5", "hard min `2`"),
             "ACTIVE_CONTROLLER_DEVICE_ID": ("", "single-device local-owner noop"),

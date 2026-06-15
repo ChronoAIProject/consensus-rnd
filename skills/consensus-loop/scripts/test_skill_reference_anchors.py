@@ -324,15 +324,26 @@ class SkillReferenceAnchorTests(unittest.TestCase):
 
         for required in (
             "DefaultIssueIntakeClaim",
+            "DefaultIssueIntakeAdmission",
             "DEFAULT_ISSUE_INTAKE_ENABLE",
             "apply_default_issue_intake_claim",
             "crnd:default-issue-intake-claim",
             "crnd:default-issue-intake-stop",
+            "test_default_issue_intake_admission.py",
             "test_default_issue_intake.py",
             "test_wakeup_runner.py",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, section)
+        for admission_fact in (
+            "active cap",
+            "cooldown",
+            "upstream-idle",
+            "concrete-work-unit",
+            "must recompute the same admission before any comment or label write",
+        ):
+            with self.subTest(admission_fact=admission_fact):
+                self.assertIn(admission_fact, section)
         self.assertIn("default-issue-intake-claim-623", read(REPO_ROOT / "skills/consensus-loop/authorizations/runtime-exceptions.md"))
 
     def test_issue_decomposition_discoverability_requires_plan_level_judge_fields(self) -> None:
