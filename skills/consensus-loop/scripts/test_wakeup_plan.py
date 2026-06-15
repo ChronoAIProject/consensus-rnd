@@ -5204,6 +5204,44 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(action["no_generic_command"])
         self.assertNotIn("status_only", action)
 
+    def test_reviewing_pr_with_zero_reviewer_evidence_projects_initial_reviewers(self) -> None:
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 480)
+        self.assertEqual(action["head_sha"], "a" * 40)
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
+        self.assertEqual(action["source_artifact"], "wakeup-plan")
+        self.assertEqual(action["source_marker"], "review-evidence-redispatch")
+        self.assertIn("missing_or_stale_reviewer_head_evidence", action["preconditions"])
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertNotIn("status_only", action)
+
+    def test_reviewing_pr_with_zero_evidence_and_same_head_pending_intents_does_not_redispatch(self) -> None:
+        for role in ("architect", "tests", "quality"):
+            self.append_harness_spawn_intent(
+                intent_id=f"dispatch-reviewers:480:{role}:r1",
+                source="dispatch-reviewers",
+                route="dispatch-reviewers",
+                task_id=f"review-pr480-{role}-r1",
+                cd=str(self.repo.resolve()),
+                prompt=f".refactor-loop/prompts/review-pr480-{role}-r1.md",
+                log=f".refactor-loop/logs/review-pr480-{role}-r1.log",
+                reason=f"review PR #480 as {role}",
+            )
+            (self.repo / ".refactor-loop" / "prompts").mkdir(parents=True, exist_ok=True)
+            (self.repo / ".refactor-loop" / "prompts" / f"review-pr480-{role}-r1.md").write_text(
+                f"head_sha: {'a' * 40}\n",
+                encoding="utf-8",
+            )
+
+        plan = self.run_plan(fixture="open_pr_480", ps_count=0)
+
+        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+
     def test_reviewing_pr_with_stale_reviewer_head_projects_dispatch_reviewers(self) -> None:
         stale = "b" * 40
         for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
@@ -5237,6 +5275,19 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
         self.assertEqual(action["stale_review_roles"], ["architect", "tests"])
+
+    def test_reviewing_pr_with_different_head_fresh_pending_reviewer_log_still_redispatches_role(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "approve")):
+            self.write_review_evidence(role=role, verdict=verdict)
+        (self.logs / "review-pr480-quality-r1.log").write_text(
+            f"head_sha: {'b' * 40}\nREVIEW_DONE:480:quality:comment\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
 
     def test_reviewing_pr_with_terminal_failed_reviewer_log_redispatches_only_that_role(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve")):
@@ -6190,7 +6241,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(1, len(actions))
         self.assertEqual("dispatch_reviewers", actions[0]["controller_action"])
-        self.assertEqual(["architect"], actions[0]["stale_review_roles"])
+        self.assertEqual(["architect", "tests", "quality"], actions[0]["stale_review_roles"])
 
     def test_legacy_malformed_review_intent_for_merged_pr_projects_invalid_quarantine_once(self) -> None:
         malformed_intent = self.valid_review_harness_spawn_intent(774, "quality", 6)
@@ -6265,7 +6316,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         actions = review_evidence_redispatch_actions(self.repo, [item], ctx)
 
-        self.assertEqual([], actions)
+        self.assertEqual(1, len(actions))
+        self.assertEqual(["tests", "quality"], actions[0]["stale_review_roles"])
 
     def test_live_valid_review_spawn_intent_suppresses_review_redispatch(self) -> None:
         item = GhItem(
@@ -6289,7 +6341,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         actions = review_evidence_redispatch_actions(self.repo, [item], ctx)
 
-        self.assertEqual([], actions)
+        self.assertEqual(1, len(actions))
+        self.assertEqual(["tests", "quality"], actions[0]["stale_review_roles"])
 
     def test_rollup_pr_projects_ci_only_auto_merge_action(self) -> None:
         item = GhItem(

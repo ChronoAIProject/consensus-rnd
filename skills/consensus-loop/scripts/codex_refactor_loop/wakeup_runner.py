@@ -428,6 +428,9 @@ class WakeupRunner:
             return self._record(RunnerResult(action_id, "skipped", "duplicate"), action)
         if action.get("kind") == "harness-spawn-intent-invalid":
             return self._apply_invalid_harness_spawn_intent(action, action_id)
+        same_tick_terminal_reason = self._same_tick_terminal_target_reason(action)
+        if same_tick_terminal_reason:
+            return self._record(RunnerResult(action_id, "skipped", same_tick_terminal_reason), action)
         error = self._validate_action(action)
         if error:
             if error == "issue_decomposition_duplicate_sentinel" or error in NON_BLOCKING_VALIDATION_REASONS:
@@ -438,9 +441,6 @@ class WakeupRunner:
             ):
                 return self._record(RunnerResult(action_id, "skipped", error), action)
             return self._blocked(action, error)
-        same_tick_terminal_reason = self._same_tick_terminal_target_reason(action)
-        if same_tick_terminal_reason:
-            return self._record(RunnerResult(action_id, "skipped", same_tick_terminal_reason), action)
         if self.dry_run:
             return self._record(RunnerResult(action_id, "dry-run"), action)
         stand_down_reason = self._cross_instance_stand_down_reason(action)
@@ -1251,7 +1251,52 @@ class WakeupRunner:
     def _validate_dispatch_reviewers(self, action: Mapping[str, Any]) -> str | None:
         if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
             return "dispatch_reviewers_target_missing"
+        if action.get("kind") == "review-evidence-redispatch":
+            return self._validate_review_evidence_redispatch(action)
         return None
+
+    def _validate_review_evidence_redispatch(self, action: Mapping[str, Any]) -> str | None:
+        target = action.get("target_number")
+        if not isinstance(target, int) or target <= 0:
+            return "dispatch_reviewers_target_missing"
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list) or "missing_or_stale_reviewer_head_evidence" not in preconditions:
+            return "dispatch_reviewers_missing_precondition:missing_or_stale_reviewer_head_evidence"
+        projected_head = str(action.get("head_sha") or "").strip()
+        if not projected_head:
+            return "dispatch_reviewers_head_sha_missing"
+        live_head = self._pr_head_sha(target)
+        if not live_head:
+            return "dispatch_reviewers_live_head_missing"
+        if live_head != projected_head:
+            return "dispatch_reviewers_live_head_mismatch"
+        roles = self._projected_stale_review_roles(action)
+        if not roles:
+            return "dispatch_reviewers_stale_roles_missing"
+        gate = self._review_gate(target)
+        heads = gate.get("heads_by_role")
+        if not isinstance(heads, Mapping):
+            return "dispatch_reviewers_review_evidence_unavailable"
+        missing_roles = [
+            role
+            for role in roles
+            if str(heads.get(role) or "") != projected_head
+            and not self._pending_review_spawn_intent_exists(target, role, projected_head)
+        ]
+        if not missing_roles:
+            return "dispatch_reviewers_reviewer_evidence_current"
+        return None
+
+    def _projected_stale_review_roles(self, action: Mapping[str, Any]) -> list[str]:
+        stale_roles = action.get("stale_review_roles")
+        if not isinstance(stale_roles, list):
+            return []
+        roles: list[str] = []
+        for role in stale_roles:
+            role_text = str(role)
+            if role_text in REQUIRED_REVIEW_ROLES and role_text not in roles:
+                roles.append(role_text)
+        return roles
 
     def _validate_publish_review_fix_output(self, action: Mapping[str, Any]) -> str | None:
         if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
