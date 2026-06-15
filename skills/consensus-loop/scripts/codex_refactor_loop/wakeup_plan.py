@@ -79,6 +79,8 @@ from codex_refactor_loop.workflow_stages import assert_stage_slug
 
 STALE_SECONDS = 90
 META_ESCALATION_DEFAULT_HOURS = 3.0
+NO_GAP_ALERT_TAIL_LINES = 20
+NO_GAP_ALERT_TAIL_BYTES = 128 * 1024
 PHASE_TO_STAGE = {
     label_catalog.PHASE_DESIGN_SOLVING: "design-consensus",
     label_catalog.PHASE_IMPLEMENTING: "implementation",
@@ -2924,33 +2926,52 @@ def maintainer_comment_actions(repo_root: Path, gh_items: list[GhItem]) -> list[
     return actions
 
 
-def no_gap_actions(repo_root: Path) -> list[dict[str, Any]]:
+def _tail_text_lines(path: Path, *, max_lines: int, max_bytes: int) -> list[str]:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            read_size = min(size, max_bytes)
+            handle.seek(size - read_size)
+            data = handle.read(read_size)
+    except OSError:
+        return []
+    lines = data.decode("utf-8", errors="ignore").splitlines()
+    if size > read_size and lines:
+        lines = lines[1:]
+    return lines[-max_lines:]
+
+
+def no_gap_actions(repo_root: Path, open_managed_targets: set[tuple[str, int]] | None = None) -> list[dict[str, Any]]:
     alert_path = repo_root / ".refactor-loop" / ".concurrency-alert.log"
     if not alert_path.exists():
         return []
-    try:
-        lines = alert_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
-        return []
+    lines = _tail_text_lines(alert_path, max_lines=NO_GAP_ALERT_TAIL_LINES, max_bytes=NO_GAP_ALERT_TAIL_BYTES)
     actions: list[dict[str, Any]] = []
-    for line in lines[-20:]:
+    for line in lines:
         if "no-gap-violation" not in line:
             continue
+        item = infer_item_from_text(line)
+        target_kind = _target_kind_from_item(item)
+        target_number = _target_number_from_item(item)
+        if open_managed_targets is not None and target_kind is not None and target_number is not None:
+            if (target_kind, target_number) not in open_managed_targets:
+                continue
         actions.append(
             {
                 "priority": 5,
                 "kind": "no-gap-violation",
                 "action_id": f"no-gap-violation:{line}",
-                "item": infer_item_from_text(line),
+                "item": item,
                 "phase": "work-intake",
                 "actor": "controller",
                 "route": "no-gap-repair",
                 "evidence": line,
                 "source_artifact": ".refactor-loop/.concurrency-alert.log",
                 "source_marker": line,
-                "target_kind": _target_kind_from_item(infer_item_from_text(line)),
-                "target_number": _target_number_from_item(infer_item_from_text(line)),
-                "target": _target_from_item(infer_item_from_text(line)),
+                "target_kind": target_kind,
+                "target_number": target_number,
+                "target": _target_from_item(item),
                 "preconditions": ["active_controller_owner", "source_artifact_contains_evidence"],
                 "status_only": True,
                 "no_lifecycle_authority": True,
@@ -5226,7 +5247,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(release_publish_actions(repo_root))
     actions.extend(release_gate_dispatch_actions(repo_root))
     actions.extend(ci_red_actions(repo_root, gh_items, ctx))
-    actions.extend(no_gap_actions(repo_root))
+    actions.extend(no_gap_actions(repo_root, completed_marker_open_targets))
     host_actions, host_spec_error = load_host_workflow_projection(repo_root)
     if host_spec_error:
         actions.append(
