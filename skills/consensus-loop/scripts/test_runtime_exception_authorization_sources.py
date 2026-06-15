@@ -1923,29 +1923,44 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for required in (
             "#623",
             "DefaultIssueIntakeClaim",
+            "DefaultIssueIntakeAdmission",
             "DEFAULT_ISSUE_INTAKE_ENABLE",
+            "DEFAULT_ISSUE_INTAKE_ACTIVE_DESIGN_CAP",
+            "DEFAULT_ISSUE_INTAKE_CLAIM_COOLDOWN_SECONDS",
             "apply_default_issue_intake_claim",
             "crnd:default-issue-intake-claim",
             "crnd:default-issue-intake-stop",
             "labels.design_issue_label_bundle()",
             "GitHub comment createdAt + author.login",
             "admission/accounting fact",
+            "active design-solving cap",
+            "claim cooldown",
+            "upstream idle",
+            "concrete-work-unit admission",
+            "daemon progress/pending spawn intent facts",
+            "before comments or labels",
+            "bypass of #191/#396",
             "no `UNMANAGED_ISSUE_INTAKE_ENABLE`",
+            "test_default_issue_intake_admission.py",
             "test_default_issue_intake.py",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, combined)
 
-        for source in (helper, wakeup_plan, wakeup_runner, controller):
+        admission_helper = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "default_issue_intake_admission.py")
+        for source in (helper, admission_helper, wakeup_plan, wakeup_runner, controller):
             with self.subTest(source="python"):
                 self.assertNotIn("UNMANAGED_ISSUE_INTAKE_ENABLE", source)
                 self.assertNotIn("UnmanagedIssueIntakeClaim", source)
                 self.assertNotIn("intake_unmanaged_issue_claim", source)
                 self.assertNotIn("crnd:unmanaged-issue-intake", source)
+        self.assertIn("class DefaultIssueIntakeAdmission", admission_helper)
         self.assertIn("class DefaultIssueIntakeClaim", helper)
         self.assertIn("CLAIM_MARKER", helper)
         self.assertIn("STOP_MARKER", helper)
         self.assertIn('"apply_default_issue_intake_claim"', wakeup_plan)
+        self.assertIn("DefaultIssueIntakeAdmission", wakeup_plan)
+        self.assertIn("DefaultIssueIntakeAdmission", wakeup_runner)
         self.assertIn('"apply_default_issue_intake_claim"', wakeup_runner)
         self.assertIn("def apply_default_issue_intake_claim", controller)
 

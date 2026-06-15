@@ -207,6 +207,79 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("target_not_managed", action["preconditions"])
         self.assertTrue(action["no_generic_command"])
 
+    def test_default_issue_intake_projection_requires_admission_proof(self) -> None:
+        ctx = mock.Mock(host_env={"DEFAULT_ISSUE_INTAKE_ENABLE": "true"})
+        actions = default_issue_intake_actions(
+            [
+                GhItem(
+                    kind="issue",
+                    number=88,
+                    title="Fix stale default intake projection",
+                    labels=(),
+                    updated_at="2026-06-07T00:00:00Z",
+                ),
+                GhItem(kind="issue", number=89, title="EPIC: runtime backlog", labels=(), updated_at="2026-06-07T00:00:00Z"),
+            ],
+            ctx,
+            managed_items=[],
+            pending_spawn_intents=[],
+            now_iso="2026-06-07T02:00:00Z",
+        )
+
+        self.assertEqual([88], [action["target_number"] for action in actions])
+        action = actions[0]
+        self.assertIn("default_issue_intake_admission_active_cap", action["preconditions"])
+        self.assertIn("default_issue_intake_admission_cooldown", action["preconditions"])
+        self.assertIn("default_issue_intake_admission_upstream_idle", action["preconditions"])
+        self.assertIn("default_issue_intake_admission_concrete_work_unit", action["preconditions"])
+        self.assertEqual("accepted", action["default_issue_intake_admission"]["status"])
+        self.assertEqual("upstream_idle", action["default_issue_intake_admission"]["proof"]["upstream_state"])
+
+    def test_default_issue_intake_projection_suppresses_when_active_design_cap_reached(self) -> None:
+        ctx = mock.Mock(
+            host_env={
+                "DEFAULT_ISSUE_INTAKE_ENABLE": "true",
+                "DEFAULT_ISSUE_INTAKE_ACTIVE_DESIGN_CAP": "1",
+            }
+        )
+        actions = default_issue_intake_actions(
+            [
+                GhItem(
+                    kind="issue",
+                    number=88,
+                    title="Fix stale default intake projection",
+                    labels=(),
+                    updated_at="2026-06-07T00:00:00Z",
+                )
+            ],
+            ctx,
+            managed_items=[GhItem(kind="issue", number=77, title="active", labels=(label_catalog.MANAGED, label_catalog.PHASE_DESIGN_SOLVING))],
+            pending_spawn_intents=[],
+            now_iso="2026-06-07T02:00:00Z",
+        )
+
+        self.assertEqual([], actions)
+
+    def test_load_default_issue_intake_candidates_preserves_state_for_admission(self) -> None:
+        ctx = mock.Mock(host_env={}, gh_repo_slug="owner/repo")
+        payload = [
+            {
+                "number": 88,
+                "title": "Fix stale default intake projection",
+                "labels": [],
+                "updatedAt": "2026-06-07T00:00:00Z",
+                "state": "open",
+            },
+        ]
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch(
+            "codex_refactor_loop.wakeup_plan.run_json",
+            return_value=payload,
+        ):
+            candidates = load_default_issue_intake_candidates(self.repo, ctx)
+
+        self.assertEqual([88], [item.number for item in candidates])
+        self.assertEqual("open", candidates[0].merge_state_status)
+
     def test_default_issue_intake_projection_obeys_false_like_host_toggle(self) -> None:
         ctx = mock.Mock(host_env={"DEFAULT_ISSUE_INTAKE_ENABLE": "false"})
         actions = default_issue_intake_actions(

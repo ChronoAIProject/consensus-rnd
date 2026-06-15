@@ -22,6 +22,7 @@ from .secondary_mutation_backoff import record_content_creation_backoff
 CLAIM_MARKER = "crnd:default-issue-intake-claim"
 STOP_MARKER = "crnd:default-issue-intake-stop"
 FALSE_LIKE_VALUES = {"false", "0", "no", "off"}
+CLAIM_STATE_PATH = ".refactor-loop/state/default-issue-intake-claims.json"
 CommandRunner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
 
@@ -85,11 +86,13 @@ class DefaultIssueIntakeClaim:
         if first_claim is None:
             self._write_claim_comment(issue_number)
             self._apply_design_labels(issue_number)
+            self._record_claim_state(issue_number)
             invalidate_open_managed_work_snapshot(self.ctx)
             return DefaultIssueIntakeResult(issue_number, "applied", "claim_created", self.actor_login)
 
         if first_claim.author_login == self.actor_login:
             self._apply_design_labels(issue_number)
+            self._record_claim_state(issue_number, claimed_at=first_claim.created_at)
             invalidate_open_managed_work_snapshot(self.ctx)
             return DefaultIssueIntakeResult(
                 issue_number,
@@ -189,6 +192,21 @@ class DefaultIssueIntakeClaim:
         )
         if result.returncode != 0:
             raise RuntimeError(_failure("label application", result))
+
+    def _record_claim_state(self, issue_number: int, *, claimed_at: str | None = None) -> None:
+        path = self.ctx.repo_root / CLAIM_STATE_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "last_claimed_issue": issue_number,
+                    "last_claimed_at": claimed_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
     def _has_managed_label(self, issue: Mapping[str, Any]) -> bool:
         raw_labels = issue.get("labels")
