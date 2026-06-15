@@ -217,6 +217,11 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             "no_lifecycle_authority": True,
         }
 
+    def fake_subprocess_run_without_process_probe(self, command, **kwargs):
+        if command == ["ps", "-eo", "command="]:
+            raise AssertionError("router process probe called")
+        return mock.Mock(returncode=1, stdout="", stderr="")
+
     def solver_triplet(self, issue: int = 37, round_no: int = 4, verdict: str = "same") -> None:
         for role in ("minimal", "structural", "delete"):
             self.write_log(
@@ -455,7 +460,41 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(self.commands, [])
         self.assertEqual(self.ledger_entries(), [])
 
-    def test_phase9_router_in_flight_suppresses_duplicate_dispatch_before_ledger(self) -> None:
+    def test_phase9_router_target_log_suppresses_duplicate_dispatch_before_ledger(self) -> None:
+        self.solver_triplet(issue=37, round_no=4)
+        self.router._log_path("37", 4, "judge").write_text("reserved by existing worker\n", encoding="utf-8")
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_uses_zero_process_probes_for_design_issue_intake_tick(self) -> None:
+        rows = []
+        for issue in range(900, 916):
+            rows.append(
+                {
+                    "number": issue,
+                    "title": f"design issue {issue}",
+                    "labels": [
+                        {"name": "crnd:lifecycle:managed"},
+                        {"name": "crnd:phase:design-solving"},
+                        {"name": "crnd:human:auto"},
+                    ],
+                }
+            )
+
+        with (
+            mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=self.fake_subprocess_run_without_process_probe) as run,
+            mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot(rows)),
+        ):
+            self.router.tick()
+
+        self.assertNotIn((["ps", "-eo", "command="],), [call.args for call in run.call_args_list])
+        self.assertEqual(len(self.commands), 16 * 3)
+        self.assertEqual(len(self.ledger_entries()), 16 * 3)
+
+    def test_phase9_router_ignores_process_table_when_no_log_intent_or_ledger_suppresses(self) -> None:
         with self.subTest("existing target log"):
             self.solver_triplet(issue=37, round_no=4)
             self.router._log_path("37", 4, "judge").write_text("reserved by existing worker\n", encoding="utf-8")
@@ -465,18 +504,17 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             self.assertEqual(self.commands, [])
             self.assertEqual(self.ledger_entries(), [])
 
-        with self.subTest("ps command line"):
+        with self.subTest("process table is not a router predicate"):
             self.tmp.cleanup()
             self.setUp()
             self.solver_triplet(issue=38, round_no=5)
-            target_log = self.router._log_path("38", 5, "judge")
-            ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {target_log} --stall 5400\n"
 
-            with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=mock.Mock(stdout=ps_output)):
+            with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=self.fake_subprocess_run_without_process_probe) as run:
                 self.router.tick()
 
-            self.assertEqual(self.commands, [])
-            self.assertEqual(self.ledger_entries(), [])
+            self.assertNotIn((["ps", "-eo", "command="],), [call.args for call in run.call_args_list])
+            self.assertEqual(len(self.commands), 1)
+            self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["38-5-judge"])
 
     def test_phase9_router_placeholder_exclusion_ignores_prompt_echo(self) -> None:
         for role in ("minimal", "structural", "delete"):
@@ -675,7 +713,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(event["terminal_source"], "consensus-judge-log:.refactor-loop/logs/phase9-issue416-r1-judge.log")
         self.assertEqual(self.pending_events().count("phase9-terminal-eligibility:416-1-design_consensus_issue_intake"), 1)
 
-    def test_phase9_router_design_issue_intake_suppresses_existing_and_in_flight_r1(self) -> None:
+    def test_phase9_router_design_issue_intake_suppresses_existing_log_ledger_and_pending_intent_r1(self) -> None:
         issue = {
             "number": 417,
             "title": "partially seeded",
@@ -687,18 +725,24 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         }
         self.router._log_path("417", 1, "minimal").write_text("already seeded\n", encoding="utf-8")
         self.write_ledger_key("417-1-structural")
-        delete_log = self.router._log_path("417", 1, "delete")
-        ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {delete_log} --stall 5400\n"
-
-        def fake_run(command, **kwargs):
-            return mock.Mock(returncode=0, stdout=ps_output, stderr="")
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending.write_text(
+            "2026-01-01T00:00:00Z HARNESS_SPAWN_INTENT "
+            + json.dumps(
+                self.valid_harness_spawn_intent_for_log(".refactor-loop/logs/phase9-issue417-r1-delete.log"),
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
         with (
-            mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run),
+            mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=self.fake_subprocess_run_without_process_probe) as run,
             mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot([issue])),
         ):
             self.router.tick()
 
+        self.assertNotIn((["ps", "-eo", "command="],), [call.args for call in run.call_args_list])
         self.assertEqual(self.commands, [])
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["417-1-structural"])
 
@@ -821,24 +865,33 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn("phase9-triplet-suppression:284-1-judge", fresh_router._fallback_seen)
         self.assertEqual(self.pending_events().count("phase9-triplet-suppression:284-1-judge"), 1)
 
-    def test_phase9_router_triplet_in_flight_target_suppression_appends_single_fallback(self) -> None:
+    def test_phase9_router_triplet_pending_intent_target_suppression_appends_single_fallback(self) -> None:
         self.solver_triplet(issue=284, round_no=1)
-        target_log = self.router._log_path("284", 1, "judge")
-        ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {target_log} --stall 5400\n"
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending.write_text(
+            "2026-01-01T00:00:00Z HARNESS_SPAWN_INTENT "
+            + json.dumps(
+                self.valid_harness_spawn_intent_for_log(".refactor-loop/logs/phase9-issue284-r1-judge.log"),
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
-        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=mock.Mock(stdout=ps_output)):
+        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=self.fake_subprocess_run_without_process_probe) as run:
             self.router.tick()
             fresh_router = self.new_router()
             fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
             fresh_router.tick()
 
+        self.assertNotIn((["ps", "-eo", "command="],), [call.args for call in run.call_args_list])
         self.assertEqual(self.commands, [])
         self.assertEqual(self.ledger_entries(), [])
         events = self.pending_event_payloads()
         self.assertEqual(len(events), 1)
         event = events[0]
         self.assertEqual(event["key"], "phase9-triplet-suppression:284-1-judge")
-        self.assertEqual(event["reason"], "phase9-triplet-in-flight")
+        self.assertEqual(event["reason"], "phase9-triplet-pending-intent")
         self.assertEqual(event["issue"], "284")
         self.assertEqual(event["round"], 1)
         self.assertEqual(event["route"], "solver_triplet_to_judge")
@@ -1384,11 +1437,6 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )),
-            ("in-flight", lambda: setattr(
-                self.router,
-                "_spawn_codex_in_flight",
-                lambda log_path: log_path == self.router._log_path("262", 1, "minimal"),
-            )),
             ("source-closed", lambda: self.source_issue_states.update({"262": "CLOSED"})),
             ("source-unavailable", lambda: self.source_issue_states.update({"262": "UNAVAILABLE"})),
             ("terminal-closed", lambda: setattr(
@@ -1431,6 +1479,22 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
                 self.assertEqual(self.commands, [])
                 self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["262-1-minimal"])
+
+    def test_phase9_router_actor_recovery_ignores_process_table_without_upstream_evidence(self) -> None:
+        self.write_ledger_entry(
+            key="262-1-minimal",
+            marker="DesignConsensusIssueIntake",
+            log_path=".refactor-loop/logs/phase9-issue262-r1-minimal.log",
+            dispatched_at="2026-01-01T00:00:00Z",
+        )
+        self.router.ctx.host_env["STALE_REVIVAL_HOURS"] = "0.001"
+
+        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=self.fake_subprocess_run_without_process_probe) as run:
+            self.router.tick()
+
+        self.assertNotIn((["ps", "-eo", "command="],), [call.args for call in run.call_args_list])
+        self.assertEqual(len(self.commands), 1)
+        self.assertEqual(self.commands[0]["route"], "actor_health_recovery")
 
     def test_phase9_router_malformed_pending_intent_does_not_block_stale_actor_recovery(self) -> None:
         self.write_ledger_entry(

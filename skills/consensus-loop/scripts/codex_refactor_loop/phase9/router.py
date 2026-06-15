@@ -151,7 +151,6 @@ class Phase9ActorHealth:
     target_log_exists: bool
     equivalent_log_exists: bool
     pending_intent: bool
-    in_flight: bool
     source_allowed: bool
     terminal_allowed: bool
     valid_marker: str | None = None
@@ -589,7 +588,7 @@ class Phase9Router:
         return issues
 
     def _solver_intake_suppressed(self, issue: str, round_no: int, role: str, log_path: Path) -> bool:
-        return self._equivalent_actor_log_exists(issue, round_no, role) or self._spawn_codex_in_flight(log_path)
+        return self._equivalent_actor_log_exists(issue, round_no, role) or self._pending_spawn_intent_exists(log_path)
 
     def _dispatch_meta_judge_routes(self, markers: list[Marker], ledger: set[str]) -> None:
         for marker in markers:
@@ -606,7 +605,7 @@ class Phase9Router:
                 for role in self._solver_roles():
                     key = self._key(marker.issue, target_round, role)
                     log_path = self._log_path(marker.issue, target_round, role)
-                    if key in ledger or self._in_flight(log_path):
+                    if key in ledger or self._actor_dispatch_suppressed(marker.issue, target_round, role, log_path):
                         continue
                     terminal_decision = self._solver_dispatch_terminal_decision(
                         marker.issue,
@@ -667,7 +666,7 @@ class Phase9Router:
             for role in self._solver_roles():
                 key = self._key(marker.issue, target_round, role)
                 log_path = self._log_path(marker.issue, target_round, role)
-                if key in ledger or self._in_flight(log_path):
+                if key in ledger or self._actor_dispatch_suppressed(marker.issue, target_round, role, log_path):
                     continue
                 terminal_decision = self._solver_dispatch_terminal_decision(marker.issue)
                 if not terminal_decision.allowed:
@@ -752,7 +751,7 @@ class Phase9Router:
     def _dispatch_stalled_reflector(self, marker: Marker, ledger: set[str], reason: str | None = None) -> None:
         key = self._key(marker.issue, marker.round, "reflector")
         log_path = self._log_path(marker.issue, marker.round, "reflector")
-        if key in ledger or self._in_flight(log_path):
+        if key in ledger or self._actor_dispatch_suppressed(marker.issue, marker.round, "reflector", log_path):
             return
         stalled_reason = reason or self._stalled_route_reason(marker.issue, marker.round, marker.marker)
         if stalled_reason is None:
@@ -912,19 +911,11 @@ class Phase9Router:
             return None
         return "source-unreachable/no-actionable-source"
 
-    def _in_flight(self, log_path: Path) -> bool:
-        return log_path.exists() or self._spawn_codex_in_flight(log_path)
+    def _actor_dispatch_suppressed(self, issue: str, round_no: int, actor: str, log_path: Path) -> bool:
+        return self._equivalent_actor_log_exists(issue, round_no, actor) or self._pending_spawn_intent_exists(log_path)
 
-    def _spawn_codex_in_flight(self, log_path: Path) -> bool:
-        try:
-            ps = subprocess.run(["ps", "-eo", "command="], capture_output=True, text=True, check=False)
-        except OSError:
-            return False
-        target = str(log_path)
-        for line in ps.stdout.splitlines():
-            if "consensus-rnd-cli" in line and "spawn-codex" in line and target in line and " -c " not in line:
-                return True
-        return False
+    def _pending_spawn_intent_exists(self, log_path: Path) -> bool:
+        return self._artifact_path(log_path) in self._pending_spawn_intent_logs
 
     def _read_pending_spawn_intent_logs(self) -> set[str]:
         logs: set[str] = set()
@@ -979,7 +970,6 @@ class Phase9Router:
             target_log_exists=log_path.exists(),
             equivalent_log_exists=self._equivalent_actor_log_exists(issue, round_no, actor),
             pending_intent=self._artifact_path(log_path) in self._pending_spawn_intent_logs,
-            in_flight=self._spawn_codex_in_flight(log_path),
             source_allowed=self._source_issue_decision(issue).allowed,
             terminal_allowed=terminal_decision.allowed,
             valid_marker=valid_marker,
@@ -1116,7 +1106,6 @@ class Phase9Router:
             and not health.target_log_exists
             and not health.equivalent_log_exists
             and not health.pending_intent
-            and not health.in_flight
             and health.source_allowed
             and health.terminal_allowed
         )
@@ -1203,14 +1192,14 @@ class Phase9Router:
     ) -> Literal[
         "phase9-triplet-target-log-exists",
         "phase9-triplet-equivalent-log-exists",
-        "phase9-triplet-in-flight",
+        "phase9-triplet-pending-intent",
     ] | None:
         if log_path.exists():
             return "phase9-triplet-target-log-exists"
         if self._equivalent_actor_log_exists(issue, round_no, actor):
             return "phase9-triplet-equivalent-log-exists"
-        if self._spawn_codex_in_flight(log_path):
-            return "phase9-triplet-in-flight"
+        if self._pending_spawn_intent_exists(log_path):
+            return "phase9-triplet-pending-intent"
         return None
 
     def _equivalent_actor_log_exists(self, issue: str, round_no: int, actor: str) -> bool:
@@ -1737,7 +1726,7 @@ class Phase9Router:
         reason: Literal[
             "phase9-triplet-target-log-exists",
             "phase9-triplet-equivalent-log-exists",
-            "phase9-triplet-in-flight",
+            "phase9-triplet-pending-intent",
         ],
     ) -> None:
         event_key = f"phase9-triplet-suppression:{issue}-{round_no}-{target_actor}"

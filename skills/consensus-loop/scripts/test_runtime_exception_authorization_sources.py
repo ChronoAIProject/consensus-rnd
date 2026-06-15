@@ -1175,6 +1175,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "same-device per-codex-task mutual exclusion only",
             "TaskSpawnClaimStore.acquire(...)",
             ".refactor-loop/locks/spawn-tasks/<safe-task-id>.lock",
+            "phase9-router",
+            "must not add read-lock preflight",
             "O_CREAT|O_EXCL",
             "ProcessSupervisor.supervise(...)",
             "diagnostic-only JSONL",
@@ -1541,8 +1543,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`",
             "DesignConsensusIssueIntake",
             "five built-in phase9 direct routes",
-            "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
-            "existing evidence/log/in-flight for one solver role suppresses only that role",
+            "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and validated pending target intent are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
+            "existing evidence/log/pending intent for one solver role suppresses only that role",
+            "process table or spawn-task locks as dispatch predicates",
+            "TaskSpawnClaimStore.acquire(...)",
             "`META_RESOLVED:re-design` from reflector to source-adjacent `marker.round + 1` solver triplet",
             "source-OPEN gate",
             "labels-only live read",
@@ -1713,13 +1717,16 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "no target log",
             "no equivalent legacy log",
             "no pending `HARNESS_SPAWN_INTENT`",
-            "no live in-flight `spawn-codex --log <target>`",
+            "The router does not read the process table or spawn-task locks as dispatch predicates",
+            "TaskSpawnClaimStore.acquire(...)",
             "append-only ledger row",
             "no public revive command",
             "no new runtime exception",
         ):
             with self.subTest(authority_token=token):
                 self.assertIn(token, combined_authority)
+        self.assertNotIn('["ps", "-eo", "command="]', router)
+        self.assertNotIn("locks/spawn-tasks", router)
         self.assertNotIn("revive-design-consensus", self.skill)
         self.assertNotIn("revive-design-consensus", entry)
 
