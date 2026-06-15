@@ -79,7 +79,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - Do not modify files outside the worktree, with **only one exception**: you may write `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md` (the controller-expected summary output path), `$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt`, `$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`, and `$REPO_ROOT/.refactor-loop/runs/scope-extend-${CLUSTER_ID}.log` if there are SCOPE_EXTEND records. Otherwise, do not modify `.refactor-loop/`.
 - Do not run `git commit`, `git push`, or `git checkout <branch>`.
 - Do not install new dependencies.
-- Do not skip tests or add `[Skip]`.
+- Do not skip, disable, ignore, or mark tests as manual.
 - Tests must not use `sleep/delay` for assertion pacing.
 
 ## Appendix

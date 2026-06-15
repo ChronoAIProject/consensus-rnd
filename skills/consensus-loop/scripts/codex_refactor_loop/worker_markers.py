@@ -148,6 +148,8 @@ def _marker_from_clean_log_lines(lines: list[str], log_name: str) -> WorkerMarke
 
 def _marker_from_log_tail_lines(lines: list[str], log_name: str) -> WorkerMarkerRead:
     solver_marker = _solver_tail_marker(lines, log_name)
+    if _solver_log_role(log_name) is not None:
+        return solver_marker
     if solver_marker.found or solver_marker.reason:
         return solver_marker
     marker = _last_final_marker(lines, log_name)
@@ -160,9 +162,9 @@ def _solver_tail_marker(lines: list[str], log_name: str) -> WorkerMarkerRead:
     role = _solver_log_role(log_name)
     if role is None:
         return WorkerMarkerRead()
-    if any(_malformed_standalone_marker(line) for line in lines):
+    if any(_malformed_raw_solver_marker(line) for line in lines):
         return WorkerMarkerRead(reason="malformed_log_marker")
-    markers = [marker for marker in (extract_standalone_marker(line) for line in lines) if marker]
+    markers = [marker for marker in (_extract_raw_solver_marker(line) for line in lines) if marker]
     solver_markers = [marker for marker in markers if marker.startswith("SOLVER_DONE:")]
     if not solver_markers:
         if markers:
@@ -185,6 +187,18 @@ def _solver_log_role(log_name: str) -> str | None:
         return None
     stem = log_name.removesuffix(".log")
     return stem.rsplit("-", 1)[-1]
+
+
+def _extract_raw_solver_marker(text: str) -> str:
+    if not text.startswith("SOLVER_DONE:"):
+        return ""
+    return extract_standalone_marker(text)
+
+
+def _malformed_raw_solver_marker(text: str) -> bool:
+    if not text.startswith("SOLVER_DONE:"):
+        return False
+    return extract_standalone_marker(text) == ""
 
 
 def _last_final_marker(lines: list[str], log_name: str) -> WorkerMarkerRead:
