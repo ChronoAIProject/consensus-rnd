@@ -55,6 +55,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     load_github_items_with_status,
     marker_from_completed_log,
     meta_escalation_stuck_seconds,
+    no_gap_actions,
     repository_stalled_meta_reflector_actions,
     rebase_resolve_actions,
     rebase_resolve_completed_marker_actions,
@@ -7101,6 +7102,43 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(hard_gate["reason"], "single_active_audit_in_flight")
         self.assertEqual(hard_gate["blocked_deficit"], 4)
         self.assertEqual(hard_gate["dispatch_required"], 0)
+
+    def test_no_gap_projection_suppresses_stale_target_when_open_snapshot_loaded(self) -> None:
+        (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
+            "2026-06-13T00:00:00Z concurrency-alert P0 no-gap-violation: issue #999 closed target\n"
+            "2026-06-13T00:00:01Z concurrency-alert P0 no-gap-violation: PR #30 open target\n"
+            "2026-06-13T00:00:02Z concurrency-alert P0 no-gap-violation: global floor shortfall\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="milestone")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "no-gap-violation"]
+        self.assertEqual(["PR #30", None], [action["item"] for action in actions])
+        self.assertTrue(all(action["status_only"] for action in actions))
+
+    def test_no_gap_projection_fails_open_when_snapshot_unavailable(self) -> None:
+        (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
+            "2026-06-13T00:00:00Z concurrency-alert P0 no-gap-violation: issue #10 possibly stale\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="gh_failure")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "no-gap-violation"]
+        self.assertEqual(["issue #10"], [action["item"] for action in actions])
+
+    def test_no_gap_projection_reads_only_bounded_tail(self) -> None:
+        alert = self.repo / ".refactor-loop" / ".concurrency-alert.log"
+        alert.write_text("".join(f"old-{index}\n" for index in range(5000)), encoding="utf-8")
+        with alert.open("a", encoding="utf-8") as handle:
+            handle.write("2026-06-13T00:00:00Z concurrency-alert P0 no-gap-violation: issue #20 open target\n")
+
+        with mock.patch("pathlib.Path.read_text", side_effect=AssertionError("no-gap must use a bounded tail reader")):
+            actions = no_gap_actions(self.repo, {("issue", 20)})
+
+        self.assertEqual(1, len(actions))
+        self.assertEqual("issue #20", actions[0]["item"])
 
     def test_existing_design_issue_projection_is_status_only_until_router_intent_exists(self) -> None:
         action = existing_issue_actions(
