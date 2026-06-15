@@ -84,6 +84,9 @@ class DefaultIssueIntakeTests(unittest.TestCase):
         self.assertEqual("applied", result.status)
         self.assertEqual("claim_created", result.reason)
         self.assertIn(CLAIM_MARKER, fake.body_files[0])
+        claim_state = json.loads((self.repo / ".refactor-loop/state/default-issue-intake-claims.json").read_text(encoding="utf-8"))
+        self.assertEqual(77, claim_state["last_claimed_issue"])
+        self.assertTrue(str(claim_state["last_claimed_at"]).endswith("Z"))
         edit_calls = [call for call in fake.calls if call[:3] == ["gh", "issue", "edit"]]
         self.assertEqual(1, len(edit_calls))
         self.assertEqual(",".join(labels.design_issue_label_bundle()), edit_calls[0][-1])

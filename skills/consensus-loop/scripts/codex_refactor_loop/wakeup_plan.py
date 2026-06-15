@@ -24,6 +24,11 @@ from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.consensus_gate import consensus_gate_digest, consensus_gate_file_digest
 from codex_refactor_loop.default_issue_intake import default_issue_intake_enabled
+from codex_refactor_loop.default_issue_intake_admission import (
+    ADMISSION_PRECONDITIONS,
+    DefaultIssueIntakeAdmission,
+    DefaultIssueIntakeCandidate,
+)
 from codex_refactor_loop.implement_lifecycle import (
     classify_implement_attempt,
     clear_redispatchable_implement_log,
@@ -576,6 +581,24 @@ def _pending_audit_fallback(ctx: LoopContext) -> tuple[str, str, bool] | None:
         task_id = match.group(2)
         return task_id, marker, _audit_fallback_target_reusable(ctx.paths.logs / f"{task_id}.log")
     return None
+
+
+def pending_spawn_intents(ctx: LoopContext) -> list[dict[str, Any]]:
+    try:
+        lines = ctx.paths.pending_events.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    intents: list[dict[str, Any]] = []
+    for line in lines:
+        if " HARNESS_SPAWN_INTENT " not in line:
+            continue
+        try:
+            payload = json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            intents.append(payload)
+    return intents
 
 
 def _audit_fallback_target_reusable(log_path: Path) -> bool:
@@ -3026,7 +3049,7 @@ def load_default_issue_intake_candidates(repo_root: Path, ctx: LoopContext) -> l
             "--limit",
             "50",
             "--json",
-            "number,title,labels,updatedAt",
+            "number,title,labels,updatedAt,state",
         ],
         cwd=repo_root,
     )
@@ -3049,6 +3072,7 @@ def load_default_issue_intake_candidates(repo_root: Path, ctx: LoopContext) -> l
                 number=number,
                 title=str(raw.get("title") or ""),
                 labels=tuple(labels),
+                merge_state_status=str(raw.get("state") or "open"),
                 updated_at=str(raw.get("updatedAt") or ""),
             )
         )
@@ -3766,14 +3790,39 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
     return actions
 
 
-def default_issue_intake_actions(items: list[GhItem], ctx: LoopContext) -> list[dict[str, Any]]:
+def default_issue_intake_actions(
+    items: list[GhItem],
+    ctx: LoopContext,
+    *,
+    managed_items: list[GhItem] | None = None,
+    pending_spawn_intents: list[dict[str, Any]] | None = None,
+    now_iso: str | None = None,
+) -> list[dict[str, Any]]:
     if not default_issue_intake_enabled(ctx.host_env):
         return []
+    admission = DefaultIssueIntakeAdmission(
+        ctx,
+        managed_items=managed_items or [],
+        pending_spawn_intents=pending_spawn_intents or [],
+        now_iso=now_iso,
+    )
     actions: list[dict[str, Any]] = []
     for item in sorted(items, key=lambda candidate: (candidate.updated_at or "", candidate.number)):
         if item.kind != "issue":
             continue
         if label_catalog.MANAGED in label_catalog.normalize_label_set(item.labels).canonical:
+            continue
+        decision = admission.evaluate(
+            DefaultIssueIntakeCandidate(
+                number=item.number,
+                title=item.title,
+                labels=tuple(item.labels),
+                updated_at=item.updated_at,
+                is_pr=item.head_ref == "PR",
+                state=item.merge_state_status or "open",
+            )
+        )
+        if not decision.accepted:
             continue
         actions.append(
             {
@@ -3797,7 +3846,9 @@ def default_issue_intake_actions(items: list[GhItem], ctx: LoopContext) -> list[
                     "non_pr_issue",
                     "target_not_managed",
                     "github_comment_claim_protocol",
+                    *ADMISSION_PRECONDITIONS,
                 ],
+                "default_issue_intake_admission": decision.as_action_payload(),
                 "controller_action": "apply_default_issue_intake_claim",
                 "runner_authority": RUNNER_AUTHORITY,
                 "no_generic_command": True,
@@ -5249,7 +5300,14 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(implementation_pr_artifact_repair_actions(actions, repo_root))
     suppress_publish_superseded_implementation_spawn_intents(actions)
     if gh_items_loaded and not has_dispatchable_action(actions):
-        actions.extend(default_issue_intake_actions(load_default_issue_intake_candidates(repo_root, ctx), ctx))
+        actions.extend(
+            default_issue_intake_actions(
+                load_default_issue_intake_candidates(repo_root, ctx),
+                ctx,
+                managed_items=gh_items,
+                pending_spawn_intents=pending_spawn_intents(ctx),
+            )
+        )
     if gh_items_loaded and not has_dispatchable_action(actions):
         actions.extend(repository_stalled_meta_reflector_actions(repo_root, ctx, gh_items, monitor))
     serialize_conflicting_consensus_implementation_actions(actions)

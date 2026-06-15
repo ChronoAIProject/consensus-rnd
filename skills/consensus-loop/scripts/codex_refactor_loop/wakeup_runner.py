@@ -24,6 +24,11 @@ from .consensus_gate import (
 from .context import LoopContext, LoopContextError
 from .controller_actions import ControllerActions
 from .cross_instance_stand_down import check_cross_instance_admission
+from .default_issue_intake_admission import (
+    ADMISSION_PRECONDITIONS,
+    DefaultIssueIntakeAdmission,
+    DefaultIssueIntakeCandidate,
+)
 from .github_actor import GitHubAuthenticatedActor
 from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok
@@ -1011,12 +1016,16 @@ class WakeupRunner:
             "non_pr_issue",
             "target_not_managed",
             "github_comment_claim_protocol",
+            *ADMISSION_PRECONDITIONS,
         ):
             if required not in preconditions:
                 return f"default_issue_intake_missing_precondition:{required}"
         target = action.get("target_number")
         if action.get("target_kind") != "issue" or not isinstance(target, int):
             return "default_issue_intake_target_missing"
+        projected_admission = action.get("default_issue_intake_admission")
+        if not isinstance(projected_admission, Mapping) or projected_admission.get("status") != "accepted":
+            return "default_issue_intake_admission_projection_missing"
         if str(self.ctx.host_env.get("DEFAULT_ISSUE_INTAKE_ENABLE") or "").strip().lower() in {"false", "0", "no", "off"}:
             return "default_issue_intake_disabled"
         issue_error = self._default_issue_intake_live_issue_error(target)
@@ -1024,9 +1033,22 @@ class WakeupRunner:
             return issue_error
         if self._live_target_has_managed_label("issue", target):
             return "default_issue_intake_target_already_managed"
+        admission_error = self._default_issue_intake_admission_error(action)
+        if admission_error:
+            return admission_error
         return None
 
     def _default_issue_intake_live_issue_error(self, issue_number: int) -> str | None:
+        payload = self._default_issue_intake_live_issue(issue_number)
+        if isinstance(payload, str):
+            return payload
+        if str(payload.get("state") or "").strip().lower() != "open":
+            return "default_issue_intake_target_not_open"
+        if isinstance(payload.get("pull_request"), Mapping):
+            return "default_issue_intake_target_is_pr"
+        return None
+
+    def _default_issue_intake_live_issue(self, issue_number: int) -> dict[str, Any] | str:
         if not self.ctx.gh_repo_slug:
             return "default_issue_intake_missing_gh_repo_slug"
         result = self.command_runner(["gh", "api", f"repos/{self.ctx.gh_repo_slug}/issues/{issue_number}"])
@@ -1038,11 +1060,83 @@ class WakeupRunner:
             return "default_issue_intake_issue_invalid_json"
         if not isinstance(payload, dict):
             return "default_issue_intake_issue_invalid_json"
-        if str(payload.get("state") or "").strip().lower() != "open":
-            return "default_issue_intake_target_not_open"
-        if isinstance(payload.get("pull_request"), Mapping):
-            return "default_issue_intake_target_is_pr"
-        return None
+        return payload
+
+    def _default_issue_intake_admission_error(self, action: Mapping[str, Any]) -> str | None:
+        target = action.get("target_number")
+        if not isinstance(target, int):
+            return "default_issue_intake_target_missing"
+        payload = self._default_issue_intake_live_issue(target)
+        if isinstance(payload, str):
+            return payload
+        managed_items = self._default_issue_intake_live_managed_items()
+        if isinstance(managed_items, str):
+            return managed_items
+        decision = DefaultIssueIntakeAdmission(
+            self.ctx,
+            managed_items=managed_items,
+            pending_spawn_intents=self._pending_spawn_intents(),
+        ).evaluate(
+            DefaultIssueIntakeCandidate(
+                number=target,
+                title=str(action.get("title") or payload.get("title") or ""),
+                labels=tuple(_issue_label_names(payload.get("labels"))),
+                updated_at=str(payload.get("updated_at") or payload.get("updatedAt") or ""),
+                is_pr=isinstance(payload.get("pull_request"), Mapping),
+                state=str(payload.get("state") or ""),
+            )
+        )
+        if decision.accepted:
+            return None
+        return "default_issue_intake_admission:" + decision.reason
+
+    def _default_issue_intake_live_managed_items(self) -> list[dict[str, Any]] | str:
+        if not self.ctx.gh_repo_slug:
+            return "default_issue_intake_missing_gh_repo_slug"
+        result = self.command_runner(
+            ["gh", "api", f"repos/{self.ctx.gh_repo_slug}/issues?state=open&labels=crnd%3Alifecycle%3Amanaged&per_page=100"]
+        )
+        if result.returncode != 0:
+            return "default_issue_intake_managed_snapshot_unavailable"
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError:
+            return "default_issue_intake_managed_snapshot_invalid_json"
+        if not isinstance(payload, list):
+            return "default_issue_intake_managed_snapshot_invalid_json"
+        items: list[dict[str, Any]] = []
+        for row in payload:
+            if not isinstance(row, Mapping):
+                continue
+            try:
+                number = int(row.get("number"))
+            except (TypeError, ValueError):
+                continue
+            items.append(
+                {
+                    "kind": "PR" if isinstance(row.get("pull_request"), Mapping) else "issue",
+                    "number": number,
+                    "labels": _issue_label_names(row.get("labels")),
+                }
+            )
+        return items
+
+    def _pending_spawn_intents(self) -> list[dict[str, Any]]:
+        try:
+            lines = self.pending_events_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return []
+        intents: list[dict[str, Any]] = []
+        for line in lines:
+            if " HARNESS_SPAWN_INTENT " not in line:
+                continue
+            try:
+                payload = json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                intents.append(payload)
+        return intents
 
     def _issue_decomposition_tracking_error(self, plan: Any, digest: str) -> str | None:
         parent_result = self.command_runner(["gh", "issue", "view", str(plan.parent_issue), "--json", "comments"])
@@ -2701,6 +2795,18 @@ def _single_line(value: str) -> str:
 
 def _is_invalid_harness_cleanup(action: Mapping[str, Any]) -> bool:
     return action.get("kind") == "harness-spawn-intent-invalid"
+
+
+def _issue_label_names(raw_labels: Any) -> list[str]:
+    if not isinstance(raw_labels, list):
+        return []
+    names: list[str] = []
+    for item in raw_labels:
+        if isinstance(item, str) and item:
+            names.append(item)
+        elif isinstance(item, Mapping) and item.get("name"):
+            names.append(str(item.get("name") or ""))
+    return names
 
 
 def _reviewer_log_terminal_failed(path: Path) -> bool:

@@ -379,12 +379,27 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "non_pr_issue",
                 "target_not_managed",
                 "github_comment_claim_protocol",
+                "default_issue_intake_admission_active_cap",
+                "default_issue_intake_admission_cooldown",
+                "default_issue_intake_admission_upstream_idle",
+                "default_issue_intake_admission_concrete_work_unit",
             ],
+            "default_issue_intake_admission": {
+                "status": "accepted",
+                "proof": {
+                    "active_design_solving": 0,
+                    "active_design_cap": 3,
+                    "upstream_state": "upstream_idle",
+                    "claim_cooldown_remaining_seconds": 0,
+                    "concrete_work_unit": True,
+                },
+            },
             "source_artifact": "github-open-default-issue-intake-candidates",
             "source_marker": "default-issue-intake-candidate:issue:77",
             "target_kind": "issue",
             "target_number": 77,
             "target": {"kind": "issue", "number": 77},
+            "title": "Fix stale default intake projection",
             "controller_action": "apply_default_issue_intake_claim",
             "no_generic_command": True,
             "no_lifecycle_authority": True,
@@ -395,6 +410,95 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual("applied", result[0].status)
         self.assertEqual([("apply_default_issue_intake_claim", 77)], actions.calls)
+
+    def test_apply_default_issue_intake_claim_revalidates_admission_before_helper_dispatch(self) -> None:
+        action = {
+            "kind": "default-issue-intake-claim",
+            "action_id": "default-issue-intake-claim:issue:77",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "default_issue_intake_enabled",
+                "live_open_target",
+                "non_pr_issue",
+                "target_not_managed",
+                "github_comment_claim_protocol",
+                "default_issue_intake_admission_active_cap",
+                "default_issue_intake_admission_cooldown",
+                "default_issue_intake_admission_upstream_idle",
+                "default_issue_intake_admission_concrete_work_unit",
+            ],
+            "default_issue_intake_admission": {
+                "status": "accepted",
+                "proof": {
+                    "active_design_solving": 0,
+                    "active_design_cap": 1,
+                    "upstream_state": "upstream_idle",
+                    "claim_cooldown_remaining_seconds": 0,
+                    "concrete_work_unit": True,
+                },
+            },
+            "source_artifact": "github-open-default-issue-intake-candidates",
+            "source_marker": "default-issue-intake-candidate:issue:77",
+            "target_kind": "issue",
+            "target_number": 77,
+            "target": {"kind": "issue", "number": 77},
+            "title": "Fix stale default intake projection",
+            "controller_action": "apply_default_issue_intake_claim",
+            "no_generic_command": True,
+            "no_lifecycle_authority": True,
+        }
+        actions = FakeActions()
+
+        result = self.run_result(
+            self.base_plan(action),
+            gh_labels=[],
+            actions=actions,
+            open_managed_items=[
+                {"kind": "issue", "number": 8, "labels": [labels.MANAGED, labels.PHASE_DESIGN_SOLVING]},
+                {"kind": "issue", "number": 9, "labels": [labels.MANAGED, labels.PHASE_DESIGN_SOLVING]},
+                {"kind": "issue", "number": 10, "labels": [labels.MANAGED, labels.PHASE_DESIGN_SOLVING]},
+            ],
+        )
+
+        self.assertEqual("blocked", result[0].status)
+        self.assertEqual("default_issue_intake_admission:active_design_cap_reached", result[0].reason)
+        self.assertEqual([], actions.calls)
+
+    def test_apply_default_issue_intake_claim_requires_projected_admission_payload(self) -> None:
+        action = {
+            "kind": "default-issue-intake-claim",
+            "action_id": "default-issue-intake-claim:issue:77",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "default_issue_intake_enabled",
+                "live_open_target",
+                "non_pr_issue",
+                "target_not_managed",
+                "github_comment_claim_protocol",
+                "default_issue_intake_admission_active_cap",
+                "default_issue_intake_admission_cooldown",
+                "default_issue_intake_admission_upstream_idle",
+                "default_issue_intake_admission_concrete_work_unit",
+            ],
+            "source_artifact": "github-open-default-issue-intake-candidates",
+            "source_marker": "default-issue-intake-candidate:issue:77",
+            "target_kind": "issue",
+            "target_number": 77,
+            "target": {"kind": "issue", "number": 77},
+            "title": "Fix stale default intake projection",
+            "controller_action": "apply_default_issue_intake_claim",
+            "no_generic_command": True,
+            "no_lifecycle_authority": True,
+        }
+        actions = FakeActions()
+
+        result = self.run_result(self.base_plan(action), gh_labels=[], actions=actions)
+
+        self.assertEqual("blocked", result[0].status)
+        self.assertEqual("default_issue_intake_admission_projection_missing", result[0].reason)
+        self.assertEqual([], actions.calls)
 
     def test_apply_action_skips_managed_write_on_cross_instance_stand_down(self) -> None:
         action = {
@@ -779,7 +883,21 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "non_pr_issue",
                 "target_not_managed",
                 "github_comment_claim_protocol",
+                "default_issue_intake_admission_active_cap",
+                "default_issue_intake_admission_cooldown",
+                "default_issue_intake_admission_upstream_idle",
+                "default_issue_intake_admission_concrete_work_unit",
             ],
+            "default_issue_intake_admission": {
+                "status": "accepted",
+                "proof": {
+                    "active_design_solving": 0,
+                    "active_design_cap": 3,
+                    "upstream_state": "upstream_idle",
+                    "claim_cooldown_remaining_seconds": 0,
+                    "concrete_work_unit": True,
+                },
+            },
             "source_artifact": "github-open-default-issue-intake-candidates",
             "controller_action": "apply_default_issue_intake_claim",
             "no_generic_command": True,
@@ -794,6 +912,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "target_kind": "issue",
             "target_number": 77,
             "target": {"kind": "issue", "number": 77},
+            "title": "Fix stale default intake projection",
         }
         second = {
             **base,
@@ -802,6 +921,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "target_kind": "issue",
             "target_number": 78,
             "target": {"kind": "issue", "number": 78},
+            "title": "Fix stale default intake projection again",
         }
         actions = FakeActions()
 
@@ -821,7 +941,21 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "non_pr_issue",
                 "target_not_managed",
                 "github_comment_claim_protocol",
+                "default_issue_intake_admission_active_cap",
+                "default_issue_intake_admission_cooldown",
+                "default_issue_intake_admission_upstream_idle",
+                "default_issue_intake_admission_concrete_work_unit",
             ],
+            "default_issue_intake_admission": {
+                "status": "accepted",
+                "proof": {
+                    "active_design_solving": 0,
+                    "active_design_cap": 3,
+                    "upstream_state": "upstream_idle",
+                    "claim_cooldown_remaining_seconds": 0,
+                    "concrete_work_unit": True,
+                },
+            },
             "source_artifact": "github-open-default-issue-intake-candidates",
             "source_marker": "default-issue-intake-candidate:issue:77",
             "target_kind": "issue",
@@ -865,6 +999,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         implementation_base: tuple[str, str] = ("base-sha", "base-sha"),
         actions=None,
         issue_comments: list[dict] | None = None,
+        open_managed_items: list[dict] | None = None,
     ) -> list:
         def command_runner(command):
             if command[:2] == ["gh", "api"]:
@@ -900,6 +1035,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                         "labels": [{"name": name} for name in live_labels],
                     }
                     return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+                if endpoint == "repos/owner/repo/issues?state=open&labels=crnd%3Alifecycle%3Amanaged&per_page=100":
+                    return subprocess.CompletedProcess(command, 0, json.dumps(open_managed_items or []), "")
                 if "/pulls/" in endpoint or "/issues/" in endpoint:
                     if gh_state is None:
                         return subprocess.CompletedProcess(command, 1, "", "not found")
