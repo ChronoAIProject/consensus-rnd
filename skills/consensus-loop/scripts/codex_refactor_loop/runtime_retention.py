@@ -27,6 +27,7 @@ PENDING_EVENTS_MAX_LINES = 2000
 RETENTION_PLAN_PATH = Path(".refactor-loop") / "state" / "runtime-retention-plan.json"
 SPAWN_TASK_LOCKS_PATH = Path(".refactor-loop") / "locks" / "spawn-tasks"
 
+
 @dataclass(frozen=True)
 class RuntimeRetentionResult:
     enabled: bool
@@ -67,7 +68,7 @@ def retain_runtime(
         return RuntimeRetentionResult(True, 0, 0, False, 0, False, refactor_loop, True)
 
     diagnostics: list[str] = []
-    compacted = _compact_runtime_logs(refactor_loop)
+    compacted = _compact_pending_events(refactor_loop / ".controller-pending-events.log")
     plan = _read_retention_plan(repo_real / RETENTION_PLAN_PATH, diagnostics=diagnostics)
     removed_spawn_locks = _remove_completed_spawn_task_locks(repo_real, now=now, diagnostics=diagnostics)
     deleted = removed_spawn_locks
@@ -94,11 +95,7 @@ def retain_runtime(
     )
 
 
-def _compact_runtime_logs(refactor_loop: Path) -> bool:
-    return _compact_runtime_log(refactor_loop / ".controller-pending-events.log")
-
-
-def _compact_runtime_log(path: Path) -> bool:
+def _compact_pending_events(path: Path) -> bool:
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
