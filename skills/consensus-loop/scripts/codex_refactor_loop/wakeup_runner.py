@@ -1174,7 +1174,7 @@ class WakeupRunner:
                 return f"consensus_implementation_missing_field:{field}"
         if str(action.get("design_decision_path") or "") != str(action.get("consensus_artifact") or ""):
             return "consensus_implementation_design_path_mismatch"
-        readiness_reason = consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root)
+        readiness_reason = consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root, ctx=self.ctx)
         if readiness_reason:
             return f"consensus_implementation_not_ready:{readiness_reason}"
         return None
@@ -2236,7 +2236,7 @@ class WakeupRunner:
         return False
 
     def _consensus_implementation_current_effect_suppresses_retry(self, action: Mapping[str, Any]) -> bool:
-        if consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root):
+        if consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root, ctx=self.ctx):
             return True
         receipt = self._consensus_implementation_dispatch_receipt(action)
         try:

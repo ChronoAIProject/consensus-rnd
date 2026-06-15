@@ -400,6 +400,7 @@ def harness_spawn_intent_actions(
         suppressed = _suppressed_consensus_implementation_spawn_intent(
             intent,
             repo_root,
+            ctx,
             gh_items if gh_items_loaded else None,
             monitor,
         )
@@ -866,6 +867,7 @@ def _suppress_harness_spawn_intent(
 def _suppressed_consensus_implementation_spawn_intent(
     intent: dict[str, Any],
     repo_root: Path,
+    ctx: LoopContext,
     gh_items: list[GhItem] | None,
     monitor: Any | None,
 ) -> str | None:
@@ -880,6 +882,7 @@ def _suppressed_consensus_implementation_spawn_intent(
         repo_root,
         gh_items,
         monitor,
+        ctx=ctx,
         ignore_pending_implement_intent=True,
     )
     if reason in {"pending_implement_intent", None}:
@@ -1473,7 +1476,7 @@ def completed_marker_actions(
                     "durable_consensus_artifact",
                     "consensus_implementation_ready",
                 ]
-                _apply_consensus_implementation_readiness(action, repo_root, gh_items, monitor)
+                _apply_consensus_implementation_readiness(action, repo_root, gh_items, monitor, ctx)
             else:
                 action["status_only"] = True
                 action["no_lifecycle_authority"] = True
@@ -3754,7 +3757,7 @@ def _worktrees_by_branch(repo_root: Path) -> dict[str, Path]:
     return parse_worktree_branches(listed.stdout)
 
 
-def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -> list[dict[str, Any]]:
+def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None, ctx: LoopContext | None = None) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     raw_by_key = {(item.kind.lower(), item.number): item for item in items}
     actionable = open_actionable_managed_items(_projection_items(items))
@@ -3804,7 +3807,7 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
                         **consensus_fields,
                     }
                 )
-                _apply_consensus_implementation_readiness(action, repo_root, items, None)
+                _apply_consensus_implementation_readiness(action, repo_root, items, None, ctx)
                 if action.get("consensus_implementation_ready") is True:
                     action.pop("status_only", None)
         actions.append(action)
@@ -4011,8 +4014,9 @@ def _apply_consensus_implementation_readiness(
     repo_root: Path,
     gh_items: list[GhItem] | None,
     monitor: Any | None,
+    ctx: LoopContext | None,
 ) -> None:
-    reason = consensus_implementation_suppressed_reason(action, repo_root, gh_items, monitor)
+    reason = consensus_implementation_suppressed_reason(action, repo_root, gh_items, monitor, ctx=ctx)
     if not reason:
         action["consensus_implementation_ready"] = True
         return
@@ -4188,6 +4192,7 @@ def consensus_implementation_suppressed_reason(
     gh_items: list[GhItem] | None = None,
     monitor: Any | None = None,
     *,
+    ctx: LoopContext | None = None,
     ignore_pending_implement_intent: bool = False,
 ) -> str | None:
     target_kind = action.get("target_kind")
@@ -4215,11 +4220,14 @@ def consensus_implementation_suppressed_reason(
         return "implementation_ready_to_publish"
     if (
         not ignore_pending_implement_intent
-        and _pending_implement_intent_exists(repo_root, target_number, action)
         # Stale queued intents can point at deleted worktrees; allow fresh dispatch to recreate them.
         and _canonical_consensus_worktree_exists(repo_root, action)
     ):
-        return "pending_implement_intent"
+        pending_intent_exists = _pending_implement_intent_exists(repo_root, target_number, action, ctx=ctx)
+        if pending_intent_exists is None:
+            return "readiness_context_unavailable"
+        if pending_intent_exists:
+            return "pending_implement_intent"
     if _in_flight_implement_exists(repo_root, action, monitor):
         return "in_flight_implement"
     if gh_items is not None and _open_pr_exists_for_branch(gh_items, branch):
@@ -4314,7 +4322,7 @@ def _open_pr_exists_for_branch(items: list[GhItem], head_ref: str) -> bool:
     return False
 
 
-def _pending_implement_intent_exists(repo_root: Path, issue: int, action: dict[str, Any], ctx: LoopContext | None = None) -> bool:
+def _pending_implement_intent_exists(repo_root: Path, issue: int, action: dict[str, Any], ctx: LoopContext | None = None) -> bool | None:
     pending_path = repo_root / ".refactor-loop" / ".controller-pending-events.log"
     if not pending_path.exists():
         return False
@@ -4322,8 +4330,6 @@ def _pending_implement_intent_exists(repo_root: Path, issue: int, action: dict[s
         lines = pending_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return False
-    if ctx is None:
-        ctx = LoopContext.load(repo_root=repo_root, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=repo_root, read_only=True)
     archived_invalid_markers = archived_invalid_harness_spawn_intent_markers(lines)
     cluster_id = str(action.get("cluster_id") or "").strip()
     expected_ids = {f"{IMPLEMENT_PENDING_INTENT_PREFIX}{issue}"}
@@ -4338,11 +4344,14 @@ def _pending_implement_intent_exists(repo_root: Path, issue: int, action: dict[s
             continue
         if not isinstance(intent, dict):
             continue
+        intent_values = {str(intent.get("intent_id") or ""), str(intent.get("task_id") or "")}
+        if not expected_ids.intersection(intent_values):
+            continue
+        if ctx is None:
+            return None
         if not live_valid_harness_spawn_intent(ctx, line, intent, archived_invalid_markers):
             continue
-        intent_values = {str(intent.get("intent_id") or ""), str(intent.get("task_id") or "")}
-        if expected_ids.intersection(intent_values):
-            return True
+        return True
     return False
 
 
@@ -5316,7 +5325,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     else:
         actions.extend(host_actions)
     actions.extend(release_countdown_actions(repo_root, gh_items))
-    actions.extend(existing_issue_actions(gh_items, repo_root))
+    actions.extend(existing_issue_actions(gh_items, repo_root, ctx))
     suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)
     actions.extend(implementation_pr_artifact_repair_actions(actions, repo_root))
     suppress_publish_superseded_implementation_spawn_intents(actions)
