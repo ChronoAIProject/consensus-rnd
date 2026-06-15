@@ -388,6 +388,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "no delete authority",
             "same inode",
             ".controller-pending-events.log",
+            ".concurrency-alert.log",
             ".refactor-loop/state/runtime-retention-plan.json",
             "git worktree remove <path>",
             "git worktree prune",
