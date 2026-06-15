@@ -39,8 +39,9 @@ Refactor (iter364/issue364):
 5. Call sites of the violating code:
    ```bash
    # Find all callers
-   rg -l '<symbol>' --type cs
+   rg -l '<symbol>' $SOURCE_GLOBS
    ```
+   If `$SOURCE_GLOBS` is empty, search the cited scope paths / repo source conventions; do not assume a language-specific file type.
 6. Git blame on the violating file to see the original commit + intent:
    ```bash
    git log --oneline -- <file> | head -20
