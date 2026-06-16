@@ -22,6 +22,7 @@ from .restart import (
     expected_launch_fingerprint,
     pid_alive,
     progress_budget_for_daemon,
+    require_base_host_env_admission,
     read_daemon_pid,
     read_heartbeat_age_seconds,
     read_heartbeat_status,
@@ -110,7 +111,11 @@ class DaemonStatusReport:
 
 
 def collect(target: str = "all", *, repo_root: str | Path | None = None, skill_root: str | Path | None = None) -> DaemonStatusReport:
-    ctx = LoopContext.load(repo_root=repo_root, skill_root=skill_root, read_only=True, allow_git_root_fallback=True)
+    try:
+        ctx = LoopContext.load(repo_root=repo_root, skill_root=skill_root, read_only=True, allow_git_root_fallback=True)
+    except LoopContextError as exc:
+        raise _daemon_status_context_error(exc) from exc
+    require_base_host_env_admission(ctx, "daemon-status")
     config = RestartConfig()
     active_status = _cached_active_controller_status(ctx.paths.state / "active-controller-status.json")
     inventory = DaemonProcessInventory.collect()
@@ -126,6 +131,18 @@ def collect(target: str = "all", *, repo_root: str | Path | None = None, skill_r
         generated_at=_utc_now(),
         daemons=projections,
     )
+
+
+def _daemon_status_context_error(exc: LoopContextError) -> LoopContextError:
+    message = str(exc)
+    if message.startswith("host.env REPO_ROOT override points outside resolved repo root:"):
+        raw_root = message.split(":", 1)[1].strip()
+        return LoopContextError(f"daemon-status host.env REPO_ROOT mismatch: {raw_root}")
+    if message.startswith("GH_REPO_SLUG must be OWNER/REPO"):
+        return LoopContextError(f"daemon-status {message}")
+    if message.startswith("invalid host.env assignment"):
+        return LoopContextError(f"daemon-status {message}")
+    return exc
 
 
 def _project_target(
