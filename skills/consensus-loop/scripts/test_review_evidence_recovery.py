@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from codex_refactor_loop.review_evidence_recovery import (  # noqa: E402
     ReviewEvidenceRecoveryInput,
     ReviewEvidenceRecoveryLedgerRow,
+    ledger_row_from_mapping,
     project_review_evidence_recovery,
     review_recovery_attempt_key,
 )
@@ -35,6 +36,21 @@ def evidence(role: str, *, head_sha: str = LIVE_HEAD, valid: bool = True, reason
         reason=reason,
         created_at=f"2026-06-12T00:0{REQUIRED_ROLES.index(role)}:00Z",
         comment_id=100 + REQUIRED_ROLES.index(role),
+    )
+
+
+def terminal_failed_evidence(role: str, *, reason: str = "") -> ParsedGithubReviewEvidence:
+    return ParsedGithubReviewEvidence(
+        role=role,
+        round_number=1,
+        verdict="",
+        head_sha=LIVE_HEAD,
+        source="github:issues/comments",
+        valid=False,
+        reason=reason or f"terminal_failed:{role}",
+        terminal_failed=True,
+        created_at=f"2026-06-12T00:1{REQUIRED_ROLES.index(role)}:00Z",
+        comment_id=200 + REQUIRED_ROLES.index(role),
     )
 
 
@@ -142,6 +158,72 @@ class ReviewEvidenceRecoveryTests(unittest.TestCase):
 
         self.assertEqual(projection.roles, ("quality",))
         self.assertEqual(tuple(projection.attempt_count_by_key.values()), (0,))
+
+    def test_stale_github_visible_evidence_uses_stale_attempt_key(self) -> None:
+        projection = project_review_evidence_recovery(
+            recovery_input(
+                github_review_evidences=(
+                    evidence("architect"),
+                    evidence("tests"),
+                    evidence("quality", head_sha="b" * 40),
+                )
+            )
+        )
+
+        expected_key = review_recovery_attempt_key(480, "quality", LIVE_HEAD, "stale_github_review_evidence")
+        self.assertEqual(projection.roles, ("quality",))
+        self.assertEqual(projection.reason_by_role, {"quality": "stale_github_review_evidence"})
+        self.assertEqual(projection.attempt_keys, (expected_key,))
+
+    def test_terminal_failed_github_visible_evidence_uses_terminal_failed_attempt_key(self) -> None:
+        projection = project_review_evidence_recovery(
+            recovery_input(
+                github_review_evidences=(
+                    evidence("architect"),
+                    evidence("quality"),
+                    terminal_failed_evidence("tests"),
+                )
+            )
+        )
+
+        expected_key = review_recovery_attempt_key(480, "tests", LIVE_HEAD, "terminal_failed_github_review_evidence")
+        self.assertEqual(projection.roles, ("tests",))
+        self.assertEqual(projection.reason_by_role, {"tests": "terminal_failed_github_review_evidence"})
+        self.assertEqual(projection.attempt_keys, (expected_key,))
+
+    def test_ledger_row_from_mapping_parses_attempt_keys_and_ignores_malformed_keys(self) -> None:
+        parsed = ledger_row_from_mapping(
+            {
+                "action_id": "review-evidence-redispatch:480:" + LIVE_HEAD,
+                "status": "applied",
+                "reason": "done",
+                "kind": "review-evidence-redispatch",
+                "review_recovery_attempt_keys": [
+                    review_recovery_attempt_key(480, "quality", LIVE_HEAD, "missing_github_review_evidence"),
+                    7,
+                ],
+            }
+        )
+        malformed = ledger_row_from_mapping(
+            {
+                "action_id": "review-evidence-redispatch:480:" + LIVE_HEAD,
+                "status": "applied",
+                "review_recovery_attempt_keys": "not-a-list",
+            }
+        )
+
+        self.assertEqual(parsed.action_id, "review-evidence-redispatch:480:" + LIVE_HEAD)
+        self.assertEqual(parsed.status, "applied")
+        self.assertEqual(parsed.reason, "done")
+        self.assertEqual(parsed.kind, "review-evidence-redispatch")
+        self.assertEqual(
+            parsed.attempt_keys,
+            (
+                review_recovery_attempt_key(480, "quality", LIVE_HEAD, "missing_github_review_evidence"),
+                "7",
+            ),
+        )
+        self.assertEqual(malformed.attempt_keys, ())
 
 
 if __name__ == "__main__":

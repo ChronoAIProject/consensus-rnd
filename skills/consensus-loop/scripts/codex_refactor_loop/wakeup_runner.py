@@ -58,6 +58,7 @@ from .review_evidence_recovery import (
     DEFAULT_REVIEW_RECOVERY_CAP,
     RECOVERY_KIND,
     ReviewEvidenceRecoveryLedgerRow,
+    ledger_row_from_mapping,
 )
 from .release.gate import AutoReleaseGate
 from .release.commits import write_release_commits
@@ -1368,17 +1369,7 @@ class WakeupRunner:
                 continue
             if not isinstance(row, Mapping):
                 continue
-            keys_value = row.get("review_recovery_attempt_keys")
-            keys = tuple(str(key) for key in keys_value) if isinstance(keys_value, list) else ()
-            rows.append(
-                ReviewEvidenceRecoveryLedgerRow(
-                    action_id=str(row.get("action_id") or ""),
-                    status=str(row.get("status") or ""),
-                    reason=str(row.get("reason") or ""),
-                    kind=str(row.get("kind") or ""),
-                    attempt_keys=keys,
-                )
-            )
+            rows.append(ledger_row_from_mapping(row))
         return tuple(rows)
 
     def _projected_stale_review_roles(self, action: Mapping[str, Any]) -> list[str]:

@@ -112,8 +112,8 @@ def project_review_evidence_recovery(request: ReviewEvidenceRecoveryInput) -> Re
         candidate_keys[role] = review_recovery_attempt_key(request.pr_number, role, head_sha, reason)
 
     attempt_count_by_key = {
-        key: _attempt_count_for_key(key, role, request)
-        for role, key in candidate_keys.items()
+        key: _attempt_count_for_key(key, request)
+        for key in candidate_keys.values()
     }
     capped_roles = tuple(
         role
@@ -175,7 +175,7 @@ def _reason_family_for_role(role: str, invalid: Sequence[str], terminal_failed_r
     return family or MISSING_GITHUB_EVIDENCE_REASON
 
 
-def _attempt_count_for_key(key: str, role: str, request: ReviewEvidenceRecoveryInput) -> int:
+def _attempt_count_for_key(key: str, request: ReviewEvidenceRecoveryInput) -> int:
     count = 0
     legacy_seen = False
     legacy_action_id = f"{RECOVERY_KIND}:{request.pr_number}:{request.head_sha}"
