@@ -1055,6 +1055,12 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "release #322 preflight",
             "helper-specific precondition",
             "`dispatch_consensus_implementation` only moves the issue to implementing phase",
+            "`crnd:triage:resume-requested`",
+            "label-catalog owned maintainer/cockpit directive",
+            "live OPEN managed issue with the label still present",
+            "not standalone authorization",
+            "not a generic resume ticket",
+            "not authority for issue/PR close/reopen/body/title/merge/tag/release actions",
             "spawns the implement worker; it does not commit, push, or open a PR",
             "`suppressed_reason=pr_already_open_current`",
             "returns 0 before diff/build/test/push/PR edit/reviewer dispatch",
@@ -1100,6 +1106,9 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "empty reservation commit",
             "empty-reservation",
             "early_pr_missing",
+            "resume_ticket",
+            "proof_ticket",
+            "generic_resume",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, entry)
