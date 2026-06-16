@@ -144,6 +144,18 @@ class DaemonProgressHealth:
         return self.state == "complete"
 
 
+@dataclass(frozen=True)
+class DaemonProgressBudget:
+    completed_max_age_seconds: int
+    in_progress_max_age_seconds: int
+
+    def __post_init__(self) -> None:
+        if self.completed_max_age_seconds <= 0:
+            raise ValueError(f"completed_max_age_seconds must be positive: {self.completed_max_age_seconds}")
+        if self.in_progress_max_age_seconds <= 0:
+            raise ValueError(f"in_progress_max_age_seconds must be positive: {self.in_progress_max_age_seconds}")
+
+
 def progress_path(repo_root: Path, daemon_name: str) -> Path:
     return repo_root / ".refactor-loop" / "state" / PROGRESS_DIR_NAME / f"{_validate_daemon_name(daemon_name)}.json"
 
@@ -196,10 +208,10 @@ def classify_progress(
     daemon_name: str,
     *,
     now: int | None = None,
-    max_age_seconds: int,
+    budget: DaemonProgressBudget | None = None,
+    max_age_seconds: int | None = None,
 ) -> DaemonProgressHealth:
-    if max_age_seconds <= 0:
-        raise ValueError(f"max_age_seconds must be positive: {max_age_seconds}")
+    budget = _resolve_budget(budget=budget, max_age_seconds=max_age_seconds)
     current_time = _timestamp(now)
     path = progress_path(repo_root, daemon_name)
     try:
@@ -222,14 +234,29 @@ def classify_progress(
     if age < 0:
         return DaemonProgressHealth("malformed", None, "progress-future")
     if progress.status == "begin":
-        if age >= max_age_seconds:
+        if age >= budget.in_progress_max_age_seconds:
             return DaemonProgressHealth("overdue", age, f"progress-overdue:{age}s")
         return DaemonProgressHealth("in-progress", age, f"progress-in-progress:{age}s")
     if progress.status == "fail":
         return DaemonProgressHealth("failed", age, f"progress-failed:{_clean_message(progress.message) or progress.tick_id}")
-    if age >= max_age_seconds:
+    if age >= budget.completed_max_age_seconds:
         return DaemonProgressHealth("overdue", age, f"progress-overdue:{age}s")
     return DaemonProgressHealth("complete", age, f"progress-complete:{age}s")
+
+
+def _resolve_budget(
+    *,
+    budget: DaemonProgressBudget | None,
+    max_age_seconds: int | None,
+) -> DaemonProgressBudget:
+    if budget is not None:
+        return budget
+    if max_age_seconds is None:
+        raise ValueError("progress budget is required")
+    return DaemonProgressBudget(
+        completed_max_age_seconds=max_age_seconds,
+        in_progress_max_age_seconds=max_age_seconds,
+    )
 
 
 def _timestamp(value: int | None) -> int:
@@ -251,6 +278,7 @@ def _clean_message(value: str) -> str:
 
 
 __all__ = [
+    "DaemonProgressBudget",
     "DaemonProgressHealth",
     "DaemonTickProgress",
     "begin_tick",

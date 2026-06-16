@@ -189,6 +189,121 @@ class DaemonStatusProjectionTests(unittest.TestCase):
         self.assertEqual(701, daemon["progress_age_seconds"])
         self.assertEqual("progress-overdue:701s", daemon["stale_reason"])
 
+    def test_closed_label_reconciler_completed_progress_age_within_interval_plus_grace_is_running(self) -> None:
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+        ctx = LoopContext.load(
+            repo_root=self.tmp,
+            skill_root=SCRIPT_DIR.parent,
+            read_only=True,
+            env=env,
+        )
+        target = restart.daemon_target(
+            ctx,
+            "closed_label_reconciler",
+            ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon"),
+        )
+        target.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
+        target.heartbeat_file.write_text("2711\n", encoding="utf-8")
+        target.pid_file.parent.mkdir(parents=True, exist_ok=True)
+        target.pid_file.write_text("848\n", encoding="utf-8")
+        restart.DaemonLaunchFingerprint.current(ctx, "closed_label_reconciler", target.command).write(target.fingerprint_file)
+        progress = begin_tick(self.tmp, "closed_label_reconciler", now=1000, pid=857)
+        complete_tick(self.tmp, progress, now=1000)
+        wrapper_command = " ".join(
+            (
+                sys.executable,
+                "-c",
+                restart.WRAPPER_CODE,
+                "closed_label_reconciler",
+                str(ctx.repo_root),
+                str(target.pid_file),
+                str(target.died_file),
+                *target.command,
+            )
+        )
+        inventory = restart.DaemonProcessInventory(
+            (
+                restart.DaemonProcess(848, wrapper_command, 1),
+                restart.DaemonProcess(857, "python3 /tmp/old/consensus-rnd-cli closed-label-reconciler --daemon", 848),
+            )
+        )
+        singleton = DaemonSingletonProjection(target.singleton_lock_file, "held", 857, True, "lock-held")
+        (self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=inventory):
+                with mock.patch("codex_refactor_loop.daemon_status.probe_daemon_singleton", return_value=singleton):
+                    with mock.patch("codex_refactor_loop.restart.time.time", return_value=2711):
+                        with mock.patch("codex_refactor_loop.daemon_status.pid_alive", side_effect=lambda candidate: candidate in {848, 857}):
+                            report = daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        daemon = next(item for item in report.to_json()["daemons"] if item["name"] == "closed_label_reconciler")
+        self.assertEqual("running", daemon["status"])
+        self.assertEqual("fresh", daemon["heartbeat_status"])
+        self.assertEqual("complete", daemon["progress_status"])
+        self.assertEqual(1711, daemon["progress_age_seconds"])
+
+    def test_closed_label_reconciler_completed_progress_past_interval_plus_grace_is_stale(self) -> None:
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+        ctx = LoopContext.load(
+            repo_root=self.tmp,
+            skill_root=SCRIPT_DIR.parent,
+            read_only=True,
+            env=env,
+        )
+        target = restart.daemon_target(
+            ctx,
+            "closed_label_reconciler",
+            ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon"),
+        )
+        target.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
+        target.heartbeat_file.write_text("3400\n", encoding="utf-8")
+        target.pid_file.parent.mkdir(parents=True, exist_ok=True)
+        target.pid_file.write_text("848\n", encoding="utf-8")
+        restart.DaemonLaunchFingerprint.current(ctx, "closed_label_reconciler", target.command).write(target.fingerprint_file)
+        progress = begin_tick(self.tmp, "closed_label_reconciler", now=1000, pid=857)
+        complete_tick(self.tmp, progress, now=1000)
+        wrapper_command = " ".join(
+            (
+                sys.executable,
+                "-c",
+                restart.WRAPPER_CODE,
+                "closed_label_reconciler",
+                str(ctx.repo_root),
+                str(target.pid_file),
+                str(target.died_file),
+                *target.command,
+            )
+        )
+        inventory = restart.DaemonProcessInventory(
+            (
+                restart.DaemonProcess(848, wrapper_command, 1),
+                restart.DaemonProcess(857, "python3 /tmp/old/consensus-rnd-cli closed-label-reconciler --daemon", 848),
+            )
+        )
+        singleton = DaemonSingletonProjection(target.singleton_lock_file, "held", 857, True, "lock-held")
+        (self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=inventory):
+                with mock.patch("codex_refactor_loop.daemon_status.probe_daemon_singleton", return_value=singleton):
+                    with mock.patch("codex_refactor_loop.restart.time.time", return_value=3400):
+                        with mock.patch("codex_refactor_loop.daemon_status.pid_alive", side_effect=lambda candidate: candidate in {848, 857}):
+                            report = daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        daemon = next(item for item in report.to_json()["daemons"] if item["name"] == "closed_label_reconciler")
+        self.assertEqual("stale", daemon["status"])
+        self.assertEqual("fresh", daemon["heartbeat_status"])
+        self.assertEqual("overdue", daemon["progress_status"])
+        self.assertEqual(2400, daemon["progress_age_seconds"])
+        self.assertEqual("progress-overdue:2400s", daemon["stale_reason"])
+
     def test_failed_progress_is_stale_even_when_heartbeat_is_fresh(self) -> None:
         env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
         heartbeat = self.tmp / ".refactor-loop" / "heartbeats" / "comment-monitor.ts"

@@ -18,7 +18,7 @@ from typing import Any, Callable, Protocol, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from .context import LoopContext, LoopContextError
 from .daemon_singleton import DaemonSingletonProjection, lock_path as daemon_singleton_lock_path, probe as probe_daemon_singleton
-from .daemon_progress import DaemonProgressHealth, classify_progress
+from .daemon_progress import DaemonProgressBudget, DaemonProgressHealth, classify_progress
 from .gh_accounting import accounting_env
 from .runtime_retention import retain_runtime, runtime_retention_enabled
 from .update_check import maybe_run_update_check
@@ -90,6 +90,48 @@ class DaemonTarget:
     fingerprint_file: Path
     died_file: Path
     singleton_lock_file: Path
+
+
+@dataclass(frozen=True)
+class DaemonRuntimeTargetPolicy:
+    name: str
+    tick_interval_seconds: int
+    progress_budget: DaemonProgressBudget
+
+
+@dataclass(frozen=True)
+class DaemonRuntimePolicy:
+    targets: tuple[DaemonRuntimeTargetPolicy, ...]
+
+    @classmethod
+    def from_context(cls, ctx: LoopContext, config: RestartConfig | None = None) -> "DaemonRuntimePolicy":
+        restart_config = config or RestartConfig()
+        return cls(
+            tuple(
+                DaemonRuntimeTargetPolicy(
+                    name=name,
+                    tick_interval_seconds=resolved_interval,
+                    progress_budget=DaemonProgressBudget(
+                        completed_max_age_seconds=resolved_interval + restart_config.progress_fresh_seconds,
+                        in_progress_max_age_seconds=restart_config.progress_fresh_seconds,
+                    ),
+                )
+                for name, command_template in restart_daemon_commands_for_context(ctx)
+                for resolved_interval in (_daemon_tick_interval_seconds(ctx, name, command_template),)
+            )
+        )
+
+    def daemon_names(self) -> tuple[str, ...]:
+        return tuple(target.name for target in self.targets)
+
+    def target_policy(self, name: str) -> DaemonRuntimeTargetPolicy:
+        for target in self.targets:
+            if target.name == name:
+                return target
+        raise ValueError(f"unknown daemon target: {name}")
+
+    def progress_budget(self, name: str) -> DaemonProgressBudget:
+        return self.target_policy(name).progress_budget
 
 
 @dataclass(frozen=True)
@@ -508,6 +550,10 @@ def restart_daemon_commands_for_context(ctx: LoopContext) -> tuple[tuple[str, tu
     return tuple((name, command) for name, command in DAEMON_COMMANDS if name not in SUPERVISOR_REPLACED_DAEMON_TARGETS)
 
 
+def progress_budget_for_daemon(ctx: LoopContext, daemon_name: str, config: RestartConfig | None = None) -> DaemonProgressBudget:
+    return DaemonRuntimePolicy.from_context(ctx, config).progress_budget(daemon_name)
+
+
 def read_daemon_pid(target: DaemonTarget) -> int | None:
     return _read_pid(target.pid_file)
 
@@ -860,7 +906,7 @@ class RestartDaemons:
             self.ctx.repo_root,
             name,
             now=self.runtime.now(),
-            max_age_seconds=self.config.progress_fresh_seconds,
+            budget=progress_budget_for_daemon(self.ctx, name, self.config),
         )
 
     def _stop_existing_daemon(self, target: DaemonTarget, *, instance: DaemonInstanceProjection) -> None:
@@ -919,6 +965,44 @@ def _positive_env_int(ctx: LoopContext, env_name: str, default: str) -> str:
     except ValueError:
         return default
     return str(parsed) if parsed > 0 else default
+
+
+def _daemon_tick_interval_seconds(ctx: LoopContext, name: str, command_template: Sequence[str]) -> int:
+    resolved_command = tuple(_resolve_daemon_command_part(ctx, part) for part in command_template)
+    interval = _interval_from_option(resolved_command, "--interval")
+    if interval is not None:
+        return interval
+    interval = _interval_from_option(resolved_command, "--interval-seconds")
+    if interval is not None:
+        return interval
+    return _daemon_default_tick_interval_seconds(name)
+
+
+def _interval_from_option(command: Sequence[str], option: str) -> int | None:
+    for index, part in enumerate(command):
+        if part == option and index + 1 < len(command):
+            try:
+                parsed = int(command[index + 1])
+            except ValueError:
+                return None
+            return parsed if parsed > 0 else None
+    return None
+
+
+def _daemon_default_tick_interval_seconds(name: str) -> int:
+    defaults = {
+        "concurrency_monitor": 60,
+        "comment-monitor": 30,
+        "codex-progress-reporter": 600,
+        "dev_sync_daemon": 600,
+        "phase9_router_daemon": 120,
+        "closed_label_reconciler": 1800,
+        "wakeup_runner_daemon": 60,
+    }
+    try:
+        return defaults[name]
+    except KeyError as exc:
+        raise ValueError(f"unknown daemon target: {name}") from exc
 
 
 def _truthy(value: object) -> bool:
