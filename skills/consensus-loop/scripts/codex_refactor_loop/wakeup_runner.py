@@ -1166,6 +1166,17 @@ class WakeupRunner:
         preconditions = action.get("preconditions")
         if not isinstance(preconditions, list) or "durable_consensus_artifact" not in preconditions:
             return "consensus_implementation_missing_precondition:durable_consensus_artifact"
+        if "resume_requested_label_present" in preconditions:
+            target = action.get("target_number")
+            if action.get("target_kind") != "issue" or not isinstance(target, int):
+                return "consensus_implementation_resume_target_missing"
+            labels_error = self._live_issue_label_requirement_error(
+                target,
+                required_labels=(labels.MANAGED, labels.TRIAGE_RESUME_REQUESTED),
+                reason_prefix="consensus_implementation",
+            )
+            if labels_error:
+                return labels_error
         artifact_error = self._validate_consensus_artifact(action)
         if artifact_error:
             return artifact_error
@@ -1177,6 +1188,29 @@ class WakeupRunner:
         readiness_reason = consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root, ctx=self.ctx)
         if readiness_reason:
             return f"consensus_implementation_not_ready:{readiness_reason}"
+        return None
+
+    def _live_issue_label_requirement_error(
+        self,
+        issue_number: int,
+        *,
+        required_labels: Sequence[str],
+        reason_prefix: str,
+    ) -> str | None:
+        result = self.command_runner(["gh", "issue", "view", str(issue_number), "--json", "labels,body"])
+        if result.returncode != 0:
+            return f"{reason_prefix}_issue_unavailable"
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return f"{reason_prefix}_issue_invalid_json"
+        if not isinstance(payload, Mapping):
+            return f"{reason_prefix}_issue_invalid_json"
+        normalized = labels.normalize_label_set(_issue_label_names(payload.get("labels"))).canonical
+        if labels.MANAGED in required_labels and labels.MANAGED not in normalized:
+            return f"{reason_prefix}_target_not_managed"
+        if labels.TRIAGE_RESUME_REQUESTED in required_labels and labels.TRIAGE_RESUME_REQUESTED not in normalized:
+            return f"{reason_prefix}_resume_label_missing"
         return None
 
     def _validate_consensus_artifact(self, action: Mapping[str, Any]) -> str | None:

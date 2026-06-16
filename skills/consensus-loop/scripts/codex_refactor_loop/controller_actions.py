@@ -91,6 +91,10 @@ ISSUE_LABELS_REMOVE = (
     labels.HUMAN_MAINTAINER_DECISION,
     labels.STUCK,
 )
+CONSENSUS_IMPLEMENTATION_ISSUE_LABELS_REMOVE = (
+    *ISSUE_LABELS_REMOVE,
+    labels.TRIAGE_RESUME_REQUESTED,
+)
 SAFE_WORKTREE_ITERATION_RE = re.compile(r"^[0-9]+$")
 SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
@@ -1664,7 +1668,7 @@ class ControllerActions:
 
     def _move_issue_to_implementing_phase(self, issue_target: str) -> int:
         add_labels = (labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO)
-        remove_labels = ISSUE_LABELS_REMOVE
+        remove_labels = CONSENSUS_IMPLEMENTATION_ISSUE_LABELS_REMOVE
         args = ["issue", "edit", issue_target]
         for label in remove_labels:
             args.extend(["--remove-label", label])
