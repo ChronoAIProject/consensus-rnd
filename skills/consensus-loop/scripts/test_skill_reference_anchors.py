@@ -1849,6 +1849,14 @@ class WakeupRunnerContractTests(unittest.TestCase):
         self.assertIn("classifies each dispatch payload through `safe_progress_scheduler.py`", dispatch_protocol)
         self.assertIn("do not stall later low/medium queue files", dispatch_protocol)
 
+    def test_wakeup_runner_dry_run_has_no_live_ledger_or_retry_authority(self) -> None:
+        wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")
+        self.assertIn(
+            '`--dry-run`/test-only runner execution must not append live wakeup-runner ledger rows, '
+            'and legacy `status="dry-run"` rows have no retry-suppression authority.',
+            wakeup_runner,
+        )
+
     def test_consensus_implementation_projection_fact_source_is_judge_only(self) -> None:
         wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")
         meta_judge = read(SKILL_ROOT / "prompts" / "meta-judge.md")
