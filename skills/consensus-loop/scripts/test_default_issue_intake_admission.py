@@ -119,7 +119,6 @@ class DefaultIssueIntakeAdmissionTests(unittest.TestCase):
 
         decision = admission.evaluate(self.candidate())
 
-        # Before #973 this binary pending-intent gate rejected here and serialized intake.
         self.assertTrue(decision.accepted)
         self.assertEqual("", decision.reason)
         self.assertEqual("upstream_idle", decision.proof["upstream_state"])

@@ -450,7 +450,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual("applied", result[0].status)
         self.assertEqual([("apply_default_issue_intake_claim", 77)], actions.calls)
 
-    def test_apply_default_issue_intake_claim_revalidates_admission_before_helper_dispatch(self) -> None:
+    def test_apply_default_issue_intake_claim_revalidates_active_design_cap_before_helper_dispatch(self) -> None:
         action = {
             "kind": "default-issue-intake-claim",
             "action_id": "default-issue-intake-claim:issue:77",
@@ -553,7 +553,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual("default_issue_intake_admission:claim_cooldown_active", result[0].reason)
         self.assertEqual([], actions.calls)
 
-    def test_apply_default_issue_intake_claim_revalidates_admission_before_helper_dispatch(self) -> None:
+    def test_apply_default_issue_intake_claim_revalidates_daemon_progress_before_helper_dispatch(self) -> None:
         action = self.default_issue_intake_claim_action()
         begin_tick(self.repo, "phase9_router_daemon", now=1000, pid=42)
         actions = FakeActions()
