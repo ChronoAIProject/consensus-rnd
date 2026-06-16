@@ -49,6 +49,76 @@ class DaemonStatusProjectionTests(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def test_collect_requires_explicit_host_env_before_inventory_or_fingerprint(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect") as collect_inventory:
+                with mock.patch("codex_refactor_loop.daemon_status.read_stored_launch_fingerprint") as read_fingerprint:
+                    with self.assertRaisesRegex(
+                        daemon_status.LoopContextError,
+                        "daemon-status requires CONSENSUS_RND_HOST_ENV to point at host-owned host.env",
+                    ):
+                        daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        collect_inventory.assert_not_called()
+        read_fingerprint.assert_not_called()
+
+    def test_collect_rejects_empty_host_env_before_inventory(self) -> None:
+        host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
+        host_env.write_text("\n", encoding="utf-8")
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect") as collect_inventory:
+                with self.assertRaisesRegex(daemon_status.LoopContextError, "daemon-status host.env is empty"):
+                    daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        collect_inventory.assert_not_called()
+
+    def test_collect_rejects_host_env_repo_root_mismatch(self) -> None:
+        other = self.tmp / "other"
+        other.mkdir()
+        host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
+        host_env.write_text(
+            f'export REPO_ROOT="{other}"\nexport GH_REPO_SLUG="owner/repo"\n',
+            encoding="utf-8",
+        )
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect") as collect_inventory:
+                with self.assertRaisesRegex(daemon_status.LoopContextError, "daemon-status host.env REPO_ROOT mismatch"):
+                    daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        collect_inventory.assert_not_called()
+
+    def test_collect_rejects_invalid_host_env_slug_before_inventory(self) -> None:
+        host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
+        host_env.write_text(
+            f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo/extra"\n',
+            encoding="utf-8",
+        )
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect") as collect_inventory:
+                with self.assertRaisesRegex(daemon_status.LoopContextError, "daemon-status GH_REPO_SLUG must be OWNER/REPO"):
+                    daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        collect_inventory.assert_not_called()
+
+    def test_main_missing_host_env_exits_2_without_json(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch("sys.stderr") as stderr:
+                with mock.patch("sys.stdout") as stdout:
+                    status = daemon_status.main(["--json"])
+
+        self.assertEqual(2, status)
+        self.assertIn(
+            "daemon-status requires CONSENSUS_RND_HOST_ENV to point at host-owned host.env",
+            "".join(call.args[0] for call in stderr.write.call_args_list),
+        )
+        stdout.write.assert_not_called()
+
     def test_collect_projects_cached_display_only_login(self) -> None:
         env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
         with mock.patch.dict(os.environ, env, clear=True):

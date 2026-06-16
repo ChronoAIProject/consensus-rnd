@@ -2106,6 +2106,25 @@ class WakeupRunnerContractTests(unittest.TestCase):
             with self.subTest(stale=stale):
                 self.assertNotIn(stale, self.skill)
 
+    def test_daemon_status_requires_host_env_admission_before_fingerprint_projection(self) -> None:
+        section = section_after_heading(self.skill, "Anti-stop restart helper cron/launchd install(per #49)")
+        runtime_exception = section_after_heading(self.skill, "Named runtime exception — anti-stop restart helper(per #49)")
+        daemon_bodies = section_after_heading(self.skill, "Daemon command bodies")
+        combined = "\n".join((section, runtime_exception, daemon_bodies))
+        for needle in (
+            "daemon-status --json` uses the same base admission before daemon inventory/fingerprint projection",
+            "launch currentness depends on host-owned identity",
+            "remains read-only and gains no restart write-side authority",
+            "`daemon-status requires CONSENSUS_RND_HOST_ENV ...`",
+            "before reading daemon inventory, stored fingerprints, or printing JSON",
+            "`host_env_path=\"\"` / `host_env_sha256=\"missing\"`",
+            "must not add an `unknown` daemon-status schema state",
+            "does not project fabricated stale JSON",
+            "test_daemon_status.py",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
     def test_no_shared_controller_runtime_registry_or_tick_envelope_scaffold(self) -> None:
         inventory = section_after_anchor_until_heading(self.skill, "tier0-scaffold-inventory", level=3)
         for needle in (
