@@ -47,6 +47,17 @@ Escalation / consensus picks **must** include a clear option table with one-line
 - **zsh-safe exit-code variables**: if shell code captures a `gh` exit code, use variable names such as `post_exit_code` or `gh_exit_code`; **do not** use `status`. `status` is a zsh read-only special variable and assignment will fail the worker.
 - **Decomposition tracking grammar is helper-owned**: workers may discuss `IssueDecompositionPlan` artifacts, but must not write `<!-- crnd:issue-decomposition-tracking -->`, `IssueDecompositionChild fingerprint:`, or parent tracking blocks in GitHub-facing prose; the checked-in #403 helper is the only writer for that idempotency grammar.
 
+## Reviewer GitHub-visible evidence tail
+
+Reviewer roles must end the GitHub PR comment with this ordered tail after the body/evidence:
+
+1. `review_round: <round>`
+2. `head_sha: <sha>`
+3. Role-matching `REVIEW_DONE:<PR>:<role>:<verdict>`
+4. Final standalone AI sentinel
+
+No marker or body may appear after the sentinel. The wakeup runner treats only GitHub-visible, final-sentinel, same-head reviewer comments as merge/fix authority; local reviewer output files and logs are diagnostics and prompt inputs.
+
 ## Allowed `gh` Commands
 
 - `gh issue view` / `gh issue comment`
@@ -104,3 +115,4 @@ If no original authors are provided, skip this section.
 - ❌ Empty promises such as "complete overhaul" or "comprehensive review"
 - ❌ Code identifiers appear without a one-sentence explanation
 - ❌ TL;DR omits the next step or what the maintainer should do
+- ❌ For reviewer comments, any text or marker after the final standalone AI sentinel

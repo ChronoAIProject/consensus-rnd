@@ -652,6 +652,17 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
                 {"body": f"review_round: 1\nhead_sha: {'a' * 40}\nREVIEW_DONE:12:tests:approve"},
             ),
             (
+                "missing_final_ai_sentinel:tests",
+                {
+                    "body": (
+                        f"review_round: 1\nhead_sha: {'a' * 40}\n"
+                        "REVIEW_DONE:12:tests:approve\n\n"
+                        "⟦AI:AUTO-LOOP⟧\n"
+                        "REVIEW_DONE:12:tests:approve"
+                    )
+                },
+            ),
+            (
                 "missing_reviewed_head_sha:tests",
                 {"body": "review_round: 1\nREVIEW_DONE:12:tests:approve\n\n⟦AI:AUTO-LOOP⟧"},
             ),
