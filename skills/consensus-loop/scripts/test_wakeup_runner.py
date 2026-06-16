@@ -4876,6 +4876,58 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "dispatch_consensus_implementation")
 
+    def test_resume_requested_dispatch_requires_live_resume_label_before_helper(self) -> None:
+        actions = FakeActions()
+        action = self.consensus_action(
+            kind="resume-requested-consensus-implementation",
+            action_id="resume-requested-consensus-implementation:20:5",
+            source_artifact="github-open-managed-items",
+            source_marker="resume-requested:issue:20",
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target",
+                "live_managed_target",
+                "resume_requested_label_present",
+                "durable_consensus_artifact",
+                "consensus_implementation_ready",
+            ],
+        )
+
+        results = self.run_result(
+            self.base_plan(action),
+            gh_labels=[labels.MANAGED, labels.TRIAGE_RESUME_REQUESTED],
+            actions=actions,
+        )
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "dispatch_consensus_implementation")
+
+    def test_resume_requested_dispatch_blocks_when_live_label_missing(self) -> None:
+        actions = FakeActions()
+        action = self.consensus_action(
+            kind="resume-requested-consensus-implementation",
+            action_id="resume-requested-consensus-implementation:20:5",
+            source_artifact="github-open-managed-items",
+            source_marker="resume-requested:issue:20",
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target",
+                "live_managed_target",
+                "resume_requested_label_present",
+                "durable_consensus_artifact",
+                "consensus_implementation_ready",
+            ],
+        )
+
+        results = self.run_result(self.base_plan(action), gh_labels=[labels.MANAGED], actions=actions)
+
+        self.assert_blocked_before_dispatch(
+            results,
+            "resume-requested-consensus-implementation:20:5",
+            "consensus_implementation_resume_label_missing",
+            actions,
+        )
+
     def test_issue_decomposition_apply_revalidates_digest_live_parent_and_dispatches_existing_helper(self) -> None:
         actions = FakeActions()
         action = self.issue_decomposition_action()

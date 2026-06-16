@@ -28,6 +28,7 @@ from codex_refactor_loop.banners import BannerRequest
 from codex_refactor_loop.cli import COMMANDS
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import (
+    CONSENSUS_IMPLEMENTATION_ISSUE_LABELS_REMOVE,
     ControllerActions,
     ISSUE_LABELS_REMOVE,
 )
@@ -2998,6 +2999,32 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn('"task_id": "implement-issue-413"', pending)
         self.assertLess(sequence.index("gh:['issue', 'edit', '413']"), sequence.index("render_prompt"))
 
+    def test_dispatch_consensus_implementation_clears_resume_requested_label_on_phase_move(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
+        worktree = self.tmp / ".worktrees" / "iter413-issue-413"
+        action = self.dispatch_consensus_implementation_action()
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(list(args))
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        def fake_render(_template: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
+            Path(output_path).write_text("rendered prompt\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "fresh_safe_worktree", return_value=(worktree, "refactor/iter413-issue-413")):
+                with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
+                    with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                        self.assertEqual(0, self.actions.dispatch_consensus_implementation(action))
+
+        issue_edit = gh_calls[0]
+        removed = [issue_edit[index + 1] for index, value in enumerate(issue_edit) if value == "--remove-label"]
+        self.assertIn(labels.TRIAGE_RESUME_REQUESTED, removed)
+        self.assertIn(labels.PHASE_CONSENSUS_REACHED, removed)
+        self.assertIn(labels.HUMAN_AUTO, removed)
+        self.assertNotIn(labels.TRIAGE_PENDING, removed)
+
     def test_dispatch_consensus_implementation_phase_transition_failure_blocks_before_worktree(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
         action = {
@@ -3039,7 +3066,7 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn('gh_rc="7"', canonical_line)
         self.assertIn('gh_stderr="label update failed missing \\"phase\\" label"', canonical_line)
         self.assertIn(f'add_labels="{labels.MANAGED},{labels.PHASE_IMPLEMENTING},{labels.HUMAN_AUTO}"', canonical_line)
-        self.assertIn(f'remove_labels="{",".join(ISSUE_LABELS_REMOVE)}"', canonical_line)
+        self.assertIn(f'remove_labels="{",".join(CONSENSUS_IMPLEMENTATION_ISSUE_LABELS_REMOVE)}"', canonical_line)
         self.assertNotIn("HARNESS_SPAWN_INTENT", pending)
 
     def test_dispatch_consensus_implementation_intent_round_trips_through_wakeup_plan(self) -> None:

@@ -194,6 +194,7 @@ EXECUTABLE_ACTION_KINDS = {
     "release-publish",
     "review-evidence-redispatch",
     "default-issue-intake-claim",
+    "resume-requested-consensus-implementation",
 }
 NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_PR_OPEN: "pr-open",
@@ -3775,7 +3776,9 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None, c
     for item in ordered:
         raw = raw_by_key.get((item.kind, item.number))
         title = raw.title if raw is not None else item.title
-        milestone = label_catalog.MILESTONE_CURRENT in label_catalog.normalize_label_set(item.labels).canonical
+        normalized_labels = label_catalog.normalize_label_set(item.labels).canonical
+        milestone = label_catalog.MILESTONE_CURRENT in normalized_labels
+        resume_requested = label_catalog.TRIAGE_RESUME_REQUESTED in normalized_labels
         priority = 6 if milestone else 7
         item_name = f"{'PR' if item.kind == 'pr' else item.kind} #{item.number}"
         action = {
@@ -3797,18 +3800,40 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None, c
             "status_only": True,
             "no_lifecycle_authority": True,
         }
-        if item.kind == "issue" and phase_from_labels(item.labels) == "implementation" and milestone:
+        if item.kind == "issue" and (
+            (phase_from_labels(item.labels) == "implementation" and milestone)
+            or resume_requested
+        ):
             consensus_fields = latest_consensus_implementation_for_issue(repo_root, item.number) if repo_root else {}
             if consensus_fields:
+                resume_preconditions = (
+                    ["live_managed_target", "resume_requested_label_present"]
+                    if resume_requested
+                    else []
+                )
                 action.update(
                     {
-                        "kind": "consensus-implementation-ready",
-                        "action_id": f"consensus-implementation-ready:{item.number}:{consensus_fields['consensus_round']}",
+                        "kind": (
+                            "resume-requested-consensus-implementation"
+                            if resume_requested
+                            else "consensus-implementation-ready"
+                        ),
+                        "action_id": (
+                            f"resume-requested-consensus-implementation:{item.number}:{consensus_fields['consensus_round']}"
+                            if resume_requested
+                            else f"consensus-implementation-ready:{item.number}:{consensus_fields['consensus_round']}"
+                        ),
                         "route": "dispatch-consensus-implementation",
                         "controller_action": "dispatch_consensus_implementation",
+                        "source_marker": (
+                            f"resume-requested:issue:{item.number}"
+                            if resume_requested
+                            else action["source_marker"]
+                        ),
                         "preconditions": [
                             "active_controller_owner",
                             "live_open_target",
+                            *resume_preconditions,
                             "durable_consensus_artifact",
                             "consensus_implementation_ready",
                         ],

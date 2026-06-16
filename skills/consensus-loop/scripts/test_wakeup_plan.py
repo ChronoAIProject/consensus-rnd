@@ -1436,6 +1436,42 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         issue_rows: dict[str, list[dict[str, object]]] = {
             "open_issue_330": [issue(330, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "open_issue_20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "resume_requested_issue20": [
+                issue(
+                    20,
+                    "resume target",
+                    [
+                        managed,
+                        label_catalog.PHASE_CONSENSUS_REACHED,
+                        auto,
+                        label_catalog.TRIAGE_RESUME_REQUESTED,
+                    ],
+                )
+            ],
+            "resume_requested_issue20_no_artifact": [
+                issue(
+                    20,
+                    "resume target without artifact",
+                    [
+                        managed,
+                        label_catalog.PHASE_CONSENSUS_REACHED,
+                        auto,
+                        label_catalog.TRIAGE_RESUME_REQUESTED,
+                    ],
+                )
+            ],
+            "resume_requested_issue20_with_closing_pr": [
+                issue(
+                    20,
+                    "resume target with closing PR",
+                    [
+                        managed,
+                        label_catalog.PHASE_CONSENSUS_REACHED,
+                        auto,
+                        label_catalog.TRIAGE_RESUME_REQUESTED,
+                    ],
+                )
+            ],
             "local_iter_branch_issue581_stale_base_noop": [
                 issue(581, "noop implementation target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])
             ],
@@ -1567,6 +1603,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "review_thread_node_malformed": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
             "closing_pr_issue20": [
                 issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+                pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
+            ],
+            "resume_requested_issue20_with_closing_pr": [
                 pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
             ],
             "represented_parent": [pr(255, "child PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/issue239", body="Closes #239")],
@@ -6861,6 +6900,83 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(actions[0]["consensus_implementation_ready"])
         self.assertIn("consensus_implementation_ready", actions[0]["preconditions"])
         self.assertNotIn("suppressed_reason", actions[0])
+
+    def test_resume_requested_label_projects_existing_consensus_dispatch_action(self) -> None:
+        artifact = self.write_consensus_artifact()
+
+        plan = self.run_plan(fixture="resume_requested_issue20")
+
+        action = next(
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "dispatch_consensus_implementation"
+        )
+        self.assertEqual("resume-requested-consensus-implementation", action["kind"])
+        self.assertEqual("resume-requested-consensus-implementation:20:5", action["action_id"])
+        self.assertEqual("dispatch-consensus-implementation", action["route"])
+        self.assertEqual("github-open-managed-items", action["source_artifact"])
+        self.assertEqual("resume-requested:issue:20", action["source_marker"])
+        self.assertEqual("issue", action["target_kind"])
+        self.assertEqual(20, action["target_number"])
+        self.assertEqual(artifact.relative_to(self.repo).as_posix(), action["consensus_artifact"])
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertTrue(action["consensus_implementation_ready"])
+        self.assertNotIn("status_only", action)
+        self.assertIn("resume_requested_label_present", action["preconditions"])
+        self.assertNotIn("cmd", action)
+        self.assertNotIn("gh", action)
+
+    def test_resume_requested_label_suppresses_without_durable_consensus_artifact(self) -> None:
+        plan = self.run_plan(fixture="resume_requested_issue20_no_artifact")
+
+        action = next(item for item in plan["actions"] if item["action_id"] == "existing-issue:issue:20")
+        self.assertEqual("existing-issue", action["kind"])
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
+        self.assertNotIn("runner_authority", action)
+
+    def test_resume_requested_label_suppresses_when_readiness_fails(self) -> None:
+        self.write_consensus_artifact()
+        action = {
+            "kind": "resume-requested-consensus-implementation",
+            "controller_action": "dispatch_consensus_implementation",
+            "target_kind": "issue",
+            "target_number": 20,
+            "iteration": "20",
+            "cluster_id": "issue-20",
+            "consensus_implementation_ready": True,
+        }
+        gh_items = [
+            GhItem(
+                kind="issue",
+                number=20,
+                title="resume target",
+                labels=(
+                    label_catalog.MANAGED,
+                    label_catalog.PHASE_CONSENSUS_REACHED,
+                    label_catalog.HUMAN_AUTO,
+                    label_catalog.TRIAGE_RESUME_REQUESTED,
+                ),
+            ),
+            GhItem(
+                kind="PR",
+                number=320,
+                title="closing PR",
+                labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING, label_catalog.HUMAN_AUTO),
+                head_ref="refactor/iter20-issue-20",
+                body="Closes #20",
+            ),
+        ]
+
+        from codex_refactor_loop.wakeup_plan import _apply_consensus_implementation_readiness
+
+        _apply_consensus_implementation_readiness(action, self.repo, gh_items, None, None)
+
+        self.assertTrue(action["status_only"])
+        self.assertEqual("open_closing_pr", action["suppressed_reason"])
+        self.assertFalse(action["consensus_implementation_ready"])
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
 
     def test_consensus_implementation_scope_conflicts_serialize_overlapping_dispatches(self) -> None:
         self.write_consensus_artifact(
