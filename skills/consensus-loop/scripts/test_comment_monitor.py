@@ -57,6 +57,70 @@ class CommentMonitorTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "MAINTAINER_WHITELIST"):
             CommentMonitor(ctx)
 
+    def test_startup_fail_closed_for_missing_repo_appends_one_pending_event_line(self) -> None:
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
+            f'export REPO_ROOT="{self.tmp}"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        output = StringIO()
+
+        with mock.patch("codex_refactor_loop.monitors.comment.LoopContext.load", return_value=ctx):
+            with redirect_stdout(output):
+                with mock.patch("sys.stderr", new_callable=StringIO) as stderr:
+                    self.assertEqual(2, comment_monitor_main(["--once"]))
+
+        pending = (self.tmp / ".refactor-loop" / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertEqual(
+            ["DAEMON_STARTUP_FAIL_CLOSED daemon=comment-monitor reason=gh-repo-slug-unset"],
+            [line for line in pending.splitlines() if "DAEMON_STARTUP_FAIL_CLOSED" in line],
+        )
+        self.assertIn("GH_REPO_SLUG", stderr.getvalue())
+        self.assertNotIn("DAEMON_STARTUP_FAIL_CLOSED", output.getvalue())
+
+    def test_startup_fail_closed_for_missing_whitelist_appends_one_pending_event_line(self) -> None:
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
+            f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        output = StringIO()
+
+        with mock.patch("codex_refactor_loop.monitors.comment.LoopContext.load", return_value=ctx):
+            with redirect_stdout(output):
+                with mock.patch("sys.stderr", new_callable=StringIO) as stderr:
+                    self.assertEqual(2, comment_monitor_main(["--once"]))
+
+        pending = (self.tmp / ".refactor-loop" / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertEqual(
+            ["DAEMON_STARTUP_FAIL_CLOSED daemon=comment-monitor reason=maintainer-whitelist-unset"],
+            [line for line in pending.splitlines() if "DAEMON_STARTUP_FAIL_CLOSED" in line],
+        )
+        self.assertIn("MAINTAINER_WHITELIST", stderr.getvalue())
+        self.assertNotIn("DAEMON_STARTUP_FAIL_CLOSED", output.getvalue())
+
+    def test_startup_fail_closed_appends_one_line_per_main_invocation(self) -> None:
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
+            f'export REPO_ROOT="{self.tmp}"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+
+        with mock.patch("codex_refactor_loop.monitors.comment.LoopContext.load", return_value=ctx):
+            with mock.patch("sys.stderr", new_callable=StringIO):
+                self.assertEqual(2, comment_monitor_main(["--once"]))
+            with mock.patch("sys.stderr", new_callable=StringIO):
+                self.assertEqual(2, comment_monitor_main(["--once"]))
+
+        pending = (self.tmp / ".refactor-loop" / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertEqual(
+            [
+                "DAEMON_STARTUP_FAIL_CLOSED daemon=comment-monitor reason=gh-repo-slug-unset",
+                "DAEMON_STARTUP_FAIL_CLOSED daemon=comment-monitor reason=gh-repo-slug-unset",
+            ],
+            [line for line in pending.splitlines() if "DAEMON_STARTUP_FAIL_CLOSED" in line],
+        )
+
     def test_controller_post_filter_covers_sentinel_and_banner_prefix(self) -> None:
         self.assertTrue(is_controller_post("hello", "body\n⟦AI:AUTO-LOOP⟧"))
         self.assertTrue(is_controller_post("## 📊 status", "body"))
