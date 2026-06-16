@@ -451,6 +451,30 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                 ),
                 "GH_REPO_SLUG",
             ),
+            (
+                "empty-owner-gh-repo-slug-segment",
+                self.ctx_with_restart_admission_override(
+                    host_env={**valid_host_env, "GH_REPO_SLUG": "/repo"},
+                    gh_repo_slug="/repo",
+                ),
+                "GH_REPO_SLUG",
+            ),
+            (
+                "empty-repo-gh-repo-slug-segment",
+                self.ctx_with_restart_admission_override(
+                    host_env={**valid_host_env, "GH_REPO_SLUG": "owner/"},
+                    gh_repo_slug="owner/",
+                ),
+                "GH_REPO_SLUG",
+            ),
+            (
+                "gh-repo-slug-loaded-context-mismatch",
+                self.ctx_with_restart_admission_override(
+                    host_env={**valid_host_env, "GH_REPO_SLUG": "example/repo"},
+                    gh_repo_slug="other/repo",
+                ),
+                "loaded context",
+            ),
         )
 
         for name, ctx, pattern in cases:
