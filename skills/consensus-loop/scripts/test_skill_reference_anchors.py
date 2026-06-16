@@ -2107,6 +2107,8 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "restart.py::DAEMON_COMMANDS",
             "sole active seven-daemon command surface",
             "restart_managed_daemon_names()",
+            "DaemonRuntimePolicy",
+            "not a daemon registry, lifecycle authority, host production SSOT, or #191 lease substitute",
             "daemon name, owner module/CLI command, tick import path, authority note, and test owner",
             "callable, argv/shell/cmd/env, git/gh, executor, dispatch, authorization, pending-events, state-transition, or lifecycle owner fields",
             "cli.py::COMMANDS[*].authority",

@@ -27,9 +27,11 @@ from codex_refactor_loop.restart import (
     DAEMON_COMMANDS,
     DaemonProcess,
     DaemonProcessInventory,
+    DaemonRuntimePolicy,
     RestartConfig,
     RestartDaemons,
     daemon_targets,
+    progress_budget_for_daemon,
     restart_managed_daemon_names,
 )
 from codex_refactor_loop.runtime_retention import RuntimeRetentionResult
@@ -573,6 +575,36 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", patched):
             self.assertEqual(("first", "second"), restart.restart_managed_daemon_names())
 
+    def test_daemon_runtime_policy_mirrors_restart_allowlist_without_patrol_inspector(self) -> None:
+        policy = DaemonRuntimePolicy.from_context(self.ctx, self.config)
+
+        self.assertEqual(DAEMON_NAMES, policy.daemon_names())
+        self.assertEqual(1800, policy.target_policy("closed_label_reconciler").tick_interval_seconds)
+        self.assertEqual(2400, policy.progress_budget("closed_label_reconciler").completed_max_age_seconds)
+        self.assertEqual(self.config.progress_fresh_seconds, policy.progress_budget("closed_label_reconciler").in_progress_max_age_seconds)
+        self.assertEqual(
+            restart._positive_env_int(self.ctx, "PHASE9_ROUTER_INTERVAL_SECONDS", "120"),
+            str(policy.target_policy("phase9_router_daemon").tick_interval_seconds),
+        )
+        self.assertNotIn("patrol_inspector_daemon", policy.daemon_names())
+        with self.assertRaises(ValueError):
+            policy.target_policy("patrol_inspector_daemon")
+
+    def test_wakeup_runner_interval_seconds_sets_completed_progress_budget(self) -> None:
+        self.host_env_path.write_text(
+            f'export REPO_ROOT="{self.repo}"\n'
+            'export GH_REPO_SLUG="example/repo"\n'
+            'export MAINTAINER_WHITELIST="maintainer"\n'
+            'export WAKEUP_RUNNER_INTERVAL_SECONDS="145"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill, env={"CONSENSUS_RND_HOST_ENV": str(self.host_env_path)})
+
+        budget = progress_budget_for_daemon(ctx, "wakeup_runner_daemon", self.config)
+
+        self.assertEqual(145 + self.config.progress_fresh_seconds, budget.completed_max_age_seconds)
+        self.assertEqual(self.config.progress_fresh_seconds, budget.in_progress_max_age_seconds)
+
     def test_controller_tick_supervisor_restart_target_is_host_opt_in_only(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="restart-daemons", lease_id="lease", expires_at="")
         calls: list[str] = []
@@ -811,6 +843,41 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
         self.assertNotEqual(old_pid, self.read_pid("comment-monitor"))
         self.assertEqual(2, self.start_count("comment-monitor"))
+
+    def test_closed_label_reconciler_completed_progress_uses_interval_plus_grace(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("closed_label_reconciler")
+        progress = begin_tick(self.repo, "closed_label_reconciler", now=self.runtime.now() - 1711, pid=old_pid + 1)
+        complete_tick(self.repo, progress, now=self.runtime.now() - 1711)
+        self.heartbeat_path("closed_label_reconciler").write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+
+        self.run_helper()
+
+        self.assertEqual(old_pid, self.read_pid("closed_label_reconciler"))
+        self.assertEqual(1, self.start_count("closed_label_reconciler"))
+
+    def test_closed_label_reconciler_restarts_after_interval_plus_progress_grace(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("closed_label_reconciler")
+        progress = begin_tick(self.repo, "closed_label_reconciler", now=self.runtime.now() - 2400, pid=old_pid + 1)
+        complete_tick(self.repo, progress, now=self.runtime.now() - 2400)
+        self.heartbeat_path("closed_label_reconciler").write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+
+        self.run_helper()
+
+        self.assertNotEqual(old_pid, self.read_pid("closed_label_reconciler"))
+        self.assertEqual(2, self.start_count("closed_label_reconciler"))
+
+    def test_begin_progress_uses_progress_grace_without_interval_padding(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("closed_label_reconciler")
+        begin_tick(self.repo, "closed_label_reconciler", now=self.runtime.now() - self.config.progress_fresh_seconds, pid=old_pid + 1)
+        self.heartbeat_path("closed_label_reconciler").write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+
+        self.run_helper()
+
+        self.assertNotEqual(old_pid, self.read_pid("closed_label_reconciler"))
+        self.assertEqual(2, self.start_count("closed_label_reconciler"))
 
     def test_restarts_when_progress_failed_even_with_fresh_heartbeat(self) -> None:
         self.run_helper()
@@ -1772,6 +1839,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                 self.assertEqual((self.repo / ".refactor-loop" / "locks" / f"{target.name}.pid").resolve(), target.pid_file)
                 self.assertEqual((self.repo / ".refactor-loop" / "heartbeats" / f"{target.name}.ts").resolve(), target.heartbeat_file)
 
+        self.assertEqual(2400, progress_budget_for_daemon(self.ctx, "closed_label_reconciler", self.config).completed_max_age_seconds)
+        self.assertEqual(self.config.progress_fresh_seconds, progress_budget_for_daemon(self.ctx, "closed_label_reconciler", self.config).in_progress_max_age_seconds)
+
         one = daemon_targets(self.ctx, "comment-monitor")
         self.assertEqual(("comment-monitor",), tuple(target.name for target in one))
         with self.assertRaises(ValueError):
@@ -1802,6 +1872,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             "read_heartbeat_age_seconds",
             "read_heartbeat_status",
             "DaemonHeartbeatStatus",
+            "DaemonRuntimePolicy",
+            "DaemonRuntimeTargetPolicy",
+            "progress_budget_for_daemon",
             "expected_launch_fingerprint",
             "DaemonProcessInventory",
             "DaemonInstanceProjection",
