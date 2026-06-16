@@ -590,6 +590,21 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             policy.target_policy("patrol_inspector_daemon")
 
+    def test_wakeup_runner_interval_seconds_sets_completed_progress_budget(self) -> None:
+        self.host_env_path.write_text(
+            f'export REPO_ROOT="{self.repo}"\n'
+            'export GH_REPO_SLUG="example/repo"\n'
+            'export MAINTAINER_WHITELIST="maintainer"\n'
+            'export WAKEUP_RUNNER_INTERVAL_SECONDS="145"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill, env={"CONSENSUS_RND_HOST_ENV": str(self.host_env_path)})
+
+        budget = progress_budget_for_daemon(ctx, "wakeup_runner_daemon", self.config)
+
+        self.assertEqual(145 + self.config.progress_fresh_seconds, budget.completed_max_age_seconds)
+        self.assertEqual(self.config.progress_fresh_seconds, budget.in_progress_max_age_seconds)
+
     def test_controller_tick_supervisor_restart_target_is_host_opt_in_only(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="restart-daemons", lease_id="lease", expires_at="")
         calls: list[str] = []
