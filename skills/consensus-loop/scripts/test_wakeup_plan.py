@@ -235,6 +235,52 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("accepted", action["default_issue_intake_admission"]["status"])
         self.assertEqual("upstream_idle", action["default_issue_intake_admission"]["proof"]["upstream_state"])
 
+    def test_default_issue_intake_projection_ignores_stale_pending_spawn_intents(self) -> None:
+        ctx = mock.Mock(host_env={"DEFAULT_ISSUE_INTAKE_ENABLE": "true"})
+        actions = default_issue_intake_actions(
+            [
+                GhItem(
+                    kind="issue",
+                    number=88,
+                    title="Fix stale default intake projection",
+                    labels=(),
+                    updated_at="2026-06-07T00:00:00Z",
+                )
+            ],
+            ctx,
+            managed_items=[],
+            pending_spawn_intents=[
+                {"intent_id": "historical-pr", "task_id": "review-pr123-tests-r1"},
+                {"intent_id": "historical-issue", "task_id": "phase9-issue124-r1-minimal"},
+            ],
+            now_iso="2026-06-07T02:00:00Z",
+        )
+
+        self.assertEqual([88], [action["target_number"] for action in actions])
+        self.assertEqual("apply_default_issue_intake_claim", actions[0]["controller_action"])
+        self.assertEqual("accepted", actions[0]["default_issue_intake_admission"]["status"])
+        self.assertEqual("upstream_idle", actions[0]["default_issue_intake_admission"]["proof"]["upstream_state"])
+
+    def test_default_issue_intake_projection_rejects_live_pending_spawn_intent(self) -> None:
+        ctx = mock.Mock(host_env={"DEFAULT_ISSUE_INTAKE_ENABLE": "true"})
+        actions = default_issue_intake_actions(
+            [
+                GhItem(
+                    kind="issue",
+                    number=88,
+                    title="Fix stale default intake projection",
+                    labels=(),
+                    updated_at="2026-06-07T00:00:00Z",
+                )
+            ],
+            ctx,
+            managed_items=[GhItem(kind="PR", number=123, title="live", labels=(label_catalog.MANAGED,))],
+            pending_spawn_intents=[{"intent_id": "live-pr", "task_id": "review-pr123-tests-r1"}],
+            now_iso="2026-06-07T02:00:00Z",
+        )
+
+        self.assertEqual([], actions)
+
     def test_default_issue_intake_projection_suppresses_when_active_design_cap_reached(self) -> None:
         ctx = mock.Mock(
             host_env={
@@ -3137,9 +3183,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_harness_spawn_intent_target_extraction_owner_contract_is_anchored(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        target_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "harness_spawn_intent_target.py").read_text(encoding="utf-8")
 
         self.assertIn(
-            "`scripts/codex_refactor_loop/wakeup_plan.py` | read-only stale-target extraction for `HARNESS_SPAWN_INTENT` fields `task_id`, `intent_id`, `source`, `route`, and `reason`",
+            "`scripts/codex_refactor_loop/harness_spawn_intent_target.py` | read-only stale-target extraction for `HARNESS_SPAWN_INTENT` fields `task_id`, `intent_id`, `source`, `route`, and `reason`",
             skill,
         )
         self.assertIn("`PR #<N>`, `issue #<N>`, `phase9-issue<N>-r<R>-<role>`, `review-pr<N>-<role>-r<R>`, and `fix-pr<N>-(r|round-)<R>`", skill)
@@ -3148,6 +3195,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("legacy free-text read only for stale closed/merged target suppression", skill)
         self.assertIn("unresolved targets fail open", skill)
         self.assertIn("test_wakeup_plan.py", skill)
+        self.assertIn("_harness_spawn_intent_target", wakeup_source)
         for token in (
             "HARNESS_SPAWN_TARGET_TEXT_PATTERNS",
             r"(?i)\bPR\s*#([1-9][0-9]*)\b",
@@ -3156,10 +3204,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "review-",
             "fix-",
             '("task_id", "intent_id", "source", "route", "reason")',
-            'TERMINAL_HARNESS_SPAWN_INTENT_BLOCKED_REASONS = {"target_not_open:CLOSED", "target_not_open:MERGED"}',
         ):
             with self.subTest(token=token):
-                self.assertIn(token, wakeup_source)
+                self.assertIn(token, target_source)
+        self.assertIn(
+            'TERMINAL_HARNESS_SPAWN_INTENT_BLOCKED_REASONS = {"target_not_open:CLOSED", "target_not_open:MERGED"}',
+            wakeup_source,
+        )
 
     def test_completed_marker_routes_before_ci_red(self) -> None:
         self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE")

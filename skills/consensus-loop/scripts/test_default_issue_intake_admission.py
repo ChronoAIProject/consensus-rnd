@@ -122,6 +122,51 @@ class DefaultIssueIntakeAdmissionTests(unittest.TestCase):
         self.assertEqual("upstream_not_idle", decision.reason)
         self.assertEqual("pending_spawn_intent", decision.proof["upstream_state"])
 
+    def test_ignores_stale_pending_spawn_intents_targeting_closed_managed_work(self) -> None:
+        admission = DefaultIssueIntakeAdmission(
+            self.ctx,
+            managed_items=[],
+            pending_spawn_intents=[
+                {"intent_id": "historical-pr", "task_id": "review-pr123-tests-r1"},
+                {"intent_id": "historical-issue", "task_id": "phase9-issue124-r1-minimal"},
+            ],
+        )
+
+        decision = admission.evaluate(self.candidate())
+
+        self.assertEqual("upstream_idle", admission._upstream_state())
+        self.assertTrue(decision.accepted)
+        self.assertEqual("", decision.reason)
+        self.assertEqual("upstream_idle", decision.proof["upstream_state"])
+
+    def test_rejects_when_pending_spawn_intent_targets_open_managed_work(self) -> None:
+        admission = DefaultIssueIntakeAdmission(
+            self.ctx,
+            managed_items=[{"kind": "PR", "number": 123, "labels": [labels.MANAGED]}],
+            pending_spawn_intents=[{"intent_id": "live-pr", "task_id": "review-pr123-tests-r1"}],
+        )
+
+        decision = admission.evaluate(self.candidate())
+
+        self.assertEqual("pending_spawn_intent", admission._upstream_state())
+        self.assertFalse(decision.accepted)
+        self.assertEqual("upstream_not_idle", decision.reason)
+        self.assertEqual("pending_spawn_intent", decision.proof["upstream_state"])
+
+    def test_rejects_unresolvable_pending_spawn_intent_as_live(self) -> None:
+        admission = DefaultIssueIntakeAdmission(
+            self.ctx,
+            managed_items=[],
+            pending_spawn_intents=[{"intent_id": "opaque-worker", "task_id": "custom-worker"}],
+        )
+
+        decision = admission.evaluate(self.candidate())
+
+        self.assertEqual("pending_spawn_intent", admission._upstream_state())
+        self.assertFalse(decision.accepted)
+        self.assertEqual("upstream_not_idle", decision.reason)
+        self.assertEqual("pending_spawn_intent", decision.proof["upstream_state"])
+
     def test_rejects_when_daemon_progress_is_in_progress(self) -> None:
         begin_tick(self.repo, "phase9_router_daemon", now=1000, pid=42)
         admission = DefaultIssueIntakeAdmission(

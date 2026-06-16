@@ -13,6 +13,7 @@ from . import labels
 from .context import LoopContext
 from .daemon_progress import read_progress
 from .default_issue_intake import default_issue_intake_enabled
+from .harness_spawn_intent_target import _harness_spawn_intent_target
 
 
 DEFAULT_ACTIVE_DESIGN_CAP = 3
@@ -146,7 +147,7 @@ class DefaultIssueIntakeAdmission:
         return max(0, cooldown - max(0, elapsed))
 
     def _upstream_state(self) -> str:
-        if self.pending_spawn_intents:
+        if self._live_pending_spawn_intents():
             return "pending_spawn_intent"
         repo_root = _ctx_repo_root(self.ctx)
         if repo_root is None:
@@ -158,6 +159,15 @@ class DefaultIssueIntakeAdmission:
             if progress.status != "complete":
                 return f"daemon_progress_incomplete:{daemon_name}"
         return "upstream_idle"
+
+    def _live_pending_spawn_intents(self) -> tuple[Mapping[str, Any], ...]:
+        open_targets = _open_managed_targets(self.managed_items)
+        live_intents: list[Mapping[str, Any]] = []
+        for intent in self.pending_spawn_intents:
+            target = _harness_spawn_intent_target(intent)
+            if target is None or target in open_targets:
+                live_intents.append(intent)
+        return tuple(live_intents)
 
     def _reject(self, reason: str, proof: dict[str, Any]) -> DefaultIssueIntakeAdmissionDecision:
         return DefaultIssueIntakeAdmissionDecision(False, reason, (), proof)
@@ -194,6 +204,31 @@ def _item_labels(item: Mapping[str, Any] | Any) -> tuple[str, ...]:
     if isinstance(raw, (list, tuple, set)):
         return tuple(str(label) for label in raw if str(label))
     return ()
+
+
+def _item_number(item: Mapping[str, Any] | Any) -> int | None:
+    raw = item.get("number") if isinstance(item, Mapping) else getattr(item, "number", None)
+    try:
+        number = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if number <= 0:
+        return None
+    return number
+
+
+def _open_managed_targets(items: Sequence[Mapping[str, Any] | Any]) -> set[tuple[str, int]]:
+    targets: set[tuple[str, int]] = set()
+    for item in items:
+        kind = str(item.get("kind") if isinstance(item, Mapping) else getattr(item, "kind", "") or "").strip()
+        number = _item_number(item)
+        if number is None:
+            continue
+        if kind == "PR" or kind.lower() == "pr":
+            targets.add(("PR", number))
+        elif kind.lower() == "issue":
+            targets.add(("issue", number))
+    return targets
 
 
 def _positive_host_int(value: object, default: int) -> int:

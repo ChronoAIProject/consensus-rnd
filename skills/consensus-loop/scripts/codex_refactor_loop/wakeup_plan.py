@@ -29,6 +29,10 @@ from codex_refactor_loop.default_issue_intake_admission import (
     DefaultIssueIntakeAdmission,
     DefaultIssueIntakeCandidate,
 )
+from codex_refactor_loop.harness_spawn_intent_target import (
+    HARNESS_SPAWN_TARGET_TEXT_PATTERNS,
+    _harness_spawn_intent_target,
+)
 from codex_refactor_loop.implement_lifecycle import (
     classify_implement_attempt,
     clear_redispatchable_implement_log,
@@ -112,13 +116,6 @@ HARNESS_SPAWN_INTENT_FORBIDDEN_FIELDS = {
     "lifecycle_owner",
     "target_ref",
 }
-HARNESS_SPAWN_TARGET_TEXT_PATTERNS = (
-    (re.compile(r"(?i)\bPR\s*#([1-9][0-9]*)\b"), "PR"),
-    (re.compile(r"(?i)\bissue\s*#([1-9][0-9]*)\b"), "issue"),
-    (re.compile(r"\bphase9-" + r"issue([1-9][0-9]*)-r[1-9][0-9]*-[A-Za-z][A-Za-z0-9_-]*\b"), "issue"),
-    (re.compile(r"\b" + "review-" + r"pr([1-9][0-9]*)-[A-Za-z][A-Za-z0-9_-]*-r[1-9][0-9]*\b"), "PR"),
-    (re.compile(r"\b" + "fix-" + r"pr([1-9][0-9]*)(?:-r|-round-)"), "PR"),
-)
 TERMINAL_HARNESS_SPAWN_INTENT_BLOCKED_REASONS = {"target_not_open:CLOSED", "target_not_open:MERGED"}
 RUNNER_AUTHORITY = "wakeup-runner-396"
 REBASE_RESOLVE_FALSE_DONE_RETRY_LIMIT = 2
@@ -923,20 +920,6 @@ def _is_design_consensus_solver_dispatch_intent(intent: dict[str, Any]) -> bool:
         return True
     task_id = str(intent.get("task_id") or "")
     return bool(re.fullmatch(r"phase9-issue[1-9][0-9]*-r[1-9][0-9]*-(minimal|structural|delete)", task_id))
-
-
-def _harness_spawn_intent_target(intent: dict[str, Any]) -> tuple[str, int] | None:
-    text_parts = []
-    for field in ("task_id", "intent_id", "source", "route", "reason"):
-        value = intent.get(field)
-        if isinstance(value, str) and value:
-            text_parts.append(value)
-    text = " ".join(text_parts)
-    for pattern, kind in HARNESS_SPAWN_TARGET_TEXT_PATTERNS:
-        match = pattern.search(text)
-        if match:
-            return kind, int(match.group(1))
-    return None
 
 
 def _harness_spawn_intent_invalid_reason(intent: dict[str, Any]) -> str | None:

@@ -574,6 +574,27 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual("default_issue_intake_admission:upstream_not_idle", result[0].reason)
         self.assertEqual([], actions.calls)
 
+    def test_apply_default_issue_intake_claim_ignores_stale_pending_spawn_intent_before_helper_dispatch(self) -> None:
+        action = self.default_issue_intake_claim_action()
+        pending_intent = {
+            "intent_id": "historical-pr",
+            "task_id": "review-pr123-tests-r1",
+            "source": "wakeup-plan",
+            "route": "dispatch-reviewers",
+            "queued_at": "2026-06-01T00:00:00Z",
+            "log": ".refactor-loop/logs/review-pr123-tests-r1.log",
+        }
+        self.ctx.paths.pending_events.write_text(
+            f"2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(pending_intent, sort_keys=True)}\n",
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        result = self.run_result(self.base_plan(action), gh_labels=[], actions=actions)
+
+        self.assertEqual("applied", result[0].status)
+        self.assertEqual([("apply_default_issue_intake_claim", 77)], actions.calls)
+
     def test_apply_action_skips_managed_write_on_cross_instance_stand_down(self) -> None:
         action = {
             "kind": "review-dispatch",
