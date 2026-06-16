@@ -19,6 +19,7 @@ from codex_refactor_loop.daemon_progress import begin_tick  # noqa: E402
 from codex_refactor_loop.default_issue_intake_admission import (  # noqa: E402
     DefaultIssueIntakeAdmission,
     DefaultIssueIntakeCandidate,
+    UPSTREAM_PROGRESS_DAEMONS,
     issue_title_is_concrete_work_unit,
 )
 
@@ -180,6 +181,36 @@ class DefaultIssueIntakeAdmissionTests(unittest.TestCase):
         self.assertFalse(decision.accepted)
         self.assertEqual("upstream_not_idle", decision.reason)
         self.assertEqual("daemon_progress_incomplete:phase9_router_daemon", decision.proof["upstream_state"])
+
+    def test_accepts_when_wakeup_runner_progress_is_in_progress(self) -> None:
+        begin_tick(self.repo, "wakeup_runner_daemon", now=1000, pid=42)
+        admission = DefaultIssueIntakeAdmission(
+            self.ctx,
+            managed_items=[],
+            pending_spawn_intents=[],
+        )
+
+        decision = admission.evaluate(self.candidate())
+
+        self.assertTrue(decision.accepted)
+        self.assertEqual("upstream_idle", decision.proof["upstream_state"])
+
+    def test_rejects_when_concurrency_monitor_progress_is_in_progress(self) -> None:
+        begin_tick(self.repo, "concurrency_monitor", now=1000, pid=42)
+        admission = DefaultIssueIntakeAdmission(
+            self.ctx,
+            managed_items=[],
+            pending_spawn_intents=[],
+        )
+
+        decision = admission.evaluate(self.candidate())
+
+        self.assertFalse(decision.accepted)
+        self.assertEqual("upstream_not_idle", decision.reason)
+        self.assertEqual("daemon_progress_incomplete:concurrency_monitor", decision.proof["upstream_state"])
+
+    def test_upstream_progress_daemons_exclude_wakeup_runner_executor(self) -> None:
+        self.assertEqual(("phase9_router_daemon", "concurrency_monitor"), UPSTREAM_PROGRESS_DAEMONS)
 
     def test_rejects_epic_tracking_and_container_titles_as_not_concrete_work_units(self) -> None:
         admission = DefaultIssueIntakeAdmission(self.ctx, managed_items=[], pending_spawn_intents=[])
