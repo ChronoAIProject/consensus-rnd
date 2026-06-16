@@ -1348,6 +1348,12 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "read-only daemon-status projection",
             "repair/reload remains restart-daemons",
             "cached active-controller status",
+            "DaemonProgressBudget",
+            "DaemonRuntimePolicy",
+            "completed ticks stay fresh through resolved tick interval plus restart progress grace",
+            "begin ticks use only restart progress grace",
+            "same budget helper",
+            "not a daemon registry",
             "public start/stop/restart/reload lifecycle verb",
             "test_cli_command_router.py",
             "test_restart_daemons.py",
@@ -1358,7 +1364,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for required in (
             "DaemonTickProgress",
             "daemon-tick-progress",
-            "fresh completed `DaemonTickProgress`",
+            "completed ticks stay fresh through resolved tick interval plus restart progress grace",
+            "begin ticks use only restart progress grace",
             "progress_status",
             "progress-overdue repair",
         ):

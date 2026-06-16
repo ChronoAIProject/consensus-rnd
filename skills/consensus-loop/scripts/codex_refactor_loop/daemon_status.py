@@ -21,6 +21,7 @@ from .restart import (
     daemon_targets,
     expected_launch_fingerprint,
     pid_alive,
+    progress_budget_for_daemon,
     read_daemon_pid,
     read_heartbeat_age_seconds,
     read_heartbeat_status,
@@ -139,7 +140,7 @@ def _project_target(
     progress = classify_progress(
         ctx.repo_root,
         target.name,
-        max_age_seconds=config.progress_fresh_seconds,
+        budget=progress_budget_for_daemon(ctx, target.name, config),
     )
     heartbeat_age = heartbeat.age_seconds
     heartbeat_fresh = heartbeat.fresh
