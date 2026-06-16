@@ -1,6 +1,6 @@
 {
   "schema": "consensus-loop-version",
-  "version": "1.0.0-beta.19",
+  "version": "1.0.0-beta.20",
   "repository": "ChronoAIProject/consensus-rnd",
   "release_source": "github-release-then-tag",
   "install_hint": "host-owned"
