@@ -61,6 +61,29 @@ class PromptContractsTests(unittest.TestCase):
                 self.assertIn("post_exit_code=$?", rendered)
                 self.assertNotIn("status=$?", rendered)
 
+    def test_reviewer_prompts_share_one_github_visible_evidence_tail_contract(self) -> None:
+        shared = (PROMPTS_DIR / "_github-post-rules.md").read_text(encoding="utf-8")
+        for needle in (
+            "Reviewer GitHub-visible evidence tail",
+            "body/evidence",
+            "`review_round: <round>`",
+            "`head_sha: <sha>`",
+            "`REVIEW_DONE:<PR>:<role>:<verdict>`",
+            "final standalone AI sentinel",
+            "No marker or body may appear after the sentinel",
+        ):
+            with self.subTest(shared_needles=needle):
+                self.assertIn(needle, shared)
+
+        for name in ("reviewer-architect.md", "reviewer-tests.md", "reviewer-quality.md"):
+            body = (PROMPTS_DIR / name).read_text(encoding="utf-8")
+            rendered = inline_prompt_contracts(body, skill_root=SKILL_ROOT)
+            role = name.removeprefix("reviewer-").removesuffix(".md")
+            with self.subTest(prompt=name):
+                self.assertIn("Reviewer GitHub-visible evidence tail", rendered)
+                self.assertIn(f"`REVIEW_DONE:${{PR_NUMBER}}:{role}:<verdict>`", body)
+                self.assertNotIn("Your GitHub PR comment must include `review_round", body)
+
     def test_prompts_do_not_keep_hidden_legacy_contract_anchor_blocks(self) -> None:
         for path in PROMPTS_DIR.glob("*.md"):
             body = path.read_text(encoding="utf-8")
