@@ -2601,7 +2601,7 @@ def pending_or_fresh_review_evidence_exists(repo_root: Path, pr_number: int) -> 
     return False
 
 
-def pending_or_fresh_review_evidence_roles(repo_root: Path, pr_number: int) -> set[str]:
+def pending_or_fresh_review_evidence_roles(repo_root: Path, pr_number: int, head_sha: str | None = None) -> set[str]:
     roles: set[str] = set()
     now = time.time()
     for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
@@ -2609,6 +2609,8 @@ def pending_or_fresh_review_evidence_roles(repo_root: Path, pr_number: int) -> s
         if not match or int(match.group(1)) != pr_number:
             continue
         if _reviewer_log_has_exit_zero(path) or _reviewer_log_terminal_failed(path):
+            continue
+        if head_sha is not None and _reviewed_head_sha_from_file(path) != head_sha:
             continue
         if now - path.stat().st_mtime < REVIEW_PENDING_SECONDS:
             roles.add(match.group(2))
@@ -2756,8 +2758,15 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem], 
         heads = latest_reviewer_heads(repo_root, item.number)
         dead_roles = dead_reviewer_roles(repo_root, item.number)
         evidence_roles = reviewer_roles_with_evidence(repo_root, item.number)
-        pending_roles = pending_or_fresh_review_evidence_roles(repo_root, item.number)
-        redispatch_candidate_roles = (evidence_roles | dead_roles | github_evidence_roles) - pending_roles
+        pending_roles = pending_or_fresh_review_evidence_roles(repo_root, item.number, item.head_sha)
+        missing_same_head_roles = {
+            role
+            for role in REQUIRED_REVIEW_ROLES
+            if role not in github_complete_roles and heads.get(role, "") != item.head_sha
+        }
+        redispatch_candidate_roles = (
+            missing_same_head_roles | evidence_roles | dead_roles | github_evidence_roles
+        ) - pending_roles
         local_roles = evidence_roles | dead_roles
         if github_evidence_roles:
             redispatch_candidate_roles |= {
@@ -2789,6 +2798,8 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem], 
                 "target": {"kind": "PR", "number": item.number},
                 "stale_review_roles": stale_roles,
                 "head_sha": item.head_sha,
+                "source_artifact": "wakeup-plan",
+                "source_marker": "review-evidence-redispatch",
                 "preconditions": ["active_controller_owner", "live_open_target_if_present", "missing_or_stale_reviewer_head_evidence"],
                 "runner_authority": RUNNER_AUTHORITY,
                 "no_generic_command": True,

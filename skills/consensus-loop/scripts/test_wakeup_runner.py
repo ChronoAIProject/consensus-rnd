@@ -2841,12 +2841,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         )
         other_pr_dispatch = self.reviewer_dispatch_action(
             kind="review-evidence-redispatch",
-            action_id="review-evidence-redispatch:78:" + "b" * 40,
+            action_id="review-evidence-redispatch:78:" + "a" * 40,
             source_artifact="wakeup-plan",
             source_marker="review-evidence-redispatch",
             target_number=78,
             target={"kind": "PR", "number": 78},
-            head_sha="b" * 40,
+            head_sha="a" * 40,
             stale_review_roles=["tests"],
             preconditions=[
                 "active_controller_owner",
@@ -2867,7 +2867,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             [
                 ("review-gate:77:merge-before-reviewer-top-up", "applied", ""),
                 ("review-evidence-redispatch:77:" + "a" * 40, "skipped", "same_tick_terminal_target:MERGED"),
-                ("review-evidence-redispatch:78:" + "b" * 40, "applied", ""),
+                ("review-evidence-redispatch:78:" + "a" * 40, "applied", ""),
             ],
         )
         self.assertEqual([call[0] for call in actions.calls], ["merge_pr", "dispatch_reviewers"])
@@ -5396,7 +5396,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             action_id="review-evidence-redispatch:77:" + "a" * 40,
             source_artifact="wakeup-plan",
             source_marker="review-evidence-redispatch",
-            head_sha="b" * 40,
+            head_sha="a" * 40,
             stale_review_roles=["architect", "tests"],
             preconditions=[
                 "active_controller_owner",
@@ -5410,6 +5410,100 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "dispatch_reviewers")
         self.assertEqual(actions.calls[0][1]["stale_review_roles"], ["architect", "tests"])
+
+    def test_review_evidence_redispatch_revalidates_live_head_before_helper(self) -> None:
+        actions = FakeActions()
+        action = self.reviewer_dispatch_action(
+            kind="review-evidence-redispatch",
+            action_id="review-evidence-redispatch:77:" + "b" * 40,
+            source_artifact="wakeup-plan",
+            source_marker="review-evidence-redispatch",
+            head_sha="b" * 40,
+            stale_review_roles=["architect", "tests", "quality"],
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "missing_or_stale_reviewer_head_evidence",
+            ],
+        )
+
+        results = self.run_result(self.base_plan(action), actions=actions, gh_head_ref="refactor/iter77-worker")
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "dispatch_reviewers_live_head_mismatch")
+        self.assertEqual(actions.calls, [])
+
+    def test_review_evidence_redispatch_revalidates_same_head_evidence_before_helper(self) -> None:
+        self.add_review_comments({"architect": "approve", "tests": "approve", "quality": "comment"})
+        actions = FakeActions()
+        action = self.reviewer_dispatch_action(
+            kind="review-evidence-redispatch",
+            action_id="review-evidence-redispatch:77:" + "a" * 40,
+            source_artifact="wakeup-plan",
+            source_marker="review-evidence-redispatch",
+            head_sha="a" * 40,
+            stale_review_roles=["architect", "tests", "quality"],
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "missing_or_stale_reviewer_head_evidence",
+            ],
+        )
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "dispatch_reviewers_reviewer_evidence_current")
+        self.assertEqual(actions.calls, [])
+
+    def test_review_evidence_redispatch_revalidates_pending_same_head_intent_before_helper(self) -> None:
+        actions = FakeActions()
+        action = self.reviewer_dispatch_action(
+            kind="review-evidence-redispatch",
+            action_id="review-evidence-redispatch:77:" + "a" * 40,
+            source_artifact="wakeup-plan",
+            source_marker="review-evidence-redispatch",
+            head_sha="a" * 40,
+            stale_review_roles=["architect"],
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "missing_or_stale_reviewer_head_evidence",
+            ],
+        )
+        intent = {
+            "intent_id": "dispatch-reviewers:77:architect:r1",
+            "source": "dispatch-reviewers",
+            "route": "dispatch-reviewers",
+            "task_id": "review-pr77-architect-r1",
+            "priority": "p1",
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "cd": ".",
+            "prompt": ".refactor-loop/prompts/review-pr77-architect-r1.md",
+            "log": ".refactor-loop/logs/review-pr77-architect-r1.log",
+            "stall": 5400,
+            "reason": "review PR #77 as architect",
+            "queued_at": "2026-05-31T00:00:00Z",
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
+        }
+        self.ctx.paths.pending_events.write_text(
+            "2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT "
+            + json.dumps(intent, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop/prompts/review-pr77-architect-r1.md").write_text(
+            f"head_sha: {'a' * 40}\n",
+            encoding="utf-8",
+        )
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "dispatch_reviewers_reviewer_evidence_current")
+        self.assertEqual(actions.calls, [])
 
     def test_stale_review_dispatch_applied_row_retries_when_evidence_still_stale(self) -> None:
         for role in ("architect", "tests"):
