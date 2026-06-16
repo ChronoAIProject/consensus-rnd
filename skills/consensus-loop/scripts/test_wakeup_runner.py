@@ -1087,6 +1087,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         gh_state: str | None = "OPEN",
         gh_labels: list[str] | None = None,
         gh_head_ref: str = "refactor/iter77-worker",
+        pr_mergeable: str = "MERGEABLE",
         git_diff_code: int = 0,
         implementation_status: str | None = None,
         implementation_issue: int = 77,
@@ -1176,7 +1177,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 if ".headRefOid" in command:
                     return subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", "")
                 if "mergeable,isDraft,changedFiles" in command:
-                    return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False, "changedFiles": 1}), "")
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": pr_mergeable, "isDraft": False, "changedFiles": 1}), "")
                 if gh_state is None:
                     return subprocess.CompletedProcess(command, 1, "", "not found")
                 return subprocess.CompletedProcess(command, 0, gh_state + "\n", "")
@@ -5464,6 +5465,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
     def test_review_evidence_redispatch_routes_to_named_helper_after_pr_target_validation(self) -> None:
         actions = FakeActions()
+        key = "77:architect:" + "a" * 40 + ":missing_github_review_evidence"
         action = self.reviewer_dispatch_action(
             kind="review-evidence-redispatch",
             action_id="review-evidence-redispatch:77:" + "a" * 40,
@@ -5471,6 +5473,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             source_marker="review-evidence-redispatch",
             head_sha="a" * 40,
             stale_review_roles=["architect", "tests"],
+            review_recovery_attempt_keys=[key, "77:tests:" + "a" * 40 + ":missing_github_review_evidence"],
+            review_recovery_reason_by_role={
+                "architect": "missing_github_review_evidence",
+                "tests": "missing_github_review_evidence",
+            },
+            review_recovery_cap=2,
             preconditions=[
                 "active_controller_owner",
                 "live_open_target_if_present",
@@ -5483,6 +5491,36 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "dispatch_reviewers")
         self.assertEqual(actions.calls[0][1]["stale_review_roles"], ["architect", "tests"])
+        ledger_rows = [
+            json.loads(line)
+            for line in (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(ledger_rows[-1]["review_recovery_attempt_keys"][0], key)
+
+    def test_review_evidence_redispatch_blocks_non_mergeable_pr_before_helper(self) -> None:
+        actions = FakeActions()
+        action = self.reviewer_dispatch_action(
+            kind="review-evidence-redispatch",
+            action_id="review-evidence-redispatch:77:" + "a" * 40,
+            source_artifact="wakeup-plan",
+            source_marker="review-evidence-redispatch",
+            head_sha="a" * 40,
+            stale_review_roles=["architect"],
+            review_recovery_attempt_keys=["77:architect:" + "a" * 40 + ":missing_github_review_evidence"],
+            review_recovery_reason_by_role={"architect": "missing_github_review_evidence"},
+            review_recovery_cap=2,
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "missing_or_stale_reviewer_head_evidence",
+            ],
+        )
+
+        results = self.run_result(self.base_plan(action), actions=actions, pr_mergeable="CONFLICTING")
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "dispatch_reviewers_non_mergeable_pr")
+        self.assertEqual(actions.calls, [])
 
     def test_review_evidence_redispatch_revalidates_live_head_before_helper(self) -> None:
         actions = FakeActions()
@@ -5578,7 +5616,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].reason, "dispatch_reviewers_reviewer_evidence_current")
         self.assertEqual(actions.calls, [])
 
-    def test_stale_review_dispatch_applied_row_retries_when_evidence_still_stale(self) -> None:
+    def test_stale_review_dispatch_applied_rows_stop_after_recovery_cap(self) -> None:
         for role in ("architect", "tests"):
             (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r1.md").write_text(
                 "reviewed-head-sha: " + "b" * 40 + "\n",
@@ -5592,6 +5630,10 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 f"REVIEW_DONE:77:{role}:approve\nEXIT=0\n",
                 encoding="utf-8",
             )
+        keys = [
+            f"77:{role}:{'a' * 40}:missing_github_review_evidence"
+            for role in ("architect", "tests")
+        ]
         action = self.reviewer_dispatch_action(
             kind="review-evidence-redispatch",
             action_id="review-evidence-redispatch:77:" + "a" * 40,
@@ -5599,6 +5641,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             source_marker="review-evidence-redispatch",
             head_sha="a" * 40,
             stale_review_roles=["architect", "tests"],
+            review_recovery_attempt_keys=keys,
+            review_recovery_reason_by_role={
+                "architect": "missing_github_review_evidence",
+                "tests": "missing_github_review_evidence",
+            },
+            review_recovery_cap=2,
             preconditions=[
                 "active_controller_owner",
                 "live_open_target_if_present",
@@ -5610,12 +5658,26 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
+        with (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "action_id": action["action_id"],
+                        "status": "applied",
+                        "reason": "",
+                        "kind": "review-evidence-redispatch",
+                        "review_recovery_attempt_keys": keys,
+                    }
+                )
+                + "\n"
+            )
         actions = FakeActions()
 
         results = self.run_result(self.base_plan(action), actions=actions)
 
-        self.assertEqual(results[0].status, "applied")
-        self.assertEqual(actions.calls[0][0], "dispatch_reviewers")
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "review_evidence_recovery_cap_exhausted")
+        self.assertEqual(actions.calls, [])
 
     def test_stale_review_dispatch_applied_row_suppresses_after_target_roles_current(self) -> None:
         self.add_review_comment("architect", "approve", round_number=2)

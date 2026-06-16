@@ -54,6 +54,11 @@ from .issue_decomposition import (
 from .pr_checks import PrMergeReadinessProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .review_gate_selection import extract_review_head_sha, parse_github_review_evidence, select_latest_live_head_review_evidence
+from .review_evidence_recovery import (
+    DEFAULT_REVIEW_RECOVERY_CAP,
+    RECOVERY_KIND,
+    ReviewEvidenceRecoveryLedgerRow,
+)
 from .release.gate import AutoReleaseGate
 from .release.commits import write_release_commits
 from .release.candidate_liveness import classify_release_candidate_liveness
@@ -424,6 +429,8 @@ class WakeupRunner:
                 f"{PUBLISH_HELPER_EXIT_BACKOFF_COOLDOWN_SECONDS}"
             )
             return self._record(RunnerResult(action_id, "skipped", "backoff:publish_helper_exit"), action)
+        if self._review_recovery_cap_exhausted(action):
+            return self._record(RunnerResult(action_id, "skipped", "review_evidence_recovery_cap_exhausted"), action)
         if self._ledger_suppresses_retry(action):
             return self._record(RunnerResult(action_id, "skipped", "duplicate"), action)
         if action.get("kind") == "harness-spawn-intent-invalid":
@@ -1299,6 +1306,9 @@ class WakeupRunner:
         projected_head = str(action.get("head_sha") or "").strip()
         if not projected_head:
             return "dispatch_reviewers_head_sha_missing"
+        mergeability_error = self._review_gate_mergeability_error(target)
+        if mergeability_error:
+            return f"dispatch_reviewers_{mergeability_error}"
         live_head = self._pr_head_sha(target)
         if not live_head:
             return "dispatch_reviewers_live_head_missing"
@@ -1320,6 +1330,56 @@ class WakeupRunner:
         if not missing_roles:
             return "dispatch_reviewers_reviewer_evidence_current"
         return None
+
+    def _review_recovery_cap_exhausted(self, action: Mapping[str, Any]) -> bool:
+        if action.get("kind") != RECOVERY_KIND:
+            return False
+        cap = action.get("review_recovery_cap")
+        cap_value = cap if isinstance(cap, int) and cap > 0 else DEFAULT_REVIEW_RECOVERY_CAP
+        keys_value = action.get("review_recovery_attempt_keys")
+        keys = tuple(str(key) for key in keys_value) if isinstance(keys_value, list) else ()
+        if not keys:
+            return False
+        counts = {key: 0 for key in keys}
+        legacy_seen = False
+        action_id = str(action.get("action_id") or "")
+        for row in self._review_recovery_ledger_rows():
+            if row.kind and row.kind != RECOVERY_KIND:
+                continue
+            if row.status != "applied":
+                continue
+            for key in keys:
+                if key in row.attempt_keys:
+                    counts[key] += 1
+            if not row.attempt_keys and row.action_id == action_id and not legacy_seen:
+                legacy_seen = True
+                for key in keys:
+                    counts[key] += 1
+        return all(count >= cap_value for count in counts.values())
+
+    def _review_recovery_ledger_rows(self) -> tuple[ReviewEvidenceRecoveryLedgerRow, ...]:
+        if not self.ledger_path.exists():
+            return ()
+        rows: list[ReviewEvidenceRecoveryLedgerRow] = []
+        for line in self.ledger_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, Mapping):
+                continue
+            keys_value = row.get("review_recovery_attempt_keys")
+            keys = tuple(str(key) for key in keys_value) if isinstance(keys_value, list) else ()
+            rows.append(
+                ReviewEvidenceRecoveryLedgerRow(
+                    action_id=str(row.get("action_id") or ""),
+                    status=str(row.get("status") or ""),
+                    reason=str(row.get("reason") or ""),
+                    kind=str(row.get("kind") or ""),
+                    attempt_keys=keys,
+                )
+            )
+        return tuple(rows)
 
     def _projected_stale_review_roles(self, action: Mapping[str, Any]) -> list[str]:
         stale_roles = action.get("stale_review_roles")
@@ -2487,6 +2547,19 @@ class WakeupRunner:
             "kind": action.get("kind") if action else None,
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
+        if action and action.get("kind") == RECOVERY_KIND:
+            keys_value = action.get("review_recovery_attempt_keys")
+            if isinstance(keys_value, list):
+                row["review_recovery_attempt_keys"] = [str(key) for key in keys_value]
+            reason_by_role = action.get("review_recovery_reason_by_role")
+            if isinstance(reason_by_role, Mapping):
+                row["review_recovery_reason_by_role"] = {
+                    str(role): str(reason)
+                    for role, reason in reason_by_role.items()
+                }
+            cap = action.get("review_recovery_cap")
+            if isinstance(cap, int):
+                row["review_recovery_cap"] = cap
         with self.ledger_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row, sort_keys=True) + "\n")
         return result

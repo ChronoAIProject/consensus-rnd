@@ -74,6 +74,12 @@ from codex_refactor_loop.review_fix_dispatch import (
     ReviewThreadCompletionEvidence,
     validate_review_thread_completion,
 )
+from codex_refactor_loop.review_evidence_recovery import (
+    DEFAULT_REVIEW_RECOVERY_CAP,
+    ReviewEvidenceRecoveryInput,
+    ReviewEvidenceRecoveryLedgerRow,
+    project_review_evidence_recovery,
+)
 from codex_refactor_loop.work_items import (
     DESIGN_CONSENSUS_TERMINAL_PHASES,
     ManagedWorkProjection,
@@ -203,7 +209,6 @@ NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_MERGED: "merged",
 }
 REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
-REVIEW_ARTIFACT_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.md$")
 REVIEW_LOG_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.log$")
 REBASE_RESOLVE_LOG_RE = re.compile(r"^rebase-resolve-pr([1-9][0-9]*)-r([1-9][0-9]*)\.log$")
 REBASE_RESOLVE_DONE_RE = re.compile(r"^REBASE_RESOLVE_DONE:([1-9][0-9]*):[^\s`]+$")
@@ -2468,95 +2473,6 @@ def _reviewer_log_terminal_failed(path: Path) -> bool:
     return False
 
 
-def _reviewer_log_has_valid_marker(path: Path, pr_number: int, role: str) -> bool:
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
-    prefix = f"REVIEW_DONE:{pr_number}:{role}:"
-    return sum(1 for line in lines if line.strip().startswith(prefix)) == 1
-
-
-def latest_reviewer_heads(repo_root: Path, pr_number: int) -> dict[str, str]:
-    by_role: dict[str, tuple[int, str]] = {}
-    artifact_keys: set[tuple[str, int]] = set()
-    runs_dir = repo_root / ".refactor-loop" / "runs"
-    logs_dir = repo_root / ".refactor-loop" / "logs"
-    prompts_dir = repo_root / ".refactor-loop" / "prompts"
-    for path in sorted(runs_dir.glob(f"review-pr{pr_number}-*-r*.md")):
-        match = REVIEW_ARTIFACT_RE.match(path.name)
-        if not match or int(match.group(1)) != pr_number:
-            continue
-        role = match.group(2)
-        round_number = int(match.group(3))
-        artifact_keys.add((role, round_number))
-        log_path = logs_dir / f"review-pr{pr_number}-{role}-r{round_number}.log"
-        if not _reviewer_log_has_exit_zero(log_path):
-            continue
-        head_sha = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompts_dir / path.name) or _reviewed_head_sha_from_file(log_path)
-        if head_sha:
-            existing = by_role.get(role)
-            if existing is None or round_number >= existing[0]:
-                by_role[role] = (round_number, head_sha)
-    for path in sorted(logs_dir.glob(f"review-pr{pr_number}-*-r*.log")):
-        match = REVIEW_LOG_RE.match(path.name)
-        if not match or int(match.group(1)) != pr_number:
-            continue
-        role = match.group(2)
-        round_number = int(match.group(3))
-        if (role, round_number) in artifact_keys:
-            continue
-        if not _reviewer_log_has_exit_zero(path) or not _reviewer_log_has_valid_marker(path, pr_number, role):
-            continue
-        prompt_path = prompts_dir / path.with_suffix(".md").name
-        head_sha = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompt_path)
-        if head_sha:
-            existing = by_role.get(role)
-            if existing is None or round_number >= existing[0]:
-                by_role[role] = (round_number, head_sha)
-    return {role: head_sha for role, (_round_number, head_sha) in by_role.items()}
-
-
-def latest_valid_reviewer_rounds(repo_root: Path, pr_number: int) -> dict[str, tuple[int, str]]:
-    by_role: dict[str, tuple[int, str]] = {}
-    artifact_keys: set[tuple[str, int]] = set()
-    runs_dir = repo_root / ".refactor-loop" / "runs"
-    logs_dir = repo_root / ".refactor-loop" / "logs"
-    prompts_dir = repo_root / ".refactor-loop" / "prompts"
-    for path in sorted(runs_dir.glob(f"review-pr{pr_number}-*-r*.md")):
-        match = REVIEW_ARTIFACT_RE.match(path.name)
-        if not match or int(match.group(1)) != pr_number:
-            continue
-        role = match.group(2)
-        round_number = int(match.group(3))
-        artifact_keys.add((role, round_number))
-        log_path = logs_dir / f"review-pr{pr_number}-{role}-r{round_number}.log"
-        if not _reviewer_log_has_exit_zero(log_path):
-            continue
-        head_sha = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompts_dir / path.name) or _reviewed_head_sha_from_file(log_path)
-        if head_sha and _reviewer_log_has_valid_marker(log_path, pr_number, role):
-            existing = by_role.get(role)
-            if existing is None or round_number >= existing[0]:
-                by_role[role] = (round_number, head_sha)
-    for path in sorted(logs_dir.glob(f"review-pr{pr_number}-*-r*.log")):
-        match = REVIEW_LOG_RE.match(path.name)
-        if not match or int(match.group(1)) != pr_number:
-            continue
-        role = match.group(2)
-        round_number = int(match.group(3))
-        if (role, round_number) in artifact_keys:
-            continue
-        if not _reviewer_log_has_exit_zero(path) or not _reviewer_log_has_valid_marker(path, pr_number, role):
-            continue
-        prompt_path = prompts_dir / path.with_suffix(".md").name
-        head_sha = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompt_path)
-        if head_sha:
-            existing = by_role.get(role)
-            if existing is None or round_number >= existing[0]:
-                by_role[role] = (round_number, head_sha)
-    return by_role
-
-
 def highest_complete_required_review_round(repo_root: Path, pr_number: int, head_sha: str) -> ReviewRoundCompletion | None:
     if not head_sha:
         return None
@@ -2570,19 +2486,6 @@ def highest_complete_required_review_round(repo_root: Path, pr_number: int, head
         return None
     heads_by_role = {role: evidence.head_sha for role, evidence in selection.by_role.items()}
     return ReviewRoundCompletion(round_number=selection.complete_round, head_sha=head_sha, heads_by_role=heads_by_role)
-
-
-def pending_or_fresh_review_evidence_exists(repo_root: Path, pr_number: int) -> bool:
-    now = time.time()
-    for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
-        match = REVIEW_LOG_RE.match(path.name)
-        if not match or int(match.group(1)) != pr_number:
-            continue
-        if _reviewer_log_has_exit_zero(path) or _reviewer_log_terminal_failed(path):
-            continue
-        if now - path.stat().st_mtime < REVIEW_PENDING_SECONDS:
-            return True
-    return False
 
 
 def pending_or_fresh_review_evidence_roles(repo_root: Path, pr_number: int, head_sha: str | None = None) -> set[str]:
@@ -2599,39 +2502,6 @@ def pending_or_fresh_review_evidence_roles(repo_root: Path, pr_number: int, head
         if now - path.stat().st_mtime < REVIEW_PENDING_SECONDS:
             roles.add(match.group(2))
     return roles
-
-
-def dead_reviewer_roles(repo_root: Path, pr_number: int) -> set[str]:
-    dead: set[str] = set()
-    now = time.time()
-    for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
-        match = REVIEW_LOG_RE.match(path.name)
-        if not match or int(match.group(1)) != pr_number:
-            continue
-        role = match.group(2)
-        if _reviewer_log_terminal_failed(path):
-            dead.add(role)
-            continue
-        if not _reviewer_log_has_exit_zero(path) and now - path.stat().st_mtime >= REVIEW_PENDING_SECONDS:
-            dead.add(role)
-    return dead
-
-
-def reviewer_roles_with_evidence(repo_root: Path, pr_number: int) -> set[str]:
-    roles: set[str] = set()
-    for path in sorted((repo_root / ".refactor-loop" / "runs").glob(f"review-pr{pr_number}-*-r*.md")):
-        match = REVIEW_ARTIFACT_RE.match(path.name)
-        if match and int(match.group(1)) == pr_number:
-            roles.add(match.group(2))
-    for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
-        match = REVIEW_LOG_RE.match(path.name)
-        if match and int(match.group(1)) == pr_number:
-            roles.add(match.group(2))
-    return roles
-
-
-def valid_required_review_round_complete(repo_root: Path, pr_number: int, head_sha: str) -> bool:
-    return highest_complete_required_review_round(repo_root, pr_number, head_sha) is not None
 
 
 def github_review_completion_roles(
@@ -2722,73 +2592,69 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem], 
             continue
         context_slug_value = getattr(ctx, "gh_repo_slug", None) if ctx is not None else None
         context_slug = context_slug_value if isinstance(context_slug_value, str) and context_slug_value else None
-        if ctx is not None and not context_slug:
-            github_complete_roles: set[str] = set()
-            github_evidence_roles: set[str] = set()
-            github_round_complete = False
-        elif ctx is None:
-            github_complete_roles = set()
-            github_evidence_roles = set()
-            github_round_complete = False
-        else:
-            github_complete_roles, github_evidence_roles, github_round_complete = github_review_completion_roles(
-                repo_root,
-                item.number,
-                item.head_sha,
-                gh_repo_slug=context_slug,
-            )
-        if github_round_complete:
-            continue
-        heads = latest_reviewer_heads(repo_root, item.number)
-        dead_roles = dead_reviewer_roles(repo_root, item.number)
-        evidence_roles = reviewer_roles_with_evidence(repo_root, item.number)
-        pending_roles = pending_or_fresh_review_evidence_roles(repo_root, item.number, item.head_sha)
-        missing_same_head_roles = {
-            role
-            for role in REQUIRED_REVIEW_ROLES
-            if role not in github_complete_roles and heads.get(role, "") != item.head_sha
-        }
-        redispatch_candidate_roles = (
-            missing_same_head_roles | evidence_roles | dead_roles | github_evidence_roles
-        ) - pending_roles
-        local_roles = evidence_roles | dead_roles
-        if github_evidence_roles:
-            redispatch_candidate_roles |= {
-                role
-                for role in local_roles
-                if heads.get(role, "") != item.head_sha or role in dead_roles
-            }
-        stale_roles = [
-            role
-            for role in REQUIRED_REVIEW_ROLES
-            if role not in github_complete_roles
-            and role in redispatch_candidate_roles
-            and not pending_review_spawn_exists(repo_root, item.number, ctx, role=role, head_sha=item.head_sha)
-        ]
-        if not stale_roles:
-            continue
-        actions.append(
-            {
-                "priority": 2,
-                "kind": "review-evidence-redispatch",
-                "action_id": f"review-evidence-redispatch:{item.number}:{item.head_sha}",
-                "item": item.item,
-                "phase": "review-gate",
-                "actor": "controller",
-                "route": "dispatch-reviewers",
-                "controller_action": "dispatch_reviewers",
-                "target_kind": "PR",
-                "target_number": item.number,
-                "target": {"kind": "PR", "number": item.number},
-                "stale_review_roles": stale_roles,
-                "head_sha": item.head_sha,
-                "source_artifact": "wakeup-plan",
-                "source_marker": "review-evidence-redispatch",
-                "preconditions": ["active_controller_owner", "live_open_target_if_present", "missing_or_stale_reviewer_head_evidence"],
-                "runner_authority": RUNNER_AUTHORITY,
-                "no_generic_command": True,
-            }
+        github_evidences = (
+            _github_review_completion_evidences(repo_root, item.number, gh_repo_slug=context_slug)
+            if context_slug
+            else []
         )
+        local_pending_roles = pending_or_fresh_review_evidence_roles(repo_root, item.number, item.head_sha)
+        pending_roles = tuple(
+            role
+            for role in REQUIRED_REVIEW_ROLES
+            if role in local_pending_roles
+            or pending_review_spawn_exists(repo_root, item.number, ctx, role=role, head_sha=item.head_sha)
+        )
+        recovery = project_review_evidence_recovery(
+            ReviewEvidenceRecoveryInput(
+                pr_number=item.number,
+                head_sha=item.head_sha,
+                mergeable=item.mergeable,
+                merge_state_status=item.merge_state_status,
+                required_roles=REQUIRED_REVIEW_ROLES,
+                github_review_evidences=github_evidences,
+                pending_roles=pending_roles,
+                ledger_rows=_review_recovery_ledger_rows(repo_root),
+                cap=DEFAULT_REVIEW_RECOVERY_CAP,
+            )
+        )
+        if not recovery.roles and not recovery.status_only:
+            continue
+        action = {
+            "priority": 2,
+            "kind": "review-evidence-redispatch",
+            "action_id": f"review-evidence-redispatch:{item.number}:{item.head_sha}",
+            "item": item.item,
+            "phase": "review-gate",
+            "actor": "controller",
+            "route": "dispatch-reviewers",
+            "controller_action": "dispatch_reviewers",
+            "target_kind": "PR",
+            "target_number": item.number,
+            "target": {"kind": "PR", "number": item.number},
+            "stale_review_roles": list(recovery.roles),
+            "head_sha": item.head_sha,
+            "review_recovery_attempt_keys": list(recovery.attempt_keys),
+            "review_recovery_reason_by_role": recovery.reason_by_role,
+            "review_recovery_cap": recovery.cap,
+            "review_recovery_role_count": len(recovery.roles),
+            "source_artifact": "wakeup-plan",
+            "source_marker": "review-evidence-redispatch",
+            "preconditions": ["active_controller_owner", "live_open_target_if_present", "missing_or_stale_reviewer_head_evidence"],
+            "runner_authority": RUNNER_AUTHORITY,
+            "no_generic_command": True,
+        }
+        if recovery.status_only:
+            action["status_only"] = True
+            action["reason"] = recovery.status_reason
+            action["no_lifecycle_authority"] = True
+            action.pop("controller_action", None)
+            action.pop("runner_authority", None)
+            action.pop("no_generic_command", None)
+            if recovery.capped_roles:
+                action["capped_review_roles"] = list(recovery.capped_roles)
+            if recovery.pending_roles:
+                action["pending_review_roles"] = list(recovery.pending_roles)
+        actions.append(action)
     return actions
 
 
@@ -5159,6 +5025,34 @@ def _retryable_create_pr_secondary_limit(repo_root: Path, action: dict[str, Any]
         reason = str(row.get("reason") or "")
         return "createPullRequest" in reason and "was submitted too quickly" in reason
     return False
+
+
+def _review_recovery_ledger_rows(repo_root: Path) -> tuple[ReviewEvidenceRecoveryLedgerRow, ...]:
+    ledger = repo_root / ".refactor-loop" / "state" / "wakeup-runner-ledger.jsonl"
+    try:
+        lines = ledger.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ()
+    rows: list[ReviewEvidenceRecoveryLedgerRow] = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, Mapping):
+            continue
+        keys_value = row.get("review_recovery_attempt_keys")
+        keys = tuple(str(key) for key in keys_value) if isinstance(keys_value, list) else ()
+        rows.append(
+            ReviewEvidenceRecoveryLedgerRow(
+                action_id=str(row.get("action_id") or ""),
+                status=str(row.get("status") or ""),
+                reason=str(row.get("reason") or ""),
+                kind=str(row.get("kind") or ""),
+                attempt_keys=keys,
+            )
+        )
+    return tuple(rows)
 
 
 def _single_linked_issue_from_body(body: str) -> int | None:

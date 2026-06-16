@@ -976,7 +976,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         for needle in (
             "`WAIT_EXPLICIT_APPROVAL`: surface comments, do not ready, do not merge",
             "`FIX`: enter fix-retry loop; do not ready, do not merge",
-            "`WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer once; do not ready, never merge",
+            "`WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer through bounded `review_evidence_recovery.py` keys",
+            "`CONFLICTING`/`DIRTY` is status-only",
+            "do not ready, never merge",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)

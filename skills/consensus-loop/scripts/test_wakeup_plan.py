@@ -1350,6 +1350,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   printf '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"stale-head-sha"}\n'
                   exit 0
                 fi
+                if [[ "$cmd1 $cmd2" == "pr view" && "$fixture" == "open_pr_480_conflicting" && "$cmd3" == "480" ]]; then
+                  printf '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n'
+                  exit 0
+                fi
                 if [[ "$cmd1 $cmd2" == "pr view" && "$cmd3" == "31" ]]; then
                   printf '{"baseRefName":"main","headRefOid":"ci-red-sha","mergeStateStatus":"DIRTY"}\n'
                   exit 0
@@ -1587,6 +1591,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             ],
             "open_pr_480": [
                 pr(480, "wedged review PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr480", head_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            ],
+            "open_pr_480_conflicting": [
+                pr(480, "wedged conflicting review PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr480", head_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
             ],
             "open_pr_77": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
             "fix_done_dirty_worktree": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
@@ -5289,6 +5296,24 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["head_sha"], "a" * 40)
         self.assertEqual(action["action_id"], "review-evidence-redispatch:480:" + "a" * 40)
         self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
+        self.assertEqual(action["review_recovery_cap"], 2)
+        self.assertEqual(action["review_recovery_role_count"], 3)
+        self.assertEqual(
+            action["review_recovery_reason_by_role"],
+            {
+                "architect": "missing_github_review_evidence",
+                "tests": "missing_github_review_evidence",
+                "quality": "missing_github_review_evidence",
+            },
+        )
+        self.assertEqual(
+            action["review_recovery_attempt_keys"],
+            [
+                "480:architect:" + "a" * 40 + ":missing_github_review_evidence",
+                "480:tests:" + "a" * 40 + ":missing_github_review_evidence",
+                "480:quality:" + "a" * 40 + ":missing_github_review_evidence",
+            ],
+        )
         self.assertIn("missing_or_stale_reviewer_head_evidence", action["preconditions"])
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
         self.assertTrue(action["no_generic_command"])
@@ -5331,6 +5356,89 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan(fixture="open_pr_480", ps_count=0)
 
         self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+
+    def test_review_evidence_redispatch_conflicting_pr_is_status_only(self) -> None:
+        plan = self.run_plan(fixture="open_pr_480_conflicting")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["reason"], "blocked:needs-conflict-resolution")
+        self.assertEqual(action["stale_review_roles"], [])
+        self.assertEqual(action["review_recovery_attempt_keys"], [])
+        self.assertNotIn("controller_action", action)
+        self.assertNotIn("runner_authority", action)
+
+    def test_review_evidence_redispatch_cap_projects_status_only_after_two_applied_attempts(self) -> None:
+        live = "a" * 40
+        key = f"480:quality:{live}:missing_github_review_evidence"
+        comments = [
+            [
+                {
+                    "id": 301,
+                    "created_at": "2026-06-12T00:01:00Z",
+                    "body": (
+                        f"review_round: 7\nhead_sha: {live}\n"
+                        "REVIEW_DONE:480:architect:approve\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+                {
+                    "id": 302,
+                    "created_at": "2026-06-12T00:02:00Z",
+                    "body": (
+                        f"review_round: 7\nhead_sha: {live}\n"
+                        "REVIEW_DONE:480:tests:approve\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+            ]
+        ]
+        (self.repo / "gh-api-repos-owner-repo-issues-480-comments?per_page=100-comments.json").write_text(
+            json.dumps(comments),
+            encoding="utf-8",
+        )
+        ledger = self.repo / ".refactor-loop" / "state" / "wakeup-runner-ledger.jsonl"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(
+            "\n".join(
+                json.dumps(row, sort_keys=True)
+                for row in (
+                    {
+                        "action_id": f"review-evidence-redispatch:480:{live}",
+                        "kind": "review-evidence-redispatch",
+                        "status": "applied",
+                        "reason": "",
+                    },
+                    {
+                        "action_id": f"review-evidence-redispatch:480:{live}",
+                        "kind": "review-evidence-redispatch",
+                        "status": "applied",
+                        "reason": "",
+                        "review_recovery_attempt_keys": [key],
+                    },
+                    {
+                        "action_id": f"review-evidence-redispatch:480:{live}",
+                        "kind": "review-evidence-redispatch",
+                        "status": "skipped",
+                        "reason": "duplicate",
+                        "review_recovery_attempt_keys": [key],
+                    },
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["reason"], "capped:review-evidence-recovery")
+        self.assertEqual(action["capped_review_roles"], ["quality"])
+        self.assertEqual(action["review_recovery_role_count"], 0)
+        self.assertEqual(action["review_recovery_attempt_keys"], [])
+        self.assertNotIn("controller_action", action)
+        self.assertNotIn("runner_authority", action)
 
     def test_reviewing_pr_with_stale_reviewer_head_projects_dispatch_reviewers(self) -> None:
         stale = "b" * 40
@@ -5378,6 +5486,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
         self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
+        self.assertEqual(set(action["review_recovery_reason_by_role"].values()), {"missing_github_review_evidence"})
 
     def test_reviewing_pr_with_terminal_failed_reviewer_log_redispatches_only_that_role(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve")):
@@ -7285,7 +7394,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("review-evidence-redispatch", projection.set_members["EXECUTABLE_ACTION_KINDS"])
         self.assertIn('"action_id": f"review-evidence-redispatch:{item.number}:{item.head_sha}"', redispatch_source)
         self.assertIn('"head_sha": item.head_sha', redispatch_source)
-        self.assertIn("github_review_completion_roles", redispatch_source)
+        self.assertIn("project_review_evidence_recovery", redispatch_source)
+        self.assertIn("ReviewEvidenceRecoveryInput", redispatch_source)
+        self.assertIn('"review_recovery_attempt_keys"', redispatch_source)
+        self.assertIn('"review_recovery_reason_by_role"', redispatch_source)
+        self.assertNotIn("latest_reviewer_heads", redispatch_source)
+        self.assertNotIn("dead_reviewer_roles", redispatch_source)
+        self.assertNotIn("reviewer_roles_with_evidence", redispatch_source)
 
     def test_wakeup_plan_source_locks_stale_unexecutable_status_only_suppression(self) -> None:
         projection = wakeup_plan_projection()
