@@ -6178,6 +6178,40 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(second[0].status, "skipped")
         popen.assert_called_once()
 
+    def test_dry_run_ledger_does_not_append_live_row(self) -> None:
+        action = self.spawn_action()
+        runner = WakeupRunner(
+            self.ctx,
+            dry_run=True,
+            plan_loader=lambda _repo: self.base_plan(action),
+            actions=FakeActions(),
+            supervisor=self.supervisor,
+            command_runner=lambda command: subprocess.CompletedProcess(command, 0, "", ""),
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual(result, [RunnerResult(action["action_id"], "dry-run")])
+        self.assertFalse((self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").exists())
+        self.assertEqual([], self.supervisor.calls)
+
+    def test_dry_run_ledger_legacy_row_does_not_suppress_real_apply(self) -> None:
+        action = self.spawn_action(action_id="spawn:legacy-dry-run")
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.write_text(
+            json.dumps({"action_id": action["action_id"], "status": "dry-run", "reason": "", "kind": "harness-spawn-intent"})
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            result = self.run_result(self.base_plan(action))
+
+        self.assertEqual(result[0].status, "applied")
+        launch.assert_called_once()
+        rows = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([row["status"] for row in rows], ["dry-run", "applied"])
+
     def test_wakeup_runner_tick_status_line_format(self) -> None:
         out = StringIO()
         with redirect_stdout(out):

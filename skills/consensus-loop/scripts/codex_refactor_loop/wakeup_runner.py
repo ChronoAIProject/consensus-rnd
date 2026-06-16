@@ -450,7 +450,7 @@ class WakeupRunner:
                 return self._record(RunnerResult(action_id, "skipped", error), action)
             return self._blocked(action, error)
         if self.dry_run:
-            return self._record(RunnerResult(action_id, "dry-run"), action)
+            return RunnerResult(action_id, "dry-run")
         stand_down_reason = self._cross_instance_stand_down_reason(action)
         if stand_down_reason:
             return self._record(RunnerResult(action_id, "skipped", stand_down_reason), action)
@@ -2267,8 +2267,6 @@ class WakeupRunner:
             if row.get("action_id") != action_id:
                 continue
             status = row.get("status")
-            if status == "dry-run":
-                return True
             if status == "applied":
                 stale_release_reason = self._release_dispatch_stale_ledger_reason(action)
                 if stale_release_reason:
