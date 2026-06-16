@@ -1215,6 +1215,16 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         )
         return runner.run_once()
 
+    def dry_run_result(self, plan: dict, *, actions=None, **run_kwargs) -> list:
+        original = WakeupRunner.run_once
+
+        def run_dry_once(runner):
+            runner.dry_run = True
+            return original(runner)
+
+        with mock.patch.object(WakeupRunner, "run_once", run_dry_once):
+            return self.run_result(plan, actions=actions or FakeActions(), **run_kwargs)
+
     def base_plan(self, action: dict) -> dict:
         return {
             "schema": "wakeup-plan",
@@ -6180,6 +6190,25 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
     def test_dry_run_ledger_does_not_append_live_row(self) -> None:
         action = self.spawn_action()
+
+        result = self.dry_run_result(self.base_plan(action), git_diff_code=1)
+
+        self.assertEqual(result, [RunnerResult(action["action_id"], "dry-run")])
+        self.assertFalse((self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").exists())
+        self.assertEqual([], self.supervisor.calls)
+
+    def test_dry_run_duplicate_suppression_does_not_append_live_row(self) -> None:
+        action = self.spawn_action(action_id="spawn:dry-run-duplicate")
+        Path(action["log"]).write_text("SPAWN\n", encoding="utf-8")
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "harness-spawn-intent"})
+            + "\n",
+            encoding="utf-8",
+        )
+        original_rows = ledger.read_text(encoding="utf-8")
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        original_pending = pending.read_text(encoding="utf-8")
         runner = WakeupRunner(
             self.ctx,
             dry_run=True,
@@ -6192,8 +6221,51 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         result = runner.run_once()
 
         self.assertEqual(result, [RunnerResult(action["action_id"], "dry-run")])
-        self.assertFalse((self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").exists())
+        self.assertEqual(original_rows, ledger.read_text(encoding="utf-8"))
+        self.assertEqual(original_pending, pending.read_text(encoding="utf-8"))
         self.assertEqual([], self.supervisor.calls)
+
+    def test_dry_run_publish_backoff_does_not_append_live_row_or_event(self) -> None:
+        action = self.implementation_output_action(action_id="dry-run-publish-backoff")
+        recent = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self._seed_publish_helper_exit_rows(action["action_id"], count=3, ts=recent)
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        original_rows = ledger.read_text(encoding="utf-8")
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        original_pending = pending.read_text(encoding="utf-8") if pending.exists() else ""
+        runner = WakeupRunner(
+            self.ctx,
+            dry_run=True,
+            plan_loader=lambda _repo: self.base_plan(action),
+            actions=FakeActions(),
+            supervisor=self.supervisor,
+            command_runner=lambda command: subprocess.CompletedProcess(command, 0, "", ""),
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual(result, [RunnerResult(action["action_id"], "dry-run")])
+        self.assertEqual(original_rows, ledger.read_text(encoding="utf-8"))
+        self.assertEqual(original_pending, pending.read_text(encoding="utf-8") if pending.exists() else "")
+
+    def test_dry_run_validation_error_does_not_append_live_row_or_blocked_event(self) -> None:
+        action = self.spawn_action(action_id="spawn:dry-run-validation", runner_authority="controller")
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        original_pending = pending.read_text(encoding="utf-8")
+        runner = WakeupRunner(
+            self.ctx,
+            dry_run=True,
+            plan_loader=lambda _repo: self.base_plan(action),
+            actions=FakeActions(),
+            supervisor=self.supervisor,
+            command_runner=lambda command: subprocess.CompletedProcess(command, 0, "", ""),
+        )
+
+        result = runner.run_once()
+
+        self.assertEqual(result, [RunnerResult(action["action_id"], "blocked", "runner_authority_mismatch")])
+        self.assertFalse((self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").exists())
+        self.assertEqual(original_pending, pending.read_text(encoding="utf-8"))
 
     def test_dry_run_ledger_legacy_row_does_not_suppress_real_apply(self) -> None:
         action = self.spawn_action(action_id="spawn:legacy-dry-run")

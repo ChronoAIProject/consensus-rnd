@@ -417,6 +417,18 @@ class WakeupRunner:
         action_id = str(action.get("action_id") or "")
         if not action_id:
             return self._blocked(action, "missing_action_id")
+        if self.dry_run:
+            error = self._validate_action(action)
+            if error and not (
+                error == "issue_decomposition_duplicate_sentinel"
+                or error in NON_BLOCKING_VALIDATION_REASONS
+                or (
+                    action.get("controller_action") == "spawn_codex_harness_background"
+                    and error in NON_BLOCKING_SPAWN_VALIDATION_REASONS
+                )
+            ):
+                return RunnerResult(action_id, "blocked", error)
+            return RunnerResult(action_id, "dry-run")
         suppressed_exit_count = self._rebase_resolve_helper_exit_2_blocked_count(action)
         if suppressed_exit_count >= REBASE_RESOLVE_HELPER_EXIT_SUPPRESSION_THRESHOLD:
             self._append_pending_event(
@@ -449,8 +461,6 @@ class WakeupRunner:
             ):
                 return self._record(RunnerResult(action_id, "skipped", error), action)
             return self._blocked(action, error)
-        if self.dry_run:
-            return RunnerResult(action_id, "dry-run")
         stand_down_reason = self._cross_instance_stand_down_reason(action)
         if stand_down_reason:
             return self._record(RunnerResult(action_id, "skipped", stand_down_reason), action)
