@@ -319,12 +319,16 @@ class WakeupRunner:
         write_active_controller_status(self.ctx, owner)
         if not owner.allowed:
             result = RunnerResult("", "noop", f"not-owner:{owner.status}")
+            if self.dry_run:
+                return [result]
             self._record(result, action=None)
             return [result]
         plan = dict(self.plan_loader(self.ctx.repo_root))
         plan_error = self._validate_plan(plan)
         if plan_error:
             result = RunnerResult("", "blocked", plan_error)
+            if self.dry_run:
+                return [result]
             self._record(result, action=None)
             return [result]
         budget = WakeupApplyBudget.from_plan(plan)

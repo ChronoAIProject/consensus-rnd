@@ -1096,6 +1096,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         actions=None,
         issue_comments: list[dict] | None = None,
         open_managed_items: list[dict] | None = None,
+        dry_run: bool = False,
     ) -> list:
         def command_runner(command):
             if command[:2] == ["gh", "api"]:
@@ -1208,6 +1209,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         runner = WakeupRunner(
             self.ctx,
+            dry_run=dry_run,
             plan_loader=lambda _repo: plan,
             actions=actions,
             supervisor=self.supervisor,
@@ -1216,14 +1218,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         return runner.run_once()
 
     def dry_run_result(self, plan: dict, *, actions=None, **run_kwargs) -> list:
-        original = WakeupRunner.run_once
-
-        def run_dry_once(runner):
-            runner.dry_run = True
-            return original(runner)
-
-        with mock.patch.object(WakeupRunner, "run_once", run_dry_once):
-            return self.run_result(plan, actions=actions or FakeActions(), **run_kwargs)
+        return self.run_result(plan, actions=actions or FakeActions(), dry_run=True, **run_kwargs)
 
     def base_plan(self, action: dict) -> dict:
         return {
@@ -3875,6 +3870,18 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(self.supervisor.calls, [])
         self.assert_blocked_ledger("", "schema_mismatch")
 
+    def test_dry_run_malformed_plan_envelope_does_not_append_live_ledger(self) -> None:
+        actions = FakeActions()
+        plan = self.base_plan(self.spawn_action())
+        plan["schema"] = "wrong-schema"
+
+        results = self.dry_run_result(plan, actions=actions)
+
+        self.assertEqual(results, [RunnerResult("", "blocked", "schema_mismatch")])
+        self.assertEqual(actions.calls, [])
+        self.assertEqual(self.supervisor.calls, [])
+        self.assertFalse((self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").exists())
+
     def test_malformed_action_authorization_blocks_before_dispatch_and_records_event(self) -> None:
         cases = [
             ("runner-authority", self.spawn_action(action_id="auth:runner", runner_authority="controller"), "runner_authority_mismatch"),
@@ -3896,6 +3903,16 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "noop")
         self.assertEqual(self.supervisor.calls, [])
+
+    def test_dry_run_non_owner_noop_does_not_append_live_ledger(self) -> None:
+        with mock.patch("codex_refactor_loop.wakeup_runner.require_active_controller") as owner:
+            owner.return_value = type("Decision", (), {"allowed": False, "status": "not-owner", "action": "wakeup-runner", "owner_device": "other", "lease_id": "", "expires_at": ""})()
+
+            results = self.dry_run_result(self.base_plan(self.spawn_action()))
+
+        self.assertEqual(results, [RunnerResult("", "noop", "not-owner:not-owner")])
+        self.assertEqual(self.supervisor.calls, [])
+        self.assertFalse((self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").exists())
 
     def test_missing_evidence_fails_closed(self) -> None:
         action = self.spawn_action(source_marker="missing")
@@ -6209,16 +6226,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         original_rows = ledger.read_text(encoding="utf-8")
         pending = self.repo / ".refactor-loop/.controller-pending-events.log"
         original_pending = pending.read_text(encoding="utf-8")
-        runner = WakeupRunner(
-            self.ctx,
-            dry_run=True,
-            plan_loader=lambda _repo: self.base_plan(action),
-            actions=FakeActions(),
-            supervisor=self.supervisor,
-            command_runner=lambda command: subprocess.CompletedProcess(command, 0, "", ""),
-        )
-
-        result = runner.run_once()
+        result = self.dry_run_result(self.base_plan(action), git_diff_code=1)
 
         self.assertEqual(result, [RunnerResult(action["action_id"], "dry-run")])
         self.assertEqual(original_rows, ledger.read_text(encoding="utf-8"))
@@ -6233,16 +6241,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         original_rows = ledger.read_text(encoding="utf-8")
         pending = self.repo / ".refactor-loop/.controller-pending-events.log"
         original_pending = pending.read_text(encoding="utf-8") if pending.exists() else ""
-        runner = WakeupRunner(
-            self.ctx,
-            dry_run=True,
-            plan_loader=lambda _repo: self.base_plan(action),
-            actions=FakeActions(),
-            supervisor=self.supervisor,
-            command_runner=lambda command: subprocess.CompletedProcess(command, 0, "", ""),
-        )
-
-        result = runner.run_once()
+        result = self.dry_run_result(self.base_plan(action), git_diff_code=1)
 
         self.assertEqual(result, [RunnerResult(action["action_id"], "dry-run")])
         self.assertEqual(original_rows, ledger.read_text(encoding="utf-8"))
