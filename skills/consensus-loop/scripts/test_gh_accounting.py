@@ -506,7 +506,11 @@ class GhAccountingBehaviorTests(unittest.TestCase):
             """
         )
         command = (sys.executable, "-c", child_code)
-        ctx = LoopContext.load(repo_root=self.repo, skill_root=SKILL_ROOT)
+        ctx = LoopContext.load(
+            repo_root=self.repo,
+            skill_root=SKILL_ROOT,
+            env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"},
+        )
         helper = RestartDaemons(ctx, RestartConfig(heartbeat_fresh_seconds=30, heartbeat_interval=1, stop_grace_seconds=1))
         env = {
             "PATH": f"{self.realbin}{os.pathsep}/usr/bin{os.pathsep}/bin",

@@ -10,7 +10,7 @@ import shutil
 import sys
 import tempfile
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from unittest import mock
 
@@ -19,7 +19,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import restart
-from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.context import LoopContext, LoopContextError
 from codex_refactor_loop.daemon_progress import begin_tick, complete_tick, fail_tick
 from codex_refactor_loop.daemon_singleton import DaemonSingletonMetadata, DaemonSingletonProjection, METADATA_FIELD_ORDER, read_metadata
 from codex_refactor_loop.daemon_status import DaemonStatusProjection, collect as collect_daemon_status
@@ -332,6 +332,49 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
     def stale_heartbeat(self, name: str) -> None:
         self.heartbeat_path(name).write_text(f"{self.runtime.now() - 120}\n", encoding="utf-8")
 
+    def ctx_with_restart_admission_override(
+        self,
+        *,
+        host_env_location: Path | None | object = ...,
+        host_env: dict[str, str] | object = ...,
+        gh_repo_slug: str | None | object = ...,
+    ) -> LoopContext:
+        kwargs = {}
+        if host_env_location is not ...:
+            kwargs["host_env_location"] = host_env_location
+        if host_env is not ...:
+            kwargs["host_env"] = host_env
+        if gh_repo_slug is not ...:
+            kwargs["gh_repo_slug"] = gh_repo_slug
+        return replace(self.ctx, **kwargs)
+
+    def assert_restart_run_rejects_before_write_side_supervision(self, ctx: LoopContext, pattern: str) -> None:
+        helper = RestartDaemons(ctx, self.config, runtime=self.runtime)
+        with (
+            mock.patch.object(helper, "_prepare_dirs") as prepare_dirs,
+            mock.patch("codex_refactor_loop.restart.require_active_controller") as active_controller,
+            mock.patch.object(helper, "_run_runtime_retention") as retention,
+            mock.patch.object(helper, "start_daemon") as start_daemon,
+            mock.patch.object(helper, "_run_update_check") as update_check,
+        ):
+            with self.assertRaisesRegex(LoopContextError, pattern):
+                helper.run()
+
+        prepare_dirs.assert_not_called()
+        active_controller.assert_not_called()
+        retention.assert_not_called()
+        start_daemon.assert_not_called()
+        update_check.assert_not_called()
+
+    def assert_direct_start_daemon_rejects_before_launch_probe(self, ctx: LoopContext, pattern: str) -> None:
+        helper = RestartDaemons(ctx, self.config, runtime=self.runtime)
+        with mock.patch.object(self.runtime, "collect_inventory") as collect_inventory:
+            with self.assertRaisesRegex(LoopContextError, pattern):
+                helper.start_daemon("concurrency_monitor", FAKE_COMMAND)
+
+        collect_inventory.assert_not_called()
+        self.assertEqual(0, self.start_count("concurrency_monitor"))
+
     def test_singleton_metadata_canonical_json_matches_documented_field_order(self) -> None:
         target = restart.daemon_target(self.ctx, "concurrency_monitor", FAKE_COMMAND)
         metadata = write_singleton_metadata(self.ctx.repo_root, target, actor_pid=12345, started_at=self.runtime.now())
@@ -360,6 +403,108 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual("closed-label-reconciler", commands_by_name["closed_label_reconciler"][2])
         self.assertEqual(("phase9-router", "--daemon", "--interval", "{phase9_router_interval_seconds}"), commands_by_name["phase9_router_daemon"][2:])
         self.assertEqual(("wakeup-runner", "--daemon", "--interval-seconds", "{wakeup_runner_interval_seconds}"), commands_by_name["wakeup_runner_daemon"][2:])
+
+    def test_restart_daemons_requires_host_owned_host_env_before_supervision(self) -> None:
+        valid_host_env = dict(self.ctx.host_env)
+        cases = (
+            (
+                "missing-locator",
+                self.ctx_with_restart_admission_override(host_env_location=None),
+                "CONSENSUS_RND_HOST_ENV",
+            ),
+            (
+                "empty-host-env",
+                self.ctx_with_restart_admission_override(host_env={}),
+                "host.env is empty",
+            ),
+            (
+                "missing-host-env-repo-root",
+                self.ctx_with_restart_admission_override(host_env={"GH_REPO_SLUG": "example/repo"}),
+                "REPO_ROOT",
+            ),
+            (
+                "mismatched-host-env-repo-root",
+                self.ctx_with_restart_admission_override(host_env={**valid_host_env, "REPO_ROOT": str(self.tmp_root / "other")}),
+                "REPO_ROOT",
+            ),
+            (
+                "missing-gh-repo-slug",
+                self.ctx_with_restart_admission_override(
+                    host_env={"REPO_ROOT": str(self.repo)},
+                    gh_repo_slug=None,
+                ),
+                "GH_REPO_SLUG",
+            ),
+            (
+                "invalid-gh-repo-slug",
+                self.ctx_with_restart_admission_override(
+                    host_env={**valid_host_env, "GH_REPO_SLUG": "repo-only"},
+                    gh_repo_slug="repo-only",
+                ),
+                "GH_REPO_SLUG",
+            ),
+            (
+                "too-many-gh-repo-slug-segments",
+                self.ctx_with_restart_admission_override(
+                    host_env={**valid_host_env, "GH_REPO_SLUG": "owner/repo/extra"},
+                    gh_repo_slug="owner/repo/extra",
+                ),
+                "GH_REPO_SLUG",
+            ),
+            (
+                "empty-owner-gh-repo-slug-segment",
+                self.ctx_with_restart_admission_override(
+                    host_env={**valid_host_env, "GH_REPO_SLUG": "/repo"},
+                    gh_repo_slug="/repo",
+                ),
+                "GH_REPO_SLUG",
+            ),
+            (
+                "empty-repo-gh-repo-slug-segment",
+                self.ctx_with_restart_admission_override(
+                    host_env={**valid_host_env, "GH_REPO_SLUG": "owner/"},
+                    gh_repo_slug="owner/",
+                ),
+                "GH_REPO_SLUG",
+            ),
+            (
+                "gh-repo-slug-loaded-context-mismatch",
+                self.ctx_with_restart_admission_override(
+                    host_env={**valid_host_env, "GH_REPO_SLUG": "example/repo"},
+                    gh_repo_slug="other/repo",
+                ),
+                "loaded context",
+            ),
+        )
+
+        for name, ctx, pattern in cases:
+            with self.subTest(name=name):
+                self.assert_restart_run_rejects_before_write_side_supervision(ctx, pattern)
+
+    def test_direct_start_daemon_requires_same_host_env_admission(self) -> None:
+        ctx = self.ctx_with_restart_admission_override(host_env_location=None)
+
+        self.assert_direct_start_daemon_rejects_before_launch_probe(ctx, "CONSENSUS_RND_HOST_ENV")
+
+    def test_restart_daemons_base_admission_does_not_require_maintainer_whitelist(self) -> None:
+        self.host_env_path.write_text(
+            f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="example/repo"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill, env={"CONSENSUS_RND_HOST_ENV": str(self.host_env_path)})
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="restart-daemons", lease_id="lease", expires_at="")
+        calls: list[str] = []
+
+        def fake_start(helper: RestartDaemons, name: str, command: tuple[str, ...]) -> None:
+            calls.append(name)
+
+        with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
+                with mock.patch.object(RestartDaemons, "start_daemon", fake_start):
+                    helper = RestartDaemons(ctx, self.config, runtime=self.runtime)
+                    self.assertEqual(0, helper.run())
+
+        self.assertEqual(list(DAEMON_NAMES), calls)
 
     def test_restart_daemon_intervals_resolve_from_host_env_with_default_fallback(self) -> None:
         phase9_template = next(command for name, command in DAEMON_COMMANDS if name == "phase9_router_daemon")
