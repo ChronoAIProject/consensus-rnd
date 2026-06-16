@@ -2151,7 +2151,7 @@ For each `bucket: fail` check:
 <a id="daemon-command-bodies"></a>
 ## Daemon command bodies
 
-The restart-helper-managed daemon command bodies below are defined by `restart.py::DAEMON_COMMANDS` and are active-controller-owner-only in multi-device mode. The owner may start/maintain `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`, and `wakeup_runner_daemon`; a non-owner `restart-daemons` is a noop with `active_controller=noop:not-owner`. Read-only `peek` and `statusline` remain allowed on non-owner devices.
+The restart-helper-managed daemon command bodies below are defined by `restart.py::DAEMON_COMMANDS` and are active-controller-owner-only in multi-device mode. Before `_prepare_dirs()`, active-controller status writes, RuntimeRetention, daemon launch, update-check, or direct `start_daemon()`, `restart-daemons` requires base host admission from host-owned `CONSENSUS_RND_HOST_ENV`: explicit locator, non-empty parsed host.env, host.env `REPO_ROOT` matching the loaded repository, and `GH_REPO_SLUG` in `OWNER/REPO` form. It does not read `.refactor-loop/host.env` as host production SSOT and does not require `MAINTAINER_WHITELIST` as a fleet-wide gate; that variable remains comment-monitor-local. The owner may start/maintain `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`, and `wakeup_runner_daemon`; a non-owner `restart-daemons` is a noop with `active_controller=noop:not-owner`. Read-only `peek` and `statusline` remain allowed on non-owner devices.
 
 Consensus-rnd Phase integration-sync is owned by the singleton daemon, not by controller wakeup shell commands. The goal is to keep `integration_branch` continuously up-to-date with `review_base_branch` so cluster PRs base on fresh code and the eventual rollup PR has minimal merge conflicts.
 
@@ -2632,6 +2632,8 @@ tail -n 0 -F .refactor-loop/.controller-pending-events.log .refactor-loop/.concu
 <ISO8601> new-team-comment <issue_number> <author> <comment_id>
 ```
 (daemon 仍正常 react eyes + post daemon banner + write comment-monitor.log。新增的 pending-events 文件只用于 controller 自适应 wakeup。)
+
+`comment-monitor` startup fail-close remains local to that daemon: after trusted `LoopContext` loads, missing `GH_REPO_SLUG` or `MAINTAINER_WHITELIST` appends one grep-able line `DAEMON_STARTUP_FAIL_CLOSED daemon=comment-monitor reason=<gh-repo-slug-unset|maintainer-whitelist-unset>` to the same pending-events file, then exits 2; this is diagnostic wakeup evidence only, not a wrapper registry or lifecycle authority.
 
 #### Controller 侧 — per-wakeup step 1.6:check pending events
 

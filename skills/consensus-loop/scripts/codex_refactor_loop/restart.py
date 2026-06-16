@@ -657,6 +657,7 @@ class RestartDaemons:
         self._package_digest_cache: tuple[str, int] | None = None
 
     def run(self) -> int:
+        require_restart_daemons_host_env_admission(self.ctx)
         self._prepare_dirs()
         decision = require_active_controller(self.ctx, "restart-daemons")
         write_active_controller_status(self.ctx, decision)
@@ -703,6 +704,7 @@ class RestartDaemons:
                 self._log(f"{name} stopped: supervisor-replaced pids={','.join(str(pid) for pid in pids)}")
 
     def start_daemon(self, name: str, command_template: Sequence[str]) -> None:
+        require_restart_daemons_host_env_admission(self.ctx)
         target = daemon_target(self.ctx, name, command_template)
         pid_file = target.pid_file
         fingerprint_file = target.fingerprint_file
@@ -921,6 +923,27 @@ def _positive_env_int(ctx: LoopContext, env_name: str, default: str) -> str:
 
 def _truthy(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def require_restart_daemons_host_env_admission(ctx: LoopContext) -> None:
+    if ctx.host_env_location is None:
+        raise LoopContextError("restart-daemons requires CONSENSUS_RND_HOST_ENV to point at host-owned host.env")
+    if not ctx.host_env:
+        raise LoopContextError("restart-daemons host.env is empty")
+    raw_repo_root = ctx.host_env.get("REPO_ROOT")
+    if not raw_repo_root:
+        raise LoopContextError("restart-daemons host.env must set REPO_ROOT")
+    host_repo_root = Path(raw_repo_root).expanduser().resolve()
+    if host_repo_root != ctx.repo_root.resolve():
+        raise LoopContextError(f"restart-daemons host.env REPO_ROOT mismatch: {raw_repo_root}")
+    raw_slug = ctx.host_env.get("GH_REPO_SLUG")
+    if not raw_slug:
+        raise LoopContextError("restart-daemons host.env must set GH_REPO_SLUG")
+    slug_parts = raw_slug.split("/")
+    if len(slug_parts) != 2 or not all(slug_parts):
+        raise LoopContextError(f"restart-daemons GH_REPO_SLUG must be OWNER/REPO; got {raw_slug!r}")
+    if ctx.gh_repo_slug != raw_slug:
+        raise LoopContextError("restart-daemons GH_REPO_SLUG does not match loaded context")
 
 
 WRAPPER_CODE = "from codex_refactor_loop.restart import _run_restart_wrapper; import sys; raise SystemExit(_run_restart_wrapper(sys.argv[1:]))"

@@ -53,9 +53,11 @@ class CommentMonitor:
         self.ctx = ctx
         self.repo = ctx.gh_repo_slug
         if not self.repo:
+            append_startup_fail_closed_event(ctx, "gh-repo-slug-unset")
             raise RuntimeError("FATAL: GH_REPO_SLUG is unset and gh repo view failed")
         whitelist = ctx.host_env.get("MAINTAINER_WHITELIST")
         if not whitelist:
+            append_startup_fail_closed_event(ctx, "maintainer-whitelist-unset")
             raise RuntimeError("FATAL: MAINTAINER_WHITELIST is unset; comment-monitor fails closed")
         self.maintainers = {item for item in whitelist.replace(",", " ").split() if item}
         self.state_file = state_file or ctx.paths.refactor_loop / "comment-monitor-state.json"
@@ -280,6 +282,12 @@ class CommentMonitor:
 
 def run_comment_monitor_reconcile_tick(monitor: CommentMonitor) -> None:
     monitor.tick()
+
+
+def append_startup_fail_closed_event(ctx: LoopContext, reason: str) -> None:
+    ctx.paths.pending_events.parent.mkdir(parents=True, exist_ok=True)
+    with ctx.paths.pending_events.open("a", encoding="utf-8") as handle:
+        handle.write(f"DAEMON_STARTUP_FAIL_CLOSED daemon=comment-monitor reason={reason}\n")
 
 
 def is_controller_post(first_line: str, body: str) -> bool:
