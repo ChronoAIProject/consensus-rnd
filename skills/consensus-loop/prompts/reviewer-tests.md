@@ -70,7 +70,7 @@ Verdict semantics:
 - Out-of-scope, non-flippable, or advisory findings must be `comment`.
 
 End with marker: `REVIEW_DONE:${PR_NUMBER}:tests:<verdict>`
-Your GitHub PR comment must include `review_round: ${REVIEW_ROUND}`, `head_sha: ${HEAD_SHA}`, the same `REVIEW_DONE:${PR_NUMBER}:tests:<verdict>` marker, and the final standalone AI sentinel. The wakeup runner treats only that GitHub-visible, sentinel-bearing, same-head comment as merge/fix authority; `${REVIEW_OUTPUT_PATH}` and logs are diagnostics and prompt inputs.
+Your GitHub PR comment must follow the rendered shared Reviewer GitHub-visible evidence tail using the role-matching marker `REVIEW_DONE:${PR_NUMBER}:tests:<verdict>`.
 
 ## Marker emission allowlist(强制)
 
