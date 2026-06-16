@@ -19,9 +19,10 @@ from .harness_spawn_intent_target import _harness_spawn_intent_target
 DEFAULT_ACTIVE_DESIGN_CAP = 3
 DEFAULT_CLAIM_COOLDOWN_SECONDS = 3600
 CLAIM_STATE_PATH = ".refactor-loop/state/default-issue-intake-claims.json"
+# wakeup_runner_daemon evaluates this admission inside its own begin->callback->complete tick,
+# so gating on its own progress self-deadlocks (#969); only upstream/parallel producers belong here.
 UPSTREAM_PROGRESS_DAEMONS = (
     "phase9_router_daemon",
-    "wakeup_runner_daemon",
     "concurrency_monitor",
 )
 ADMISSION_PRECONDITIONS = (
