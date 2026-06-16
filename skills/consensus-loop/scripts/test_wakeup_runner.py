@@ -20,6 +20,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.consensus_gate import consensus_gate_digest, consensus_gate_file_digest
+from codex_refactor_loop.daemon_progress import begin_tick
 from codex_refactor_loop.issue_decomposition import (
     IssueDecompositionBackoff,
     issue_decomposition_child_fingerprint,
@@ -552,20 +553,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual("default_issue_intake_admission:claim_cooldown_active", result[0].reason)
         self.assertEqual([], actions.calls)
 
-    def test_apply_default_issue_intake_claim_revalidates_pending_spawn_intent_before_helper_dispatch(self) -> None:
+    def test_apply_default_issue_intake_claim_revalidates_admission_before_helper_dispatch(self) -> None:
         action = self.default_issue_intake_claim_action()
-        pending_intent = {
-            "intent_id": "dispatch-consensus-implementation:77",
-            "task_id": "implement-issue-77",
-            "source": "wakeup-plan",
-            "route": "dispatch-consensus-implementation",
-            "queued_at": "2026-06-01T00:00:00Z",
-            "log": ".refactor-loop/logs/implement-issue-77.log",
-        }
-        self.ctx.paths.pending_events.write_text(
-            f"2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(pending_intent, sort_keys=True)}\n",
-            encoding="utf-8",
-        )
+        begin_tick(self.repo, "phase9_router_daemon", now=1000, pid=42)
         actions = FakeActions()
 
         result = self.run_result(self.base_plan(action), gh_labels=[], actions=actions)

@@ -261,7 +261,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("accepted", actions[0]["default_issue_intake_admission"]["status"])
         self.assertEqual("upstream_idle", actions[0]["default_issue_intake_admission"]["proof"]["upstream_state"])
 
-    def test_default_issue_intake_projection_rejects_live_pending_spawn_intent(self) -> None:
+    def test_default_issue_intake_projection_admits_with_live_pending_spawn_intent(self) -> None:
         ctx = mock.Mock(host_env={"DEFAULT_ISSUE_INTAKE_ENABLE": "true"})
         actions = default_issue_intake_actions(
             [
@@ -279,7 +279,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             now_iso="2026-06-07T02:00:00Z",
         )
 
-        self.assertEqual([], actions)
+        self.assertEqual([88], [action["target_number"] for action in actions])
+        self.assertEqual("apply_default_issue_intake_claim", actions[0]["controller_action"])
+        self.assertEqual("accepted", actions[0]["default_issue_intake_admission"]["status"])
+        self.assertEqual("upstream_idle", actions[0]["default_issue_intake_admission"]["proof"]["upstream_state"])
 
     def test_default_issue_intake_projection_suppresses_when_active_design_cap_reached(self) -> None:
         ctx = mock.Mock(
