@@ -3445,6 +3445,109 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls, [("defer_false_positive_consensus", self.annotate_safe_progress(action))])
 
+    def test_runner_blocks_invalid_false_positive_defer_actions_before_dispatch(self) -> None:
+        marker = "META_JUDGE_DONE:consensus:false-positive"
+        log = self.repo / ".refactor-loop/logs/phase9-issue330-r4-judge.log"
+        log.write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+        artifact = self.repo / ".refactor-loop/runs/phase9-issue330-r4-judge.md"
+        artifact.write_text(f"---\ndecision: consensus\n---\n\n{marker}\n", encoding="utf-8")
+        base_action = {
+            "kind": "defer-false-positive-consensus",
+            "action_id": f"completed-marker:{log.name}:{marker}",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "durable_consensus_artifact",
+                "scope_paths_none",
+                "no_change_false_positive_framing",
+                "live_open_managed_design_issue",
+            ],
+            "source_artifact": ".refactor-loop/logs/phase9-issue330-r4-judge.log",
+            "source_marker": marker,
+            "target_kind": "issue",
+            "target_number": 330,
+            "target": {"kind": "issue", "number": 330},
+            "controller_action": "defer_false_positive_consensus",
+            "no_generic_command": True,
+            "no_lifecycle_authority": True,
+            "consensus_artifact": ".refactor-loop/runs/phase9-issue330-r4-judge.md",
+            "design_decision_path": ".refactor-loop/runs/phase9-issue330-r4-judge.md",
+            "consensus_issue": 330,
+            "consensus_round": 4,
+            "scope_paths": "- none",
+            "old_pattern": "unnecessary implementation dispatch",
+            "new_principle": "false-positive no-change consensus defers to blocked",
+        }
+        cases = (
+            ("missing-preconditions", {"preconditions": None}, "false_positive_defer_missing_preconditions", None, None),
+            (
+                "missing-scope-precondition",
+                {
+                    "preconditions": [
+                        "active_controller_owner",
+                        "clean_exit_source_marker",
+                        "durable_consensus_artifact",
+                        "no_change_false_positive_framing",
+                        "live_open_managed_design_issue",
+                    ]
+                },
+                "false_positive_defer_missing_precondition:scope_paths_none",
+                None,
+                None,
+            ),
+            ("target-missing", {"target_kind": "PR", "target_number": 330}, "false_positive_defer_target_missing", None, None),
+            ("artifact-missing", {"consensus_artifact": ".refactor-loop/runs/missing.md"}, "false_positive_defer_consensus_artifact_missing", None, None),
+            (
+                "design-path-mismatch",
+                {"design_decision_path": ".refactor-loop/runs/other.md"},
+                "false_positive_defer_design_path_mismatch",
+                None,
+                None,
+            ),
+            ("scope-not-none", {"scope_paths": "- skills/consensus-loop/SKILL.md"}, "false_positive_defer_scope_paths_not_none", None, None),
+            (
+                "framing-missing",
+                {
+                    "source_marker": "META_JUDGE_DONE:consensus",
+                    "old_pattern": "old",
+                    "new_principle": "new",
+                },
+                "false_positive_defer_framing_missing",
+                None,
+                None,
+            ),
+            ("issue-unavailable", {}, "false_positive_defer_issue_unavailable", None, None),
+            ("target-not-open", {}, "false_positive_defer_target_not_open", "CLOSED", None),
+            ("target-not-managed", {}, "false_positive_defer_target_not_managed", "OPEN", [labels.PHASE_DESIGN_SOLVING]),
+            ("target-not-design-solving", {}, "false_positive_defer_target_not_design_solving", "OPEN", [labels.MANAGED]),
+        )
+        for name, overrides, reason, gh_state, gh_labels in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                action = dict(base_action)
+                action.update(overrides)
+                action["action_id"] = f"{base_action['action_id']}:{name}"
+                if name == "framing-missing":
+                    bad_log = self.repo / ".refactor-loop/logs/phase9-issue331-r4-judge.log"
+                    bad_log.write_text(f"{action['source_marker']}\nEXIT=0\n", encoding="utf-8")
+                    action["source_artifact"] = ".refactor-loop/logs/phase9-issue331-r4-judge.log"
+                    bad_artifact = self.repo / ".refactor-loop/runs/phase9-issue331-r4-judge.md"
+                    bad_artifact.write_text(f"---\ndecision: consensus\n---\n\n{action['source_marker']}\n", encoding="utf-8")
+                    action["consensus_artifact"] = ".refactor-loop/runs/phase9-issue331-r4-judge.md"
+                    action["design_decision_path"] = ".refactor-loop/runs/phase9-issue331-r4-judge.md"
+                    action["target_number"] = 331
+                    action["target"] = {"kind": "issue", "number": 331}
+                    action["consensus_issue"] = 331
+                results = self.run_result(
+                    self.base_plan(action),
+                    gh_state=gh_state,
+                    gh_labels=gh_labels,
+                    actions=actions,
+                )
+
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
     def test_release_dispatch_writes_candidate_artifact_only(self) -> None:
         self.write_release_dispatch_fixtures()
         actions = FakeActions()

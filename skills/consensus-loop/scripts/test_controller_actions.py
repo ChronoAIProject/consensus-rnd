@@ -622,6 +622,19 @@ class ControllerActionsTests(unittest.TestCase):
             "source_ref": "gh-issue-413",
         }
 
+    def false_positive_defer_action(self, **overrides: object) -> dict[str, object]:
+        action: dict[str, object] = {
+            "target_kind": "issue",
+            "target_number": 330,
+            "consensus_artifact": ".refactor-loop/runs/phase9-issue330-r4-judge.md",
+            "design_decision_path": ".refactor-loop/runs/phase9-issue330-r4-judge.md",
+            "scope_paths": "- none",
+            "old_pattern": "unnecessary implementation dispatch",
+            "new_principle": "false-positive no-change consensus defers to blocked",
+        }
+        action.update(overrides)
+        return action
+
     def matching_implementation_pr_payload(self, issue: int, head_ref: str, pr_number: int = 414) -> str:
         return json.dumps(
             [
