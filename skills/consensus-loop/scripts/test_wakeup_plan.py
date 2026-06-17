@@ -7311,6 +7311,58 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             )
         )
 
+    def test_scope_none_false_positive_defer_does_not_require_implementation_owner(self) -> None:
+        self.write_consensus_artifact(
+            issue=330,
+            round_no=4,
+            marker="META_JUDGE_DONE:consensus:false-positive",
+            scope_paths="- none",
+            old_pattern="incomplete implementation owner should not hide no-change consensus",
+            new_principle="no-change false-positive consensus defers without implementation dispatch",
+            include_owner=False,
+        )
+        log = self.logs / "phase9-issue330-r4-judge.log"
+        self.write_completed_log("phase9-issue330-r4-judge.log", "META_JUDGE_DONE:consensus:false-positive")
+
+        self.assertEqual({}, consensus_implementation_fields(self.repo, log, "issue #330"))
+        plan = self.run_plan(fixture="design_solving_issue_330")
+
+        action = completed_marker_action(plan, "completed-marker:phase9-issue330-r4-judge.log")
+        self.assertEqual("defer_false_positive_consensus", action["controller_action"])
+        self.assertEqual("defer-false-positive-consensus", action["kind"])
+        self.assertEqual("issue", action["target_kind"])
+        self.assertEqual(330, action["target_number"])
+        self.assertEqual("- none", action["scope_paths"])
+        self.assertIn("scope_paths_none", action["preconditions"])
+        self.assertIn("no_change_false_positive_framing", action["preconditions"])
+        self.assertNotIn("status_only", action)
+        self.assertFalse(
+            any(
+                item.get("controller_action") == "dispatch_consensus_implementation"
+                and not item.get("status_only")
+                for item in plan["actions"]
+            )
+        )
+
+    def test_scope_none_false_positive_defer_requires_live_design_solving_issue(self) -> None:
+        self.write_consensus_artifact(
+            issue=330,
+            round_no=4,
+            marker="META_JUDGE_DONE:consensus:false-positive",
+            scope_paths="- none",
+            old_pattern="incomplete implementation owner should not hide no-change consensus",
+            new_principle="no-change false-positive consensus defers without implementation dispatch",
+            include_owner=False,
+        )
+        self.write_completed_log("phase9-issue330-r4-judge.log", "META_JUDGE_DONE:consensus:false-positive")
+
+        plan = self.run_plan(fixture="open_issue_330")
+
+        action = completed_marker_action(plan, "completed-marker:phase9-issue330-r4-judge.log")
+        self.assertTrue(action["status_only"])
+        self.assertNotEqual("defer_false_positive_consensus", action.get("controller_action"))
+        self.assertNotIn("runner_authority", action)
+
     def test_false_positive_consensus_with_non_empty_scope_still_dispatches_implementation(self) -> None:
         self.write_consensus_artifact(
             issue=330,
@@ -7397,6 +7449,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "_extract_implementation_owner",
             "_extract_structured_consensus_field",
             "_consensus_projection_from_artifact",
+            "false_positive_consensus_defer_fields",
+            "_false_positive_defer_projection_from_artifact",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, projection.assigned_names | projection.function_names)
