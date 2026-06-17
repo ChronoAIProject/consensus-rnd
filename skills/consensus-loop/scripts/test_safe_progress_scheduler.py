@@ -50,6 +50,21 @@ class SafeProgressSchedulerTests(unittest.TestCase):
         self.assertEqual("cautious", decision.execution_policy)
         self.assertTrue(decision.executable)
 
+    def test_false_positive_defer_helper_is_known_medium_cautious(self) -> None:
+        action = {
+            "kind": "defer-false-positive-consensus",
+            "action_id": "defer:330",
+            "controller_action": "defer_false_positive_consensus",
+            "no_lifecycle_authority": True,
+        }
+
+        decision = classify_wakeup_action(action)
+
+        self.assertEqual("medium", decision.risk_tier)
+        self.assertEqual("cautious", decision.execution_policy)
+        self.assertTrue(decision.executable)
+        self.assertIsNone(validate_runner_action({**action, "risk_tier": "medium", "execution_policy": "cautious"}))
+
     def test_forbidden_nested_field_is_high_blocked(self) -> None:
         action = {
             "kind": "completed-marker",

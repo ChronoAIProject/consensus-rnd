@@ -41,6 +41,7 @@ KNOWN_CONTROLLER_ACTIONS = frozenset(
         "archive_invalid_harness_spawn_intent",
         "safe_push",
         "dispatch_consensus_implementation",
+        "defer_false_positive_consensus",
         "publish_implementation_output",
         "publish_worker_output_from_action",
         "publish_review_fix_output_from_action",

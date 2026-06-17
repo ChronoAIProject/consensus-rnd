@@ -133,6 +133,7 @@ RUNNER_NAMED_HELPER_ACTIONS = {
     "archive_invalid_harness_spawn_intent",
     "safe_push",
     "dispatch_consensus_implementation",
+    "defer_false_positive_consensus",
     "publish_implementation_output",
     "publish_worker_output_from_action",
     "publish_review_fix_output_from_action",
@@ -202,6 +203,7 @@ EXECUTABLE_ACTION_KINDS = {
     "review-evidence-redispatch",
     "default-issue-intake-claim",
     "resume-requested-consensus-implementation",
+    "defer-false-positive-consensus",
 }
 NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_PR_OPEN: "pr-open",
@@ -1461,12 +1463,15 @@ def completed_marker_actions(
             consensus_fields = consensus_implementation_fields(repo_root, log_path, item)
             if consensus_fields:
                 action.update(consensus_fields)
-                action["preconditions"] = [
-                    *action["preconditions"],
-                    "durable_consensus_artifact",
-                    "consensus_implementation_ready",
-                ]
-                _apply_consensus_implementation_readiness(action, repo_root, gh_items, monitor, ctx)
+                if _apply_false_positive_consensus_defer(action):
+                    pass
+                else:
+                    action["preconditions"] = [
+                        *action["preconditions"],
+                        "durable_consensus_artifact",
+                        "consensus_implementation_ready",
+                    ]
+                    _apply_consensus_implementation_readiness(action, repo_root, gh_items, monitor, ctx)
             else:
                 action["status_only"] = True
                 action["no_lifecycle_authority"] = True
@@ -4086,6 +4091,44 @@ def _scope_path_overlaps_one(left: str, right: str) -> bool:
     if left == right:
         return True
     return right.startswith(left + "/") or left.startswith(right + "/")
+
+
+def _apply_false_positive_consensus_defer(action: dict[str, Any]) -> bool:
+    if not _consensus_scope_paths_is_none(action.get("scope_paths")):
+        return False
+    if not _no_change_false_positive_framing(action):
+        return False
+    action["kind"] = "defer-false-positive-consensus"
+    action["controller_action"] = "defer_false_positive_consensus"
+    action["phase"] = "design-consensus"
+    action["route"] = "defer-false-positive-consensus"
+    action["preconditions"] = [
+        "active_controller_owner",
+        "clean_exit_source_marker",
+        "durable_consensus_artifact",
+        "scope_paths_none",
+        "no_change_false_positive_framing",
+        "live_open_managed_design_issue",
+    ]
+    action["no_lifecycle_authority"] = True
+    action["runner_authority"] = RUNNER_AUTHORITY
+    action["no_generic_command"] = True
+    return True
+
+
+def _no_change_false_positive_framing(action: Mapping[str, Any]) -> bool:
+    marker = str(action.get("source_marker") or "").lower()
+    fields = " ".join(
+        str(action.get(field) or "")
+        for field in ("old_pattern", "new_principle", "consensus_disposition", "framing", "chosen_framing")
+    ).lower()
+    text = f"{marker} {fields}"
+    return (
+        "false-positive" in text
+        or "false positive" in text
+        or "no-change" in text
+        or "no change" in text
+    )
 
 
 def consensus_implementation_suppressed_reason(
