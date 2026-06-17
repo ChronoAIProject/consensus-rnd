@@ -1442,6 +1442,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ci_running = label_catalog.PHASE_CI_RUNNING
         issue_rows: dict[str, list[dict[str, object]]] = {
             "open_issue_330": [issue(330, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "design_solving_issue_330": [issue(330, "design solving target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "resume_requested_issue20": [
                 issue(
@@ -7276,6 +7277,56 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         fields = consensus_implementation_fields(self.repo, log, "issue #330")
 
         self.assertEqual({}, fields)
+
+    def test_false_positive_scope_none_consensus_projects_defer_helper_not_implementation(self) -> None:
+        self.write_consensus_artifact(
+            issue=330,
+            round_no=4,
+            marker="META_JUDGE_DONE:consensus:false-positive",
+            scope_paths="- none",
+            old_pattern="unnecessary implementation dispatch",
+            new_principle="false-positive no-change consensus defers to blocked",
+        )
+        self.write_completed_log("phase9-issue330-r4-judge.log", "META_JUDGE_DONE:consensus:false-positive")
+
+        plan = self.run_plan(fixture="design_solving_issue_330")
+
+        action = completed_marker_action(plan, "completed-marker:phase9-issue330-r4-judge.log")
+        self.assertEqual("defer_false_positive_consensus", action["controller_action"])
+        self.assertEqual("defer-false-positive-consensus", action["kind"])
+        self.assertEqual("issue", action["target_kind"])
+        self.assertEqual(330, action["target_number"])
+        self.assertEqual("- none", action["scope_paths"])
+        self.assertIn("scope_paths_none", action["preconditions"])
+        self.assertIn("no_change_false_positive_framing", action["preconditions"])
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertEqual("medium", action["risk_tier"])
+        self.assertEqual("cautious", action["execution_policy"])
+        self.assertNotIn("status_only", action)
+        self.assertFalse(
+            any(
+                item.get("controller_action") == "dispatch_consensus_implementation"
+                and not item.get("status_only")
+                for item in plan["actions"]
+            )
+        )
+
+    def test_false_positive_consensus_with_non_empty_scope_still_dispatches_implementation(self) -> None:
+        self.write_consensus_artifact(
+            issue=330,
+            round_no=4,
+            marker="META_JUDGE_DONE:consensus:false-positive",
+            scope_paths="- skills/consensus-loop/scripts/codex_refactor_loop/wakeup_plan.py",
+            old_pattern="unnecessary implementation dispatch",
+            new_principle="false-positive no-change consensus defers to blocked",
+        )
+        self.write_completed_log("phase9-issue330-r4-judge.log", "META_JUDGE_DONE:consensus:false-positive")
+
+        plan = self.run_plan(fixture="open_issue_330")
+
+        action = completed_marker_action(plan, "completed-marker:phase9-issue330-r4-judge.log")
+        self.assertEqual("dispatch_consensus_implementation", action["controller_action"])
+        self.assertNotIn("status_only", action)
 
     def test_consensus_projection_does_not_read_solver_artifact_fallback(self) -> None:
         self.write_consensus_artifact(issue=330, round_no=4, scope_paths="")

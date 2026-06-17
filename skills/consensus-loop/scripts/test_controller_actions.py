@@ -3069,6 +3069,68 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn(f'remove_labels="{",".join(CONSENSUS_IMPLEMENTATION_ISSUE_LABELS_REMOVE)}"', canonical_line)
         self.assertNotIn("HARNESS_SPAWN_INTENT", pending)
 
+    def test_defer_false_positive_consensus_posts_fixed_explanation_and_moves_blocked_auto(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="defer-false-positive-consensus", lease_id="lease", expires_at="soon")
+        action = {
+            "target_kind": "issue",
+            "target_number": 330,
+            "consensus_artifact": ".refactor-loop/runs/phase9-issue330-r4-judge.md",
+            "design_decision_path": ".refactor-loop/runs/phase9-issue330-r4-judge.md",
+            "scope_paths": "- none",
+            "old_pattern": "unnecessary implementation dispatch",
+            "new_principle": "false-positive no-change consensus defers to blocked",
+        }
+        gh_calls: list[list[str]] = []
+        comment_body = ""
+
+        def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            nonlocal comment_body
+            gh_calls.append(list(args))
+            if list(args)[:4] == ["issue", "view", "330", "--json"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "state": "OPEN",
+                            "labels": [
+                                {"name": labels.MANAGED},
+                                {"name": labels.PHASE_DESIGN_SOLVING},
+                                {"name": labels.HUMAN_AUTO},
+                            ],
+                        }
+                    ),
+                    stderr="",
+                )
+            if list(args)[:4] == ["issue", "comment", "330", "--body-file"]:
+                comment_body = Path(args[4]).read_text(encoding="utf-8")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                self.assertEqual(0, self.actions.defer_false_positive_consensus(action))
+
+        self.assertEqual(["issue", "view", "330", "--json", "state,labels"], gh_calls[0])
+        comment_call = gh_calls[1]
+        self.assertEqual(["issue", "comment", "330", "--body-file"], comment_call[:4])
+        body_file = Path(comment_call[4])
+        self.assertIn("No implementation work was dispatched.", comment_body)
+        self.assertIn("scope_paths: none", comment_body)
+        self.assertIn(".refactor-loop/runs/phase9-issue330-r4-judge.md", comment_body)
+        self.assertTrue(comment_body.endswith("⟦AI:AUTO-LOOP⟧\n"))
+        self.assertFalse(body_file.exists())
+        edit_call = gh_calls[2]
+        self.assertEqual(["issue", "edit", "330"], edit_call[:3])
+        removed = [edit_call[index + 1] for index, value in enumerate(edit_call) if value == "--remove-label"]
+        self.assertIn(labels.PHASE_DESIGN_SOLVING, removed)
+        self.assertIn(labels.HUMAN_MAINTAINER_DECISION, removed)
+        self.assertIn(labels.STUCK, removed)
+        self.assertNotIn(labels.MANAGED, removed)
+        self.assertEqual(
+            ",".join((labels.PHASE_BLOCKED, labels.HUMAN_AUTO)),
+            edit_call[edit_call.index("--add-label") + 1],
+        )
+        self.assertFalse(any(call[:2] == ["issue", "close"] for call in gh_calls), gh_calls)
+
     def test_dispatch_consensus_implementation_intent_round_trips_through_wakeup_plan(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
         worktree = self.tmp / ".worktrees" / "iter413-issue-413"
