@@ -122,6 +122,7 @@ SUPPORTED_CONTROLLER_ACTIONS = {
     "spawn_codex_harness_background",
     "safe_push",
     "dispatch_consensus_implementation",
+    "defer_false_positive_consensus",
     "publish_implementation_output",
     "publish_worker_output_from_action",
     "publish_review_fix_output_from_action",
@@ -161,6 +162,7 @@ STAND_DOWN_MANAGED_WRITE_ACTIONS = frozenset(
     {
         "safe_push",
         "dispatch_consensus_implementation",
+        "defer_false_positive_consensus",
         "publish_implementation_output",
         "publish_worker_output_from_action",
         "publish_review_fix_output_from_action",
@@ -701,6 +703,8 @@ class WakeupRunner:
             return self._validate_issue_decomposition_apply(action)
         if controller_action == "apply_default_issue_intake_claim":
             return self._validate_default_issue_intake_claim(action)
+        if controller_action == "defer_false_positive_consensus":
+            return self._validate_false_positive_defer(action)
         if controller_action == "dispatch_consensus_implementation":
             return self._validate_consensus_implementation(action)
         if controller_action == "publish_implementation_output":
@@ -1212,6 +1216,38 @@ class WakeupRunner:
             return f"consensus_implementation_not_ready:{readiness_reason}"
         return None
 
+    def _validate_false_positive_defer(self, action: Mapping[str, Any]) -> str | None:
+        if action.get("kind") != "defer-false-positive-consensus":
+            return f"unsupported_kind:{action.get('kind')}"
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "false_positive_defer_missing_preconditions"
+        for required in (
+            "clean_exit_source_marker",
+            "durable_consensus_artifact",
+            "scope_paths_none",
+            "no_change_false_positive_framing",
+            "live_open_managed_design_issue",
+        ):
+            if required not in preconditions:
+                return f"false_positive_defer_missing_precondition:{required}"
+        target = action.get("target_number")
+        if action.get("target_kind") != "issue" or not isinstance(target, int):
+            return "false_positive_defer_target_missing"
+        artifact_error = self._validate_consensus_artifact(action)
+        if artifact_error:
+            return "false_positive_defer_" + artifact_error
+        if str(action.get("design_decision_path") or "") != str(action.get("consensus_artifact") or ""):
+            return "false_positive_defer_design_path_mismatch"
+        if not _consensus_scope_paths_is_none(action.get("scope_paths")):
+            return "false_positive_defer_scope_paths_not_none"
+        if not _no_change_false_positive_framing(action):
+            return "false_positive_defer_framing_missing"
+        live_error = self._false_positive_defer_live_issue_error(target)
+        if live_error:
+            return live_error
+        return None
+
     def _live_issue_label_requirement_error(
         self,
         issue_number: int,
@@ -1233,6 +1269,25 @@ class WakeupRunner:
             return f"{reason_prefix}_target_not_managed"
         if labels.TRIAGE_RESUME_REQUESTED in required_labels and labels.TRIAGE_RESUME_REQUESTED not in normalized:
             return f"{reason_prefix}_resume_label_missing"
+        return None
+
+    def _false_positive_defer_live_issue_error(self, issue_number: int) -> str | None:
+        result = self.command_runner(["gh", "issue", "view", str(issue_number), "--json", "state,labels"])
+        if result.returncode != 0:
+            return "false_positive_defer_issue_unavailable"
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return "false_positive_defer_issue_invalid_json"
+        if not isinstance(payload, Mapping):
+            return "false_positive_defer_issue_invalid_json"
+        if str(payload.get("state") or "").strip().lower() != "open":
+            return "false_positive_defer_target_not_open"
+        normalized = labels.normalize_label_set(_issue_label_names(payload.get("labels"))).canonical
+        if labels.MANAGED not in normalized:
+            return "false_positive_defer_target_not_managed"
+        if labels.PHASE_DESIGN_SOLVING not in normalized:
+            return "false_positive_defer_target_not_design_solving"
         return None
 
     def _validate_consensus_artifact(self, action: Mapping[str, Any]) -> str | None:
@@ -1625,6 +1680,8 @@ class WakeupRunner:
             return self.actions.safe_push(branch=str(action.get("head_ref") or ""), worktree=str(action.get("worktree") or ""))
         if controller_action == "dispatch_consensus_implementation":
             return self.actions.dispatch_consensus_implementation(dict(action))
+        if controller_action == "defer_false_positive_consensus":
+            return self.actions.defer_false_positive_consensus(dict(action))
         if controller_action == "publish_implementation_output":
             return self.actions.publish_implementation_output(dict(action))
         if controller_action == "publish_worker_output_from_action":
@@ -2962,6 +3019,34 @@ def _issue_label_names(raw_labels: Any) -> list[str]:
         elif isinstance(item, Mapping) and item.get("name"):
             names.append(str(item.get("name") or ""))
     return names
+
+
+def _consensus_scope_paths_is_none(value: Any) -> bool:
+    normalized: list[str] = []
+    for raw_line in str(value or "").splitlines():
+        text = raw_line.strip()
+        if not text:
+            continue
+        text = re.sub(r"^(?:[-*]\s+|\d+\.\s+)", "", text).strip()
+        text = text.strip("`'\"").lower()
+        if text:
+            normalized.append(text)
+    return normalized == ["none"]
+
+
+def _no_change_false_positive_framing(action: Mapping[str, Any]) -> bool:
+    marker = str(action.get("source_marker") or "").lower()
+    fields = " ".join(
+        str(action.get(field) or "")
+        for field in ("old_pattern", "new_principle", "consensus_disposition", "framing", "chosen_framing")
+    ).lower()
+    text = f"{marker} {fields}"
+    return (
+        "false-positive" in text
+        or "false positive" in text
+        or "no-change" in text
+        or "no change" in text
+    )
 
 
 def _reviewer_log_terminal_failed(path: Path) -> bool:

@@ -622,6 +622,19 @@ class ControllerActionsTests(unittest.TestCase):
             "source_ref": "gh-issue-413",
         }
 
+    def false_positive_defer_action(self, **overrides: object) -> dict[str, object]:
+        action: dict[str, object] = {
+            "target_kind": "issue",
+            "target_number": 330,
+            "consensus_artifact": ".refactor-loop/runs/phase9-issue330-r4-judge.md",
+            "design_decision_path": ".refactor-loop/runs/phase9-issue330-r4-judge.md",
+            "scope_paths": "- none",
+            "old_pattern": "unnecessary implementation dispatch",
+            "new_principle": "false-positive no-change consensus defers to blocked",
+        }
+        action.update(overrides)
+        return action
+
     def matching_implementation_pr_payload(self, issue: int, head_ref: str, pr_number: int = 414) -> str:
         return json.dumps(
             [
@@ -3069,6 +3082,305 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn(f'remove_labels="{",".join(CONSENSUS_IMPLEMENTATION_ISSUE_LABELS_REMOVE)}"', canonical_line)
         self.assertNotIn("HARNESS_SPAWN_INTENT", pending)
 
+    def test_defer_false_positive_consensus_posts_fixed_explanation_and_moves_blocked_auto(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="defer-false-positive-consensus", lease_id="lease", expires_at="soon")
+        action = self.false_positive_defer_action()
+        gh_calls: list[list[str]] = []
+        comment_body = ""
+
+        def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            nonlocal comment_body
+            gh_calls.append(list(args))
+            if list(args)[:4] == ["issue", "view", "330", "--json"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "state": "OPEN",
+                            "labels": [
+                                {"name": labels.MANAGED},
+                                {"name": labels.PHASE_DESIGN_SOLVING},
+                                {"name": labels.HUMAN_AUTO},
+                            ],
+                        }
+                    ),
+                    stderr="",
+                )
+            if list(args)[:4] == ["issue", "comment", "330", "--body-file"]:
+                comment_body = Path(args[4]).read_text(encoding="utf-8")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                self.assertEqual(0, self.actions.defer_false_positive_consensus(action))
+
+        self.assertEqual(["issue", "view", "330", "--json", "state,labels"], gh_calls[0])
+        comment_call = gh_calls[1]
+        self.assertEqual(["issue", "comment", "330", "--body-file"], comment_call[:4])
+        body_file = Path(comment_call[4])
+        self.assertIn("No implementation work was dispatched.", comment_body)
+        self.assertIn("scope_paths: none", comment_body)
+        self.assertIn(".refactor-loop/runs/phase9-issue330-r4-judge.md", comment_body)
+        self.assertTrue(comment_body.endswith("⟦AI:AUTO-LOOP⟧\n"))
+        self.assertFalse(body_file.exists())
+        edit_call = gh_calls[2]
+        self.assertEqual(["issue", "edit", "330"], edit_call[:3])
+        removed = [edit_call[index + 1] for index, value in enumerate(edit_call) if value == "--remove-label"]
+        self.assertIn(labels.PHASE_DESIGN_SOLVING, removed)
+        self.assertIn(labels.HUMAN_MAINTAINER_DECISION, removed)
+        self.assertIn(labels.STUCK, removed)
+        self.assertNotIn(labels.MANAGED, removed)
+        self.assertEqual(
+            ",".join((labels.PHASE_BLOCKED, labels.HUMAN_AUTO)),
+            edit_call[edit_call.index("--add-label") + 1],
+        )
+        self.assertFalse(any(call[:2] == ["issue", "close"] for call in gh_calls), gh_calls)
+
+    def test_defer_false_positive_consensus_rejects_invalid_inputs_before_comment_or_label_edit(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="defer-false-positive-consensus", lease_id="lease", expires_at="soon")
+        cases = (
+            ("invalid-target", self.false_positive_defer_action(target_number="0330"), 2, []),
+            ("wrong-target-kind", self.false_positive_defer_action(target_kind="PR"), 2, []),
+            (
+                "design-path-mismatch",
+                self.false_positive_defer_action(design_decision_path=".refactor-loop/runs/other.md"),
+                2,
+                [],
+            ),
+            (
+                "scope-not-none",
+                self.false_positive_defer_action(scope_paths="- skills/consensus-loop/SKILL.md"),
+                2,
+                [],
+            ),
+            (
+                "framing-missing",
+                self.false_positive_defer_action(
+                    old_pattern="old",
+                    new_principle="new",
+                    consensus_artifact=".refactor-loop/runs/phase9-issue330-r4-judge.md",
+                ),
+                2,
+                [],
+            ),
+        )
+        for name, action, expected_rc, expected_calls in cases:
+            with self.subTest(name=name):
+                gh_calls: list[list[str]] = []
+
+                def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
+                    gh_calls.append(list(args))
+                    raise AssertionError(f"gh should not run for {name}: {args}")
+
+                with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+                    with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                        self.assertEqual(expected_rc, self.actions.defer_false_positive_consensus(action))
+
+                self.assertEqual(expected_calls, gh_calls)
+
+    def test_defer_false_positive_consensus_rejects_live_state_failures_before_label_edit(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="defer-false-positive-consensus", lease_id="lease", expires_at="soon")
+        cases = (
+            ("issue-unavailable", mock.Mock(returncode=1, stdout="", stderr="not found")),
+            ("issue-invalid-json", mock.Mock(returncode=0, stdout="{", stderr="")),
+            ("issue-invalid-labels", mock.Mock(returncode=0, stdout=json.dumps({"state": "OPEN", "labels": {}}), stderr="")),
+            (
+                "target-not-open",
+                mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "state": "CLOSED",
+                            "labels": [
+                                {"name": labels.MANAGED},
+                                {"name": labels.PHASE_DESIGN_SOLVING},
+                            ],
+                        }
+                    ),
+                    stderr="",
+                ),
+            ),
+            (
+                "target-not-managed",
+                mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"state": "OPEN", "labels": [{"name": labels.PHASE_DESIGN_SOLVING}]}),
+                    stderr="",
+                ),
+            ),
+            (
+                "target-not-design-solving",
+                mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"state": "OPEN", "labels": [{"name": labels.MANAGED}]}),
+                    stderr="",
+                ),
+            ),
+        )
+        for name, issue_view_result in cases:
+            with self.subTest(name=name):
+                gh_calls: list[list[str]] = []
+
+                def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
+                    gh_calls.append(list(args))
+                    if list(args) == ["issue", "view", "330", "--json", "state,labels"]:
+                        return issue_view_result
+                    raise AssertionError(f"unexpected mutation after live-state failure {name}: {args}")
+
+                with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+                    with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                        self.assertEqual(2, self.actions.defer_false_positive_consensus(self.false_positive_defer_action()))
+
+                self.assertEqual([["issue", "view", "330", "--json", "state,labels"]], gh_calls)
+                self.assertFalse(any(call[:3] == ["issue", "edit", "330"] for call in gh_calls), gh_calls)
+
+    def test_defer_false_positive_consensus_actor_denial_blocks_before_comment_or_label_edit(self) -> None:
+        actor = RejectingGitHubActor()
+        actions = ControllerActions(self.actions.ctx, github_actor=actor)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="defer-false-positive-consensus", lease_id="lease", expires_at="soon")
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(list(args))
+            if list(args) == ["issue", "view", "330", "--json", "state,labels"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "state": "OPEN",
+                            "labels": [
+                                {"name": labels.MANAGED},
+                                {"name": labels.PHASE_DESIGN_SOLVING},
+                            ],
+                        }
+                    ),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected mutation after actor denial: {args}")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(actions, "gh", side_effect=fake_gh):
+                self.assertEqual(3, actions.defer_false_positive_consensus(self.false_positive_defer_action()))
+
+        self.assertEqual(actor.actions, ["defer-false-positive-consensus"])
+        self.assertEqual([["issue", "view", "330", "--json", "state,labels"]], gh_calls)
+
+    def test_defer_false_positive_consensus_stand_down_blocks_before_comment_or_label_edit(self) -> None:
+        actions = ControllerActions(self.actions.ctx, github_actor=AllowingGitHubActorWithLogin())
+        actions.cross_instance_admission = lambda kind, target, current_login, now: CrossInstanceAdmission(
+            "stand_down",
+            "fresh_other_instance_comment:other-user",
+            other_login="other-user",
+            source="comment",
+            created_at="2026-06-09T00:59:00Z",
+        )
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="defer-false-positive-consensus", lease_id="lease", expires_at="soon")
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(list(args))
+            if list(args) == ["issue", "view", "330", "--json", "state,labels"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "state": "OPEN",
+                            "labels": [
+                                {"name": labels.MANAGED},
+                                {"name": labels.PHASE_DESIGN_SOLVING},
+                            ],
+                        }
+                    ),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected mutation after stand-down: {args}")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(actions, "gh", side_effect=fake_gh):
+                self.assertEqual(2, actions.defer_false_positive_consensus(self.false_positive_defer_action()))
+
+        self.assertEqual([["issue", "view", "330", "--json", "state,labels"]], gh_calls)
+        self.assertIn("CROSS_INSTANCE_STAND_DOWN:defer-false-positive-consensus:issue:330", self.pending_events())
+
+    def test_defer_false_positive_consensus_comment_failure_blocks_label_edit(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="defer-false-positive-consensus", lease_id="lease", expires_at="soon")
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(list(args))
+            if list(args) == ["issue", "view", "330", "--json", "state,labels"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "state": "OPEN",
+                            "labels": [
+                                {"name": labels.MANAGED},
+                                {"name": labels.PHASE_DESIGN_SOLVING},
+                            ],
+                        }
+                    ),
+                    stderr="",
+                )
+            if list(args)[:4] == ["issue", "comment", "330", "--body-file"]:
+                return mock.Mock(returncode=5, stdout="", stderr="comment failed")
+            raise AssertionError(f"label edit should not run after comment failure: {args}")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                self.assertEqual(5, self.actions.defer_false_positive_consensus(self.false_positive_defer_action()))
+
+        self.assertEqual(["issue", "view", "330", "--json", "state,labels"], gh_calls[0])
+        self.assertEqual(["issue", "comment", "330", "--body-file"], gh_calls[1][:4])
+        self.assertFalse(any(call[:3] == ["issue", "edit", "330"] for call in gh_calls), gh_calls)
+
+    def test_defer_false_positive_consensus_label_transition_failure_reports_defer_action(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="defer-false-positive-consensus", lease_id="lease", expires_at="soon")
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(list(args))
+            if list(args) == ["issue", "view", "330", "--json", "state,labels"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "state": "OPEN",
+                            "labels": [
+                                {"name": labels.MANAGED},
+                                {"name": labels.PHASE_DESIGN_SOLVING},
+                            ],
+                        }
+                    ),
+                    stderr="",
+                )
+            if list(args)[:4] == ["issue", "comment", "330", "--body-file"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if list(args)[:3] == ["issue", "edit", "330"]:
+                return mock.Mock(returncode=7, stdout="", stderr='blocked update failed\nmissing "phase" label')
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        stderr = io.StringIO()
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch("sys.stderr", stderr):
+                    self.assertEqual(7, self.actions.defer_false_positive_consensus(self.false_positive_defer_action()))
+
+        canonical_line = self.pending_events().strip()
+        self.assertEqual(canonical_line, stderr.getvalue().strip())
+        self.assertTrue(canonical_line.startswith("CONTROLLER_ACTION_BLOCKED:phase-transition:defer-false-positive-consensus:issue:330 "))
+        self.assertIn('controller_action="defer-false-positive-consensus"', canonical_line)
+        self.assertIn('action="move-to-false-positive-blocked"', canonical_line)
+        self.assertIn('target_kind="issue"', canonical_line)
+        self.assertIn('target_number="330"', canonical_line)
+        self.assertIn('issue="330"', canonical_line)
+        self.assertIn('helper="gh"', canonical_line)
+        self.assertIn('gh_rc="7"', canonical_line)
+        self.assertIn('gh_stderr="blocked update failed missing \\"phase\\" label"', canonical_line)
+        self.assertIn(f'add_labels="{labels.PHASE_BLOCKED},{labels.HUMAN_AUTO}"', canonical_line)
+        self.assertIn(f'remove_labels="{",".join(ISSUE_LABELS_REMOVE)}"', canonical_line)
+        self.assertEqual(["issue", "edit", "330"], gh_calls[-1][:3])
+
     def test_dispatch_consensus_implementation_intent_round_trips_through_wakeup_plan(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
         worktree = self.tmp / ".worktrees" / "iter413-issue-413"
@@ -5268,9 +5580,9 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
         for needle in (
             "def _format_phase_transition_blocked_event",
-            "CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:{issue_target}",
-            '"controller_action": "dispatch-consensus-implementation"',
-            '"action": "move-to-implementing"',
+            "CONTROLLER_ACTION_BLOCKED:phase-transition:{controller_action}:issue:{issue_target}",
+            '"controller_action": controller_action',
+            '"action": transition_action',
             '"target_kind": "issue"',
             '"target_number": issue_target',
             '"issue": issue_target',
@@ -5282,6 +5594,10 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, text)
+        self.assertIn('controller_action="dispatch-consensus-implementation"', text)
+        self.assertIn('transition_action="move-to-implementing"', text)
+        self.assertIn('controller_action="defer-false-positive-consensus"', text)
+        self.assertIn('transition_action="move-to-false-positive-blocked"', text)
         self.assertIn("sys.stderr.write(f\"{line}\\n\")", text)
         self.assertNotIn("failed to move issue to implementing phase", text)
 

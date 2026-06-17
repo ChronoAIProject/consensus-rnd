@@ -1666,6 +1666,60 @@ class ControllerActions:
         )
         return 0
 
+    def defer_false_positive_consensus(self, action: Mapping[str, object]) -> int:
+        if not self._require_owner_or_return("defer-false-positive-consensus", code=3):
+            return 3
+        number = self._normalize_lifecycle_target_or_block(
+            action.get("target_number"),
+            kind="issue",
+            action="defer-false-positive-consensus",
+            source="wakeup-runner-action",
+        )
+        if number is None:
+            return 2
+        if action.get("target_kind") != "issue":
+            sys.stderr.write("defer_false_positive_consensus: target_kind must be issue\n")
+            return 2
+        if str(action.get("design_decision_path") or "") != str(action.get("consensus_artifact") or ""):
+            sys.stderr.write("defer_false_positive_consensus: design_decision_path must match consensus_artifact\n")
+            return 2
+        if not _consensus_scope_paths_is_none(action.get("scope_paths")):
+            sys.stderr.write("defer_false_positive_consensus: scope_paths must normalize to none\n")
+            return 2
+        if not _no_change_false_positive_framing(action):
+            sys.stderr.write("defer_false_positive_consensus: false-positive/no-change framing missing\n")
+            return 2
+        live = self._live_issue_state_and_labels(number)
+        if isinstance(live, str):
+            sys.stderr.write(f"defer_false_positive_consensus: {live}\n")
+            return 2
+        state, label_names = live
+        normalized = labels.normalize_label_set(label_names).canonical
+        if state != "OPEN":
+            sys.stderr.write("defer_false_positive_consensus: target issue is not open\n")
+            return 2
+        if labels.MANAGED not in normalized:
+            sys.stderr.write("defer_false_positive_consensus: target issue is not managed\n")
+            return 2
+        if labels.PHASE_DESIGN_SOLVING not in normalized:
+            sys.stderr.write("defer_false_positive_consensus: target issue is not in design-solving phase\n")
+            return 2
+        admission = self._require_github_actor_admission_or_return("defer-false-positive-consensus")
+        if admission is None:
+            return 3
+        denied = self._require_item_write_admission_or_return(
+            "defer-false-positive-consensus",
+            "issue",
+            number,
+            current_login=admission.login,
+        )
+        if denied is not None:
+            return denied
+        comment_result = self._post_false_positive_defer_comment(number, action)
+        if comment_result != 0:
+            return comment_result
+        return self._move_issue_to_false_positive_blocked(number)
+
     def _move_issue_to_implementing_phase(self, issue_target: str) -> int:
         add_labels = (labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO)
         remove_labels = CONSENSUS_IMPLEMENTATION_ISSUE_LABELS_REMOVE
@@ -1680,8 +1734,65 @@ class ControllerActions:
                 result=result,
                 add_labels=add_labels,
                 remove_labels=remove_labels,
+                controller_action="dispatch-consensus-implementation",
+                transition_action="move-to-implementing",
             )
         return result.returncode
+
+    def _move_issue_to_false_positive_blocked(self, issue_target: str) -> int:
+        add_labels = (labels.PHASE_BLOCKED, labels.HUMAN_AUTO)
+        remove_labels = ISSUE_LABELS_REMOVE
+        args = ["issue", "edit", issue_target]
+        for label in remove_labels:
+            args.extend(["--remove-label", label])
+        args.extend(["--add-label", ",".join(add_labels)])
+        result = self.gh(args, check=False)
+        if result.returncode != 0:
+            self._write_phase_transition_blocked_event(
+                issue_target=issue_target,
+                result=result,
+                add_labels=add_labels,
+                remove_labels=remove_labels,
+                controller_action="defer-false-positive-consensus",
+                transition_action="move-to-false-positive-blocked",
+            )
+        return result.returncode
+
+    def _post_false_positive_defer_comment(self, issue_target: str, action: Mapping[str, object]) -> int:
+        body = (
+            "No implementation work was dispatched.\n\n"
+            "The latest consensus is a no-change/false-positive decision with `scope_paths: none`, "
+            "so this issue is being moved to blocked for human-visible accounting instead of starting an implementation worker.\n\n"
+            f"Consensus artifact: `{action.get('consensus_artifact')}`\n\n"
+            "⟦AI:AUTO-LOOP⟧\n"
+        )
+        tmp = ""
+        try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
+                handle.write(body)
+                tmp = handle.name
+            result = self.gh(["issue", "comment", issue_target, "--body-file", tmp], check=False)
+            return result.returncode
+        finally:
+            if tmp:
+                Path(tmp).unlink(missing_ok=True)
+
+    def _live_issue_state_and_labels(self, issue_target: str) -> tuple[str, list[str]] | str:
+        result = self.gh(["issue", "view", issue_target, "--json", "state,labels"], check=False)
+        if result.returncode != 0:
+            return "issue_unavailable"
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return "issue_invalid_json"
+        if not isinstance(payload, Mapping):
+            return "issue_invalid_json"
+        state = str(payload.get("state") or "").strip().upper()
+        raw_labels = payload.get("labels")
+        if not isinstance(raw_labels, list):
+            return "issue_invalid_labels"
+        names = [str(item.get("name") or "") for item in raw_labels if isinstance(item, Mapping) and item.get("name")]
+        return state, names
 
     def _write_phase_transition_blocked_event(
         self,
@@ -1690,6 +1801,8 @@ class ControllerActions:
         result: subprocess.CompletedProcess[str],
         add_labels: Sequence[str],
         remove_labels: Sequence[str],
+        controller_action: str,
+        transition_action: str,
     ) -> None:
         line = self._format_phase_transition_blocked_event(
             issue_target=issue_target,
@@ -1697,6 +1810,8 @@ class ControllerActions:
             gh_stderr=result.stderr,
             add_labels=add_labels,
             remove_labels=remove_labels,
+            controller_action=controller_action,
+            transition_action=transition_action,
         )
         self._append_pending_event(line)
         sys.stderr.write(f"{line}\n")
@@ -1709,11 +1824,13 @@ class ControllerActions:
         gh_stderr: str,
         add_labels: Sequence[str],
         remove_labels: Sequence[str],
+        controller_action: str,
+        transition_action: str,
     ) -> str:
-        prefix = f"CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:{issue_target}"
+        prefix = f"CONTROLLER_ACTION_BLOCKED:phase-transition:{controller_action}:issue:{issue_target}"
         fields: Mapping[str, object] = {
-            "controller_action": "dispatch-consensus-implementation",
-            "action": "move-to-implementing",
+            "controller_action": controller_action,
+            "action": transition_action,
             "target_kind": "issue",
             "target_number": issue_target,
             "issue": issue_target,
@@ -3086,6 +3203,32 @@ def _body_closing_issue_targets(body: str) -> tuple[str, ...]:
 
 def _single_line(value: str) -> str:
     return " ".join(str(value or "").splitlines())
+
+
+def _consensus_scope_paths_is_none(value: object) -> bool:
+    normalized: list[str] = []
+    for raw_line in str(value or "").splitlines():
+        text = raw_line.strip()
+        if not text:
+            continue
+        text = re.sub(r"^(?:[-*]\s+|\d+\.\s+)", "", text).strip()
+        text = text.strip("`'\"").lower()
+        if text:
+            normalized.append(text)
+    return normalized == ["none"]
+
+
+def _no_change_false_positive_framing(action: Mapping[str, object]) -> bool:
+    fields = " ".join(
+        str(action.get(field) or "")
+        for field in ("source_marker", "old_pattern", "new_principle", "consensus_disposition", "framing", "chosen_framing")
+    ).lower()
+    return (
+        "false-positive" in fields
+        or "false positive" in fields
+        or "no-change" in fields
+        or "no change" in fields
+    )
 
 
 def _line_count(value: str) -> int:
