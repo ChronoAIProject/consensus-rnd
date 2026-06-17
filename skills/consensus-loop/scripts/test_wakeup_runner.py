@@ -1090,6 +1090,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         actions=None,
         issue_comments: list[dict] | None = None,
         open_managed_items: list[dict] | None = None,
+        issue_state_labels_result: subprocess.CompletedProcess[str] | None = None,
         dry_run: bool = False,
     ) -> list:
         def command_runner(command):
@@ -1155,6 +1156,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, json.dumps({"comments": []}), "")
             if command[:3] == ["gh", "issue", "view"] or command[:3] == ["gh", "pr", "view"]:
                 if "state,labels" in command:
+                    if command[:3] == ["gh", "issue", "view"] and issue_state_labels_result is not None:
+                        return issue_state_labels_result
                     live_labels = gh_labels if gh_labels is not None else [
                         labels.MANAGED,
                         labels.PHASE_DESIGN_SOLVING,
@@ -3479,8 +3482,22 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "old_pattern": "unnecessary implementation dispatch",
             "new_principle": "false-positive no-change consensus defers to blocked",
         }
+        valid_issue_result = subprocess.CompletedProcess(
+            ["gh", "issue", "view", "330", "--json", "state,labels"],
+            0,
+            json.dumps(
+                {
+                    "state": "OPEN",
+                    "labels": [
+                        {"name": labels.MANAGED},
+                        {"name": labels.PHASE_DESIGN_SOLVING},
+                    ],
+                }
+            ),
+            "",
+        )
         cases = (
-            ("missing-preconditions", {"preconditions": None}, "false_positive_defer_missing_preconditions", None, None),
+            ("missing-preconditions", {"preconditions": []}, "missing_preconditions", "OPEN", None, valid_issue_result),
             (
                 "missing-scope-precondition",
                 {
@@ -3493,19 +3510,32 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     ]
                 },
                 "false_positive_defer_missing_precondition:scope_paths_none",
+                "OPEN",
                 None,
-                None,
+                valid_issue_result,
             ),
-            ("target-missing", {"target_kind": "PR", "target_number": 330}, "false_positive_defer_target_missing", None, None),
-            ("artifact-missing", {"consensus_artifact": ".refactor-loop/runs/missing.md"}, "false_positive_defer_consensus_artifact_missing", None, None),
+            ("target-missing", {"target_kind": "PR", "target_number": 330}, "false_positive_defer_target_missing", "OPEN", None, valid_issue_result),
+            (
+                "artifact-missing",
+                {
+                    "consensus_artifact": ".refactor-loop/runs/phase9-issue330-r9-judge.md",
+                    "design_decision_path": ".refactor-loop/runs/phase9-issue330-r9-judge.md",
+                    "consensus_round": 9,
+                },
+                "false_positive_defer_consensus_artifact_missing",
+                "OPEN",
+                None,
+                valid_issue_result,
+            ),
             (
                 "design-path-mismatch",
                 {"design_decision_path": ".refactor-loop/runs/other.md"},
                 "false_positive_defer_design_path_mismatch",
+                "OPEN",
                 None,
-                None,
+                valid_issue_result,
             ),
-            ("scope-not-none", {"scope_paths": "- skills/consensus-loop/SKILL.md"}, "false_positive_defer_scope_paths_not_none", None, None),
+            ("scope-not-none", {"scope_paths": "- skills/consensus-loop/SKILL.md"}, "false_positive_defer_scope_paths_not_none", "OPEN", None, valid_issue_result),
             (
                 "framing-missing",
                 {
@@ -3514,15 +3544,59 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     "new_principle": "new",
                 },
                 "false_positive_defer_framing_missing",
+                "OPEN",
                 None,
-                None,
+                valid_issue_result,
             ),
-            ("issue-unavailable", {}, "false_positive_defer_issue_unavailable", None, None),
-            ("target-not-open", {}, "false_positive_defer_target_not_open", "CLOSED", None),
-            ("target-not-managed", {}, "false_positive_defer_target_not_managed", "OPEN", [labels.PHASE_DESIGN_SOLVING]),
-            ("target-not-design-solving", {}, "false_positive_defer_target_not_design_solving", "OPEN", [labels.MANAGED]),
+            (
+                "issue-unavailable",
+                {},
+                "false_positive_defer_issue_unavailable",
+                "OPEN",
+                None,
+                subprocess.CompletedProcess(["gh", "issue", "view", "330", "--json", "state,labels"], 1, "", "not found"),
+            ),
+            (
+                "target-not-open",
+                {},
+                "false_positive_defer_target_not_open",
+                "OPEN",
+                None,
+                subprocess.CompletedProcess(
+                    ["gh", "issue", "view", "330", "--json", "state,labels"],
+                    0,
+                    json.dumps({"state": "CLOSED", "labels": [{"name": labels.MANAGED}, {"name": labels.PHASE_DESIGN_SOLVING}]}),
+                    "",
+                ),
+            ),
+            (
+                "target-not-managed",
+                {},
+                "false_positive_defer_target_not_managed",
+                "OPEN",
+                None,
+                subprocess.CompletedProcess(
+                    ["gh", "issue", "view", "330", "--json", "state,labels"],
+                    0,
+                    json.dumps({"state": "OPEN", "labels": [{"name": labels.PHASE_DESIGN_SOLVING}]}),
+                    "",
+                ),
+            ),
+            (
+                "target-not-design-solving",
+                {},
+                "false_positive_defer_target_not_design_solving",
+                "OPEN",
+                None,
+                subprocess.CompletedProcess(
+                    ["gh", "issue", "view", "330", "--json", "state,labels"],
+                    0,
+                    json.dumps({"state": "OPEN", "labels": [{"name": labels.MANAGED}]}),
+                    "",
+                ),
+            ),
         )
-        for name, overrides, reason, gh_state, gh_labels in cases:
+        for name, overrides, reason, gh_state, gh_labels, issue_result in cases:
             with self.subTest(name=name):
                 actions = FakeActions()
                 action = dict(base_action)
@@ -3543,6 +3617,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     self.base_plan(action),
                     gh_state=gh_state,
                     gh_labels=gh_labels,
+                    issue_state_labels_result=issue_result,
                     actions=actions,
                 )
 

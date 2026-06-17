@@ -1734,6 +1734,8 @@ class ControllerActions:
                 result=result,
                 add_labels=add_labels,
                 remove_labels=remove_labels,
+                controller_action="dispatch-consensus-implementation",
+                transition_action="move-to-implementing",
             )
         return result.returncode
 
@@ -1751,6 +1753,8 @@ class ControllerActions:
                 result=result,
                 add_labels=add_labels,
                 remove_labels=remove_labels,
+                controller_action="defer-false-positive-consensus",
+                transition_action="move-to-false-positive-blocked",
             )
         return result.returncode
 
@@ -1797,6 +1801,8 @@ class ControllerActions:
         result: subprocess.CompletedProcess[str],
         add_labels: Sequence[str],
         remove_labels: Sequence[str],
+        controller_action: str,
+        transition_action: str,
     ) -> None:
         line = self._format_phase_transition_blocked_event(
             issue_target=issue_target,
@@ -1804,6 +1810,8 @@ class ControllerActions:
             gh_stderr=result.stderr,
             add_labels=add_labels,
             remove_labels=remove_labels,
+            controller_action=controller_action,
+            transition_action=transition_action,
         )
         self._append_pending_event(line)
         sys.stderr.write(f"{line}\n")
@@ -1816,11 +1824,13 @@ class ControllerActions:
         gh_stderr: str,
         add_labels: Sequence[str],
         remove_labels: Sequence[str],
+        controller_action: str,
+        transition_action: str,
     ) -> str:
-        prefix = f"CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:{issue_target}"
+        prefix = f"CONTROLLER_ACTION_BLOCKED:phase-transition:{controller_action}:issue:{issue_target}"
         fields: Mapping[str, object] = {
-            "controller_action": "dispatch-consensus-implementation",
-            "action": "move-to-implementing",
+            "controller_action": controller_action,
+            "action": transition_action,
             "target_kind": "issue",
             "target_number": issue_target,
             "issue": issue_target,
