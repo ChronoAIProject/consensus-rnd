@@ -1463,8 +1463,14 @@ def completed_marker_actions(
             consensus_fields = consensus_implementation_fields(repo_root, log_path, item)
             if consensus_fields:
                 action.update(consensus_fields)
-                if _apply_false_positive_consensus_defer(action):
-                    pass
+                if _consensus_scope_paths_is_none(action.get("scope_paths")):
+                    if _live_design_solving_issue_for_defer(action, gh_items) and _apply_false_positive_consensus_defer(action):
+                        pass
+                    else:
+                        action["status_only"] = True
+                        action["no_lifecycle_authority"] = True
+                        action.pop("runner_authority", None)
+                        action.pop("no_generic_command", None)
                 else:
                     action["preconditions"] = [
                         *action["preconditions"],
@@ -1473,10 +1479,15 @@ def completed_marker_actions(
                     ]
                     _apply_consensus_implementation_readiness(action, repo_root, gh_items, monitor, ctx)
             else:
-                action["status_only"] = True
-                action["no_lifecycle_authority"] = True
-                action.pop("runner_authority", None)
-                action.pop("no_generic_command", None)
+                defer_fields = false_positive_consensus_defer_fields(repo_root, log_path, item)
+                if defer_fields and _live_design_solving_issue_for_defer(defer_fields, gh_items):
+                    action.update(defer_fields)
+                    _apply_false_positive_consensus_defer(action)
+                else:
+                    action["status_only"] = True
+                    action["no_lifecycle_authority"] = True
+                    action.pop("runner_authority", None)
+                    action.pop("no_generic_command", None)
         if marker.startswith("FIX_DONE"):
             _apply_fix_done_publish_route(repo_root, gh_items or [], action)
             _apply_fix_done_review_thread_gate(repo_root, ctx, action)
@@ -2089,6 +2100,80 @@ def _consensus_facts_complete(facts: dict[str, str]) -> bool:
         str(facts.get(field) or "").strip()
         for field in ("cluster_id", "design_decision_path", "scope_paths", "old_pattern", "new_principle")
     )
+
+
+def false_positive_consensus_defer_fields(repo_root: Path, log_path: Path, item: str | None) -> dict[str, Any]:
+    log_match = CONSENSUS_JUDGE_LOG_RE.fullmatch(log_path.name)
+    if log_match is None:
+        return {}
+    issue, round_no = log_match.groups()
+    if item and _target_number_from_item(item) != int(issue):
+        return {}
+    artifact = repo_root / ".refactor-loop" / "runs" / f"phase9-issue{issue}-r{round_no}-judge.md"
+    if not artifact.is_file():
+        return {}
+    artifact_match = CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(artifact.name)
+    if artifact_match is None or artifact_match.groups() != log_match.groups():
+        return {}
+    return _false_positive_defer_projection_from_artifact(repo_root, artifact, int(issue), int(round_no))
+
+
+def _false_positive_defer_projection_from_artifact(repo_root: Path, artifact: Path, issue: int, round_no: int) -> dict[str, Any]:
+    match = CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(artifact.name)
+    if match is None or int(match.group(1)) != issue or int(match.group(2)) != round_no:
+        return {}
+    if not _consensus_artifact_has_marker(artifact):
+        return {}
+    try:
+        text = artifact.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    if not _frontmatter_is_consensus(text):
+        return {}
+    if_consensus = _extract_section_text(text, "If consensus")
+    if not if_consensus:
+        return {}
+    scope_paths = _extract_structured_consensus_field(if_consensus, "scope_paths")
+    old_pattern = _extract_structured_consensus_field(if_consensus, "old_pattern")
+    new_principle = _extract_structured_consensus_field(if_consensus, "new_principle")
+    if not str(scope_paths or "").strip() or not str(old_pattern or "").strip() or not str(new_principle or "").strip():
+        return {}
+    rel = artifact.relative_to(repo_root).as_posix()
+    projection: dict[str, Any] = {
+        "consensus_artifact": rel,
+        "design_decision_path": rel,
+        "consensus_issue": issue,
+        "consensus_round": round_no,
+        "cluster_id": f"issue-{issue}",
+        "iteration": str(issue),
+        "source_ref": f"gh-issue-{issue}",
+        "scope_paths": scope_paths,
+        "old_pattern": old_pattern,
+        "new_principle": new_principle,
+        "target_kind": "issue",
+        "target_number": issue,
+        "target": {"kind": "issue", "number": issue},
+    }
+    if not _consensus_scope_paths_is_none(scope_paths) or not _no_change_false_positive_framing(projection):
+        return {}
+    return projection
+
+
+def _live_design_solving_issue_for_defer(action: Mapping[str, Any], gh_items: list[GhItem] | None) -> bool:
+    if gh_items is None:
+        return False
+    if action.get("target_kind") not in {None, "issue"}:
+        return False
+    try:
+        issue = int(action.get("target_number") or action.get("consensus_issue") or 0)
+    except (TypeError, ValueError):
+        return False
+    for item in gh_items:
+        if item.kind != "issue" or item.number != issue:
+            continue
+        labels = label_catalog.normalize_label_set(item.labels)
+        return label_catalog.MANAGED in labels.canonical and labels.phase == label_catalog.PHASE_DESIGN_SOLVING
+    return False
 
 
 def _extract_section_text(text: str, heading: str) -> str:
