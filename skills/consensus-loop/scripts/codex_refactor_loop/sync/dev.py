@@ -669,7 +669,8 @@ class IntegrationSyncDaemon:
                 continue
             head_name = str(candidate.get("headRefName") or "")
             head_oid = str(candidate.get("headRefOid") or "").strip()
-            if head_name == self.integration or head_name.startswith("rollup/") or head_oid == expected_remote_sha:
+            expected_rollup_head = f"rollup/{expected_remote_sha}"
+            if head_name == self.integration or head_name == expected_rollup_head or head_oid == expected_remote_sha:
                 row = candidate
                 break
         if row is None:
