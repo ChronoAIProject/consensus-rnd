@@ -13,7 +13,11 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.monitor_bridge import filtered_lines, should_forward_line
+from codex_refactor_loop.monitor_bridge import (
+    MonitorBridgeFilter,
+    filtered_lines,
+    should_forward_line,
+)
 
 
 CLI = SCRIPT_DIR / "consensus-rnd-cli"
@@ -134,6 +138,23 @@ class MonitorBridgeFilterTests(unittest.TestCase):
                 ]
             ),
             result.stdout,
+        )
+
+    def test_recent_key_dedup_re_forwards_after_bounded_window_eviction(self) -> None:
+        first_event = "DEV_SYNC_PENDING:rollup-adoption-rebase-ambiguous:stale-adoption-operation"
+        second_event = "DEV_SYNC_PENDING:rollup-adoption-rebase-ambiguous:missing-head-or-remote"
+        third_event = "DEV_SYNC_PENDING:rollup-adoption-rebase-ambiguous:pending-review"
+        monitor_filter = MonitorBridgeFilter(recent_key_limit=2)
+
+        forwarded = [
+            line
+            for line in [first_event, first_event, second_event, third_event, first_event]
+            if monitor_filter.should_forward(line)
+        ]
+
+        self.assertEqual(
+            [first_event, second_event, third_event, first_event],
+            forwarded,
         )
 
     def test_cli_suppresses_raw_p0_duplicate_after_timestamp_normalization(self) -> None:
