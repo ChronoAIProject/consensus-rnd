@@ -162,6 +162,28 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertEqual(self.commands[0]["command"], "spawn-codex")
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["160-3-judge"])
 
+    def test_package_router_dispatches_judge_for_verbose_solver_marker_triplet(self) -> None:
+        marker_text = "SOLVER_DONE:minimal:propose:accept rollup/<current integration sha> only"
+        self.write_log(
+            "phase9-issue997-r1-minimal.log",
+            "worker summary begins",
+            marker_text,
+            *[f"verbose diagnostic line {index}" for index in range(40)],
+            f"+{marker_text}",
+            f"prose repeats `{marker_text}` as context",
+            "worker output footer",
+        )
+        self.write_log("phase9-issue997-r1-structural.log", "SOLVER_DONE:structural:propose:structural-summary")
+        self.write_log("phase9-issue997-r1-delete.log", "SOLVER_DONE:delete:abstain:no-delete")
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        joined = self.intent_text(self.commands[0])
+        self.assertIn("phase9-issue997-r1-judge.log", joined)
+        self.assertEqual(self.commands[0]["command"], "spawn-codex")
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["997-1-judge"])
+
     def test_package_router_design_issue_intake_dispatches_r1_triplet(self) -> None:
         rows = [
             {
