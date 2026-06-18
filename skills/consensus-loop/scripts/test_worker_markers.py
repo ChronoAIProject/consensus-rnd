@@ -114,12 +114,12 @@ class WorkerMarkerReaderTests(unittest.TestCase):
             self.assertEqual(marker.marker, marker_text)
             self.assertEqual(marker.reason, "")
 
-    def test_solver_marker_tail_requires_unique_role_matching_standalone_marker(self) -> None:
+    def test_solver_marker_tail_requires_unique_expected_role_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, _runs = self.repo(tmp)
-            wrong_role = logs / "phase9-issue659-r2-minimal.log"
-            wrong_role.write_text(
-                "SOLVER_DONE:structural:propose:wrong-role\n"
+            other_role_only = logs / "phase9-issue659-r2-minimal.log"
+            other_role_only.write_text(
+                "SOLVER_DONE:structural:propose:other-role-noise\n"
                 "EXIT=0\n",
                 encoding="utf-8",
             )
@@ -132,13 +132,34 @@ class WorkerMarkerReaderTests(unittest.TestCase):
             )
 
             self.assertEqual(
-                read_worker_terminal_marker(wrong_role).reason,
-                "duplicate_or_conflicting_log_marker",
+                read_worker_terminal_marker(other_role_only).reason,
+                "marker_missing",
             )
             self.assertEqual(
                 read_worker_terminal_marker(conflict).reason,
                 "duplicate_or_conflicting_log_marker",
             )
+
+    def test_solver_log_ignores_stray_other_role_and_returns_expected_log_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self.repo(tmp)
+            log = logs / "phase9-issue1004-r2-minimal.log"
+            expected_marker = "SOLVER_DONE:minimal:propose:sync-claude-skill-mirror"
+            log.write_text(
+                "worker quotes peer output\n"
+                "SOLVER_DONE:structural:propose:example-peer-marker\n"
+                "worker own verdict\n"
+                f"{expected_marker}\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertTrue(marker.found)
+            self.assertEqual(marker.marker, expected_marker)
+            self.assertEqual(marker.source, "log")
+            self.assertEqual(marker.reason, "")
 
     def test_solver_log_ignores_diff_added_replay_and_uses_same_stem_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -163,31 +184,34 @@ class WorkerMarkerReaderTests(unittest.TestCase):
             self.assertEqual(marker.source, "artifact")
             self.assertEqual(marker.reason, "")
 
-    def test_solver_log_raw_wrong_role_marker_blocks_artifact_fallback(self) -> None:
+    def test_solver_log_other_role_only_uses_expected_role_artifact_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, runs = self.repo(tmp)
             log = logs / "phase9-issue952-r2-minimal.log"
+            expected_marker = "SOLVER_DONE:minimal:propose:artifact"
             log.write_text(
-                "SOLVER_DONE:structural:propose:wrong-role\n"
+                "SOLVER_DONE:structural:propose:other-role-noise\n"
                 "EXIT=0\n",
                 encoding="utf-8",
             )
             (runs / "phase9-issue952-r2-minimal.md").write_text(
-                "SOLVER_DONE:minimal:propose:artifact\n",
+                f"{expected_marker}\n",
                 encoding="utf-8",
             )
 
             marker = read_worker_terminal_marker(log)
 
-            self.assertFalse(marker.found)
-            self.assertEqual(marker.reason, "duplicate_or_conflicting_log_marker")
+            self.assertTrue(marker.found)
+            self.assertEqual(marker.marker, expected_marker)
+            self.assertEqual(marker.source, "artifact")
+            self.assertEqual(marker.reason, "")
 
     def test_solver_log_raw_malformed_marker_blocks_artifact_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, runs = self.repo(tmp)
             log = logs / "phase9-issue952-r2-minimal.log"
             log.write_text(
-                "SOLVER_DONE:<role>:<verdict>:<summary>\n"
+                "SOLVER_DONE:minimal:<verdict>:<summary>\n"
                 "EXIT=0\n",
                 encoding="utf-8",
             )
@@ -200,6 +224,209 @@ class WorkerMarkerReaderTests(unittest.TestCase):
 
             self.assertFalse(marker.found)
             self.assertEqual(marker.reason, "malformed_log_marker")
+
+    def test_verbose_solver_conflict_uses_companion_when_it_matches_last_same_role_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            log = logs / "phase9-issue1005-r1-delete.log"
+            early_marker = "SOLVER_DONE:delete:propose:delete-draft"
+            final_marker = "SOLVER_DONE:delete:abstain:no-deletion-strict-marker-guard-needs-narrow-companion-disambiguation"
+            log.write_text(
+                "\n".join(
+                    [
+                        "worker reasoning",
+                        early_marker,
+                        "more reasoning",
+                        f"+{final_marker}",
+                        "artifact diff replay is not a raw solver marker",
+                        final_marker,
+                        "tokens used",
+                        "EXIT=0",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (runs / "phase9-issue1005-r1-delete.md").write_text(
+                "---\nverdict: abstain\n---\n"
+                "⟦AI:AUTO-LOOP⟧\n"
+                f"{final_marker}\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertTrue(marker.found)
+            self.assertEqual(marker.marker, final_marker)
+            self.assertEqual(marker.source, "artifact")
+            self.assertEqual(marker.reason, "")
+
+    def test_verbose_solver_conflict_accepts_identical_duplicate_expected_role_companion_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            log = logs / "phase9-issue1004-r2-minimal.log"
+            early_marker = "SOLVER_DONE:minimal:propose:early-release-proof"
+            final_marker = "SOLVER_DONE:minimal:propose:sync-claude-skill-mirror"
+            log.write_text(
+                "worker quotes peer output\n"
+                "SOLVER_DONE:structural:propose:quoted-peer-marker\n"
+                f"{early_marker}\n"
+                "more reasoning\n"
+                f"{final_marker}\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            (runs / "phase9-issue1004-r2-minimal.md").write_text(
+                "---\nverdict: propose\n---\n"
+                f"{final_marker}\n"
+                "⟦AI:AUTO-LOOP⟧\n"
+                f"{final_marker}\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertTrue(marker.found)
+            self.assertEqual(marker.marker, final_marker)
+            self.assertEqual(marker.source, "artifact")
+            self.assertEqual(marker.reason, "")
+
+    def test_verbose_solver_conflict_ignores_other_role_and_uses_expected_role_companion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            log = logs / "phase9-issue1004-r2-minimal.log"
+            early_marker = "SOLVER_DONE:minimal:propose:early-release-proof"
+            final_marker = "SOLVER_DONE:minimal:propose:sync-claude-skill-mirror"
+            log.write_text(
+                "worker quotes peer output\n"
+                "SOLVER_DONE:structural:propose:quoted-peer-marker\n"
+                f"{early_marker}\n"
+                "more reasoning\n"
+                f"{final_marker}\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            (runs / "phase9-issue1004-r2-minimal.md").write_text(
+                "---\nverdict: propose\n---\n"
+                f"{final_marker}\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertTrue(marker.found)
+            self.assertEqual(marker.marker, final_marker)
+            self.assertEqual(marker.source, "artifact")
+            self.assertEqual(marker.reason, "")
+
+    def test_verbose_solver_conflict_fails_closed_when_companion_has_earlier_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            log = logs / "phase9-issue1004-r2-minimal.log"
+            early_marker = "SOLVER_DONE:minimal:propose:early-release-proof"
+            final_marker = "SOLVER_DONE:minimal:propose:sync-claude-skill-mirror"
+            log.write_text(
+                f"{early_marker}\n"
+                "reasoning\n"
+                f"{final_marker}\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            (runs / "phase9-issue1004-r2-minimal.md").write_text(
+                f"{early_marker}\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertFalse(marker.found)
+            self.assertEqual(marker.reason, "duplicate_or_conflicting_log_marker")
+
+    def test_verbose_solver_conflict_fails_closed_when_companion_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self.repo(tmp)
+            log = logs / "phase9-issue1005-r1-delete.log"
+            log.write_text(
+                "SOLVER_DONE:delete:propose:draft\n"
+                "SOLVER_DONE:delete:abstain:final\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertFalse(marker.found)
+            self.assertEqual(marker.reason, "duplicate_or_conflicting_log_marker")
+
+    def test_verbose_solver_conflict_fails_closed_when_companion_has_distinct_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            log = logs / "phase9-issue1005-r1-delete.log"
+            final_marker = "SOLVER_DONE:delete:abstain:final"
+            log.write_text(
+                "SOLVER_DONE:delete:propose:draft\n"
+                f"{final_marker}\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            (runs / "phase9-issue1005-r1-delete.md").write_text(
+                f"{final_marker}\n"
+                "SOLVER_DONE:delete:false-positive:other\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertFalse(marker.found)
+            self.assertEqual(marker.reason, "duplicate_or_conflicting_log_marker")
+            self.assertNotEqual(marker.source, "artifact")
+
+    def test_solver_expected_role_malformed_or_conflicting_without_companion_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self.repo(tmp)
+            conflict = logs / "phase9-issue1005-r1-delete.log"
+            conflict.write_text(
+                "SOLVER_DONE:minimal:propose:other-role-noise\n"
+                "SOLVER_DONE:delete:propose:draft\n"
+                "SOLVER_DONE:delete:abstain:final\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            malformed = logs / "phase9-issue1004-r2-minimal.log"
+            malformed.write_text(
+                "SOLVER_DONE:minimal:propose:draft\n"
+                "SOLVER_DONE:minimal:<verdict>:<summary>\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+
+            conflict_marker = read_worker_terminal_marker(conflict)
+            malformed_marker = read_worker_terminal_marker(malformed)
+
+            self.assertFalse(conflict_marker.found)
+            self.assertEqual(conflict_marker.reason, "duplicate_or_conflicting_log_marker")
+            self.assertFalse(malformed_marker.found)
+            self.assertEqual(malformed_marker.reason, "malformed_log_marker")
+
+    def test_non_solver_log_conflict_does_not_use_companion_disambiguation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            log = logs / "implement-issue-1005.log"
+            log.write_text(
+                "IMPLEMENT_DONE:issue-1005:partial\n"
+                "IMPLEMENT_DONE:issue-1005:ok\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            (runs / "implement-issue-1005.md").write_text(
+                "IMPLEMENT_DONE:issue-1005:ok\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertFalse(marker.found)
+            self.assertEqual(marker.reason, "duplicate_or_conflicting_log_marker")
 
     def test_reads_same_stem_artifact_when_log_markerless(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

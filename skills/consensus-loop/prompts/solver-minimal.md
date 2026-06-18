@@ -94,6 +94,8 @@ End with EXACTLY ONE marker line:
 - `SOLVER_DONE:minimal:escalate:no-plan:<reason>` — no concrete minimal plan can be produced
 - `SOLVER_DONE:minimal:false-positive:<reason>` — violation already fixed / misreported
 
+Emit the final `SOLVER_DONE:minimal:...` marker exactly once, as the last line, at the very end; never print a draft or column-zero `SOLVER_DONE` marker mid-reasoning.
+
 ## Marker emission allowlist(强制)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
