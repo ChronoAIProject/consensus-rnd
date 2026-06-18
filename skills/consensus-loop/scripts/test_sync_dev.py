@@ -339,7 +339,14 @@ class SyncDevBehaviorTests(unittest.TestCase):
 
     def test_merged_throwaway_rollup_head_emits_adoption_request(self) -> None:
         fake = FakeGit(
-            gh_rows=[{"number": 46, "headRefName": "rollup/old-head", "headRefOid": "old-head", "mergedAt": "2026-05-25T00:00:00Z"}],
+            gh_rows=[
+                {
+                    "number": 46,
+                    "headRefName": "rollup/remote-sha",
+                    "headRefOid": "old-head",
+                    "mergedAt": "2026-05-25T00:00:00Z",
+                }
+            ],
             replay_count=0,
         )
         self.daemon(fake).tick()
@@ -348,6 +355,48 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertEqual("adopt-merged-rollup", operation["kind"])
         self.assertEqual(46, operation["pr_number"])
         self.assertEqual("old-head", operation["old_rollup_head"])
+
+    def test_merged_rollup_same_sha_compatibility_emits_adoption_request(self) -> None:
+        fake = FakeGit(
+            gh_rows=[
+                {
+                    "number": 47,
+                    "headRefName": "rollup/legacy-name",
+                    "headRefOid": "remote-sha",
+                    "mergedAt": "2026-05-25T00:00:00Z",
+                }
+            ],
+            replay_count=0,
+        )
+        self.daemon(fake).tick()
+
+        operation = self.operation_jsons()[0]
+        self.assertEqual("adopt-merged-rollup", operation["kind"])
+        self.assertEqual(47, operation["pr_number"])
+        self.assertEqual("remote-sha", operation["old_rollup_head"])
+
+    def test_merged_foreign_rollup_head_is_ignored_and_reset_handles_remote_movement(self) -> None:
+        fake = FakeGit(
+            gh_rows=[
+                {
+                    "number": 48,
+                    "headRefName": "rollup/old-sha",
+                    "headRefOid": "old-sha",
+                    "mergedAt": "2026-05-25T00:00:00Z",
+                }
+            ],
+            remote_sha="current-sha",
+            head_sha="local-sha",
+        )
+        self.daemon(fake).tick()
+
+        operations = self.operation_jsons()
+        self.assertEqual(["reset-to-remote"], [operation["kind"] for operation in operations])
+        self.assertEqual("current-sha", operations[0]["expected_remote_sha"])
+        self.assertFalse(any(operation["kind"] == "adopt-merged-rollup" for operation in operations))
+        self.assertFalse(
+            any("--force-with-lease=refs/heads/auto-refact-dev:current-sha" in command for command in fake.commands)
+        )
 
     def test_forward_sync_review_base_executes_merge_or_push(self) -> None:
         fake = FakeGit(behind=3, merge_base_adopted=True, remote_sha="head-sha")
@@ -896,7 +945,10 @@ class SyncDevSourceRegressionTests(unittest.TestCase):
         self.assertIn("return True", src)
         self.assertIn('["git", "ls-remote", "--exit-code", "--heads", "origin", branch]', src)
         self.assertIn('append_pending_event("missing-integration-branch", self.integration)', src)
-        self.assertIn('head_name.startswith("rollup/")', src)
+        self.assertIn('expected_rollup_head = f"rollup/{expected_remote_sha}"', src)
+        self.assertIn("head_name == expected_rollup_head", src)
+        self.assertIn("head_oid == expected_remote_sha", src)
+        self.assertNotIn('head_name.startswith("rollup/")', src)
         self.assertNotIn("DEV_SYNC_REQUEST:", src)
 
     def test_sync_source_regression_uses_durable_display_paths(self) -> None:
@@ -930,11 +982,19 @@ class SyncDevSourceRegressionTests(unittest.TestCase):
 
     def test_skill_documents_rollup_ambiguity_fallthrough(self) -> None:
         skill = (SCRIPT_DIR.parent / "SKILL.md").read_text(encoding="utf-8")
+        mirror = (SCRIPT_DIR.parent / "authorizations" / "runtime-exceptions.md").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("rollup-adoption-ambiguous", skill)
         self.assertIn("blocks only force-with-lease adoption", skill)
         self.assertIn("RESET_TO_REMOTE", skill)
         self.assertIn("FORWARD_SYNC", skill)
         self.assertIn("DETECT_RELEASE_ROLLUP_NEEDED", skill)
+        self.assertIn("headRefName == $INTEGRATION_BRANCH", skill)
+        self.assertIn("headRefOid == expected origin/$INTEGRATION_BRANCH sha", skill)
+        self.assertIn("Noncurrent or foreign `rollup/*` merged heads are ignored", skill)
+        self.assertIn("rollup/<expected origin/$INTEGRATION_BRANCH sha>", mirror)
+        self.assertIn("no prefix-only merged `rollup/*` adoption", mirror)
 
 
 if __name__ == "__main__":
