@@ -24,6 +24,7 @@ DONE_PREFIXES = (
 DONE_PREFIX_RE = re.compile(r"^(?:" + "|".join(re.escape(prefix) for prefix in DONE_PREFIXES) + r")(?::[^\s`]+)*$")
 GENERIC_DONE_PREFIX_RE = re.compile(r"^[A-Z][A-Z0-9_]*(?:_DONE|_RESOLVED|_BLOCKED)$")
 REVIEW_DONE_STRICT_RE = re.compile(r"^REVIEW_DONE:[1-9][0-9]*:[A-Za-z][A-Za-z0-9_-]*:(?:approve|comment|reject)(?::real)?$")
+ANGLE_PLACEHOLDER_FIELD_RE = re.compile(r"^<[^<>\n]+>$")
 IMPLEMENT_DONE_STATUSES = {"ok", "partial", "blocked"}
 IMPLEMENT_LOG_RE = re.compile(r"^implement-(?:issue-)?[A-Za-z0-9._-]+\.log$")
 SOLVER_LOG_RE = re.compile(r"^(?:" + "phase9-" + r"|solver-)issue[1-9][0-9]*-r[1-9][0-9]*-(?:minimal|structural|delete)\.log$")
@@ -83,7 +84,7 @@ def extract_standalone_marker(text: str) -> str:
     stripped = _normalized_marker_candidate(text)
     if not stripped:
         return ""
-    if "<" in stripped and ">" in stripped:
+    if _has_unreplaced_marker_template_field(stripped):
         return ""
     if stripped.startswith("REVIEW_DONE:"):
         return stripped if REVIEW_DONE_STRICT_RE.fullmatch(stripped) else ""
@@ -100,7 +101,7 @@ def _extract_generic_standalone_marker(text: str) -> str:
     stripped = _normalized_marker_candidate(text)
     if not stripped:
         return ""
-    if "<" in stripped and ">" in stripped:
+    if _has_unreplaced_marker_template_field(stripped):
         return ""
     parts = stripped.split(":")
     if len(parts) >= 2 and GENERIC_DONE_PREFIX_RE.fullmatch(parts[0]):
@@ -110,13 +111,25 @@ def _extract_generic_standalone_marker(text: str) -> str:
 
 def _malformed_standalone_marker(text: str) -> bool:
     stripped = _normalized_marker_candidate(text)
-    if not stripped or ("<" in stripped and ">" in stripped):
+    if not stripped:
         return False
+    if _has_unreplaced_marker_template_field(stripped):
+        return True
     if stripped.startswith("REVIEW_DONE:"):
         return REVIEW_DONE_STRICT_RE.fullmatch(stripped) is None
     if stripped.startswith("IMPLEMENT_DONE:"):
         return _reject_malformed_implement_marker(stripped)
     return False
+
+
+def _has_unreplaced_marker_template_field(marker: str) -> bool:
+    parts = marker.split(":")
+    if len(parts) < 2:
+        return False
+    prefix = parts[0]
+    if prefix not in DONE_PREFIXES and GENERIC_DONE_PREFIX_RE.fullmatch(prefix) is None:
+        return False
+    return any(ANGLE_PLACEHOLDER_FIELD_RE.fullmatch(part.strip()) is not None for part in parts[1:])
 
 
 def _normalized_marker_candidate(text: str) -> str:
@@ -143,6 +156,8 @@ def _marker_from_clean_log_lines(lines: list[str], log_name: str) -> WorkerMarke
     except ValueError:
         return WorkerMarkerRead()
     before_exit = lines[:exit_index]
+    if _solver_log_role(log_name) is not None:
+        return _solver_tail_marker(before_exit, log_name)
     return _marker_from_log_tail_lines(before_exit[-MARKER_TAIL_LINES:], log_name)
 
 
