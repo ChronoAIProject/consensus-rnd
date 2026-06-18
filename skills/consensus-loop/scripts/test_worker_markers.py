@@ -60,6 +60,60 @@ class WorkerMarkerReaderTests(unittest.TestCase):
             self.assertEqual(marker.marker, "SOLVER_DONE:minimal:propose:shared-reader")
             self.assertEqual(marker.source, "log")
 
+    def test_reads_verbose_solver_marker_from_full_clean_log_before_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            log = logs / "phase9-issue997-r1-minimal.log"
+            marker_text = "SOLVER_DONE:minimal:propose:accept rollup/<current integration sha> only"
+            verbose_lines = [f"verbose diagnostic line {index}" for index in range(40)]
+            log.write_text(
+                "\n".join(
+                    [
+                        "worker summary begins",
+                        marker_text,
+                        *verbose_lines,
+                        f"+{marker_text}",
+                        f"prose repeats `{marker_text}` as context",
+                        "worker output footer",
+                        "EXIT=0",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (runs / "phase9-issue997-r1-minimal.md").write_text(
+                "\n".join(
+                    [
+                        "## result",
+                        marker_text,
+                        "⟦AI:AUTO-LOOP⟧",
+                        marker_text,
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertTrue(marker.found)
+            self.assertEqual(marker.marker, marker_text)
+            self.assertEqual(marker.source, "log")
+            self.assertEqual(marker.reason, "")
+
+    def test_solver_marker_allows_angle_brackets_in_summary_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self.repo(tmp)
+            log = logs / "phase9-issue997-r1-minimal.log"
+            marker_text = "SOLVER_DONE:minimal:propose:accept rollup/<current integration sha> only"
+            log.write_text(f"{marker_text}\nEXIT=0\n", encoding="utf-8")
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertTrue(marker.found)
+            self.assertEqual(marker.marker, marker_text)
+            self.assertEqual(marker.reason, "")
+
     def test_solver_marker_tail_requires_unique_role_matching_standalone_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, _runs = self.repo(tmp)
