@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import unittest
@@ -96,6 +97,73 @@ class MonitorBridgeFilterTests(unittest.TestCase):
                 [
                     "[2026-06-13T00:00:00Z] P0 no-gap-violation | detail={\"zero_streak\": 1}",
                     "2026-06-13T00:02:00Z SOLVER_DONE:issue-890:structural:propose",
+                    "",
+                ]
+            ),
+            result.stdout,
+        )
+
+    def test_cli_suppresses_duplicate_dev_sync_pending_events(self) -> None:
+        event = "DEV_SYNC_PENDING:rollup-adoption-rebase-ambiguous:stale-adoption-operation"
+        payload = "\n".join(
+            [
+                event,
+                event,
+                "DEV_SYNC_PENDING:rollup-adoption-rebase-ambiguous:missing-head-or-remote",
+                "2026-06-13T00:03:00Z new-team-comment 42 maintainer 99",
+                "",
+            ]
+        )
+
+        result = subprocess.run(
+            [sys.executable, str(CLI), "monitor-bridge-filter"],
+            input=payload,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            "\n".join(
+                [
+                    event,
+                    "DEV_SYNC_PENDING:rollup-adoption-rebase-ambiguous:missing-head-or-remote",
+                    "2026-06-13T00:03:00Z new-team-comment 42 maintainer 99",
+                    "",
+                ]
+            ),
+            result.stdout,
+        )
+
+    def test_cli_suppresses_raw_p0_duplicate_after_timestamp_normalization(self) -> None:
+        base_detail = {"zero_streak": 1, "issue_breakdown": {"996": 1}, "severity": "P0"}
+        changed_detail = {"zero_streak": 1, "issue_breakdown": {"997": 1}, "severity": "P0"}
+        payload = "\n".join(
+            [
+                f"[2026-06-13T00:00:00Z] P0 no-gap-violation | detail={json.dumps(base_detail, sort_keys=True)}",
+                f"[2026-06-13T00:01:00Z] P0 no-gap-violation | detail={json.dumps(base_detail, sort_keys=True)}",
+                f"[2026-06-13T00:02:00Z] P0 no-gap-violation | detail={json.dumps(changed_detail, sort_keys=True)}",
+                f"[2026-06-13T00:03:00Z] P0 no-gap-violation | detail={json.dumps({**base_detail, 'zero_streak': 5}, sort_keys=True)}",
+                "",
+            ]
+        )
+
+        result = subprocess.run(
+            [sys.executable, str(CLI), "monitor-bridge-filter"],
+            input=payload,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            "\n".join(
+                [
+                    f"[2026-06-13T00:00:00Z] P0 no-gap-violation | detail={json.dumps(base_detail, sort_keys=True)}",
+                    f"[2026-06-13T00:02:00Z] P0 no-gap-violation | detail={json.dumps(changed_detail, sort_keys=True)}",
+                    f"[2026-06-13T00:03:00Z] P0 no-gap-violation | detail={json.dumps({**base_detail, 'zero_streak': 5}, sort_keys=True)}",
                     "",
                 ]
             ),
