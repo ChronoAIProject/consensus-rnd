@@ -102,6 +102,8 @@ End with EXACTLY ONE marker line:
 - `SOLVER_DONE:structural:escalate:no-plan:<reason>`
 - `SOLVER_DONE:structural:false-positive:<reason>`
 
+Emit the final `SOLVER_DONE:structural:...` marker exactly once, as the last line, at the very end; never print a draft or column-zero `SOLVER_DONE` marker mid-reasoning.
+
 ## Marker emission allowlist(强制)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->

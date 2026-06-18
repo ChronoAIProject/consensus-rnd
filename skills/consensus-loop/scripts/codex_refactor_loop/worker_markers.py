@@ -53,6 +53,10 @@ def read_worker_terminal_marker(log_path: Path) -> WorkerMarkerRead:
         return WorkerMarkerRead(reason="missing_exit_zero")
     log_marker = _marker_from_clean_log_lines(lines, log_path.name)
     if log_marker.found or log_marker.reason:
+        if log_marker.reason == "duplicate_or_conflicting_log_marker":
+            artifact_marker = _solver_conflict_disambiguated_by_companion_artifact(lines, log_path)
+            if artifact_marker.found:
+                return artifact_marker
         return log_marker
     artifact_marker = _marker_from_companion_artifact(log_path)
     if artifact_marker.found or artifact_marker.reason:
@@ -177,23 +181,43 @@ def _solver_tail_marker(lines: list[str], log_name: str) -> WorkerMarkerRead:
     role = _solver_log_role(log_name)
     if role is None:
         return WorkerMarkerRead()
-    if any(_malformed_raw_solver_marker(line) for line in lines):
+    if any(_malformed_expected_role_solver_marker(line, role) for line in lines):
         return WorkerMarkerRead(reason="malformed_log_marker")
     markers = [marker for marker in (_extract_raw_solver_marker(line) for line in lines) if marker]
-    solver_markers = [marker for marker in markers if marker.startswith("SOLVER_DONE:")]
-    if not solver_markers:
-        if markers:
-            return WorkerMarkerRead(reason="duplicate_or_conflicting_log_marker")
-        return WorkerMarkerRead()
     expected_prefix = f"SOLVER_DONE:{role}:"
-    if any(not marker.startswith(expected_prefix) for marker in solver_markers):
-        return WorkerMarkerRead(reason="duplicate_or_conflicting_log_marker")
+    solver_markers = [marker for marker in markers if marker.startswith(expected_prefix)]
+    if not solver_markers:
+        return WorkerMarkerRead()
     if any(not marker.startswith("SOLVER_DONE:") for marker in markers):
         return WorkerMarkerRead(reason="duplicate_or_conflicting_log_marker")
     unique = set(solver_markers)
     if len(unique) != 1:
         return WorkerMarkerRead(reason="duplicate_or_conflicting_log_marker")
     return WorkerMarkerRead(marker=solver_markers[-1], source="log")
+
+
+def _solver_conflict_disambiguated_by_companion_artifact(lines: list[str], log_path: Path) -> WorkerMarkerRead:
+    role = _solver_log_role(log_path.name)
+    if role is None:
+        return WorkerMarkerRead()
+    try:
+        exit_index = max(index for index, line in enumerate(lines) if line.strip() == "EXIT=0")
+    except ValueError:
+        return WorkerMarkerRead()
+    before_exit = lines[:exit_index]
+    if any(_malformed_expected_role_solver_marker(line, role) for line in before_exit):
+        return WorkerMarkerRead()
+    raw_markers = [marker for marker in (_extract_raw_solver_marker(line) for line in before_exit) if marker]
+    expected_prefix = f"SOLVER_DONE:{role}:"
+    same_role_markers = [marker for marker in raw_markers if marker.startswith(expected_prefix)]
+    if len(set(same_role_markers)) < 2:
+        return WorkerMarkerRead()
+    artifact_marker = _marker_from_companion_artifact(log_path)
+    if not artifact_marker.found:
+        return WorkerMarkerRead()
+    if artifact_marker.marker != same_role_markers[-1]:
+        return WorkerMarkerRead()
+    return artifact_marker
 
 
 def _solver_log_role(log_name: str) -> str | None:
@@ -212,6 +236,12 @@ def _extract_raw_solver_marker(text: str) -> str:
 
 def _malformed_raw_solver_marker(text: str) -> bool:
     if not text.startswith("SOLVER_DONE:"):
+        return False
+    return extract_standalone_marker(text) == ""
+
+
+def _malformed_expected_role_solver_marker(text: str, role: str) -> bool:
+    if not text.startswith(f"SOLVER_DONE:{role}:"):
         return False
     return extract_standalone_marker(text) == ""
 

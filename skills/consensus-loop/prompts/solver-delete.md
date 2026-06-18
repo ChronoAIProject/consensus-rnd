@@ -120,6 +120,8 @@ End with EXACTLY ONE marker line:
 - `SOLVER_DONE:delete:escalate:no-plan:<reason>` — no deletion/collapse/abstain classification can be produced
 - `SOLVER_DONE:delete:false-positive:<reason>`
 
+Emit the final `SOLVER_DONE:delete:...` marker exactly once, as the last line, at the very end; never print a draft or column-zero `SOLVER_DONE` marker mid-reasoning.
+
 ## Marker emission allowlist(强制)
 
 <!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
