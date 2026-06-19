@@ -63,6 +63,27 @@ class GitHubReleaseVersion:
     release_url: str | None = None
 
 
+def load_version_manifest(path: Path) -> dict[str, str]:
+    raw = read_json(path, None)
+    if not isinstance(raw, dict):
+        raise RuntimeError("VERSION.json is missing or invalid")
+    expected = {
+        "schema": "consensus-loop-version",
+        "release_source": "github-release-then-tag",
+        "install_hint": "host-owned",
+    }
+    for key, value in expected.items():
+        if raw.get(key) != value:
+            raise RuntimeError(f"VERSION.json {key} mismatch")
+    version = raw.get("version")
+    repository = raw.get("repository")
+    if not isinstance(version, str) or not version:
+        raise RuntimeError("VERSION.json version missing")
+    if not isinstance(repository, str) or "/" not in repository:
+        raise RuntimeError("VERSION.json repository missing")
+    return {"version": version, "repository": repository}
+
+
 class UpdateCheckProbe:
     """Read local version and GitHub release/tag state, then write local notice state.
 
@@ -132,24 +153,7 @@ class UpdateCheckProbe:
             )
 
     def _load_manifest(self) -> dict[str, str]:
-        raw = read_json(self.manifest_path, None)
-        if not isinstance(raw, dict):
-            raise RuntimeError("VERSION.json is missing or invalid")
-        expected = {
-            "schema": "consensus-loop-version",
-            "release_source": "github-release-then-tag",
-            "install_hint": "host-owned",
-        }
-        for key, value in expected.items():
-            if raw.get(key) != value:
-                raise RuntimeError(f"VERSION.json {key} mismatch")
-        version = raw.get("version")
-        repository = raw.get("repository")
-        if not isinstance(version, str) or not version:
-            raise RuntimeError("VERSION.json version missing")
-        if not isinstance(repository, str) or "/" not in repository:
-            raise RuntimeError("VERSION.json repository missing")
-        return {"version": version, "repository": repository}
+        return load_version_manifest(self.manifest_path)
 
     def _latest_release_version(self, repository: str, *, timeout: int) -> GitHubReleaseVersion:
         try:
