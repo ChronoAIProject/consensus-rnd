@@ -117,6 +117,9 @@ class FakeRunner:
         self.rollup_refs: dict[str, str] = {}
         self.rollup_subjects: dict[str, str] = {}
         self.rollup_manifest_versions: dict[str, dict[str, str]] = {}
+        self.history_shas: list[str] = []
+        self.history_subjects: dict[str, str] = {}
+        self.history_manifest_versions: dict[str, dict[str, str]] = {}
         self.check_status = "green"
         self.check_completed_at = "2026-05-30T12:01:00Z"
 
@@ -151,8 +154,20 @@ class FakeRunner:
             return subprocess.CompletedProcess(command, 0, stdout=f"{self.remote_subject}\n", stderr="")
         if command[:4] == ["git", "show", "-s", "--format=%s"] and len(command) == 5 and command[4].startswith("origin/rollup/"):
             return subprocess.CompletedProcess(command, 0, stdout=f"{self.rollup_subjects.get(command[4], '')}\n", stderr="")
+        if command[:4] == ["git", "show", "-s", "--format=%s"] and len(command) == 5 and command[4] in self.history_subjects:
+            return subprocess.CompletedProcess(command, 0, stdout=f"{self.history_subjects.get(command[4], '')}\n", stderr="")
         if command == ["git", "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/rollup"]:
             return subprocess.CompletedProcess(command, 0, stdout="\n".join(sorted(self.rollup_refs)) + "\n", stderr="")
+        if command == [
+            "git",
+            "log",
+            "--format=%H",
+            "--fixed-strings",
+            "--grep",
+            "Release v2.0.0-beta.4",
+            f"origin/{self.remote_branch}",
+        ]:
+            return subprocess.CompletedProcess(command, 0, stdout="\n".join(self.history_shas) + "\n", stderr="")
         if command[:2] == ["git", "show"] and len(command) == 3 and command[2].startswith(f"origin/{self.remote_branch}:"):
             relative = command[2].split(":", 1)[1]
             return subprocess.CompletedProcess(command, 0, stdout=self._remote_manifest_payload(cwd, relative), stderr="")
@@ -160,7 +175,12 @@ class FakeRunner:
             remote_ref, relative = command[2].split(":", 1)
             versions = self.rollup_manifest_versions.get(remote_ref, {})
             return subprocess.CompletedProcess(command, 0, stdout=self._remote_manifest_payload(cwd, relative, versions), stderr="")
-        check_run_shas = {self.head_sha, self.remote_sha, *self.rollup_refs.values()}
+        if command[:2] == ["git", "show"] and len(command) == 3 and ":" in command[2]:
+            remote_ref, relative = command[2].split(":", 1)
+            if remote_ref in self.history_manifest_versions:
+                versions = self.history_manifest_versions.get(remote_ref, {})
+                return subprocess.CompletedProcess(command, 0, stdout=self._remote_manifest_payload(cwd, relative, versions), stderr="")
+        check_run_shas = {self.head_sha, self.remote_sha, *self.rollup_refs.values(), *self.history_shas}
         if command in [expected_check_runs_command(sha) for sha in check_run_shas]:
             if self.check_status == "api_failure":
                 return subprocess.CompletedProcess(command, 1, stdout="", stderr="api failed")
@@ -355,13 +375,15 @@ def expected_release_command(repo: Path, version: str, target_ref: str, prerelea
 def expected_success_commands(repo: Path, version: str = "2.0.0-beta.4", prerelease: bool = True) -> list[list[str]]:
     release_command = expected_release_command(repo, version, "bumpcommit456", prerelease=prerelease)
     worktree = repo / ".worktrees" / "release-publish" / f"{version}-1"
+    remote_ref = "origin/auto-refact-dev"
     return [
         ["git", "fetch", "origin", "auto-refact-dev"],
-        ["git", "rev-parse", "origin/auto-refact-dev"],
-        ["git", "show", "-s", "--format=%s", "origin/auto-refact-dev"],
+        ["git", "rev-parse", remote_ref],
+        ["git", "show", "-s", "--format=%s", remote_ref],
         ["git", "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/rollup"],
+        ["git", "log", "--format=%H", "--fixed-strings", "--grep", f"Release v{version}", remote_ref],
         ["git", "fetch", "origin", "auto-refact-dev"],
-        ["git", "rev-parse", "origin/auto-refact-dev"],
+        ["git", "rev-parse", remote_ref],
         ["git", "worktree", "add", "--detach", str(worktree), "basecommit123"],
         ["python3", ".github/scripts/bump_version.py", "--version", version],
         [
@@ -389,11 +411,13 @@ def expected_success_commands(repo: Path, version: str = "2.0.0-beta.4", prerele
 
 def expected_reentry_success_commands(repo: Path, version: str = "2.0.0-beta.4", prerelease: bool = True) -> list[list[str]]:
     release_command = expected_release_command(repo, version, "bumpcommit456", prerelease=prerelease)
+    remote_ref = "origin/auto-refact-dev"
     return [
         ["git", "fetch", "origin", "auto-refact-dev"],
-        ["git", "rev-parse", "origin/auto-refact-dev"],
-        ["git", "show", "-s", "--format=%s", "origin/auto-refact-dev"],
+        ["git", "rev-parse", remote_ref],
+        ["git", "show", "-s", "--format=%s", remote_ref],
         ["git", "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/rollup"],
+        ["git", "log", "--format=%H", "--fixed-strings", "--grep", f"Release v{version}", remote_ref],
         ["git", "show", "-s", "--format=%s", "HEAD"],
         ["git", "rev-parse", "HEAD"],
         expected_check_runs_command("bumpcommit456"),
@@ -417,12 +441,14 @@ def expected_real_preflight_reentry_success_commands(
     repo: Path, version: str = "2.0.0-beta.4", prerelease: bool = True
 ) -> list[list[str]]:
     release_command = expected_release_command(repo, version, "bumpcommit456", prerelease=prerelease)
+    remote_ref = "origin/auto-refact-dev"
     return [
         ["git", "show", "-s", "--format=%s", "HEAD"],
         ["git", "fetch", "origin", "auto-refact-dev"],
-        ["git", "rev-parse", "origin/auto-refact-dev"],
-        ["git", "show", "-s", "--format=%s", "origin/auto-refact-dev"],
+        ["git", "rev-parse", remote_ref],
+        ["git", "show", "-s", "--format=%s", remote_ref],
         ["git", "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/rollup"],
+        ["git", "log", "--format=%H", "--fixed-strings", "--grep", f"Release v{version}", remote_ref],
         ["git", "rev-parse", "HEAD"],
         expected_check_runs_command("bumpcommit456"),
         release_command,
@@ -475,6 +501,35 @@ def expected_rollup_remote_reentry_success_commands(
         ["git", "show", f"{rollup_ref}:gemini-extension.json"],
         ["git", "show", f"{rollup_ref}:skills/consensus-loop/VERSION.json"],
         expected_check_runs_command(rollup_sha),
+        release_command,
+    ]
+
+
+def expected_history_remote_reentry_success_commands(
+    *,
+    repo: Path,
+    version: str = "2.0.0-beta.4",
+    history_sha: str,
+    prerelease: bool = True,
+) -> list[list[str]]:
+    release_command = expected_release_command(repo, version, history_sha, prerelease=prerelease)
+    remote_ref = "origin/auto-refact-dev"
+    return [
+        ["git", "fetch", "origin", "auto-refact-dev"],
+        ["git", "rev-parse", remote_ref],
+        ["git", "show", "-s", "--format=%s", remote_ref],
+        ["git", "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/rollup"],
+        ["git", "log", "--format=%H", "--fixed-strings", "--grep", f"Release v{version}", remote_ref],
+        ["git", "show", "-s", "--format=%s", history_sha],
+        ["git", "show", "-s", "--format=%s", history_sha],
+        ["git", "show", f"{history_sha}:package.json"],
+        ["git", "show", f"{history_sha}:.claude-plugin/plugin.json"],
+        ["git", "show", f"{history_sha}:.claude-plugin/marketplace.json"],
+        ["git", "show", f"{history_sha}:.codex-plugin/plugin.json"],
+        ["git", "show", f"{history_sha}:.cursor-plugin/plugin.json"],
+        ["git", "show", f"{history_sha}:gemini-extension.json"],
+        ["git", "show", f"{history_sha}:skills/consensus-loop/VERSION.json"],
+        expected_check_runs_command(history_sha),
         release_command,
     ]
 
@@ -707,6 +762,103 @@ class ReleasePublisherTests(unittest.TestCase):
             self.assertIsInstance(payload, dict)
             assert isinstance(payload, dict)
             self.assertEqual(payload["target_ref"], rollup_sha)
+
+    def test_remote_reentry_accepts_unique_history_release_commit_when_branch_head_is_merge(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            history_sha = "1ccc9eb90a3aa9437f79bbe8260738c7ad7c361e"
+            runner = FakeRunner()
+            runner.remote_sha = "713192baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            runner.remote_subject = f"{LOCALIZED_ROLLUP_PREFIX} rollup: integration ahead 2 commits (256e4b827b26) (#595)"
+            runner.history_shas = [history_sha]
+            runner.history_subjects = {history_sha: "Release v2.0.0-beta.4"}
+            runner.history_manifest_versions = {
+                history_sha: {
+                    "package.json": "2.0.0-beta.4",
+                    ".claude-plugin/plugin.json": "2.0.0-beta.4",
+                    ".claude-plugin/marketplace.json": "2.0.0-beta.4",
+                    ".codex-plugin/plugin.json": "2.0.0-beta.4",
+                    ".cursor-plugin/plugin.json": "2.0.0-beta.4",
+                    "gemini-extension.json": "2.0.0-beta.4",
+                    "skills/consensus-loop/VERSION.json": "2.0.0-beta.4",
+                }
+            }
+            publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
+
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
+
+            self.assertTrue(result.published)
+            self.assertEqual(result.target_ref, history_sha)
+            self.assertEqual(runner.commands, expected_history_remote_reentry_success_commands(repo=repo, history_sha=history_sha))
+            self.assertFalse(any(command[:2] == ["python3", ".github/scripts/bump_version.py"] for command in runner.commands))
+            self.assertFalse(any(command[:2] == ["git", "add"] for command in runner.commands))
+            self.assertFalse(any(command[:2] == ["git", "commit"] for command in runner.commands))
+            self.assertFalse(any(command[:2] == ["git", "push"] for command in runner.commands))
+            self.assertFalse(any("--max-count" in part for command in runner.commands for part in command))
+            self.assertIn(expected_check_runs_command(history_sha), runner.commands)
+            self.assertEqual(runner.commands[-1][4:6], ["--target", history_sha])
+            payload = read_json(repo / ".refactor-loop/state/release-publish-result.json")
+            self.assertIsInstance(payload, dict)
+            assert isinstance(payload, dict)
+            self.assertEqual(payload["target_ref"], history_sha)
+
+    def test_remote_reentry_rejects_multiple_exact_history_release_commits(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            first_sha = "1ccc9eb90a3aa9437f79bbe8260738c7ad7c361e"
+            second_sha = "2ccc9eb90a3aa9437f79bbe8260738c7ad7c361e"
+            set_mapped_version(repo, "2.0.0-beta.4")
+            runner = FakeRunner()
+            runner.remote_sha = "713192baaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            runner.remote_subject = f"{LOCALIZED_ROLLUP_PREFIX} rollup: integration ahead 2 commits (256e4b827b26) (#595)"
+            runner.head_subject = "not a release commit"
+            runner.history_shas = [first_sha, second_sha]
+            runner.history_subjects = {
+                first_sha: "Release v2.0.0-beta.4",
+                second_sha: "Release v2.0.0-beta.4",
+            }
+            runner.history_manifest_versions = {
+                first_sha: {
+                    "package.json": "2.0.0-beta.4",
+                    ".claude-plugin/plugin.json": "2.0.0-beta.4",
+                    ".claude-plugin/marketplace.json": "2.0.0-beta.4",
+                    ".codex-plugin/plugin.json": "2.0.0-beta.4",
+                    ".cursor-plugin/plugin.json": "2.0.0-beta.4",
+                    "gemini-extension.json": "2.0.0-beta.4",
+                    "skills/consensus-loop/VERSION.json": "2.0.0-beta.4",
+                },
+                second_sha: {
+                    "package.json": "2.0.0-beta.4",
+                    ".claude-plugin/plugin.json": "2.0.0-beta.4",
+                    ".claude-plugin/marketplace.json": "2.0.0-beta.4",
+                    ".codex-plugin/plugin.json": "2.0.0-beta.4",
+                    ".cursor-plugin/plugin.json": "2.0.0-beta.4",
+                    "gemini-extension.json": "2.0.0-beta.4",
+                    "skills/consensus-loop/VERSION.json": "2.0.0-beta.4",
+                },
+            }
+            publisher = ReleasePublisher(
+                repo,
+                preflight=FakePreflight(manifest_mismatch_result(repo)),
+                runner=runner,
+                now=lambda: NOW,
+            )
+
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
+
+            self.assertFalse(result.published)
+            self.assertEqual(result.reasons, ("manifest_version_mismatch", "remote_release_reentry_unavailable"))
+            self.assertIn(
+                ["git", "log", "--format=%H", "--fixed-strings", "--grep", "Release v2.0.0-beta.4", "origin/auto-refact-dev"],
+                runner.commands,
+            )
+            self.assertIn(["git", "show", "-s", "--format=%s", first_sha], runner.commands)
+            self.assertIn(["git", "show", "-s", "--format=%s", second_sha], runner.commands)
+            self.assertFalse(any(command[:2] == ["git", "show"] and len(command) == 3 and command[2].startswith(first_sha + ":") for command in runner.commands))
+            self.assertFalse(any(command[:3] == ["gh", "release", "create"] for command in runner.commands))
+            self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
 
     def test_real_preflight_reentry_after_initial_push_failure_skips_bump_add_commit(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -1033,7 +1185,7 @@ class ReleasePublisherTests(unittest.TestCase):
 
             expected_prefix = expected_success_commands(repo)[:9]
             self.assertEqual(runner.commands[:9], expected_prefix)
-            self.assertEqual(runner.commands[-1], expected_success_commands(repo)[14])
+            self.assertEqual(runner.commands[-1], expected_success_commands(repo)[15])
             self.assertNotIn(expected_violating_pre_bump_tag_command(repo), runner.commands)
             self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
 

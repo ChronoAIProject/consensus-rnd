@@ -937,6 +937,10 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "not a new public CLI, workflow release authority, tag authority, release edit/delete/upload authority, issue/PR/label lifecycle authority, or host production SSOT",
             "no tag target without exact-SHA green checks",
             "no proof-ticket/resume system",
+            "git log --format=%H --fixed-strings --grep \"Release v<to_version>\" origin/<INTEGRATION_BRANCH>",
+            "without `--max-count`",
+            "history recall output is candidate discovery only, not authorization",
+            "exactly one 40hex history candidate",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
@@ -950,6 +954,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "HEAD subject is exactly `Release v<to_version>`",
             "skip only `python3 .github/scripts/bump_version.py --version <to_version>`, `git add .version-bump.json <mapped manifests>`, and `git commit -m \"Release v<to_version>\"`",
             "exact release/reentry commit sha",
+            "read-only proven remote integration/rollup/history release SHA",
             "pending/red/missing/API-fail fail closed",
             "no proof-ticket/resume system",
         ):
