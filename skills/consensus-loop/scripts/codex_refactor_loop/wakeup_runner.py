@@ -53,13 +53,15 @@ from .issue_decomposition import (
 )
 from .pr_checks import PrMergeReadinessProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
-from .review_gate_selection import extract_review_head_sha, parse_github_review_evidence, select_latest_live_head_review_evidence
 from .review_evidence_recovery import (
     DEFAULT_REVIEW_RECOVERY_CAP,
     RECOVERY_KIND,
+    RepeatedReviewBlockerInput,
     ReviewEvidenceRecoveryLedgerRow,
     ledger_row_from_mapping,
+    project_repeated_review_blocker,
 )
+from .review_gate_selection import extract_review_head_sha, parse_github_review_evidence, select_latest_live_head_review_evidence
 from .release.gate import AutoReleaseGate
 from .release.commits import write_release_commits
 from .release.candidate_liveness import classify_release_candidate_liveness
@@ -2133,6 +2135,22 @@ class WakeupRunner:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": "missing_live_head_sha", "gate": gate}
         if action_head != live_head:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": "action_head_mismatch", "gate": gate}
+        repeated_blocker = project_repeated_review_blocker(
+            RepeatedReviewBlockerInput(
+                pr_number=target,
+                head_sha=live_head,
+                required_roles=REQUIRED_REVIEW_ROLES,
+                github_review_evidences=self._review_evidences(target),
+            )
+        )
+        if repeated_blocker.status_only:
+            return {
+                "decision": "WAIT_REPEATED_REVIEW_BLOCKER",
+                "reason": repeated_blocker.status_reason,
+                "gate": gate,
+                "repeated_review_blocker": repeated_blocker.blocker_key,
+                "repeated_review_rounds": list(repeated_blocker.rounds),
+            }
         mergeability_error = self._review_gate_mergeability_error(target)
         if mergeability_error:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": mergeability_error, "gate": gate}

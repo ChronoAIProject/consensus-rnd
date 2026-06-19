@@ -59,6 +59,8 @@ from .review_fix_dispatch import (
     ReviewThreadCompletionEvidence,
     validate_review_thread_completion,
 )
+from .review_evidence_recovery import RepeatedReviewBlockerInput, RepeatedReviewBlockerProjection, project_repeated_review_blocker
+from .review_gate_selection import ParsedGithubReviewEvidence, parse_github_review_evidence
 from .secondary_mutation_backoff import (
     currently_backing_off,
     record_backoff_from_gh_output,
@@ -1889,6 +1891,12 @@ class ControllerActions:
         title = str(facts.get("title") or f"PR {pr_target}")
         if not head or not head_sha:
             return 2
+        repeated_blocker = self._repeated_review_blocker(pr_target, head_sha)
+        if repeated_blocker.status_only:
+            sys.stderr.write(
+                f"dispatch_reviewers: {repeated_blocker.status_reason} {repeated_blocker.blocker_key}\n"
+            )
+            return 2
         stale_roles = action.get("stale_review_roles")
         if isinstance(stale_roles, list):
             roles = tuple(role for role in REVIEW_ROLES if role in {str(item) for item in stale_roles})
@@ -1978,6 +1986,77 @@ class ControllerActions:
             if intent.get("intent_id") == intent_id:
                 return True
         return False
+
+    def _repeated_review_blocker(self, pr_target: str, head_sha: str) -> RepeatedReviewBlockerProjection:
+        try:
+            pr_number = int(pr_target)
+        except ValueError:
+            return project_repeated_review_blocker(
+                RepeatedReviewBlockerInput(pr_number=0, head_sha=head_sha, required_roles=REVIEW_ROLES)
+            )
+        return project_repeated_review_blocker(
+            RepeatedReviewBlockerInput(
+                pr_number=pr_number,
+                head_sha=head_sha,
+                required_roles=REVIEW_ROLES,
+                github_review_evidences=self._github_review_evidences_for_dispatch(pr_target),
+            )
+        )
+
+    def _github_review_evidences_for_dispatch(self, pr_target: str) -> tuple[ParsedGithubReviewEvidence, ...]:
+        if not self.ctx.gh_repo_slug:
+            return ()
+        try:
+            result = self.gh(
+                ["api", f"repos/{self.ctx.gh_repo_slug}/issues/{pr_target}/comments?per_page=100", "--paginate", "--slurp"],
+                check=False,
+            )
+        except Exception:
+            return ()
+        if result.returncode != 0:
+            return ()
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError:
+            return ()
+        comments = self._github_comment_items(payload)
+        if comments is None:
+            return ()
+        evidences: list[ParsedGithubReviewEvidence] = []
+        for index, comment in enumerate(comments):
+            if not isinstance(comment, Mapping):
+                continue
+            evidence = parse_github_review_evidence(
+                str(comment.get("body") or ""),
+                int(pr_target),
+                source=f"github:issues/comments[{index}]",
+                created_at=str(comment.get("created_at") or comment.get("createdAt") or ""),
+                source_index=index + 1,
+                comment_id=self._github_comment_id(comment),
+            )
+            if evidence is not None:
+                evidences.append(evidence)
+        return tuple(evidences)
+
+    def _github_comment_items(self, payload: object) -> list[object] | None:
+        if isinstance(payload, list):
+            if all(isinstance(page, list) for page in payload):
+                return [item for page in payload for item in page]
+            return payload
+        if isinstance(payload, Mapping):
+            comments = payload.get("comments")
+            if isinstance(comments, list):
+                return comments
+        return None
+
+    def _github_comment_id(self, comment: Mapping[str, Any]) -> int | None:
+        raw_comment_id = comment.get("id")
+        if isinstance(raw_comment_id, int) and raw_comment_id > 0:
+            return raw_comment_id
+        if isinstance(raw_comment_id, str) and raw_comment_id.isdigit():
+            comment_id = int(raw_comment_id)
+            return comment_id if comment_id > 0 else None
+        return None
 
     def dispatch_pr_rebase_resolve(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("dispatch-pr-rebase-resolve", code=3):

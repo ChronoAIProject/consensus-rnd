@@ -18,6 +18,7 @@ MISSING_GITHUB_EVIDENCE_REASON = "missing_github_review_evidence"
 class ReviewEvidenceLike(Protocol):
     role: str
     round_number: int
+    verdict: str
     head_sha: str
     valid: bool
     pending: bool
@@ -64,8 +65,29 @@ class ReviewEvidenceRecoveryProjection:
     pending_roles: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class RepeatedReviewBlockerInput:
+    pr_number: int
+    head_sha: str
+    required_roles: Sequence[str] = ()
+    github_review_evidences: Sequence[ReviewEvidenceLike] = ()
+
+
+@dataclass(frozen=True)
+class RepeatedReviewBlockerProjection:
+    status_only: bool = False
+    status_reason: str = ""
+    blocker_key: str = ""
+    signature: tuple[str, ...] = ()
+    rounds: tuple[int, ...] = ()
+
+
 def review_recovery_attempt_key(pr_number: int, role: str, head_sha: str, invalid_reason_family: str) -> str:
     return f"{pr_number}:{role}:{head_sha}:{invalid_reason_family}"
+
+
+def repeated_review_blocker_key(pr_number: int, head_sha: str, signature: Sequence[str]) -> str:
+    return f"{pr_number}:{head_sha}:{'|'.join(signature)}"
 
 
 def ledger_row_from_mapping(row: Mapping[str, object]) -> ReviewEvidenceRecoveryLedgerRow:
@@ -77,6 +99,54 @@ def ledger_row_from_mapping(row: Mapping[str, object]) -> ReviewEvidenceRecovery
         reason=str(row.get("reason") or ""),
         kind=str(row.get("kind") or ""),
         attempt_keys=keys,
+    )
+
+
+def project_repeated_review_blocker(request: RepeatedReviewBlockerInput) -> RepeatedReviewBlockerProjection:
+    head_sha = request.head_sha.strip()
+    required_roles = tuple(request.required_roles)
+    if not head_sha or not required_roles:
+        return RepeatedReviewBlockerProjection()
+    by_round: dict[int, dict[str, ReviewEvidenceLike]] = {}
+    for evidence in request.github_review_evidences:
+        if evidence.role not in required_roles:
+            continue
+        if evidence.head_sha != head_sha:
+            continue
+        if not evidence.valid or evidence.pending or evidence.terminal_failed:
+            continue
+        verdict = str(getattr(evidence, "verdict", "") or "")
+        if verdict not in {"approve", "comment", "reject"}:
+            continue
+        by_round.setdefault(evidence.round_number, {})[evidence.role] = evidence
+
+    signature_rounds: dict[tuple[str, ...], list[int]] = {}
+    for round_number, role_evidences in by_round.items():
+        if not all(role in role_evidences for role in required_roles):
+            continue
+        signature = tuple(
+            f"{role}:{str(getattr(role_evidences[role], 'verdict', '') or '')}"
+            for role in sorted(required_roles)
+        )
+        signature_rounds.setdefault(signature, []).append(round_number)
+
+    repeated: list[tuple[tuple[str, ...], list[int]]] = [
+        (signature, sorted(rounds))
+        for signature, rounds in signature_rounds.items()
+        if len(set(rounds)) >= 2
+    ]
+    if not repeated:
+        return RepeatedReviewBlockerProjection()
+    signature, rounds = max(repeated, key=lambda item: (item[1][-1], item[1][-2], item[0]))
+    reason = "repeated_review_blocker" if any(item.endswith(":reject") for item in signature) else "explicit_approval_required"
+    if reason == "explicit_approval_required" and any(item.endswith(":approve") for item in signature):
+        return RepeatedReviewBlockerProjection()
+    return RepeatedReviewBlockerProjection(
+        status_only=True,
+        status_reason=reason,
+        blocker_key=repeated_review_blocker_key(request.pr_number, head_sha, signature),
+        signature=signature,
+        rounds=(rounds[-2], rounds[-1]),
     )
 
 
