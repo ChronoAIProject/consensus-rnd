@@ -539,6 +539,16 @@ class RoleArtifactProfileTests(unittest.TestCase):
         self.assertIn("First line starts with `## 🤖 `", body)
         self.assertIn("Raw artifacts must be collapsed", body)
 
+    def test_reasoning_discipline_include_is_not_artifact_profile(self) -> None:
+        body = (PROMPTS_DIR / "_reasoning-discipline.md").read_text(encoding="utf-8")
+
+        self.assertNotIn("Artifact profile:", body)
+        self.assertNotIn("SOLVER_DONE", body)
+        self.assertNotIn("REVIEW_DONE", body)
+        self.assertNotIn("META_JUDGE_DONE", body)
+        self.assertIn("not marker data", body)
+        self.assertIn("not lifecycle authority", body)
+
     def test_phase8_reviewer_profile_matches_live_prompt_output_sections(self) -> None:
         for filename in ("reviewer-architect.md", "reviewer-tests.md", "reviewer-quality.md"):
             with self.subTest(prompt=filename):

@@ -11,6 +11,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContextError
+from codex_refactor_loop.prompt_contracts import REASONING_DISCIPLINE_CONTRACT_TOKEN
 from codex_refactor_loop.prompt_rendering import render_prompt_text
 
 SKILL_ROOT = SCRIPT_DIR.parent
@@ -29,6 +30,7 @@ class PromptRenderingTests(unittest.TestCase):
             "{{scope_paths}}\n"
             "{{verification_hints}}\n"
             "{{GITHUB_POST_RULES_CONTRACT}}\n"
+            f"{REASONING_DISCIPLINE_CONTRACT_TOKEN}\n"
         )
 
         rendered = render_prompt_text(
@@ -59,12 +61,14 @@ class PromptRenderingTests(unittest.TestCase):
             "prompt_rendering.py",
             "pytest prompt rendering",
             "follow `zh`",
+            "ASSUMED-UNVERIFIED",
         ):
             with self.subTest(expected=expected):
                 self.assertIn(expected, rendered)
         self.assertNotIn("${HOST_WORK_LANGUAGE}", rendered)
         self.assertNotIn("$HOST_WORK_LANGUAGE", rendered)
         self.assertNotIn("{{GITHUB_POST_RULES_CONTRACT}}", rendered)
+        self.assertNotIn("{{REASONING_DISCIPLINE_CONTRACT}}", rendered)
 
     def test_invalid_host_work_language_fails_closed(self) -> None:
         with self.assertRaisesRegex(LoopContextError, "invalid HOST_WORK_LANGUAGE"):

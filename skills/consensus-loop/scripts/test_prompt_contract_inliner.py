@@ -18,6 +18,7 @@ from codex_refactor_loop.controller_actions import ControllerActions
 from codex_refactor_loop.prompt_contracts import (  # noqa: E402
     GITHUB_POST_RULES_CONTRACT_TOKEN,
     PromptContractError,
+    REASONING_DISCIPLINE_CONTRACT_TOKEN,
     inline_prompt_contracts,
 )
 
@@ -45,6 +46,10 @@ class PromptContractInlinerTests(unittest.TestCase):
             "# GitHub post rules\n\n## Body\n\nFollow `${HOST_WORK_LANGUAGE}`.\n",
             encoding="utf-8",
         )
+        (self.skill_root / "prompts" / "_reasoning-discipline.md").write_text(
+            "# Reasoning discipline contract\n\nAesthetic/adversarial\n\nASSUMED-UNVERIFIED\n",
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -69,6 +74,24 @@ class PromptContractInlinerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(PromptContractError, "missing GitHub post rules contract"):
             inline_prompt_contracts(GITHUB_POST_RULES_CONTRACT_TOKEN, skill_root=self.skill_root)
+
+    def test_inlines_multiple_fixed_contract_tokens(self) -> None:
+        rendered = inline_prompt_contracts(
+            f"{GITHUB_POST_RULES_CONTRACT_TOKEN}\n---\n{REASONING_DISCIPLINE_CONTRACT_TOKEN}\n",
+            skill_root=self.skill_root,
+        )
+
+        self.assertIn("# GitHub post rules", rendered)
+        self.assertIn("Aesthetic/adversarial", rendered)
+        self.assertIn("ASSUMED-UNVERIFIED", rendered)
+        self.assertNotIn(GITHUB_POST_RULES_CONTRACT_TOKEN, rendered)
+        self.assertNotIn(REASONING_DISCIPLINE_CONTRACT_TOKEN, rendered)
+
+    def test_missing_reasoning_discipline_file_fails_closed(self) -> None:
+        (self.skill_root / "prompts" / "_reasoning-discipline.md").unlink()
+
+        with self.assertRaisesRegex(PromptContractError, "missing reasoning discipline contract"):
+            inline_prompt_contracts(REASONING_DISCIPLINE_CONTRACT_TOKEN, skill_root=self.skill_root)
 
     def test_direct_post_prompts_render_selected_host_work_language(self) -> None:
         ctx = LoopContext.load(repo_root=self.tmp, skill_root=SKILL_ROOT, env={"REPO_ROOT": str(self.tmp)})

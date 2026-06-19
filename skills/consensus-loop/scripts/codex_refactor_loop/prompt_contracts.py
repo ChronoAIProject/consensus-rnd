@@ -11,19 +11,26 @@ class PromptContractError(RuntimeError):
 
 
 GITHUB_POST_RULES_CONTRACT_TOKEN = "{{GITHUB_POST_RULES_CONTRACT}}"
+REASONING_DISCIPLINE_CONTRACT_TOKEN = "{{REASONING_DISCIPLINE_CONTRACT}}"
 _CONTRACT_TOKEN_RE = re.compile(r"{{[A-Z0-9_]+_CONTRACT}}")
+_CONTRACTS = {
+    GITHUB_POST_RULES_CONTRACT_TOKEN: ("_github-post-rules.md", "GitHub post rules contract"),
+    REASONING_DISCIPLINE_CONTRACT_TOKEN: ("_reasoning-discipline.md", "reasoning discipline contract"),
+}
 
 
 def inline_prompt_contracts(text: str, *, skill_root: Path) -> str:
     tokens = set(_CONTRACT_TOKEN_RE.findall(text))
-    unknown = sorted(tokens - {GITHUB_POST_RULES_CONTRACT_TOKEN})
+    unknown = sorted(tokens - set(_CONTRACTS))
     if unknown:
         raise PromptContractError(f"unknown prompt contract token(s): {', '.join(unknown)}")
-    if GITHUB_POST_RULES_CONTRACT_TOKEN not in tokens:
-        return text
-    rules_path = skill_root / "prompts" / "_github-post-rules.md"
-    try:
-        rules = rules_path.read_text(encoding="utf-8").rstrip()
-    except OSError as exc:
-        raise PromptContractError(f"missing GitHub post rules contract: {rules_path}") from exc
-    return text.replace(GITHUB_POST_RULES_CONTRACT_TOKEN, rules)
+    rendered = text
+    for token in tokens:
+        filename, description = _CONTRACTS[token]
+        path = skill_root / "prompts" / filename
+        try:
+            contract = path.read_text(encoding="utf-8").rstrip()
+        except OSError as exc:
+            raise PromptContractError(f"missing {description}: {path}") from exc
+        rendered = rendered.replace(token, contract)
+    return rendered

@@ -4,6 +4,14 @@
 
 仓库定位与共识引擎设计哲学见英文 canonical [`README.md`](./README.md);中文 companion 见 [`README.zh-CN.md`](./README.zh-CN.md)。本文件是 agent 工作宪法,与 README pair 不重复。术语定义与项目当前状态归各 skill 的 SKILL.md / REFERENCE.md,不在本文件维护。
 
+## 旁路推理通道: nyxid oracle (ChatGPT Pro)
+
+`nyxid oracle` 把推理任务路由到浏览器端 ChatGPT Pro, 可作为 codex / Claude 之外的旁路推理通道 (例: 让 ChatGPT Pro 跑一段独立推理 / 复核). 子命令、参数、输出字段清单以 `nyxid oracle --help` / `nyxid oracle ask --help` 为准, 本文档只记非显然用法:
+
+- **两步异步 (省 token, 不轮询)**: `nyxid oracle ask company-chatgpt-pro "<问题>" --no-wait --output json` 拿 `task_id` (status=queued); 再 `nyxid oracle result <task_id> --output json` 取结果. status 走 `queued → dispatched(phase=sent) → completed`, `completed` 时 `response` 字段即答案 (附 `chatgpt_url`). 单次 `result` 即可, 未完成返回中间 status, 不要 busy-loop 轮询. 省 `--no-wait` 则 `ask` 同步阻塞最多 `--wait` 秒.
+- **pool 是 org-visibility**: `company-chatgpt-pro` 限该 pool 所属 org 成员; 非成员 `ask` 返回 403 (error_code 1002 forbidden), `status` 返回 404. 先 `nyxid org join <邀请码>` 加入该 org, 再 `nyxid oracle pool list` 应能看到该 pool. 当前账号 (`aloning@gmail.com`) 已可用.
+- 长 prompt 用 `--file -` 从 stdin 喂, 附件 `--pdf`, 多轮 `--new-conversation` / `--conversation <id>`; 配额与并发 (per-user inflight、worker tab 数) 以 `nyxid oracle pool list` / `nyxid oracle status <pool>` 实时读出, 不在此缓存数字.
+
 ## 仓库性质
 
 这是一个**跨平台 Agent Skills 发布仓库**,不是应用代码仓库。唯一产物是 `skills/<name>/` 下的 `SKILL.md` 及其配套文件。同一份 `skills/` 被 Claude Code / Codex / Cursor / Gemini 共享,各平台只靠根目录的清单文件指向它。

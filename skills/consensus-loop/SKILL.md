@@ -2303,6 +2303,12 @@ Runs when a cluster PR's remote CI is green (Consensus-rnd Phase ci-watch settle
 
 Optional (add when cluster touches the relevant area, audit's `rule_ids` decides): Perf (future), Security (future).
 
+### Reasoning discipline prompt contract
+
+The architect/tests/quality reviewer runtime prompts keep `## Reference-frame harness` and render `{{REASONING_DISCIPLINE_CONTRACT}}` from `prompts/_reasoning-discipline.md`. The include is the template-time source, and rendered worker prompts inline it; SKILL.md is documentation/source-regression anchor only and not a worker runtime path.
+
+The `Ugly defect:` / `Beautiful form:` and `ASSUMED-UNVERIFIED` note rides existing Evidence, What would change your verdict, and GitHub-visible prose surfaces. It cannot change the review truth table, reviewer triplet, same-head GitHub-comment authority, marker allowlists, lifecycle authority, daemon list, or clean `EXIT=0` handling.
+
 ### Dispatch (parallel)
 
 This runbook describes the equivalent argv shape constructed by daemon-owned review dispatch surfaces (`wakeup-runner dispatch_reviewers` helper or harness consumption of its intent). Controller manual execution is only the fallback after the mechanical daemon-stuck predicate in [Daemon-first controller boundary](#daemon-first-controller-boundary) is recorded.
@@ -2508,6 +2514,12 @@ Tier II, `CLAUDE.md`, `SPEC.md`, conformance, and core abstractions. There is no
 maintainer approval, physical GPG ratification, reinstall ratification, or philosophy escalation gate.
 
 Policy: all three solver outputs are mandatory, and all implementation-bearing proposals must agree. The only compatible-neutral mixed verdict is built-in Path A issue-driven greenfield: router-rendered `WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)` plus `WORK_UNIT_SOURCE_REF=gh-issue-<N>`, issue body/comments plus delete reverse-evidence proving greenfield/no current deletion target, two matching implementation-bearing proposals, and delete `abstain` that does not contradict the plan. This is not a generic 2/3 gate and has no host override; missing/unknown/audit-backed/non-greenfield provenance, implementation-bearing disagreement, delete `false-positive:nothing-to-delete`, or delete `escalate:no-plan` goes through convergence until consensus or true stall.
+
+### Reasoning discipline prompt contract
+
+The minimal/structural/delete solvers plus meta-judge runtime prompts keep `## Reference-frame harness` and render `{{REASONING_DISCIPLINE_CONTRACT}}` from `prompts/_reasoning-discipline.md`. The include is the template-time source, and rendered worker prompts inline it; SKILL.md is documentation/source-regression anchor only and not a worker runtime path.
+
+The `Ugly defect:` / `Beautiful form:` and `ASSUMED-UNVERIFIED` note rides existing Recommended framing, Concrete plan, Risks, Reasoning trace, Decision, Convergence question, and GitHub-post prose surfaces. It cannot change the design truth table, fixed solver triplet plus meta-judge, marker allowlists, lifecycle authority, daemon list, or clean `EXIT=0` handling.
 
 ### Solver source contract
 

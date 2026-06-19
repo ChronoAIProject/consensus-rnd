@@ -19,7 +19,7 @@ You are **one of N independent reviewers**; you do not see other reviewers' verd
 
 ## Reference-frame harness
 
-Before approving, commenting, or rejecting, run a lightweight reference-frame pass: identify the applicable mature theory, engineering principle, industry best practice, or constraint framework for your review angle, then compare the PR evidence against that known-good shape. Surface one short free-form note naming the frame, or say `no applicable mature theory found`. This is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for an honest comment or reject outcome.
+{{REASONING_DISCIPLINE_CONTRACT}}
 
 ## Your checklist (tests angle only)
 

@@ -50,7 +50,7 @@ Refactor (iter364/issue364):
 
 ## Reference-frame harness
 
-Before deciding, run a lightweight reference-frame pass: identify the applicable mature theory, engineering principle, industry best practice, or constraint framework for this class of change, then compare your plan or abstain decision against that known-good shape. Surface one short free-form note naming the frame, or say `no applicable mature theory found`. This is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for an honest abstain, false-positive, or no-plan outcome.
+{{REASONING_DISCIPLINE_CONTRACT}}
 
 ## Procedure
 

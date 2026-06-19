@@ -9,8 +9,8 @@ description: Use when a high-risk or multi-angle decision needs worker-delegated
 
 <!--
 Refactor (iter342/issue-342):
-  Old pattern: sshx 是 prompt-only 自应用 skill(r2/#349),用 sealed-transcript 作 isolation fallback,worker 推理在 caller 主上下文内
-  New principle: sshx = 轻量 worker-delegated inline consensus:WorkerMode 默认 codex-cli / 无则 isolated-token-subagent fallback / 两者无则 abstain;主上下文只 intake/派发/meta-judge/摘要/最终报告,不承载 worker 完整推理或同轮 peer 输出(No Context Pollution);删 prompt-only 自应用 + sealed-transcript。严格按 DESIGN_DECISION_PATH verbatim Concrete plan 逐条改
+  Old pattern: sshx was a prompt-only self-application skill (r2/#349) using sealed-transcript isolation fallback, with worker reasoning carried in the caller context.
+  New principle: sshx is lightweight worker-delegated inline consensus: WorkerMode defaults to codex-cli, falls back to isolated-token-subagent, and otherwise abstains. The caller context only performs intake, dispatch, meta-judge, summary, and final report; it does not carry worker full reasoning or same-round peer output (No Context Pollution). Prompt-only self-application and sealed-transcript are removed. Apply each concrete-plan step verbatim from DESIGN_DECISION_PATH.
 -->
 
 ## Trigger
@@ -155,6 +155,20 @@ The caller context must not carry worker full reasoning or same-round peer outpu
 
 Same-round thinking workers must not see one another's outputs before their own verdicts are returned. Same-round review workers follow the same rule. If worker isolation is unavailable, exit through `abstain` instead of degrading the protocol into single-context roleplay.
 
+## Reasoning Discipline
+
+`## Reasoning Discipline` is the single source of truth for the reasoning pass used by both `## Thinking Triplet` and `## Review Triplet`. It is prompt-level guidance only: not a runtime API, not a daemon, not a CLI, not a parsed schema field, not marker data, not lifecycle authority, and not a second transcript channel. The stages reference this section; they do not restate it.
+
+sshx's essence is independent context-isolated perspectives that oppose ugliness to converge on a beautiful answer.
+
+Reference-frame: each thinking or review perspective identifies the applicable mature theory, engineering principle, industry best practice, mature industry case, mature pattern, or constraint framework governing this class of problem or implementation; surfaces the known-good shape; then re-checks each candidate conclusion, implementation interpretation, or repair candidate against it before settling the verdict. `no applicable mature theory found` is an acceptable explicit fallback; in that case the note says so and still records the root-cause and minimal-path re-check against `GoalArtifact`.
+
+Aesthetic/adversarial: for each candidate approach weighed, including the chosen, revised, rejected, or repair approach, state why the approach is ugly as a specific locatable defect and what the beautiful form would be. Ugly defects include leaked abstraction, duplicated source of truth, special-case, bad coupling, asymmetry, lying name, hidden intent, or unverifiable premise. The beautiful form is the smaller, symmetric, single-responsibility, single-source-of-truth, intent-revealing form that satisfies `GoalArtifact`.
+
+seek truth from facts: verify every factual premise against actual evidence before relying on it. Evidence examples include source artifact or line, current file contents, command result, test assertion, visible input, implementation-worker conclusion, or declared `GoalArtifact` constraint. Any assumed-not-verified premise must be explicitly marked `ASSUMED-UNVERIFIED` in `SshxResultEnvelope.conclusion` and either verified before routing, treated as a `GoalArtifact` goal gap, or used as an abstain trigger. A perspective must never silently rely on an assumed premise.
+
+Each thinking or review worker must surface one compact free-form reasoning-discipline note in `SshxResultEnvelope.conclusion` naming the reference frame, stating the known-good shape and alignment, deviation, or revision status; stating the ugly defect and beautiful form for each candidate weighed; and stating the verified-premise or `ASSUMED-UNVERIFIED` status needed for the verdict. This does not override `GoalArtifact`, assigned bias or review focus, truth tables, or allowed verdict sets, and it is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for valid `abstain`, `reject`, or `comment` outcomes.
+
 ## Thinking Triplet
 
 Run three biased perspectives before choosing a plan:
@@ -163,7 +177,7 @@ Run three biased perspectives before choosing a plan:
 - `structural`: architecture and contract integrity under future growth.
 - `delete`: whether the feature, abstraction, or work should be removed, collapsed, or avoided.
 
-Before proposing, revising, rejecting, or abstaining, each thinking perspective must run a lightweight Reference-frame harness pass: identify the applicable mature theory, engineering principle, industry best practice, mature industry case, mature pattern, or constraint framework governing this class of problem, then surface that known-good shape and continue thinking by re-checking the candidate conclusion against it before settling the verdict. The perspective must surface one short free-form note naming the reference frame in `SshxResultEnvelope.conclusion`, stating the known-good shape and whether the candidate aligns with it, deviates for a reasoned goal-bound reason, or was revised because of the re-check. `no applicable mature theory found` is an acceptable explicit harness; in that case the note says so and still records the root-cause and minimal-path re-check against `GoalArtifact`. Harness discovery does not override `GoalArtifact`, the assigned bias, the thinking truth table, or the allowed verdict set, and it is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for valid `abstain` or `reject` outcomes.
+Before proposing, revising, rejecting, or abstaining, each thinking perspective must apply `## Reasoning Discipline` to every candidate conclusion it weighs and surface the compact reasoning-discipline note in `SshxResultEnvelope.conclusion` before returning a verdict.
 
 Every perspective must first identify the problem essence or root cause implied by `GoalArtifact`, then frame `propose`, `revise`, `reject`, or `abstain` as an answer to it: what satisfies it, what still differs from it, or why it cannot be satisfied. A plan that only patches a surface symptom while leaving that root cause in place does not satisfy `minimal` or the thinking gate. `revise` must name the goal gap and a next iteration question; it must not open an unrelated design search.
 
@@ -207,7 +221,7 @@ After implementation, run three review perspectives:
 - `quality`: behavior, edge cases, failure modes, and user impact.
 - `tests`: coverage, determinism, and verification strength.
 
-Before approving, commenting, or rejecting, each reviewer must run a lightweight Reference-frame harness pass: identify the applicable mature theory, engineering principle, industry best practice, mature industry case, mature pattern, or constraint framework governing this class of implementation, then surface that known-good shape and continue thinking by re-checking the implementation evidence against it before settling the verdict. The reviewer must surface one short free-form note naming the reference frame in `SshxResultEnvelope.conclusion`, stating the known-good shape and whether the implementation aligns with it, deviates for a reasoned goal-bound reason, or needs correction because of the re-check. `no applicable mature theory found` is an acceptable explicit harness; in that case the note says so and still records the root-cause and minimal-path re-check against `GoalArtifact`. Harness discovery does not override `GoalArtifact`, the review focus, the review truth table, or the allowed verdict set, and it is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for valid `comment` or `reject` outcomes.
+Before approving, commenting, or rejecting, each reviewer must apply `## Reasoning Discipline` to every implementation interpretation, repair candidate, or approval path it weighs and surface the compact reasoning-discipline note in `SshxResultEnvelope.conclusion` before returning a verdict.
 
 Each reviewer returns one of:
 
@@ -229,13 +243,13 @@ Advisory comments do not count as approval. A reject blocks done until the issue
 
 ## Fix Or Done
 
-If review exits `fix`, ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap by delegating it to a worker using the selected `WorkerMode` exactly as `## Implementation Worker` requires — open a new `SshxWorkerFlightRecord` for the same `work_target` and stay orchestration-only for the repair — then rerun the review triplet on the worker's returned `conclusion`. Stop after a bounded number of fix passes and report remaining blockers honestly.
+If review exits `fix`, ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap by delegating it to a worker using the selected `WorkerMode` exactly as `## Implementation Worker` requires - open a new `SshxWorkerFlightRecord` for the same `work_target` and stay orchestration-only for the repair - then rerun the review triplet on the worker's returned `conclusion`. Stop after a bounded number of fix passes and report remaining blockers honestly.
 
 If review exits `done with advisory surfaced`, report the final outcome by aggregating `conclusion` values and include any non-blocking advisory feedback without inlining logs.
 
 If review exits `explicit user decision or another bounded review pass`, either run one more bounded pass with a concrete next iteration question tied to `GoalArtifact`, or ask the user to decide. Do not loop indefinitely.
 
-Every bounded pass in this skill — `meta-layer convergence`, a repeated review pass, and fix passes — defaults to at most one pass unless the user explicitly authorizes more, and the chosen bound is recorded before the first such pass.
+Every bounded pass in this skill - `meta-layer convergence`, a repeated review pass, and fix passes - defaults to at most one pass unless the user explicitly authorizes more, and the chosen bound is recorded before the first such pass.
 
 ## Boundaries
 
@@ -264,6 +278,8 @@ Without this skill, lightweight high-risk decisions tend to regress to:
 - no required worker mode declaration for peer perspectives;
 - no fixed thinking truth table;
 - no same-shape review gate before done;
+- asserting current-system facts without verifying actual evidence;
+- silently relying on assumed factual premises instead of marking, verifying, gap-routing, or abstaining;
 - pressure to use daemon, GitHub, or git orchestration for cases that only need inline consensus.
 
 ## Transcript Template
