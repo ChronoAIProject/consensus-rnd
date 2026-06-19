@@ -4021,6 +4021,72 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual([".refactor-loop/runs/review-pr77-quality-r2.md"], [env["REVIEW_OUTPUT_PATH"] for env in render_envs])
         self.assertIn('"intent_id": "dispatch-reviewers:77:quality:r2"', self.pending_events())
 
+    def test_dispatch_reviewers_does_not_advance_round_while_same_head_stale_holder_is_live(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
+        (self.tmp / ".refactor-loop" / "prompts").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".refactor-loop" / "logs").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".refactor-loop" / "locks" / "spawn-tasks").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".refactor-loop" / "prompts" / "review-pr77-architect-r1.md").write_text(
+            f"head_sha: {'a' * 40}\n",
+            encoding="utf-8",
+        )
+        log_path = self.tmp / ".refactor-loop" / "logs" / "review-pr77-architect-r1.log"
+        log_path.write_text(
+            f"head_sha: {'a' * 40}\nsilent reviewer\n",
+            encoding="utf-8",
+        )
+        old_mtime = time.time() - 600
+        os.utime(log_path, (old_mtime, old_mtime))
+        (self.tmp / ".refactor-loop" / "locks" / "spawn-tasks" / "review-pr77-architect-r1.lock").write_text(
+            json.dumps(
+                {
+                    "task_id": "review-pr77-architect-r1",
+                    "log_path": str(log_path.resolve()),
+                    "pid": 1234,
+                    "acquired_at": "2026-06-01T00:00:00Z",
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        render_envs: list[dict[str, str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["pr", "view", "77", "--json", "title,baseRefName,headRefName,headRefOid"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"title": "Fix wakeup runner", "baseRefName": "dev", "headRefName": "refactor/issue735", "headRefOid": "a" * 40}),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_render(_template: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
+            assert env is not None
+            render_envs.append(dict(env))
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_text("review prompt\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
+                    with mock.patch("codex_refactor_loop.reviewer_liveness.spawn_task_holder_alive", return_value=True):
+                        self.assertEqual(
+                            0,
+                            self.actions.dispatch_reviewers(
+                                {
+                                    "target_kind": "PR",
+                                    "target_number": 77,
+                                    "stale_review_roles": ["architect", "tests"],
+                                }
+                            ),
+                        )
+
+        self.assertEqual([".refactor-loop/runs/review-pr77-tests-r1.md"], [env["REVIEW_OUTPUT_PATH"] for env in render_envs])
+        pending = self.pending_events()
+        self.assertNotIn('"intent_id": "dispatch-reviewers:77:architect:r2"', pending)
+        self.assertIn('"intent_id": "dispatch-reviewers:77:tests:r1"', pending)
+
     def test_dispatch_reviewers_fails_closed_when_pr_head_missing(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
 
