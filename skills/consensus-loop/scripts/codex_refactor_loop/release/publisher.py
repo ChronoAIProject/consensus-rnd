@@ -247,11 +247,16 @@ class ReleasePublisher:
         state = self._remote_already_bumped_state_from_proof(branch_proof, version, tag)
         if state is not None:
             return state
-        for proof in self._remote_rollup_release_proofs():
+        rollup_proofs = self._remote_rollup_release_proofs()
+        for proof in rollup_proofs:
             state = self._remote_already_bumped_state_from_proof(proof, version, tag)
             if state is not None:
                 return state
-        history_proof = self._remote_integration_history_release_proof(branch, version)
+        rollup_history_proof = self._remote_history_release_proof([proof.ref for proof in rollup_proofs], version)
+        state = self._remote_already_bumped_state_from_proof(rollup_history_proof, version, tag)
+        if state is not None:
+            return state
+        history_proof = self._remote_history_release_proof([f"origin/{branch}"], version)
         state = self._remote_already_bumped_state_from_proof(history_proof, version, tag)
         if state is not None:
             return state
@@ -298,24 +303,24 @@ class ReleasePublisher:
                 proofs.append(RemoteReleaseProof(ref=ref, sha=resolved))
         return proofs
 
-    def _remote_integration_history_release_proof(self, branch: str, version: str) -> RemoteReleaseProof | None:
-        remote_ref = f"origin/{branch}"
-        recall = self._run(
-            ["git", "log", "--format=%H", "--fixed-strings", "--grep", self._release_bump_subject(version), remote_ref]
-        )
-        if recall.returncode != 0:
-            return None
-        candidates: list[str] = []
-        for line in recall.stdout.splitlines():
-            sha = line.strip()
-            if not HEX_SHA_RE.fullmatch(sha):
-                continue
-            subject = self._run(["git", "show", "-s", "--format=%s", sha])
-            if subject.returncode == 0 and subject.stdout.strip() == self._release_bump_subject(version):
-                candidates.append(sha)
+    def _remote_history_release_proof(self, remote_refs: Sequence[str], version: str) -> RemoteReleaseProof | None:
+        candidates: set[str] = set()
+        for remote_ref in remote_refs:
+            recall = self._run(
+                ["git", "log", "--format=%H", "--fixed-strings", "--grep", self._release_bump_subject(version), remote_ref]
+            )
+            if recall.returncode != 0:
+                return None
+            for line in recall.stdout.splitlines():
+                sha = line.strip()
+                if not HEX_SHA_RE.fullmatch(sha):
+                    continue
+                subject = self._run(["git", "show", "-s", "--format=%s", sha])
+                if subject.returncode == 0 and subject.stdout.strip() == self._release_bump_subject(version):
+                    candidates.add(sha)
         if len(candidates) != 1:
             return None
-        sha = candidates[0]
+        sha = next(iter(candidates))
         return RemoteReleaseProof(ref=sha, sha=sha)
 
     def _rev_parse_ref(self, ref: str) -> str | None:
