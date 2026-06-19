@@ -26,6 +26,13 @@ def without_refactor_comments(text: str) -> str:
     return re.sub(r"<!--\nRefactor .*?\n-->\n", "", text, flags=re.DOTALL)
 
 
+def heading_index(text: str, anchor: str) -> int:
+    match = re.search(rf"^{re.escape(anchor)}$", text, flags=re.MULTILINE)
+    if not match:
+        raise AssertionError(f"missing heading anchor {anchor}")
+    return match.start()
+
+
 def frontmatter(text: str) -> dict[str, str]:
     match = re.match(r"---\n(?P<body>.*?)\n---\n", text, re.DOTALL)
     if not match:
@@ -108,15 +115,25 @@ class SshxContractTests(unittest.TestCase):
             "## Result Envelope",
             "## Worker Completion Contract",
             "## No Context Pollution",
+            "## Reasoning Discipline",
+            "## Thinking Triplet",
             "## Design Truth Table",
             "## Implementation Worker",
+            "## Review Triplet",
             "## Review Truth Table",
             "## Fix Or Done",
             "## Boundaries",
             "## Baseline Failure Mode",
+            "## Transcript Template",
             "## Verification",
         ]:
             self.assertIn(anchor, text)
+        self.assertLess(heading_index(text, "## No Context Pollution"), heading_index(text, "## Reasoning Discipline"))
+        self.assertLess(heading_index(text, "## Reasoning Discipline"), heading_index(text, "## Thinking Triplet"))
+        self.assertLess(heading_index(text, "## Thinking Triplet"), heading_index(text, "## Design Truth Table"))
+        self.assertLess(heading_index(text, "## Design Truth Table"), heading_index(text, "## Implementation Worker"))
+        self.assertLess(heading_index(text, "## Implementation Worker"), heading_index(text, "## Review Triplet"))
+        self.assertLess(heading_index(text, "## Review Triplet"), heading_index(text, "## Review Truth Table"))
         self.assertIn(
             "`intake` (write `GoalArtifact` and normalize the goal)\n2. `choose_worker_mode`\n3. `thinking_triplet_workers`\n4. `meta_judge`\n5. `implementation_worker`\n6. `review_triplet_workers`\n7. `fix_or_done`",
             text,
@@ -168,90 +185,123 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("stay orchestration-only for the repair", text)
         self.assertIn("next_iteration_question:", text)
 
-    def test_sshx_triplets_require_harness_discovery_in_conclusion(self) -> None:
+    def test_sshx_triplets_require_reasoning_discipline_in_conclusion(self) -> None:
         text = read(SKILL)
-        thinking_start = text.index("## Thinking Triplet")
-        review_start = text.index("## Review Triplet")
-        design_truth_start = text.index("## Design Truth Table")
-        review_truth_start = text.index("## Review Truth Table")
-        thinking_section = text[thinking_start:design_truth_start]
-        review_section = text[review_start:review_truth_start]
+        reasoning_section = text[heading_index(text, "## Reasoning Discipline") : heading_index(text, "## Thinking Triplet")]
+        thinking_section = text[heading_index(text, "## Thinking Triplet") : heading_index(text, "## Design Truth Table")]
+        review_section = text[heading_index(text, "## Review Triplet") : heading_index(text, "## Review Truth Table")]
 
-        self.assertIn(
-            "Before proposing, revising, rejecting, or abstaining, each thinking perspective must run a lightweight Reference-frame harness pass",
-            thinking_section,
+        for required in [
+            "Reference-frame",
+            "applicable mature theory, engineering principle, industry best practice",
+            "mature industry case, mature pattern",
+            "constraint framework",
+            "known-good shape",
+            "`no applicable mature theory found`",
+            "root-cause and minimal-path re-check against `GoalArtifact`",
+        ]:
+            self.assertIn(required, reasoning_section)
+        self.assertEqual(
+            text.count(
+                "sshx's essence is independent context-isolated perspectives that oppose ugliness to converge on a beautiful answer"
+            ),
+            1,
         )
-        self.assertIn("applicable mature theory, engineering principle, industry best practice", thinking_section)
-        self.assertIn("constraint framework", thinking_section)
-        self.assertIn("known-good shape", thinking_section)
-        self.assertIn("`no applicable mature theory found` is an acceptable explicit harness", thinking_section)
-        self.assertIn("one short free-form note", thinking_section)
-        self.assertIn("reference frame in `SshxResultEnvelope.conclusion`", thinking_section)
         self.assertIn(
-            "Harness discovery does not override `GoalArtifact`, the assigned bias, the thinking truth table, or the allowed verdict set",
-            thinking_section,
+            "sshx's essence is independent context-isolated perspectives that oppose ugliness to converge on a beautiful answer",
+            reasoning_section,
         )
+        for required in [
+            "for each candidate approach weighed",
+            "why the approach is ugly as a specific locatable defect",
+            "what the beautiful form would be",
+            "leaked abstraction",
+            "duplicated source of truth",
+            "bad coupling",
+            "asymmetry",
+            "lying name",
+            "hidden intent",
+            "single-source-of-truth",
+            "intent-revealing",
+        ]:
+            self.assertIn(required, reasoning_section)
+        for required in [
+            "seek truth from facts",
+            "verify every factual premise against actual evidence",
+            "source artifact or line",
+            "command result",
+            "test assertion",
+            "ASSUMED-UNVERIFIED",
+            "verified before routing",
+            "`GoalArtifact` goal gap",
+            "abstain trigger",
+            "never silently rely",
+        ]:
+            self.assertIn(required, reasoning_section)
         for boundary in [
-            "not mandatory citation work",
-            "not a literature search",
+            "not a runtime API",
+            "not a daemon",
+            "not a CLI",
             "not a parsed schema field",
             "not marker data",
             "not lifecycle authority",
-            "not a blocker for valid `abstain` or `reject` outcomes",
+            "not a second transcript channel",
+            "not mandatory citation work",
+            "not a literature search",
+            "not a blocker for valid",
         ]:
-            self.assertIn(boundary, thinking_section)
-        self.assertIn("mature industry case, mature pattern", thinking_section)
+            self.assertIn(boundary, reasoning_section)
         self.assertIn(
-            "then surface that known-good shape and continue thinking by re-checking the candidate conclusion against it before settling the verdict",
+            "This does not override `GoalArtifact`, assigned bias or review focus, truth tables, or allowed verdict sets",
+            reasoning_section,
+        )
+        self.assertEqual(len(re.findall(r"^## Reasoning Discipline$", text, flags=re.MULTILINE)), 1)
+        for forbidden in [
+            "## Aesthetic Frame",
+            "## Aesthetic Discipline",
+            "## Seek Truth From Facts",
+            "why_ugly:",
+            "beautiful_form:",
+            "verified_premises:",
+            "assumed_unverified:",
+            "reasoning_discipline:",
+            "aesthetic_marker",
+            "truth_marker",
+            "aesthetic_daemon",
+            "truth_daemon",
+        ]:
+            self.assertNotIn(forbidden, text)
+
+        self.assertIn(
+            "Before proposing, revising, rejecting, or abstaining, each thinking perspective must apply `## Reasoning Discipline`",
             thinking_section,
         )
         self.assertIn(
-            "whether the candidate aligns with it, deviates for a reasoned goal-bound reason, or was revised because of the re-check",
+            "surface the compact reasoning-discipline note in `SshxResultEnvelope.conclusion` before returning a verdict",
             thinking_section,
         )
-        self.assertIn("still records the root-cause and minimal-path re-check against `GoalArtifact`", thinking_section)
         self.assertLess(
-            thinking_section.index("Reference-frame harness"),
+            thinking_section.index("Before proposing, revising, rejecting, or abstaining"),
             thinking_section.index("Each perspective returns one of:"),
         )
-
         self.assertIn(
-            "Before approving, commenting, or rejecting, each reviewer must run a lightweight Reference-frame harness pass",
-            review_section,
-        )
-        self.assertIn("applicable mature theory, engineering principle, industry best practice", review_section)
-        self.assertIn("constraint framework", review_section)
-        self.assertIn("known-good shape", review_section)
-        self.assertIn("`no applicable mature theory found` is an acceptable explicit harness", review_section)
-        self.assertIn("one short free-form note", review_section)
-        self.assertIn("reference frame in `SshxResultEnvelope.conclusion`", review_section)
-        self.assertIn(
-            "Harness discovery does not override `GoalArtifact`, the review focus, the review truth table, or the allowed verdict set",
-            review_section,
-        )
-        for boundary in [
-            "not mandatory citation work",
-            "not a literature search",
-            "not a parsed schema field",
-            "not marker data",
-            "not lifecycle authority",
-            "not a blocker for valid `comment` or `reject` outcomes",
-        ]:
-            self.assertIn(boundary, review_section)
-        self.assertIn("mature industry case, mature pattern", review_section)
-        self.assertIn(
-            "then surface that known-good shape and continue thinking by re-checking the implementation evidence against it before settling the verdict",
+            "Before approving, commenting, or rejecting, each reviewer must apply `## Reasoning Discipline`",
             review_section,
         )
         self.assertIn(
-            "whether the implementation aligns with it, deviates for a reasoned goal-bound reason, or needs correction because of the re-check",
+            "surface the compact reasoning-discipline note in `SshxResultEnvelope.conclusion` before returning a verdict",
             review_section,
         )
-        self.assertIn("still records the root-cause and minimal-path re-check against `GoalArtifact`", review_section)
         self.assertLess(
-            review_section.index("Reference-frame harness"),
+            review_section.index("Before approving, commenting, or rejecting"),
             review_section.index("Each reviewer returns one of:"),
         )
+        self.assertIn(
+            "applicable mature theory, engineering principle, industry best practice",
+            reasoning_section,
+        )
+        self.assertNotIn("applicable mature theory, engineering principle, industry best practice", thinking_section)
+        self.assertNotIn("applicable mature theory, engineering principle, industry best practice", review_section)
 
     def test_sshx_thinking_anchors_root_cause_and_minimal_path(self) -> None:
         text = read(SKILL)
@@ -892,6 +942,8 @@ class SshxContractTests(unittest.TestCase):
             "no required worker mode declaration for peer perspectives",
             "no fixed thinking truth table",
             "no same-shape review gate before done",
+            "asserting current-system facts without verifying actual evidence",
+            "silently relying on assumed factual premises",
             "only need inline consensus",
         ]:
             self.assertIn(failure_mode, text)

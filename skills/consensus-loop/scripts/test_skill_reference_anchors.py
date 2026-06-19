@@ -153,6 +153,65 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(needle, contract)
         self.assertNotIn("references `prompts/_github-post-rules.md`", contract)
 
+    def test_skill_documents_review_gate_reasoning_discipline_contract(self) -> None:
+        review_gate = section_after_heading(
+            self.skill,
+            "Consensus-rnd Phase review-gate — Multi-codex PR review with consensus merge",
+        )
+        section = review_gate.split("### Reasoning discipline prompt contract", 1)[1].split("### Dispatch (parallel)", 1)[0]
+
+        for needle in (
+            "_reasoning-discipline.md",
+            "{{REASONING_DISCIPLINE_CONTRACT}}",
+            "rendered worker prompts inline",
+            "documentation/source-regression anchor only",
+            "Ugly defect:",
+            "Beautiful form:",
+            "ASSUMED-UNVERIFIED",
+            "cannot change the review truth table",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
+    def test_skill_documents_design_consensus_reasoning_discipline_contract(self) -> None:
+        design_consensus = section_after_heading(
+            self.skill,
+            "Consensus-rnd Phase design-consensus — Multi-solver design consensus (sole authorization gate)",
+        )
+        section = design_consensus.split("### Reasoning discipline prompt contract", 1)[1].split("### Solver source contract", 1)[0]
+
+        for needle in (
+            "_reasoning-discipline.md",
+            "{{REASONING_DISCIPLINE_CONTRACT}}",
+            "rendered worker prompts inline",
+            "documentation/source-regression anchor only",
+            "Ugly defect:",
+            "Beautiful form:",
+            "ASSUMED-UNVERIFIED",
+            "cannot change the design truth table",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
+    def test_reasoning_discipline_contract_aligns_with_sshx_shared_needles(self) -> None:
+        sshx = read(REPO_ROOT / "skills" / "sshx" / "SKILL.md")
+        consensus_include = read(SKILL_ROOT / "prompts" / "_reasoning-discipline.md")
+        sshx_reasoning = section_after_heading(sshx, "Reasoning Discipline")
+
+        for needle in (
+            "Reference-frame:",
+            "Aesthetic/adversarial:",
+            "seek truth from facts:",
+            "verify every factual premise",
+            "ASSUMED-UNVERIFIED",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, sshx_reasoning)
+                self.assertIn(needle, consensus_include)
+
+        self.assertIn("must never silently rely on an assumed premise", sshx_reasoning)
+        self.assertIn("Never silently rely on an assumed premise", consensus_include)
+
     def test_skill_is_the_single_heavy_manual_after_merge(self) -> None:
         available = reference_anchors(self.skill)
         for anchor in (

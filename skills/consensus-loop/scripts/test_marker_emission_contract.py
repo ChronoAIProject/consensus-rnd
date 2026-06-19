@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from pathlib import Path
 
 
 SCRIPT_PATH = Path(__file__)
 PROMPTS_DIR = SCRIPT_PATH.parents[1] / "prompts"
+sys.path.insert(0, str(SCRIPT_PATH.parent))
+
+from codex_refactor_loop.prompt_contracts import inline_prompt_contracts  # noqa: E402
 
 CONTRACT_MARKER = "MarkerEmissionContract: single-valid-invalid-role-marker-source"
 SECTION_HEADING_PATTERNS = (
@@ -275,6 +279,7 @@ class MarkerEmissionContractTests(unittest.TestCase):
             if path.name
             not in {
                 "_github-post-rules.md",
+                "_reasoning-discipline.md",
                 "design-issue-body.md",
                 "design-issue-reply.md",
                 "patrol-analysis.md",
@@ -331,19 +336,24 @@ class MarkerEmissionContractTests(unittest.TestCase):
         for filename in REFERENCE_FRAME_PROMPTS:
             with self.subTest(prompt=filename):
                 body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+                rendered = inline_prompt_contracts(body, skill_root=PROMPTS_DIR.parent)
 
                 self.assertEqual(body.count("## Reference-frame harness"), 1)
-                self.assertIn("applicable mature theory, engineering principle, industry best practice", body)
-                self.assertIn("constraint framework", body)
-                self.assertIn("known-good shape", body)
-                self.assertIn("one short free-form note", body)
-                self.assertIn("`no applicable mature theory found`", body)
+                self.assertIn("applicable mature theory, engineering principle, industry best practice", rendered)
+                self.assertIn("constraint framework", rendered)
+                self.assertIn("known-good shape", rendered)
+                if "{{REASONING_DISCIPLINE_CONTRACT}}" in body:
+                    self.assertIn("one compact free-form reasoning-discipline note", rendered)
+                else:
+                    self.assertIn("one short free-form note", rendered)
+                self.assertIn("`no applicable mature theory found`", rendered)
 
     def test_reference_frame_harness_is_not_citation_or_authority_surface(self) -> None:
         for filename in REFERENCE_FRAME_PROMPTS:
             with self.subTest(prompt=filename):
                 body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
-                harness = body.split("## Reference-frame harness", 1)[1].split("\n## ", 1)[0]
+                rendered = inline_prompt_contracts(body, skill_root=PROMPTS_DIR.parent)
+                harness = rendered.split("## Reference-frame harness", 1)[1].split("\n## ", 1)[0]
 
                 for boundary in [
                     "not mandatory citation work",
@@ -353,6 +363,16 @@ class MarkerEmissionContractTests(unittest.TestCase):
                     "not lifecycle authority",
                 ]:
                     self.assertIn(boundary, harness)
+
+    def test_reasoning_discipline_include_is_not_marker_prompt_surface(self) -> None:
+        body = (PROMPTS_DIR / "_reasoning-discipline.md").read_text(encoding="utf-8")
+
+        self.assertNotIn("Artifact profile:", body)
+        self.assertNotIn("## Marker emission allowlist", body)
+        self.assertNotIn("ALLOWED markers:", body)
+        for token in ROLE_MARKER_TOKENS:
+            with self.subTest(token=token):
+                self.assertNotIn(token, body)
 
     def test_meta_judge_prompt_does_not_authorize_fresh_stalled_marker(self) -> None:
         # Refactor (issue-304): Old: meta-judge allowlist authorized a fresh

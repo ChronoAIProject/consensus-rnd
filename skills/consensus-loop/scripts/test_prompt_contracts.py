@@ -15,6 +15,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.prompt_contracts import (  # noqa: E402
     GITHUB_POST_RULES_CONTRACT_TOKEN,
+    REASONING_DISCIPLINE_CONTRACT_TOKEN,
     inline_prompt_contracts,
 )
 
@@ -30,6 +31,16 @@ DIRECT_POST_PROMPTS = (
     "review-fix.md",
     "design-issue-reply.md",
     "triage-external-issue.md",
+)
+
+REASONING_DISCIPLINE_PROMPTS = (
+    "solver-minimal.md",
+    "solver-structural.md",
+    "solver-delete.md",
+    "meta-judge.md",
+    "reviewer-architect.md",
+    "reviewer-tests.md",
+    "reviewer-quality.md",
 )
 
 
@@ -48,7 +59,36 @@ class PromptContractsTests(unittest.TestCase):
         for path in PROMPTS_DIR.glob("*.md"):
             tokens.update(re.findall(r"{{[A-Z0-9_]+_CONTRACT}}", path.read_text(encoding="utf-8")))
 
-        self.assertEqual(tokens, {GITHUB_POST_RULES_CONTRACT_TOKEN})
+        self.assertEqual(tokens, {GITHUB_POST_RULES_CONTRACT_TOKEN, REASONING_DISCIPLINE_CONTRACT_TOKEN})
+
+    def test_reasoning_discipline_prompts_declare_one_reference_frame_contract(self) -> None:
+        for name in REASONING_DISCIPLINE_PROMPTS:
+            with self.subTest(prompt=name):
+                body = (PROMPTS_DIR / name).read_text(encoding="utf-8")
+                self.assertEqual(body.count("## Reference-frame harness"), 1)
+                harness = body.split("## Reference-frame harness", 1)[1].split("\n## ", 1)[0]
+
+                self.assertEqual(harness.count(REASONING_DISCIPLINE_CONTRACT_TOKEN), 1)
+
+    def test_rendered_reasoning_discipline_prompts_inline_contract(self) -> None:
+        for name in REASONING_DISCIPLINE_PROMPTS:
+            with self.subTest(prompt=name):
+                body = (PROMPTS_DIR / name).read_text(encoding="utf-8")
+                rendered = inline_prompt_contracts(body, skill_root=SKILL_ROOT)
+
+                for needle in (
+                    "Reference-frame:",
+                    "Aesthetic/adversarial:",
+                    "Ugly defect:",
+                    "Beautiful form:",
+                    "seek truth from facts:",
+                    "verify every factual premise",
+                    "ASSUMED-UNVERIFIED",
+                    "not marker data",
+                    "not lifecycle authority",
+                ):
+                    self.assertIn(needle, rendered)
+                self.assertNotIn(REASONING_DISCIPLINE_CONTRACT_TOKEN, rendered)
 
     def test_rendered_direct_post_prompts_ban_zsh_readonly_status_exit_variable(self) -> None:
         for name in DIRECT_POST_PROMPTS:

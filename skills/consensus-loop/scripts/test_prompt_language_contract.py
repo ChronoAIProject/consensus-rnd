@@ -26,6 +26,7 @@ SENTINEL = "⟦AI:AUTO-LOOP⟧"
 
 TOUCHED_PROMPTS_WITH_ENGLISH_SOURCE_INSTRUCTIONS = (
     "_github-post-rules.md",
+    "_reasoning-discipline.md",
     "audit.md",
     "design-issue-body.md",
     "design-issue-reply.md",
