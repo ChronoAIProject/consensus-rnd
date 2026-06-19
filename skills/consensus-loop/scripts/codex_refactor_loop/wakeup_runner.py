@@ -62,6 +62,7 @@ from .review_evidence_recovery import (
     project_repeated_review_blocker,
 )
 from .review_gate_selection import extract_review_head_sha, parse_github_review_evidence, select_latest_live_head_review_evidence
+from .reviewer_liveness import reviewer_liveness_projection
 from .release.gate import AutoReleaseGate
 from .release.commits import write_release_commits
 from .release.candidate_liveness import classify_release_candidate_liveness
@@ -1397,6 +1398,7 @@ class WakeupRunner:
             role
             for role in roles
             if str(heads.get(role) or "") != projected_head
+            and not reviewer_liveness_projection(self.ctx.repo_root, pr_number=target, head_sha=projected_head, role=role).pending
             and not self._pending_review_spawn_intent_exists(target, role, projected_head)
         ]
         if not missing_roles:
@@ -2511,6 +2513,7 @@ class WakeupRunner:
                 return False
             return all(
                 str(heads.get(role) or "") == projected_head
+                or reviewer_liveness_projection(self.ctx.repo_root, pr_number=target, head_sha=projected_head, role=role).pending
                 or self._pending_review_spawn_intent_exists(target, role, projected_head)
                 for role in roles
             )

@@ -159,6 +159,10 @@ def spawn_task_log_has_exit_marker(path: Path) -> bool:
     return _log_has_exit_marker(path)
 
 
+def spawn_task_holder_alive(metadata: SpawnTaskLockMetadata) -> bool:
+    return _holder_process_alive(metadata)
+
+
 def _worker_terminal_completion_marker_found(path: Path) -> bool:
     marker_read = read_worker_terminal_marker(path)
     if marker_read.found:
