@@ -19,7 +19,7 @@ REPO_ROOT = SCRIPT_DIR.parents[2]
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.update_check import UpdateCheckProbe
+from codex_refactor_loop.update_check import UpdateCheckProbe, load_version_manifest
 
 
 NOW = datetime(2026, 5, 31, 12, 0, tzinfo=timezone.utc)
@@ -114,6 +114,40 @@ class UpdateCheckTests(unittest.TestCase):
         self.assertEqual("unknown", result["status"])
         self.assertIn("network down", result["reason"])
         self.assertEqual("unknown", self.read_state()["status"])
+
+    def test_valid_manifest_helper_returns_version_and_repository(self) -> None:
+        manifest = load_version_manifest(self.skill / "VERSION.json")
+
+        self.assertEqual("ChronoAIProject/consensus-rnd", manifest["repository"])
+        self.assertRegex(manifest["version"], r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$")
+        self.assertEqual({"version", "repository"}, set(manifest))
+
+    def test_invalid_manifest_fails_before_update_check_runner(self) -> None:
+        self.write_host_env('export UPDATE_CHECK_ENABLE="true"\n')
+        (self.skill / "VERSION.json").write_text(
+            json.dumps(
+                {
+                    "schema": "wrong",
+                    "version": "1.0.0",
+                    "repository": "ChronoAIProject/consensus-rnd",
+                    "release_source": "github-release-then-tag",
+                    "install_hint": "host-owned",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        calls: list[list[str]] = []
+
+        result = UpdateCheckProbe(
+            self.ctx(),
+            now=lambda: NOW,
+            runner=lambda cmd: calls.append(list(cmd)) or subprocess.CompletedProcess(cmd, 0, "{}", ""),
+        ).maybe_run(startup=True)
+
+        self.assertEqual("unknown", result["status"])
+        self.assertIn("VERSION.json schema mismatch", result["reason"])
+        self.assertEqual([], calls)
 
     def test_manual_probe_reuses_fresh_state_before_interval(self) -> None:
         self.write_host_env('export UPDATE_CHECK_ENABLE="true"\nexport UPDATE_CHECK_INTERVAL_SECONDS="21600"\n')
