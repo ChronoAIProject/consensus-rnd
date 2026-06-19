@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parents[2]
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.cli import COMMANDS, RuntimeCommandRouter
@@ -149,6 +150,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "render-github-body",
                 "revive-implements",
                 "update-check",
+                "version",
             },
             set(COMMANDS),
         )
@@ -440,6 +442,74 @@ class RuntimeCommandRouterTests(unittest.TestCase):
     def test_update_check_declares_exact_notify_only_authority(self) -> None:
         self.assertEqual(("read-source", "read-gh", "write-state"), COMMANDS["update-check"].authority)
         self.assertFalse(set(COMMANDS["update-check"].authority) & LIFECYCLE_TOKENS)
+
+    def test_version_command_declares_read_source_only_authority(self) -> None:
+        self.assertEqual(("read-source",), COMMANDS["version"].authority)
+        forbidden = {
+            "read-gh",
+            "read-git",
+            "read-state",
+            "write-state",
+            "spawn",
+            "git-fetch",
+            "git-push",
+            "gh-open",
+            "gh-merge",
+            "gh-close",
+            "gh-label",
+            "controller-lifecycle-runner",
+        }
+        self.assertFalse(set(COMMANDS["version"].authority) & forbidden)
+
+    def test_version_cli_prints_only_manifest_version_without_update_check_side_effects(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="version-cli-") as raw_tmp:
+            tmp = Path(raw_tmp)
+            repo = tmp / "repo"
+            repo.mkdir()
+            state_path = repo / ".refactor-loop" / "state" / "update-check.json"
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text('{"status":"old"}\n', encoding="utf-8")
+            before_stat = state_path.stat()
+            fake_bin = tmp / "bin"
+            fake_bin.mkdir()
+            gh_marker = tmp / "gh-called"
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                f"#!/bin/sh\nprintf called > {gh_marker}\nexit 71\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+
+            result = subprocess.run(
+                [sys.executable, str(CLI), "version"],
+                cwd=repo,
+                env={
+                    "PATH": str(fake_bin),
+                    "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            expected_version = json.loads((REPO_ROOT / "skills/consensus-loop/VERSION.json").read_text(encoding="utf-8"))["version"]
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(f"{expected_version}\n", result.stdout)
+            self.assertEqual("", result.stderr)
+            self.assertFalse(gh_marker.exists())
+            after_stat = state_path.stat()
+            self.assertEqual(before_stat.st_mtime_ns, after_stat.st_mtime_ns)
+            self.assertEqual('{"status":"old"}\n', state_path.read_text(encoding="utf-8"))
+
+    def test_version_is_positional_command_not_top_level_option(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(CLI), "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(2, result.returncode)
+        self.assertIn("unrecognized arguments: --version", result.stderr)
 
     def test_monitor_bridge_filter_declares_read_stdin_only_authority(self) -> None:
         self.assertEqual(("read-stdin",), COMMANDS["monitor-bridge-filter"].authority)

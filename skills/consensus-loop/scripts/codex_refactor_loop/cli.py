@@ -28,6 +28,7 @@ from .runtime_retention import main as runtime_retention_main
 from .sync.dev import main as dev_sync_main
 from .phase9.router import main as phase9_router_main
 from .update_check import main as update_check_main
+from .version import main as version_main
 from .wakeup_plan import main as wakeup_plan_main
 from .wakeup_plan import revive_implements_main
 from .wakeup_runner import main as wakeup_runner_main
@@ -162,6 +163,11 @@ COMMANDS: dict[str, CommandSpec] = {
         update_check_main,
         "run the notify-only version update check probe",
         ("read-source", "read-gh", "write-state"),
+    ),
+    "version": CommandSpec(
+        version_main,
+        "print the installed consensus-loop version",
+        ("read-source",),
     ),
     "monitor-bridge-filter": CommandSpec(
         monitor_bridge.main,
