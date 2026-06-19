@@ -983,6 +983,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "`FIX`: enter fix-retry loop; do not ready, do not merge",
             "`WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer through bounded `review_evidence_recovery.py` keys",
             "`CONFLICTING`/`DIRTY` is status-only",
+            "same-head repeated review verdict signatures may produce status-only `repeated_review_blocker` / explicit-approval waits",
+            "Cross-head same-PR counts are diagnostic only",
             "do not ready, never merge",
         ):
             with self.subTest(needle=needle):
@@ -2085,6 +2087,9 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "raw PR-head check buckets or advisory check buckets are display-only diagnostics, not merge/fix lifecycle authority",
             "target-required CI pending/fail/missing/unavailable",
             "remote-ci worker only for target-required failed checks with `target_required_checks_red`",
+            "same complete same-head verdict signature in multiple rounds",
+            "status-only `repeated_review_blocker`",
+            "Old-head signatures and cross-head same-PR round counts are diagnostic only",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)

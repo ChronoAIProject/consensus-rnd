@@ -431,6 +431,44 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(self.actions.rendered, [(12, 1)])
         launch.assert_called_once()
 
+    def test_repeated_same_head_reject_blocks_review_fix_churn(self) -> None:
+        live = "a" * 40
+        self.github_comments = [
+            self.github_review_comment("architect", "reject", head_sha=live, round_number=3, created_at="2026-06-12T00:01:00Z", comment_id=301),
+            self.github_review_comment("tests", "approve", head_sha=live, round_number=3, created_at="2026-06-12T00:02:00Z", comment_id=302),
+            self.github_review_comment("quality", "comment", head_sha=live, round_number=3, created_at="2026-06-12T00:03:00Z", comment_id=303),
+            self.github_review_comment("architect", "reject", head_sha=live, round_number=4, created_at="2026-06-12T00:11:00Z", comment_id=401),
+            self.github_review_comment("tests", "approve", head_sha=live, round_number=4, created_at="2026-06-12T00:12:00Z", comment_id=402),
+            self.github_review_comment("quality", "comment", head_sha=live, round_number=4, created_at="2026-06-12T00:13:00Z", comment_id=403),
+        ]
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", side_effect=AssertionError("must not dispatch fix")):
+            result = self.run_action(required_checks=())
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_REPEATED_REVIEW_BLOCKER:repeated_review_blocker")
+        self.assertEqual(self.actions.rendered, [])
+        self.assertEqual(self.actions.merged, [])
+
+    def test_repeated_all_comment_no_approval_stays_explicit_approval_wait(self) -> None:
+        live = "a" * 40
+        self.github_comments = [
+            self.github_review_comment("architect", "comment", head_sha=live, round_number=7, created_at="2026-06-12T00:01:00Z", comment_id=701),
+            self.github_review_comment("tests", "comment", head_sha=live, round_number=7, created_at="2026-06-12T00:02:00Z", comment_id=702),
+            self.github_review_comment("quality", "comment", head_sha=live, round_number=7, created_at="2026-06-12T00:03:00Z", comment_id=703),
+            self.github_review_comment("architect", "comment", head_sha=live, round_number=8, created_at="2026-06-12T00:11:00Z", comment_id=801),
+            self.github_review_comment("tests", "comment", head_sha=live, round_number=8, created_at="2026-06-12T00:12:00Z", comment_id=802),
+            self.github_review_comment("quality", "comment", head_sha=live, round_number=8, created_at="2026-06-12T00:13:00Z", comment_id=803),
+        ]
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", side_effect=AssertionError("must not dispatch fix")):
+            result = self.run_action(required_checks=())
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_REPEATED_REVIEW_BLOCKER:explicit_approval_required")
+        self.assertEqual(self.actions.rendered, [])
+        self.assertEqual(self.actions.merged, [])
+
     def test_review_gate_newer_pending_wave_does_not_block_completion_when_role_has_valid_verdict(self) -> None:
         live = "f" * 40
         evidences = [

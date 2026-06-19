@@ -3836,6 +3836,94 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(tests_intent["cd"], str(self.tmp.resolve()))
         self.assertTrue(Path(str(tests_intent["cd"])).is_absolute())
 
+    def test_dispatch_reviewers_blocks_repeated_same_head_review_blocker(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
+        live = "a" * 40
+        comments = [
+            {
+                "id": 801,
+                "created_at": "2026-06-12T00:01:00Z",
+                "body": (
+                    f"review_round: 3\nhead_sha: {live}\n"
+                    "REVIEW_DONE:77:architect:reject\n\n"
+                    "⟦AI:AUTO-LOOP⟧"
+                ),
+            },
+            {
+                "id": 802,
+                "created_at": "2026-06-12T00:02:00Z",
+                "body": (
+                    f"review_round: 3\nhead_sha: {live}\n"
+                    "REVIEW_DONE:77:tests:approve\n\n"
+                    "⟦AI:AUTO-LOOP⟧"
+                ),
+            },
+            {
+                "id": 803,
+                "created_at": "2026-06-12T00:03:00Z",
+                "body": (
+                    f"review_round: 3\nhead_sha: {live}\n"
+                    "REVIEW_DONE:77:quality:comment\n\n"
+                    "⟦AI:AUTO-LOOP⟧"
+                ),
+            },
+            {
+                "id": 811,
+                "created_at": "2026-06-12T00:11:00Z",
+                "body": (
+                    f"review_round: 4\nhead_sha: {live}\n"
+                    "REVIEW_DONE:77:architect:reject\n\n"
+                    "⟦AI:AUTO-LOOP⟧"
+                ),
+            },
+            {
+                "id": 812,
+                "created_at": "2026-06-12T00:12:00Z",
+                "body": (
+                    f"review_round: 4\nhead_sha: {live}\n"
+                    "REVIEW_DONE:77:tests:approve\n\n"
+                    "⟦AI:AUTO-LOOP⟧"
+                ),
+            },
+            {
+                "id": 813,
+                "created_at": "2026-06-12T00:13:00Z",
+                "body": (
+                    f"review_round: 4\nhead_sha: {live}\n"
+                    "REVIEW_DONE:77:quality:comment\n\n"
+                    "⟦AI:AUTO-LOOP⟧"
+                ),
+            },
+        ]
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["pr", "view", "77", "--json", "title,baseRefName,headRefName,headRefOid"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "title": "Fix wakeup runner",
+                            "baseRefName": "dev",
+                            "headRefName": "refactor/issue413",
+                            "headRefOid": live,
+                        }
+                    ),
+                    stderr="",
+                )
+            if args == ["api", "repos/owner/repo/issues/77/comments?per_page=100", "--paginate", "--slurp"]:
+                return mock.Mock(returncode=0, stdout=json.dumps([comments]), stderr="")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("must not render reviewer prompt")):
+                    result = self.actions.dispatch_reviewers(
+                        {"target_kind": "PR", "target_number": 77, "stale_review_roles": ["architect", "tests", "quality"]}
+                    )
+
+        self.assertEqual(2, result)
+        self.assertNotIn("HARNESS_SPAWN_INTENT", self.pending_events())
+
     def test_dispatch_reviewers_does_not_advance_round_while_same_role_log_is_pending(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
         (self.tmp / ".refactor-loop" / "prompts").mkdir(parents=True, exist_ok=True)
