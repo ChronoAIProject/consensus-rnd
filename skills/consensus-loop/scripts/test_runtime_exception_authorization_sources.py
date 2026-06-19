@@ -906,6 +906,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "git show -s --format=%s origin/rollup/<40hex>",
             "git show origin/rollup/<40hex>:<mapped manifest>",
             "suffix equals the resolved commit sha",
+            "git log --format=%H --fixed-strings --grep \"Release v<to_version>\" origin/rollup/<40hex>",
             "git log --format=%H --fixed-strings --grep \"Release v<to_version>\" origin/<INTEGRATION_BRANCH>",
             "without `--max-count`",
             "history recall output is candidate discovery only, not authorization",
@@ -933,6 +934,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "`git show -s --format=%s origin/rollup/<40hex>`",
             "`git show origin/rollup/<40hex>:<mapped manifest>`",
             "suffix 等于 resolved commit sha",
+            "`git log --format=%H --fixed-strings --grep \"Release v<to_version>\" origin/rollup/<40hex>`",
             "`git log --format=%H --fixed-strings --grep \"Release v<to_version>\" origin/<INTEGRATION_BRANCH>`",
             "不带 `--max-count`",
             "recall output 不是授权",
@@ -943,6 +945,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         ):
             with self.subTest(repo_rules_required=repo_rules_required):
                 self.assertIn(repo_rules_required, self.repo_rules)
+        self.assertIn("rollup_history_recall", entry)
+        self.assertIn("only if rollup-history recall does not prove a release SHA", entry)
 
     def test_controller_release_publisher_334_mirror_preserves_exact_sha_green_gate(self) -> None:
         entry = mirror_entry(self.mirror, "controller-release-publisher-334")
@@ -960,6 +964,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "commit/push the release manifest commit through the detached origin-tip transaction",
             "origin/rollup/<40hex>",
             "suffix equals the resolved commit sha",
+            "git log --format=%H --fixed-strings --grep \"Release v<to_version>\" origin/rollup/<40hex>",
             "origin/<INTEGRATION_BRANCH> reachable history",
             "git log --format=%H --fixed-strings --grep \"Release v<to_version>\" origin/<INTEGRATION_BRANCH>",
             "exactly one 40hex history candidate",

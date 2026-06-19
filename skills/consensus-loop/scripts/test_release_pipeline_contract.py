@@ -318,7 +318,9 @@ class ReleasePipelineContractTests(unittest.TestCase):
 
     def test_release_publisher_remote_history_reentry_is_fixed_string_candidate_recall(self) -> None:
         for needle in (
-            "def _remote_integration_history_release_proof",
+            "def _remote_history_release_proof",
+            "rollup_history_proof = self._remote_history_release_proof([proof.ref for proof in rollup_proofs], version)",
+            'history_proof = self._remote_history_release_proof([f"origin/{branch}"], version)',
             '["git", "log", "--format=%H", "--fixed-strings", "--grep", self._release_bump_subject(version), remote_ref]',
             "HEX_SHA_RE.fullmatch(sha)",
             '["git", "show", "-s", "--format=%s", sha]',
@@ -327,11 +329,16 @@ class ReleasePipelineContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.publisher)
-        history_index = self.publisher.index("_remote_integration_history_release_proof(branch, version)")
-        rollup_index = self.publisher.index("for proof in self._remote_rollup_release_proofs():")
+        rollup_history_index = self.publisher.index("rollup_history_proof = self._remote_history_release_proof")
+        history_index = self.publisher.index('history_proof = self._remote_history_release_proof([f"origin/{branch}"], version)')
+        rollup_index = self.publisher.index("rollup_proofs = self._remote_rollup_release_proofs()")
+        rollup_state_index = self.publisher.index("self._remote_already_bumped_state_from_proof(rollup_history_proof")
         state_index = self.publisher.index("self._remote_already_bumped_state_from_proof(history_proof")
         manifest_index = self.publisher.index("self._remote_mapped_manifest_versions(proof.ref)")
         self.assertLess(rollup_index, history_index)
+        self.assertLess(rollup_index, rollup_history_index)
+        self.assertLess(rollup_history_index, rollup_state_index)
+        self.assertLess(rollup_state_index, history_index)
         self.assertLess(history_index, state_index)
         self.assertLess(state_index, manifest_index)
         self.assertNotIn("--max-count", self.publisher)
