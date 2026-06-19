@@ -5624,6 +5624,185 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan(fixture="open_pr_480")
 
         self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+
+    def test_repeated_same_head_reject_projects_status_only_without_review_fix(self) -> None:
+        live = "a" * 40
+        comments = [
+            [
+                {
+                    "id": 801,
+                    "created_at": "2026-06-12T00:01:00Z",
+                    "body": (
+                        f"review_round: 3\nhead_sha: {live}\n"
+                        "REVIEW_DONE:480:architect:reject\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+                {
+                    "id": 802,
+                    "created_at": "2026-06-12T00:02:00Z",
+                    "body": (
+                        f"review_round: 3\nhead_sha: {live}\n"
+                        "REVIEW_DONE:480:tests:approve\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+                {
+                    "id": 803,
+                    "created_at": "2026-06-12T00:03:00Z",
+                    "body": (
+                        f"review_round: 3\nhead_sha: {live}\n"
+                        "REVIEW_DONE:480:quality:comment\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+                {
+                    "id": 811,
+                    "created_at": "2026-06-12T00:11:00Z",
+                    "body": (
+                        f"review_round: 4\nhead_sha: {live}\n"
+                        "REVIEW_DONE:480:architect:reject\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+                {
+                    "id": 812,
+                    "created_at": "2026-06-12T00:12:00Z",
+                    "body": (
+                        f"review_round: 4\nhead_sha: {live}\n"
+                        "REVIEW_DONE:480:tests:approve\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+                {
+                    "id": 813,
+                    "created_at": "2026-06-12T00:13:00Z",
+                    "body": (
+                        f"review_round: 4\nhead_sha: {live}\n"
+                        "REVIEW_DONE:480:quality:comment\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+            ]
+        ]
+        (self.repo / "gh-api-repos-owner-repo-issues-480-comments?per_page=100-comments.json").write_text(
+            json.dumps(comments),
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["reason"], "repeated_review_blocker")
+        self.assertEqual(action["repeated_review_blocker"], f"480:{live}:architect:reject|quality:comment|tests:approve")
+        self.assertEqual(action["repeated_review_rounds"], [3, 4])
+        self.assertNotIn("controller_action", action)
+        self.assertNotIn("runner_authority", action)
+
+    def test_repeated_all_comment_no_approval_projects_human_blocked_status_only(self) -> None:
+        live = "a" * 40
+        comments = [[]]
+        for round_number in (7, 8):
+            for index, role in enumerate(("architect", "tests", "quality"), start=1):
+                comments[0].append(
+                    {
+                        "id": 900 + round_number * 10 + index,
+                        "created_at": f"2026-06-12T00:{round_number}{index}:00Z",
+                        "body": (
+                            f"review_round: {round_number}\nhead_sha: {live}\n"
+                            f"REVIEW_DONE:480:{role}:comment\n\n"
+                            "⟦AI:AUTO-LOOP⟧"
+                        ),
+                    }
+                )
+        (self.repo / "gh-api-repos-owner-repo-issues-480-comments?per_page=100-comments.json").write_text(
+            json.dumps(comments),
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["reason"], "explicit_approval_required")
+        self.assertEqual(action["repeated_review_rounds"], [7, 8])
+        self.assertNotIn("controller_action", action)
+        self.assertNotIn("review_fix", json.dumps(action, sort_keys=True))
+
+    def test_old_head_repeated_blocker_keeps_new_head_review_opportunity(self) -> None:
+        live = "a" * 40
+        stale = "b" * 40
+        comments = [
+            [
+                {
+                    "id": 801,
+                    "created_at": "2026-06-12T00:01:00Z",
+                    "body": (
+                        f"review_round: 3\nhead_sha: {stale}\n"
+                        "REVIEW_DONE:480:architect:reject\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+                {
+                    "id": 802,
+                    "created_at": "2026-06-12T00:02:00Z",
+                    "body": (
+                        f"review_round: 3\nhead_sha: {stale}\n"
+                        "REVIEW_DONE:480:tests:approve\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+                {
+                    "id": 803,
+                    "created_at": "2026-06-12T00:03:00Z",
+                    "body": (
+                        f"review_round: 3\nhead_sha: {stale}\n"
+                        "REVIEW_DONE:480:quality:comment\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+                {
+                    "id": 811,
+                    "created_at": "2026-06-12T00:11:00Z",
+                    "body": (
+                        f"review_round: 4\nhead_sha: {stale}\n"
+                        "REVIEW_DONE:480:architect:reject\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+                {
+                    "id": 812,
+                    "created_at": "2026-06-12T00:12:00Z",
+                    "body": (
+                        f"review_round: 4\nhead_sha: {stale}\n"
+                        "REVIEW_DONE:480:tests:approve\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+                {
+                    "id": 813,
+                    "created_at": "2026-06-12T00:13:00Z",
+                    "body": (
+                        f"review_round: 4\nhead_sha: {stale}\n"
+                        "REVIEW_DONE:480:quality:comment\n\n"
+                        "⟦AI:AUTO-LOOP⟧"
+                    ),
+                },
+            ]
+        ]
+        (self.repo / "gh-api-repos-owner-repo-issues-480-comments?per_page=100-comments.json").write_text(
+            json.dumps(comments),
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["head_sha"], live)
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
+        self.assertNotIn("status_only", action)
         gates = [item for item in plan["actions"] if item.get("controller_action") == "review_gate"]
         if gates:
             self.assertEqual(gates[0]["head_sha"], live)
@@ -7504,6 +7683,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn('"head_sha": item.head_sha', redispatch_source)
         self.assertIn("project_review_evidence_recovery", redispatch_source)
         self.assertIn("ReviewEvidenceRecoveryInput", redispatch_source)
+        self.assertIn("project_repeated_review_blocker", redispatch_source)
+        self.assertIn("RepeatedReviewBlockerInput", redispatch_source)
+        self.assertIn('"repeated_review_blocker"', redispatch_source)
         self.assertIn('"review_recovery_attempt_keys"', redispatch_source)
         self.assertIn('"review_recovery_reason_by_role"', redispatch_source)
         self.assertNotIn("latest_reviewer_heads", redispatch_source)

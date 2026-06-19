@@ -14,8 +14,11 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from codex_refactor_loop.review_evidence_recovery import (  # noqa: E402
     ReviewEvidenceRecoveryInput,
     ReviewEvidenceRecoveryLedgerRow,
+    RepeatedReviewBlockerInput,
     ledger_row_from_mapping,
     project_review_evidence_recovery,
+    project_repeated_review_blocker,
+    repeated_review_blocker_key,
     review_recovery_attempt_key,
 )
 from codex_refactor_loop.review_gate_selection import ParsedGithubReviewEvidence  # noqa: E402
@@ -36,6 +39,19 @@ def evidence(role: str, *, head_sha: str = LIVE_HEAD, valid: bool = True, reason
         reason=reason,
         created_at=f"2026-06-12T00:0{REQUIRED_ROLES.index(role)}:00Z",
         comment_id=100 + REQUIRED_ROLES.index(role),
+    )
+
+
+def verdict_evidence(role: str, verdict: str, *, round_number: int, head_sha: str = LIVE_HEAD) -> ParsedGithubReviewEvidence:
+    return ParsedGithubReviewEvidence(
+        role=role,
+        round_number=round_number,
+        verdict=verdict,
+        head_sha=head_sha,
+        source="github:issues/comments",
+        valid=True,
+        created_at=f"2026-06-12T00:{round_number:02d}:00Z",
+        comment_id=1000 + round_number + REQUIRED_ROLES.index(role),
     )
 
 
@@ -224,6 +240,73 @@ class ReviewEvidenceRecoveryTests(unittest.TestCase):
             ),
         )
         self.assertEqual(malformed.attempt_keys, ())
+
+    def test_repeated_same_head_reject_blocker_is_status_only(self) -> None:
+        key = repeated_review_blocker_key(480, LIVE_HEAD, ("architect:reject", "quality:comment", "tests:approve"))
+
+        projection = project_repeated_review_blocker(
+            RepeatedReviewBlockerInput(
+                pr_number=480,
+                head_sha=LIVE_HEAD,
+                required_roles=REQUIRED_ROLES,
+                github_review_evidences=(
+                    verdict_evidence("architect", "reject", round_number=3),
+                    verdict_evidence("tests", "approve", round_number=3),
+                    verdict_evidence("quality", "comment", round_number=3),
+                    verdict_evidence("architect", "reject", round_number=4),
+                    verdict_evidence("tests", "approve", round_number=4),
+                    verdict_evidence("quality", "comment", round_number=4),
+                ),
+            )
+        )
+
+        self.assertTrue(projection.status_only)
+        self.assertEqual(projection.status_reason, "repeated_review_blocker")
+        self.assertEqual(projection.blocker_key, key)
+        self.assertEqual(projection.signature, ("architect:reject", "quality:comment", "tests:approve"))
+        self.assertEqual(projection.rounds, (3, 4))
+
+    def test_repeated_all_comment_no_approval_is_human_blocked_without_autofix(self) -> None:
+        projection = project_repeated_review_blocker(
+            RepeatedReviewBlockerInput(
+                pr_number=480,
+                head_sha=LIVE_HEAD,
+                required_roles=REQUIRED_ROLES,
+                github_review_evidences=(
+                    verdict_evidence("architect", "comment", round_number=7),
+                    verdict_evidence("tests", "comment", round_number=7),
+                    verdict_evidence("quality", "comment", round_number=7),
+                    verdict_evidence("architect", "comment", round_number=8),
+                    verdict_evidence("tests", "comment", round_number=8),
+                    verdict_evidence("quality", "comment", round_number=8),
+                ),
+            )
+        )
+
+        self.assertTrue(projection.status_only)
+        self.assertEqual(projection.status_reason, "explicit_approval_required")
+        self.assertEqual(projection.blocker_key, f"480:{LIVE_HEAD}:architect:comment|quality:comment|tests:comment")
+        self.assertEqual(projection.rounds, (7, 8))
+
+    def test_old_head_repeated_blockers_do_not_block_fresh_head(self) -> None:
+        projection = project_repeated_review_blocker(
+            RepeatedReviewBlockerInput(
+                pr_number=480,
+                head_sha=LIVE_HEAD,
+                required_roles=REQUIRED_ROLES,
+                github_review_evidences=(
+                    verdict_evidence("architect", "reject", round_number=7, head_sha="b" * 40),
+                    verdict_evidence("tests", "approve", round_number=7, head_sha="b" * 40),
+                    verdict_evidence("quality", "comment", round_number=7, head_sha="b" * 40),
+                    verdict_evidence("architect", "reject", round_number=8, head_sha="b" * 40),
+                    verdict_evidence("tests", "approve", round_number=8, head_sha="b" * 40),
+                    verdict_evidence("quality", "comment", round_number=8, head_sha="b" * 40),
+                ),
+            )
+        )
+
+        self.assertFalse(projection.status_only)
+        self.assertEqual(projection.status_reason, "")
 
 
 if __name__ == "__main__":

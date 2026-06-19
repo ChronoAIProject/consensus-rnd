@@ -76,10 +76,12 @@ from codex_refactor_loop.review_fix_dispatch import (
 )
 from codex_refactor_loop.review_evidence_recovery import (
     DEFAULT_REVIEW_RECOVERY_CAP,
+    RepeatedReviewBlockerInput,
     ReviewEvidenceRecoveryInput,
     ReviewEvidenceRecoveryLedgerRow,
     ledger_row_from_mapping,
     project_review_evidence_recovery,
+    project_repeated_review_blocker,
 )
 from codex_refactor_loop.work_items import (
     DESIGN_CONSENSUS_TERMINAL_PHASES,
@@ -281,6 +283,7 @@ class ReviewRoundCompletion:
 class ReviewCompletionEvidence:
     role: str
     round_number: int
+    verdict: str
     head_sha: str
     valid: bool
     pending: bool = False
@@ -2505,6 +2508,7 @@ def _github_review_completion_evidences(
             ReviewCompletionEvidence(
                 role=evidence.role,
                 round_number=evidence.round_number,
+                verdict=evidence.verdict,
                 head_sha=evidence.head_sha,
                 valid=evidence.valid,
                 pending=evidence.pending,
@@ -2695,6 +2699,14 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem], 
             if role in local_pending_roles
             or pending_review_spawn_exists(repo_root, item.number, ctx, role=role, head_sha=item.head_sha)
         )
+        repeated_blocker = project_repeated_review_blocker(
+            RepeatedReviewBlockerInput(
+                pr_number=item.number,
+                head_sha=item.head_sha,
+                required_roles=REQUIRED_REVIEW_ROLES,
+                github_review_evidences=github_evidences,
+            )
+        )
         recovery = project_review_evidence_recovery(
             ReviewEvidenceRecoveryInput(
                 pr_number=item.number,
@@ -2708,7 +2720,7 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem], 
                 cap=DEFAULT_REVIEW_RECOVERY_CAP,
             )
         )
-        if not recovery.roles and not recovery.status_only:
+        if not recovery.roles and not recovery.status_only and not repeated_blocker.status_only:
             continue
         action = {
             "priority": 2,
@@ -2734,7 +2746,20 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem], 
             "runner_authority": RUNNER_AUTHORITY,
             "no_generic_command": True,
         }
-        if recovery.status_only:
+        if repeated_blocker.status_only:
+            action["status_only"] = True
+            action["reason"] = repeated_blocker.status_reason
+            action["no_lifecycle_authority"] = True
+            action["stale_review_roles"] = []
+            action["review_recovery_attempt_keys"] = []
+            action["review_recovery_role_count"] = 0
+            action["repeated_review_blocker"] = repeated_blocker.blocker_key
+            action["repeated_review_signature"] = list(repeated_blocker.signature)
+            action["repeated_review_rounds"] = list(repeated_blocker.rounds)
+            action.pop("controller_action", None)
+            action.pop("runner_authority", None)
+            action.pop("no_generic_command", None)
+        elif recovery.status_only:
             action["status_only"] = True
             action["reason"] = recovery.status_reason
             action["no_lifecycle_authority"] = True
