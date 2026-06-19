@@ -73,6 +73,7 @@ class ProcessSupervisor:
                     self.sleeper(self.poll_interval)
                     if proc.poll() is not None:
                         break
+                    _refresh_log_heartbeat(log)
                     if self.clock() - start >= stall:
                         _append(log, f"TIMEOUT_KILL_AFTER={stall}s\nTIMEOUT_KILL_AT={_utc_now()}\n")
                         kill_process_group(proc.pid)
@@ -234,6 +235,14 @@ def _has_exit_marker(path: Path) -> bool:
 def _append(path: Path, text: str) -> None:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(text)
+
+
+def _refresh_log_heartbeat(path: Path) -> None:
+    try:
+        os.utime(path, None)
+    except OSError as exc:
+        reason = str(exc).replace("\n", " ")
+        _append(path, f"LOG_HEARTBEAT_REFRESH_FAILED:path={path}:reason={reason}\n")
 
 
 def _rotate_unfinished_log(path: Path) -> None:

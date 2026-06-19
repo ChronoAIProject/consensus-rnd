@@ -74,6 +74,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     default_issue_intake_actions,
     load_default_issue_intake_candidates,
 )
+from codex_refactor_loop.reviewer_liveness import reviewer_liveness_projection  # noqa: E402
 from test_support.authorization_projection import project_python  # noqa: E402
 
 
@@ -6725,6 +6726,53 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(1, len(actions))
         self.assertEqual(["tests", "quality"], actions[0]["stale_review_roles"])
+
+    def test_same_head_stale_log_with_live_spawn_holder_suppresses_review_redispatch(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale review",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="impl/pr77",
+            head_sha="a" * 40,
+        )
+        prompt_path = self.repo / ".refactor-loop" / "prompts" / "review-pr77-architect-r1.md"
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text(f"head_sha: {'a' * 40}\n", encoding="utf-8")
+        log_path = self.logs / "review-pr77-architect-r1.log"
+        log_path.write_text(f"head_sha: {'a' * 40}\nsilent reviewer\n", encoding="utf-8")
+        old = time.time() - 600
+        os.utime(log_path, (old, old))
+        lock_path = self.repo / ".refactor-loop" / "locks" / "spawn-tasks" / "review-pr77-architect-r1.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(
+            json.dumps(
+                {
+                    "task_id": "review-pr77-architect-r1",
+                    "log_path": str(log_path.resolve()),
+                    "pid": 1234,
+                    "acquired_at": "2026-06-01T00:00:00Z",
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.repo, read_only=True)
+
+        with mock.patch("codex_refactor_loop.reviewer_liveness.spawn_task_holder_alive", return_value=True):
+            actions = review_evidence_redispatch_actions(self.repo, [item], ctx)
+
+        self.assertEqual(1, len(actions))
+        self.assertEqual(["tests", "quality"], actions[0]["stale_review_roles"])
+        projection = reviewer_liveness_projection(
+            self.repo,
+            pr_number=77,
+            head_sha="a" * 40,
+            role="architect",
+            holder_alive=lambda pid: pid == 1234,
+        )
+        self.assertEqual("spawn_holder_alive", projection.reason)
 
     def test_rollup_pr_projects_ci_only_auto_merge_action(self) -> None:
         item = GhItem(

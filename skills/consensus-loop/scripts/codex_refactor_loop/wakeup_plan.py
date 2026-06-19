@@ -56,6 +56,10 @@ from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_sna
 from codex_refactor_loop.phase9.progress import issue_has_terminal_consensus_judge
 from codex_refactor_loop.pr_checks import PrMergeReadinessProjection
 from codex_refactor_loop.review_gate_selection import parse_github_review_evidence, select_latest_live_head_review_evidence
+from codex_refactor_loop.reviewer_liveness import (
+    pending_reviewer_roles,
+    reviewed_head_sha_from_file,
+)
 from codex_refactor_loop.release.candidate_liveness import classify_release_candidate_liveness
 from codex_refactor_loop.release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from codex_refactor_loop.release.gate import decide_release_artifact
@@ -213,7 +217,6 @@ NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_BLOCKED: "blocked",
     label_catalog.PHASE_MERGED: "merged",
 }
-REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
 REVIEW_LOG_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.log$")
 REBASE_RESOLVE_LOG_RE = re.compile(r"^rebase-resolve-pr([1-9][0-9]*)-r([1-9][0-9]*)\.log$")
 REBASE_RESOLVE_DONE_RE = re.compile(r"^REBASE_RESOLVE_DONE:([1-9][0-9]*):[^\s`]+$")
@@ -225,7 +228,6 @@ CONSENSUS_JUDGE_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-
 DESIGN_CONSENSUS_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-(minimal|structural|delete|judge|reflector)\.log$")
 IMPLEMENT_PENDING_INTENT_PREFIX = "dispatch-consensus-implementation:"
 IMPLEMENT_TASK_PREFIX = "implement-"
-REVIEW_PENDING_SECONDS = 90
 INVALID_HARNESS_SPAWN_INTENT_SOURCE_ARTIFACT = ".refactor-loop/.controller-pending-events.log"
 INVALID_HARNESS_SPAWN_INTENT_SOURCE_MARKER = "HARNESS_SPAWN_INTENT"
 ARCHIVED_INVALID_HARNESS_SPAWN_INTENT_MARKER = "WAKEUP_RUNNER_ARCHIVED_INVALID_HARNESS_SPAWN_INTENT"
@@ -2431,21 +2433,11 @@ def infer_item_from_text(text: str) -> str | None:
 
 
 def _reviewed_head_sha_from_log(log_path: Path) -> str:
-    try:
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    match = REVIEW_HEAD_RE.search(text)
-    return match.group(1) if match else ""
+    return reviewed_head_sha_from_file(log_path)
 
 
 def _reviewed_head_sha_from_file(path: Path) -> str:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    match = REVIEW_HEAD_RE.search(text)
-    return match.group(1) if match else ""
+    return reviewed_head_sha_from_file(path)
 
 
 def _github_comment_items(payload: object) -> list[object] | None:
@@ -2544,30 +2536,6 @@ def _gh_item_head_sha(gh_items: list[GhItem] | None, pr_number: int) -> str:
     return ""
 
 
-def _reviewer_log_has_exit_zero(path: Path) -> bool:
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
-    return any(line.strip() == "EXIT=0" for line in lines)
-
-
-def _reviewer_log_terminal_failed(path: Path) -> bool:
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
-    for line in reversed(lines):
-        text = line.strip()
-        if not text.startswith("EXIT="):
-            continue
-        try:
-            return int(text.removeprefix("EXIT=")) != 0
-        except ValueError:
-            return True
-    return False
-
-
 def highest_complete_required_review_round(repo_root: Path, pr_number: int, head_sha: str) -> ReviewRoundCompletion | None:
     if not head_sha:
         return None
@@ -2584,19 +2552,25 @@ def highest_complete_required_review_round(repo_root: Path, pr_number: int, head
 
 
 def pending_or_fresh_review_evidence_roles(repo_root: Path, pr_number: int, head_sha: str | None = None) -> set[str]:
-    roles: set[str] = set()
-    now = time.time()
-    for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
-        match = REVIEW_LOG_RE.match(path.name)
-        if not match or int(match.group(1)) != pr_number:
-            continue
-        if _reviewer_log_has_exit_zero(path) or _reviewer_log_terminal_failed(path):
-            continue
-        if head_sha is not None and _reviewed_head_sha_from_file(path) != head_sha:
-            continue
-        if now - path.stat().st_mtime < REVIEW_PENDING_SECONDS:
-            roles.add(match.group(2))
-    return roles
+    if head_sha is None:
+        roles: set[str] = set()
+        for path in sorted((repo_root / ".refactor-loop" / "logs").glob(f"review-pr{pr_number}-*-r*.log")):
+            match = REVIEW_LOG_RE.match(path.name)
+            if match and int(match.group(1)) == pr_number:
+                projection = pending_reviewer_roles(
+                    repo_root,
+                    pr_number=pr_number,
+                    head_sha=_reviewed_head_sha_from_file(path),
+                    roles=(match.group(2),),
+                )
+                roles.update(projection)
+        return roles
+    return pending_reviewer_roles(
+        repo_root,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        roles=REQUIRED_REVIEW_ROLES,
+    )
 
 
 def github_review_completion_roles(

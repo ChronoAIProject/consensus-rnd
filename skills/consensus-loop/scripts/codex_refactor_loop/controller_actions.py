@@ -61,6 +61,7 @@ from .review_fix_dispatch import (
 )
 from .review_evidence_recovery import RepeatedReviewBlockerInput, RepeatedReviewBlockerProjection, project_repeated_review_blocker
 from .review_gate_selection import ParsedGithubReviewEvidence, parse_github_review_evidence
+from .reviewer_liveness import ReviewerLivenessProjection
 from .secondary_mutation_backoff import (
     currently_backing_off,
     record_backoff_from_gh_output,
@@ -102,7 +103,6 @@ SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
 BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}\\]*)")
 REVIEW_ROLES = ("architect", "tests", "quality")
-REVIEW_PENDING_SECONDS = 90
 PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT = 75
 MANAGED_PR_HEAD_RE = re.compile(r"^refactor/iter([1-9][0-9]*)-([A-Za-z0-9._-]+)$")
 REBASE_RESOLVE_DONE_RE = re.compile(r"^REBASE_RESOLVE_DONE:([1-9][0-9]*):([A-Za-z0-9._-]+)$")
@@ -1906,7 +1906,7 @@ class ControllerActions:
             roles = REVIEW_ROLES
         for role in roles:
             round_number = self._next_review_round(pr_target, role)
-            if self._review_round_is_pending(pr_target, role, round_number - 1):
+            if self._review_round_is_pending(pr_target, role, round_number - 1, head_sha):
                 continue
             if self._pending_review_spawn_exists(pr_target, role, round_number):
                 continue
@@ -1946,24 +1946,16 @@ class ControllerActions:
                     rounds.append(int(match.group(1)))
         return (max(rounds) if rounds else 0) + 1
 
-    def _review_round_is_pending(self, pr_target: str, role: str, round_number: int) -> bool:
+    def _review_round_is_pending(self, pr_target: str, role: str, round_number: int, head_sha: str) -> bool:
         if round_number < 1:
             return False
-        log_path = self.ctx.paths.logs / f"review-pr{pr_target}-{role}-r{round_number}.log"
-        if not log_path.exists():
-            return False
-        try:
-            if time.time() - log_path.stat().st_mtime >= REVIEW_PENDING_SECONDS:
-                return False
-        except OSError:
-            return False
-        try:
-            text = log_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return False
-        if "EXIT=" in text:
-            return False
-        return (self.ctx.paths.prompts / f"review-pr{pr_target}-{role}-r{round_number}.md").exists()
+        return ReviewerLivenessProjection.for_next_dispatch(
+            self.ctx.repo_root,
+            pr_number=int(pr_target),
+            head_sha=head_sha,
+            role=role,
+            next_round=round_number + 1,
+        ).pending
 
     def _pending_review_spawn_exists(self, pr_target: str, role: str, round_number: int) -> bool:
         try:

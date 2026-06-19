@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
@@ -5865,6 +5867,30 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].reason, "dispatch_reviewers_reviewer_evidence_current")
         self.assertEqual(actions.calls, [])
 
+    def test_review_evidence_redispatch_revalidates_live_same_head_reviewer_before_helper(self) -> None:
+        actions = FakeActions()
+        action = self.reviewer_dispatch_action(
+            kind="review-evidence-redispatch",
+            action_id="review-evidence-redispatch:77:" + "a" * 40,
+            source_artifact="wakeup-plan",
+            source_marker="review-evidence-redispatch",
+            head_sha="a" * 40,
+            stale_review_roles=["architect"],
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "missing_or_stale_reviewer_head_evidence",
+            ],
+        )
+        self.write_live_same_head_reviewer_attempt("architect")
+
+        with mock.patch("codex_refactor_loop.reviewer_liveness.spawn_task_holder_alive", return_value=True):
+            results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "dispatch_reviewers_reviewer_evidence_current")
+        self.assertEqual(actions.calls, [])
+
     def test_stale_review_dispatch_applied_rows_stop_after_recovery_cap(self) -> None:
         for role in ("architect", "tests"):
             (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r1.md").write_text(
@@ -5970,6 +5996,35 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].reason, "duplicate")
         self.assertEqual(actions.calls, [])
 
+    def test_stale_review_dispatch_applied_row_suppresses_after_live_same_head_reviewer(self) -> None:
+        action = self.reviewer_dispatch_action(
+            kind="review-evidence-redispatch",
+            action_id="review-evidence-redispatch:77:" + "a" * 40,
+            source_artifact="wakeup-plan",
+            source_marker="review-evidence-redispatch",
+            head_sha="a" * 40,
+            stale_review_roles=["architect"],
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "missing_or_stale_reviewer_head_evidence",
+            ],
+        )
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "review-evidence-redispatch"})
+            + "\n",
+            encoding="utf-8",
+        )
+        self.write_live_same_head_reviewer_attempt("architect")
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.reviewer_liveness.spawn_task_holder_alive", return_value=True):
+            results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "duplicate")
+        self.assertEqual(actions.calls, [])
+
     def test_stale_review_dispatch_applied_row_suppresses_after_live_head_advanced(self) -> None:
         action = self.reviewer_dispatch_action(
             kind="review-evidence-redispatch",
@@ -6009,6 +6064,29 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "skipped")
         self.assertEqual(results[0].reason, "duplicate")
         self.assertEqual(actions.calls, [])
+
+    def write_live_same_head_reviewer_attempt(self, role: str, *, pr_number: int = 77, round_number: int = 1, pid: int = 1234) -> None:
+        prompt_path = self.repo / ".refactor-loop" / "prompts" / f"review-pr{pr_number}-{role}-r{round_number}.md"
+        log_path = self.repo / ".refactor-loop" / "logs" / f"review-pr{pr_number}-{role}-r{round_number}.log"
+        lock_path = self.repo / ".refactor-loop" / "locks" / "spawn-tasks" / f"review-pr{pr_number}-{role}-r{round_number}.lock"
+        prompt_path.write_text(f"head_sha: {'a' * 40}\n", encoding="utf-8")
+        log_path.write_text(f"head_sha: {'a' * 40}\nsilent reviewer\n", encoding="utf-8")
+        old = time.time() - 600
+        os.utime(log_path, (old, old))
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.write_text(
+            json.dumps(
+                {
+                    "task_id": f"review-pr{pr_number}-{role}-r{round_number}",
+                    "log_path": str(log_path.resolve()),
+                    "pid": pid,
+                    "acquired_at": "2026-06-01T00:00:00Z",
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
     def test_dispatch_reviewers_blocks_missing_or_non_pr_target_before_helper(self) -> None:
         cases = (
