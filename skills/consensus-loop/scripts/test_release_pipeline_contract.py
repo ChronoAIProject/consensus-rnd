@@ -316,6 +316,27 @@ class ReleasePipelineContractTests(unittest.TestCase):
         self.assertLess(bump_index, gate_index)
         self.assertLess(gate_index, release_index)
 
+    def test_release_publisher_remote_history_reentry_is_fixed_string_candidate_recall(self) -> None:
+        for needle in (
+            "def _remote_integration_history_release_proof",
+            '["git", "log", "--format=%H", "--fixed-strings", "--grep", self._release_bump_subject(version), remote_ref]',
+            "HEX_SHA_RE.fullmatch(sha)",
+            '["git", "show", "-s", "--format=%s", sha]',
+            "len(candidates) != 1",
+            "RemoteReleaseProof(ref=sha, sha=sha)",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.publisher)
+        history_index = self.publisher.index("_remote_integration_history_release_proof(branch, version)")
+        rollup_index = self.publisher.index("for proof in self._remote_rollup_release_proofs():")
+        state_index = self.publisher.index("self._remote_already_bumped_state_from_proof(history_proof")
+        manifest_index = self.publisher.index("self._remote_mapped_manifest_versions(proof.ref)")
+        self.assertLess(rollup_index, history_index)
+        self.assertLess(history_index, state_index)
+        self.assertLess(state_index, manifest_index)
+        self.assertNotIn("--max-count", self.publisher)
+        self.assertNotIn('"git tag"', self.publisher)
+
     def snapshot_mapped_manifest_versions(self, repo: Path) -> dict[tuple[str, str], str]:
         mapping = json.loads(read(repo / ".version-bump.json"))
         snapshot = {}
