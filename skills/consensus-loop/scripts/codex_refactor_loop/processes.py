@@ -240,8 +240,9 @@ def _append(path: Path, text: str) -> None:
 def _refresh_log_heartbeat(path: Path) -> None:
     try:
         os.utime(path, None)
-    except OSError:
-        return
+    except OSError as exc:
+        reason = str(exc).replace("\n", " ")
+        _append(path, f"LOG_HEARTBEAT_REFRESH_FAILED:path={path}:reason={reason}\n")
 
 
 def _rotate_unfinished_log(path: Path) -> None:

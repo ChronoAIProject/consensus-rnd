@@ -264,6 +264,30 @@ class SpawnSupervisorTests(unittest.TestCase):
         self.assertNotIn("HEARTBEAT", text)
         self.assertNotIn("RUNNING", text)
 
+    def test_failed_log_heartbeat_writes_grepable_diagnostic_and_continues(self) -> None:
+        fake_proc = FakeProcess(polls_before_exit=2, exit_code=0)
+        ticks = iter([100.0, 110.0, 120.0])
+
+        with mock.patch("codex_refactor_loop.processes.subprocess.Popen", return_value=fake_proc):
+            with mock.patch("codex_refactor_loop.processes.os.utime", side_effect=OSError("read-only log")):
+                exit_code = ProcessSupervisor(
+                    poll_interval=0.01,
+                    clock=lambda: next(ticks),
+                    sleeper=lambda _: None,
+                ).supervise(
+                    [sys.executable, "-c", "unused"],
+                    stdin=self.prompt,
+                    log=self.log,
+                    stall=60,
+                )
+
+        self.assertEqual(0, exit_code)
+        text = self.log.read_text(encoding="utf-8")
+        self.assertIn("LOG_HEARTBEAT_REFRESH_FAILED:", text)
+        self.assertIn("path=", text)
+        self.assertIn("reason=read-only log", text)
+        self.assertIn("EXIT=0", text)
+
     def test_launch_spawn_codex_supervisor_detaches_without_wait_or_poll(self) -> None:
         repo = self.tmp_root
         skill_root = self.tmp_root / "installed-skill"
