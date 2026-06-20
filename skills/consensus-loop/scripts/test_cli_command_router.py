@@ -204,6 +204,26 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn("run-one-publish-ratchet", result.stdout)
 
+    def test_publish_verification_worker_command_forwards_argv_to_registered_handler(self) -> None:
+        router = RuntimeCommandRouter(script_dir=SCRIPT_DIR)
+        handler = mock.Mock(return_value=0)
+        with tempfile.TemporaryDirectory(prefix="publish-verification-router-") as raw_tmp:
+            job_dir = Path(raw_tmp) / "publish-verification-job"
+            job_dir.mkdir()
+            with mock.patch.dict(
+                "codex_refactor_loop.cli.COMMANDS",
+                {
+                    "publish-verification-worker": COMMANDS["publish-verification-worker"].__class__(
+                        handler,
+                        "run one helper-private publish verification job",
+                        ("read-state", "read-git", "write-state", "write-log"),
+                    ),
+                    **{k: v for k, v in COMMANDS.items() if k != "publish-verification-worker"},
+                },
+            ):
+                self.assertEqual(0, router.run("publish-verification-worker", [str(job_dir)]))
+        handler.assert_called_once_with([str(job_dir)])
+
     def test_closed_label_reconciler_declares_only_closed_reconcile_label_authority(self) -> None:
         self.assertEqual(
             ("read-gh", "gh-label-closed-reconcile", "write-state"),
