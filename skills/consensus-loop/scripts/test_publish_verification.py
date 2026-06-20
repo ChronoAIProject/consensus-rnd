@@ -299,6 +299,8 @@ class PublishVerificationTests(unittest.TestCase):
             "reason": "verified",
             "job_key": result.job_key,
             "verified_sha": "a" * 40,
+            "tested_sha": "a" * 40,
+            "post_tested_sha": "a" * 40,
             "gate_id": request["gate_id"],
             "command_digest": request["command_digest"],
             "checkpoint_hashes": request["checkpoint_hashes"],
