@@ -184,6 +184,18 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         self.assertIn("write-event", COMMANDS["concurrency"].authority)
         self.assertIn("write-event", COMMANDS["phase9-router"].authority)
 
+    def test_publish_ratchet_is_hidden_under_wakeup_runner_not_public_command(self) -> None:
+        self.assertNotIn("publish-ratchet", COMMANDS)
+        self.assertNotIn("run-one-publish-ratchet", COMMANDS)
+        result = subprocess.run(
+            [sys.executable, str(CLI), "wakeup-runner", "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("run-one-publish-ratchet", result.stdout)
+
     def test_closed_label_reconciler_declares_only_closed_reconcile_label_authority(self) -> None:
         self.assertEqual(
             ("read-gh", "gh-label-closed-reconcile", "write-state"),
