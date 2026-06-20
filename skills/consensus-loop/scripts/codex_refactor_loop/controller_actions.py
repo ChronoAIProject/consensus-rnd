@@ -49,7 +49,12 @@ from .issue_decomposition import (
 from .managed_work_snapshot import invalidate_open_managed_work_snapshot, load_open_managed_work_snapshot
 from .prompt_rendering import render_prompt_text
 from .processes import launch_spawn_codex_supervisor
-from .publish_verification import verify_or_run as verify_publish_implementation
+from .publish_verification import (
+    PublishVerificationJobResult,
+    mark_published as mark_publish_verification_published,
+    prepare_or_schedule as prepare_publish_verification,
+    record_job_retry as record_publish_verification_retry,
+)
 from .release.publisher import ReleasePublisher
 from .release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from .runtime_copy import copy_for, current_work_language
@@ -111,17 +116,6 @@ REBASE_RESOLVE_BLOCKED_RE = re.compile(
 )
 ROLLUP_HEAD_PREFIX = "rollup/"
 ROLLUP_BODY_SENTINEL = "⟦AI:RELEASE-ROLLUP⟧"
-
-
-@dataclass(frozen=True)
-class _PublishVerificationFailure:
-    status: str
-    reason: str
-    evidence_file: Path
-
-    @property
-    def ok(self) -> bool:
-        return False
 
 
 class ControllerActions:
@@ -1328,13 +1322,24 @@ class ControllerActions:
         if base_error:
             return self._delegate_publish_implementation_fallback(action, issue_target, head_ref, worktree, base_error)
         verified = self._verify_publish_implementation_output(issue_target, action, head_ref, worktree)
+        if verified.status in {"queued", "waiting"}:
+            sys.stderr.write(
+                "publish_implementation_output: verification_queued "
+                f"reason={verified.reason} artifact={self.ctx.durable_artifact_path(verified.job_dir)}\n"
+            )
+            return 0
         if not verified.ok:
             sys.stderr.write(
                 "publish_implementation_output: verification_failed "
-                f"reason={verified.reason} artifact={self.ctx.durable_artifact_path(verified.evidence_file)}\n"
+                f"reason={verified.reason} artifact={self.ctx.durable_artifact_path(verified.job_dir)}\n"
             )
             return 3
-        pushed = self.safe_push(branch=head_ref, worktree=worktree)
+        pushed = self._push_verified_publish_sha(
+            worktree,
+            verified.candidate_sha,
+            head_ref,
+            verified.job_dir,
+        )
         if pushed != 0:
             return pushed
         pr_error, pr_target = self._matching_implementation_pr(head_ref, issue_target)
@@ -1352,17 +1357,21 @@ class ControllerActions:
                 )
             except Exception as exc:
                 sys.stderr.write(f"publish_implementation_output: pr_open_failed:{_single_line(str(exc))}\n")
+                record_publish_verification_retry(verified.job_dir, "pr-open-failed")
                 return 2
             verify_error, verified_pr = self._matching_implementation_pr(head_ref, issue_target)
             if verify_error or verified_pr is None:
                 sys.stderr.write(f"publish_implementation_output: pr_unverified:{verify_error or 'matching_pr_missing'}\n")
+                record_publish_verification_retry(verified.job_dir, f"pr-unverified:{verify_error or 'matching_pr_missing'}")
                 return 2
             pr_target = verified_pr
             opened_pr = True
         if not opened_pr:
             updated = self._update_existing_implementation_pr(pr_target, action, issue_target)
             if updated != 0:
+                record_publish_verification_retry(verified.job_dir, f"pr-update-failed:{updated}")
                 return updated
+        mark_publish_verification_published(verified.job_dir, pr_number=int(pr_target), remote_oid=verified.candidate_sha)
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
 
     def _matching_current_implementation_pr(self, head_ref: str, issue_target: str, worktree: Path) -> int | None:
@@ -1564,25 +1573,46 @@ class ControllerActions:
         action: Mapping[str, object],
         head_ref: str,
         worktree: Path,
-    ):
+    ) -> PublishVerificationJobResult:
         head = self._git_in(worktree, ["rev-parse", "HEAD"], check=False)
         if head.returncode != 0 or not _is_full_sha(head.stdout.strip()):
-            evidence = self.ctx.paths.state / "publish-verification" / f"issue-{issue_target}-{head_ref.replace('/', '__')}.json"
-            return _PublishVerificationFailure("failed", "head-sha-unavailable", evidence)
-        result = verify_publish_implementation(
+            job_dir = self.ctx.paths.state / "publish-verification" / "jobs" / "head-sha-unavailable"
+            return PublishVerificationJobResult("failed", "head-sha-unavailable", job_dir, "", "")
+        result = prepare_publish_verification(
             repo_root=self.ctx.repo_root,
             worktree=worktree,
             issue=issue_target,
             action=str(action.get("controller_action") or "publish_implementation_output"),
             head_ref=head_ref,
-            head_sha=head.stdout.strip(),
+            candidate_sha=head.stdout.strip(),
             env=self.ctx.env_for_subprocess(),
+            git_runner=lambda args: self._git_in(worktree, args, check=False),
         )
         sys.stderr.write(
             "publish_implementation_output: verification "
-            f"status={result.status} reason={result.reason} artifact={self.ctx.durable_artifact_path(result.evidence_file)}\n"
+            f"status={result.status} reason={result.reason} artifact={self.ctx.durable_artifact_path(result.job_dir)}\n"
         )
         return result
+
+    def _push_verified_publish_sha(self, worktree: Path, candidate_sha: str, head_ref: str, job_dir: Path) -> int:
+        push = self._git_in(worktree, ["push", "origin", f"{candidate_sha}:refs/heads/{head_ref}"], check=False)
+        if push.stdout:
+            print(push.stdout, end="")
+        if push.stderr:
+            sys.stderr.write(push.stderr)
+        if push.returncode != 0:
+            record_publish_verification_retry(job_dir, f"push-failed:{push.returncode}")
+            return push.returncode
+        remote = self._git_in(worktree, ["ls-remote", "origin", f"refs/heads/{head_ref}"], check=False)
+        if remote.returncode != 0:
+            record_publish_verification_retry(job_dir, "remote-oid-unavailable")
+            return 3
+        remote_oid = (remote.stdout.split() or [""])[0]
+        if remote_oid != candidate_sha:
+            record_publish_verification_retry(job_dir, "remote-oid-mismatch")
+            sys.stderr.write("publish_implementation_output: remote_oid_mismatch_after_push\n")
+            return 3
+        return 0
 
     def dispatch_consensus_implementation(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("dispatch-consensus-implementation", code=3):

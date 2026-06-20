@@ -1113,10 +1113,25 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(required, entry)
                 self.assertIn(required, self.skill)
         for required in (
-            "helper-private publish verification before `safe_push`",
-            "same issue/action/head_ref/worktree realpath/exact head SHA/BUILD+TEST command digest",
-            "update an existing matching open managed implementation PR when exactly one exists",
-            "open exactly one managed implementation PR and verify it when zero matching PRs exist",
+            "`publish_verification.py` is the unique helper-private publish verification job/receipt owner",
+            "immutable `request.json`",
+            "`refs/consensus/publish/<job_key>`",
+            "hidden one-shot `wakeup-runner --run-one-publish-ratchet <job_dir>` child",
+            "`VERIFIED` receipt",
+            "verified SHA",
+            "`gate_id`",
+            "checkpoint hashes",
+            "`EXIT=0` evidence",
+            "private ref OID",
+            "not-superseded target",
+            "`git push origin <candidate_sha>:refs/heads/<head_ref>`",
+            "confirms remote OID equality before PR open/update",
+            "`RETRY_WAIT` for 30min, then 2h, then 8h, then `QUARANTINED`",
+            "no `publish_ratchet.py`",
+            "no new long-lived daemon",
+            "no public lifecycle CLI",
+            "no generic command executor",
+            "no second verification fact source",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, self.skill)
