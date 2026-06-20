@@ -39,6 +39,7 @@ from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_fil
 from codex_refactor_loop.issue_decomposition import issue_decomposition_child_fingerprint
 from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
+from codex_refactor_loop.publish_verification import PublishVerificationJobResult
 from codex_refactor_loop.release.publisher import ReleasePublishResult
 from codex_refactor_loop.secondary_mutation_backoff import record_secondary_mutation_backoff
 from codex_refactor_loop.wakeup_plan import harness_spawn_intent_actions
@@ -169,6 +170,11 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertEqual("canonical-integration", actions.integration_branch)
         self.assertEqual("canonical-review", actions.review_base_branch)
+
+    def verified_publish_job(self, candidate_sha: str = "a" * 40, *, job_key: str = "test-job") -> PublishVerificationJobResult:
+        job_dir = self.tmp / ".refactor-loop" / "state" / "publish-verification" / "jobs" / job_key
+        job_dir.mkdir(parents=True, exist_ok=True)
+        return PublishVerificationJobResult("verified", "verified", job_dir, job_key, candidate_sha)
 
     def test_run_host_command_uses_context_host_env_locator_not_ambient_locator(self) -> None:
         outside = self.tmp / "outside-host.env"
@@ -1791,6 +1797,83 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertIn("publish_implementation_output: implementation_produced_no_diff", stderr.getvalue())
 
+    def test_publish_verification_parent_queues_without_running_host_checks(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True)
+        sequence: list[str] = []
+
+        def fake_git_in(cwd: Path, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+            if args == ["rev-parse", "HEAD"]:
+                sequence.append("git:head")
+                return subprocess.CompletedProcess(list(args), 0, "a" * 40 + "\n", "")
+            if args[0] == "update-ref":
+                sequence.append("git:update-ref")
+                return subprocess.CompletedProcess(list(args), 0, "", "")
+            if args[:2] == ["rev-parse", "--verify"]:
+                sequence.append("git:private-ref")
+                return subprocess.CompletedProcess(list(args), 1, "", "")
+            raise AssertionError(f"unexpected git call: {args}")
+
+        with mock.patch.object(self.actions, "_git_in", side_effect=fake_git_in):
+            with mock.patch("codex_refactor_loop.publish_verification.run_fixed_host_command", side_effect=AssertionError("parent must not run build/test")):
+                with mock.patch("codex_refactor_loop.publish_verification.subprocess.Popen", return_value=mock.Mock(pid=123)):
+                    result = self.actions._verify_publish_implementation_output(
+                        "77",
+                        {"controller_action": "publish_implementation_output"},
+                        "refactor/iter77-issue-77",
+                        worktree,
+                    )
+
+        self.assertEqual("queued", result.status)
+        self.assertEqual("started", result.reason)
+        self.assertEqual(["git:head", "git:update-ref"], sequence)
+        self.assertTrue((result.job_dir / "request.json").is_file())
+
+    def test_verified_publish_finalizer_pushes_literal_sha_and_confirms_remote_oid(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True)
+        job_dir = self.tmp / ".refactor-loop/state/publish-verification/jobs/job-finalize"
+        job_dir.mkdir(parents=True)
+        calls: list[list[str]] = []
+
+        def fake_git_in(cwd: Path, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+            calls.append([str(arg) for arg in args])
+            if args[:2] == ["push", "origin"]:
+                return subprocess.CompletedProcess(list(args), 0, "", "")
+            if args[:2] == ["ls-remote", "origin"]:
+                return subprocess.CompletedProcess(list(args), 0, "a" * 40 + "\trefs/heads/refactor/iter77-issue-77\n", "")
+            raise AssertionError(f"unexpected git call: {args}")
+
+        with mock.patch.object(self.actions, "_git_in", side_effect=fake_git_in):
+            rc = self.actions._push_verified_publish_sha(worktree, "a" * 40, "refactor/iter77-issue-77", job_dir)
+
+        self.assertEqual(0, rc)
+        self.assertEqual(
+            [
+                ["push", "origin", f"{'a' * 40}:refs/heads/refactor/iter77-issue-77"],
+                ["ls-remote", "origin", "refs/heads/refactor/iter77-issue-77"],
+            ],
+            calls,
+        )
+
+    def test_verified_publish_finalizer_keeps_receipt_retryable_on_push_failure(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True)
+        job_dir = self.tmp / ".refactor-loop/state/publish-verification/jobs/job-push-fail"
+        job_dir.mkdir(parents=True)
+
+        def fake_git_in(cwd: Path, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+            if args[:2] == ["push", "origin"]:
+                return subprocess.CompletedProcess(list(args), 7, "", "denied")
+            raise AssertionError(f"unexpected git call after failed push: {args}")
+
+        with mock.patch.object(self.actions, "_git_in", side_effect=fake_git_in):
+            self.assertEqual(7, self.actions._push_verified_publish_sha(worktree, "a" * 40, "refactor/iter77-issue-77", job_dir))
+
+        retry = json.loads((job_dir / "retry.json").read_text(encoding="utf-8"))
+        self.assertEqual("RETRY_WAIT", retry["state"])
+        self.assertEqual("push-failed:7", retry["reason"])
+
     def test_publish_implementation_output_opens_pr_after_push_when_no_existing_pr(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
@@ -1876,42 +1959,29 @@ class ControllerActionsTests(unittest.TestCase):
             self.assertEqual({"target_kind": "PR", "target_number": 414}, dict(review_action))
             return 0
 
+        def fake_verified_push(worktree_arg: Path, candidate_sha: str, head_ref: str, job_dir: Path) -> int:
+            sequence.append("verified_push")
+            self.assertEqual(worktree, worktree_arg)
+            self.assertEqual("a" * 40, candidate_sha)
+            self.assertEqual("refactor/iter77-issue-77", head_ref)
+            self.assertTrue(job_dir.is_dir())
+            return 0
+
         delattr(self.actions, "_require_branch_push_admission_or_return")
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
                 with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
-                    with mock.patch.object(self.actions, "open_pr_with_label", side_effect=fake_open_pr):
-                        with mock.patch.object(self.actions, "_update_existing_implementation_pr", side_effect=AssertionError("new PR must not be re-edited")):
-                            with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=fake_dispatch):
-                                self.assertEqual(0, self.actions.publish_implementation_output(action))
+                    with mock.patch.object(self.actions, "_verify_publish_implementation_output", return_value=self.verified_publish_job("a" * 40)):
+                        with mock.patch.object(self.actions, "_push_verified_publish_sha", side_effect=fake_verified_push):
+                            with mock.patch.object(self.actions, "open_pr_with_label", side_effect=fake_open_pr):
+                                with mock.patch.object(self.actions, "_update_existing_implementation_pr", side_effect=AssertionError("new PR must not be re-edited")):
+                                    with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=fake_dispatch):
+                                        self.assertEqual(0, self.actions.publish_implementation_output(action))
 
-        self.assertEqual(
-            sequence,
-            [
-                "git:branch",
-                "git:branch",
-                "git:branch",
-                "gh:pr-list:1",
-                "git:diff-head",
-                "git:status",
-                "git:add",
-                "git:commit",
-                "git:fetch-origin",
-                "git:merge-base",
-                "git:origin-base",
-                "git:head",
-                "host:true",
-                "host:python3 -m unittest discover -s skills/consensus-loop/scripts -p 'test_*.py'",
-                "git:branch",
-                "git:push-fetch",
-                "git:push-behind",
-                "git:push",
-                "gh:pr-list:2",
-                "open_pr",
-                "gh:pr-list:3",
-                "dispatch_reviewers",
-            ],
-        )
+        self.assertIn("verified_push", sequence)
+        self.assertLess(sequence.index("verified_push"), sequence.index("open_pr"))
+        self.assertLess(sequence.index("open_pr"), sequence.index("dispatch_reviewers"))
+        self.assertNotIn("host:true", sequence)
         provenance = json.loads(
             (self.tmp / ".refactor-loop" / "state" / "branch-provenance" / "refactor__iter77-issue-77.json").read_text(encoding="utf-8")
         )
@@ -1919,7 +1989,61 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual("77", provenance["issue"])
         self.assertEqual("controller-bot", provenance["github_login"])
 
-    def test_publish_implementation_output_host_command_failure_writes_artifact_and_fails_closed_before_push(self) -> None:
+    def test_publish_implementation_output_keeps_verified_receipt_retryable_on_pr_open_failure(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+        verified = self.verified_publish_job("a" * 40, job_key="open-fail")
+        action = {
+            "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+            "target_kind": "issue",
+            "target_number": 77,
+            "linked_issue": 77,
+            "head_ref": "refactor/iter77-issue-77",
+            "worktree": str(worktree),
+        }
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["issue", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+            if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                return mock.Mock(returncode=1, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                return mock.Mock(returncode=0, stdout=" M implementation.txt\n", stderr="")
+            if args == ["git", "-C", str(worktree), "add", "-A"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "fetch", "origin"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "merge-base", "HEAD", "origin/canonical-integration"]:
+                return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/canonical-integration"]:
+                return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
+            raise AssertionError(f"unexpected subprocess call: {args!r}")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                    with mock.patch.object(self.actions, "_verify_publish_implementation_output", return_value=verified):
+                        with mock.patch.object(self.actions, "_push_verified_publish_sha", return_value=0):
+                            with mock.patch.object(self.actions, "open_pr_with_label", side_effect=RuntimeError("create failed")):
+                                with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=AssertionError("must not dispatch reviewers")):
+                                    self.assertEqual(2, self.actions.publish_implementation_output(action))
+
+        retry = json.loads((verified.job_dir / "retry.json").read_text(encoding="utf-8"))
+        self.assertEqual("RETRY_WAIT", retry["state"])
+        self.assertEqual("pr-open-failed", retry["reason"])
+
+    def test_publish_implementation_output_failed_receipt_blocks_before_push(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
         self.write_implementation_pr_artifacts()
@@ -1933,8 +2057,14 @@ class ControllerActionsTests(unittest.TestCase):
             "head_ref": "refactor/iter77-issue-77",
             "worktree": str(worktree),
         }
-        child_stdout = "HARNESS_SPAWN_INTENT leaked stdout\n"
-        child_stderr = "fatal fixture detail\nIMPLEMENT_DONE:issue-77:ok\n"
+        failed = PublishVerificationJobResult(
+            "failed",
+            "BUILD_CMD-failed:88",
+            self.tmp / ".refactor-loop/state/publish-verification/jobs/failed-job",
+            "failed-job",
+            "b" * 40,
+        )
+        failed.job_dir.mkdir(parents=True)
 
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
             if args == ["issue", "view", "77", "--json", "labels,body"]:
@@ -1972,51 +2102,109 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "rev-parse", "HEAD"]:
                 sequence.append("git:head")
                 return mock.Mock(returncode=0, stdout=f"{'b' * 40}\n", stderr="")
-            if args == ["bash", "-lc", "true"]:
-                sequence.append("host:BUILD_CMD")
-                self.assertEqual(str((self.tmp / ".config" / "consensus-rnd" / "host.env").resolve()), kwargs["env"]["CONSENSUS_RND_HOST_ENV"])
-                return mock.Mock(returncode=88, stdout=child_stdout, stderr=child_stderr)
             raise AssertionError(f"unexpected subprocess call: {args!r}")
 
         delattr(self.actions, "_require_branch_push_admission_or_return")
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
                 with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
-                    with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("must not push after host command failure")):
-                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("must not open PR after host command failure")):
-                            with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
-                                with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
-                                    self.assertEqual(3, self.actions.publish_implementation_output(action))
+                    with mock.patch.object(self.actions, "_verify_publish_implementation_output", return_value=failed):
+                        with mock.patch.object(self.actions, "_push_verified_publish_sha", side_effect=AssertionError("must not push after failed verification")):
+                            with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("must not open PR after host command failure")):
+                                with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                                    with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                                        self.assertEqual(3, self.actions.publish_implementation_output(action))
 
         self.assertEqual("", stdout.getvalue())
         parent_stderr = stderr.getvalue()
         self.assertIn("publish_implementation_output: verification_failed reason=BUILD_CMD-failed:88", parent_stderr)
-        self.assertNotIn("HARNESS_SPAWN_INTENT leaked stdout", parent_stderr)
-        self.assertNotIn("IMPLEMENT_DONE:issue-77:ok", parent_stderr)
-        transcripts = sorted((self.tmp / ".refactor-loop" / "state" / "publish-verification").glob("*-BUILD_CMD.log"))
-        self.assertEqual(1, len(transcripts))
-        transcript = transcripts[0].read_text(encoding="utf-8")
-        self.assertIn(child_stdout, transcript)
-        self.assertIn(child_stderr, transcript)
-        self.assertEqual(
-            [
-                "git:branch",
-                "git:branch",
-                "git:branch",
-                "gh:pr-list",
-                "gh:pr-list",
-                "git:diff-head",
-                "git:status",
-                "git:add",
-                "git:commit",
-                "git:fetch-origin",
-                "git:merge-base",
-                "git:origin-base",
-                "git:head",
-                "host:BUILD_CMD",
-            ],
-            sequence,
-        )
+        self.assertIn("git:commit", sequence)
+        self.assertIn("git:origin-base", sequence)
+
+    def test_publish_implementation_output_queued_or_waiting_verification_returns_without_publish_side_effects(self) -> None:
+        for status, reason in (("queued", "started"), ("waiting", "retry-wait")):
+            with self.subTest(status=status, reason=reason):
+                worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+                worktree.mkdir(parents=True, exist_ok=True)
+                self.write_implementation_pr_artifacts()
+                decision = mock.Mock(
+                    allowed=True,
+                    owner_device="device-a",
+                    status="owner",
+                    action="publish-implementation-output",
+                    lease_id="lease",
+                    expires_at="soon",
+                )
+                sequence: list[str] = []
+                action = {
+                    "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+                    "target_kind": "issue",
+                    "target_number": 77,
+                    "linked_issue": 77,
+                    "head_ref": "refactor/iter77-issue-77",
+                    "worktree": str(worktree),
+                }
+                verification = PublishVerificationJobResult(
+                    status,
+                    reason,
+                    self.tmp / ".refactor-loop/state/publish-verification/jobs" / f"{status}-job",
+                    f"{status}-job",
+                    "b" * 40,
+                )
+                verification.job_dir.mkdir(parents=True)
+
+                def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+                    if args == ["issue", "view", "77", "--json", "labels,body"]:
+                        return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+                    if args[:4] == ["pr", "list", "--state", "open"]:
+                        sequence.append("gh:pr-list")
+                        return mock.Mock(returncode=0, stdout="[]", stderr="")
+                    raise AssertionError(f"unexpected gh call: {args}")
+
+                def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+                    if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                        sequence.append("git:branch")
+                        return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+                    if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                        sequence.append("git:diff-head")
+                        return mock.Mock(returncode=1, stdout="", stderr="")
+                    if args == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                        sequence.append("git:status")
+                        return mock.Mock(returncode=0, stdout=" M implementation.txt\n", stderr="")
+                    if args == ["git", "-C", str(worktree), "add", "-A"]:
+                        sequence.append("git:add")
+                        return mock.Mock(returncode=0, stdout="", stderr="")
+                    if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
+                        sequence.append("git:commit")
+                        return mock.Mock(returncode=0, stdout="", stderr="")
+                    if args == ["git", "-C", str(worktree), "fetch", "origin"]:
+                        sequence.append("git:fetch-origin")
+                        return mock.Mock(returncode=0, stdout="", stderr="")
+                    if args == ["git", "-C", str(worktree), "merge-base", "HEAD", "origin/canonical-integration"]:
+                        sequence.append("git:merge-base")
+                        return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
+                    if args == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/canonical-integration"]:
+                        sequence.append("git:origin-base")
+                        return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
+                    raise AssertionError(f"unexpected subprocess call: {args!r}")
+
+                with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+                    with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                        with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                            with mock.patch.object(self.actions, "_verify_publish_implementation_output", return_value=verification):
+                                with mock.patch.object(self.actions, "_push_verified_publish_sha", side_effect=AssertionError("queued/waiting verification must not push")):
+                                    with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("queued/waiting verification must not open PR")):
+                                        with mock.patch.object(self.actions, "_update_existing_implementation_pr", side_effect=AssertionError("queued/waiting verification must not edit PR")):
+                                            with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=AssertionError("queued/waiting verification must not dispatch reviewers")):
+                                                with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                                                    with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                                                        self.assertEqual(0, self.actions.publish_implementation_output(action))
+
+                self.assertEqual("", stdout.getvalue())
+                parent_stderr = stderr.getvalue()
+                self.assertIn(f"publish_implementation_output: verification_queued reason={reason}", parent_stderr)
+                self.assertIn("git:commit", sequence)
+                self.assertIn("git:origin-base", sequence)
 
     def test_publish_implementation_output_opens_pr_for_already_committed_diff_without_second_commit(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
@@ -2076,9 +2264,11 @@ class ControllerActionsTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected subprocess call: {args!r}")
 
-        def fake_safe_push(*, branch: str, worktree: Path) -> int:
-            sequence.append("safe_push")
-            self.assertEqual("refactor/iter77-issue-77", branch)
+        def fake_verified_push(worktree_arg: Path, candidate_sha: str, head_ref: str, job_dir: Path) -> int:
+            sequence.append("verified_push")
+            self.assertEqual(worktree, worktree_arg)
+            self.assertEqual("c" * 40, candidate_sha)
+            self.assertEqual("refactor/iter77-issue-77", head_ref)
             return 0
 
         def fake_open_pr(title: str, body_file: str, *, base: str | None = None, head: str = "") -> tuple[int, str]:
@@ -2090,10 +2280,11 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
                 with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
-                    with mock.patch.object(self.actions, "safe_push", side_effect=fake_safe_push):
-                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=fake_open_pr):
-                            with mock.patch.object(self.actions, "dispatch_reviewers", return_value=0):
-                                self.assertEqual(0, self.actions.publish_implementation_output(action))
+                    with mock.patch.object(self.actions, "_verify_publish_implementation_output", return_value=self.verified_publish_job("c" * 40)):
+                        with mock.patch.object(self.actions, "_push_verified_publish_sha", side_effect=fake_verified_push):
+                            with mock.patch.object(self.actions, "open_pr_with_label", side_effect=fake_open_pr):
+                                with mock.patch.object(self.actions, "dispatch_reviewers", return_value=0):
+                                    self.assertEqual(0, self.actions.publish_implementation_output(action))
 
         self.assertEqual(
             [
@@ -2107,10 +2298,7 @@ class ControllerActionsTests(unittest.TestCase):
                 "git:fetch-origin",
                 "git:merge-base",
                 "git:origin-base",
-                "git:head",
-                "host:true",
-                "host:python3 -m unittest discover -s skills/consensus-loop/scripts -p 'test_*.py'",
-                "safe_push",
+                "verified_push",
                 "gh:pr-list:2",
                 "open_pr",
                 "gh:pr-list:3",
@@ -2191,8 +2379,11 @@ class ControllerActionsTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected subprocess call: {args!r}")
 
-        def fake_safe_push(*, branch: str, worktree: Path) -> int:
-            sequence.append("safe_push")
+        def fake_verified_push(worktree_arg: Path, candidate_sha: str, head_ref: str, job_dir: Path) -> int:
+            sequence.append("verified_push")
+            self.assertEqual(worktree, worktree_arg)
+            self.assertEqual("3" * 40, candidate_sha)
+            self.assertEqual("refactor/iter77-issue-77", head_ref)
             return 0
 
         def fake_dispatch(review_action: Mapping[str, object]) -> int:
@@ -2203,13 +2394,14 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
                 with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
-                    with mock.patch.object(self.actions, "safe_push", side_effect=fake_safe_push):
-                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("existing PR must not reopen")):
-                            with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=fake_dispatch):
-                                self.assertEqual(0, self.actions.publish_implementation_output(action))
+                    with mock.patch.object(self.actions, "_verify_publish_implementation_output", return_value=self.verified_publish_job("3" * 40)):
+                        with mock.patch.object(self.actions, "_push_verified_publish_sha", side_effect=fake_verified_push):
+                            with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("existing PR must not reopen")):
+                                with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=fake_dispatch):
+                                    self.assertEqual(0, self.actions.publish_implementation_output(action))
 
-        self.assertIn("safe_push", sequence)
-        self.assertLess(sequence.index("safe_push"), sequence.index("gh:edit-pr"))
+        self.assertIn("verified_push", sequence)
+        self.assertLess(sequence.index("verified_push"), sequence.index("gh:edit-pr"))
         self.assertLess(sequence.index("gh:edit-pr"), sequence.index("dispatch_reviewers"))
         self.assertIn("dispatch_reviewers", sequence)
 
@@ -2352,6 +2544,7 @@ class ControllerActionsTests(unittest.TestCase):
         self.write_implementation_pr_artifacts()
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
         sequence: list[str] = []
+        verified = self.verified_publish_job("4" * 40, job_key="update-fail")
         action = {
             "source_marker": "IMPLEMENT_DONE:issue-77:ok",
             "target_kind": "issue",
@@ -2403,13 +2596,17 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
                 with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
-                    with mock.patch.object(self.actions, "safe_push", return_value=0):
-                        with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=AssertionError("must not dispatch reviewers")):
-                            with mock.patch("sys.stderr", err):
-                                self.assertEqual(9, self.actions.publish_implementation_output(action))
+                    with mock.patch.object(self.actions, "_verify_publish_implementation_output", return_value=verified):
+                        with mock.patch.object(self.actions, "_push_verified_publish_sha", return_value=0):
+                            with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=AssertionError("must not dispatch reviewers")):
+                                with mock.patch("sys.stderr", err):
+                                    self.assertEqual(9, self.actions.publish_implementation_output(action))
 
         self.assertIn("gh:edit-pr-failed", sequence)
         self.assertIn("publish_implementation_output: pr_update_failed: edit failed", err.getvalue())
+        retry = json.loads((verified.job_dir / "retry.json").read_text(encoding="utf-8"))
+        self.assertEqual("RETRY_WAIT", retry["state"])
+        self.assertEqual("pr-update-failed:9", retry["reason"])
 
     def test_publish_implementation_output_with_empty_diff_opens_no_pr_or_review(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
@@ -2540,10 +2737,11 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
                 with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
-                    with mock.patch.object(self.actions, "safe_push", return_value=0):
-                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("publish must not open PR")):
-                            with mock.patch.object(self.actions, "dispatch_reviewers", return_value=0):
-                                self.assertEqual(0, self.actions.publish_implementation_output(action))
+                    with mock.patch.object(self.actions, "_verify_publish_implementation_output", return_value=self.verified_publish_job("4" * 40)):
+                        with mock.patch.object(self.actions, "_push_verified_publish_sha", side_effect=lambda *_args: sequence.append("verified_push") or 0):
+                            with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("publish must not open PR")):
+                                with mock.patch.object(self.actions, "dispatch_reviewers", return_value=0):
+                                    self.assertEqual(0, self.actions.publish_implementation_output(action))
 
         self.assertEqual(
             [
@@ -2555,7 +2753,7 @@ class ControllerActionsTests(unittest.TestCase):
                 "git:merge-base",
                 "git:origin-base",
                 "git:merge-integration",
-                "git:head",
+                "verified_push",
             ],
             sequence,
         )
@@ -2833,10 +3031,11 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
                 with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
-                    with mock.patch.object(self.actions, "safe_push", return_value=0):
-                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("publish must not open PR")):
-                            with mock.patch.object(self.actions, "dispatch_reviewers", return_value=0):
-                                self.assertEqual(0, self.actions.publish_implementation_output(action))
+                    with mock.patch.object(self.actions, "_verify_publish_implementation_output", return_value=self.verified_publish_job("5" * 40)):
+                        with mock.patch.object(self.actions, "_push_verified_publish_sha", side_effect=lambda *_args: sequence.append("verified_push") or 0):
+                            with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("publish must not open PR")):
+                                with mock.patch.object(self.actions, "dispatch_reviewers", return_value=0):
+                                    self.assertEqual(0, self.actions.publish_implementation_output(action))
 
         self.assertEqual(
             [
@@ -2848,7 +3047,7 @@ class ControllerActionsTests(unittest.TestCase):
                 "git:merge-base",
                 "git:origin-base",
                 "git:merge-integration",
-                "git:head",
+                "verified_push",
             ],
             sequence,
         )
@@ -2930,10 +3129,11 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
                 with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
-                    with mock.patch.object(self.actions, "safe_push", return_value=0):
-                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("publish must not open PR")):
-                            with mock.patch.object(self.actions, "dispatch_reviewers", return_value=0):
-                                self.assertEqual(0, self.actions.publish_implementation_output(action))
+                    with mock.patch.object(self.actions, "_verify_publish_implementation_output", return_value=self.verified_publish_job("6" * 40)):
+                        with mock.patch.object(self.actions, "_push_verified_publish_sha", side_effect=lambda *_args: sequence.append("verified_push") or 0):
+                            with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("publish must not open PR")):
+                                with mock.patch.object(self.actions, "dispatch_reviewers", return_value=0):
+                                    self.assertEqual(0, self.actions.publish_implementation_output(action))
 
         self.assertEqual(
             [
@@ -2945,9 +3145,7 @@ class ControllerActionsTests(unittest.TestCase):
                 "git:merge-base",
                 "git:origin-base",
                 "git:merge-complete",
-                "git:head",
-                "host:true",
-                "host:python3 -m unittest discover -s skills/consensus-loop/scripts -p 'test_*.py'",
+                "verified_push",
             ],
             sequence,
         )

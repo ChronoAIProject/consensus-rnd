@@ -4404,9 +4404,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_publish_helper_exit_backoff_skips_within_cooldown(self) -> None:
-        # #876: 3 deterministic publish failures with a recent ts pace retries to
-        # at most one per cooldown, instead of a 15-minute publish-verify storm.
+    def test_publish_helper_exit_history_does_not_gate_runner_retry(self) -> None:
         action = self.implementation_output_action()
         recent = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         self._seed_publish_helper_exit_rows(action["action_id"], count=3, ts=recent)
@@ -4414,27 +4412,10 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         results = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
 
-        self.assertEqual([result.status for result in results], ["skipped"])
-        self.assertEqual(results[0].reason, "backoff:publish_helper_exit")
-        self.assertEqual([], actions.calls)
-        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn(
-            f"WAKEUP_RUNNER_PUBLISH_BACKOFF:{action['action_id']}:publish_implementation_output:1800",
-            pending.splitlines(),
-        )
-
-    def test_publish_helper_exit_backoff_retries_after_cooldown(self) -> None:
-        # Once the cooldown has elapsed since the latest failure, the helper runs
-        # again so a later fix (or transient recovery) is never permanently blocked.
-        action = self.implementation_output_action()
-        old = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        self._seed_publish_helper_exit_rows(action["action_id"], count=3, ts=old)
-        actions = FakeActions(publish_code=75)
-
-        results = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
-
         self.assertEqual([call[0] for call in actions.calls], ["publish_implementation_output"])
         self.assertEqual(results[0].reason, "helper_exit:75")
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertNotIn("WAKEUP_RUNNER_PUBLISH_BACKOFF", pending)
 
     def test_publish_implementation_create_pull_request_rate_limit_blocked_ledger_retries(self) -> None:
         actions = FakeActions()
@@ -6533,8 +6514,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(original_pending, pending.read_text(encoding="utf-8"))
         self.assertEqual([], self.supervisor.calls)
 
-    def test_dry_run_publish_backoff_does_not_append_live_row_or_event(self) -> None:
-        action = self.implementation_output_action(action_id="dry-run-publish-backoff")
+    def test_dry_run_publish_helper_exit_history_does_not_append_live_row_or_event(self) -> None:
+        action = self.implementation_output_action(action_id="dry-run-publish-history")
         recent = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         self._seed_publish_helper_exit_rows(action["action_id"], count=3, ts=recent)
         ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
@@ -6623,6 +6604,16 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         exit_code = wakeup_runner_main(["--once", "--repo-root", str(self.repo), "--plan-file", str(plan_path)])
 
         self.assertEqual(exit_code, 2)
+
+    def test_wakeup_runner_hidden_publish_ratchet_runs_single_job_without_plan(self) -> None:
+        job_dir = self.repo / ".refactor-loop/state/publish-verification/jobs/job123"
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.run_one_publish_ratchet", return_value=0) as ratchet:
+            exit_code = wakeup_runner_main(["--run-one-publish-ratchet", str(job_dir)])
+
+        self.assertEqual(0, exit_code)
+        ratchet.assert_called_once_with(job_dir)
 
 
 if __name__ == "__main__":
