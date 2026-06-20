@@ -21,6 +21,7 @@ from .monitors.concurrency import main as concurrency_main
 from .monitors.progress import main as progress_reporter_main
 from .peek import main as peek_main
 from .pr_checks import main as pr_checks_main
+from .publish_verification import main as publish_verification_worker_main
 from .release.gate import main as release_gate_main
 from .release.required_checks import main as release_required_checks_main
 from .restart import main as restart_main
@@ -85,6 +86,11 @@ COMMANDS: dict[str, CommandSpec] = {
         pr_checks_main,
         "read PR-head check-runs through the narrow Checks API projection",
         ("read-gh",),
+    ),
+    "publish-verification-worker": CommandSpec(
+        publish_verification_worker_main,
+        "run one helper-private publish verification job",
+        ("read-state", "read-git", "write-state", "write-log"),
     ),
     "restart-daemons": CommandSpec(
         restart_main,
