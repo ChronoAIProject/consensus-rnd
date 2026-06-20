@@ -216,7 +216,9 @@ def run_one_publish_ratchet(job_dir: Path, *, git_runner: GitRunner | None = Non
     job_dir = job_dir.resolve()
     request = _read_request(job_dir)
     repo_root = _repo_root_from_job_dir(job_dir)
-    git = git_runner or _repo_git(repo_root)
+    private_git = git_runner or _repo_git(repo_root)
+    worktree = _artifact_path(repo_root, str(request["worktree"]))
+    worktree_git = git_runner or _repo_git(worktree)
     if (job_dir / "superseded.json").exists():
         _write_result(job_dir, _failed_result(request, "superseded"))
         _clear_slot(repo_root, job_dir)
@@ -236,8 +238,13 @@ def run_one_publish_ratchet(job_dir: Path, *, git_runner: GitRunner | None = Non
     }
     _write_result(job_dir, payload)
     env = _env_for_child(repo_root, request)
-    worktree = _artifact_path(repo_root, str(request["worktree"]))
     try:
+        ok, reason, tested_sha = _verify_worktree_subject(worktree_git, str(request.get("candidate_sha") or ""))
+        payload["tested_sha"] = tested_sha
+        if not ok:
+            payload.update({"status": "FAILED", "reason": reason})
+            _write_result(job_dir, payload)
+            return 3
         for name in VERIFY_COMMANDS:
             command = str(request["commands"].get(name) or "").strip()
             if not command:
@@ -259,7 +266,17 @@ def run_one_publish_ratchet(job_dir: Path, *, git_runner: GitRunner | None = Non
                 payload.update({"status": "FAILED", "reason": f"{name}-failed:{exit_code}"})
                 _write_result(job_dir, payload)
                 return 3
-        private_ref_oid = _private_ref_oid(git, str(request["private_ref"]))
+        ok, reason, post_tested_sha = _verify_worktree_subject(worktree_git, str(request.get("candidate_sha") or ""))
+        payload["post_tested_sha"] = post_tested_sha
+        if not ok:
+            payload.update({"status": "FAILED", "reason": reason})
+            _write_result(job_dir, payload)
+            return 3
+        private_ref_oid = _private_ref_oid(private_git, str(request["private_ref"]))
+        if private_ref_oid != request.get("candidate_sha"):
+            payload.update({"status": "FAILED", "reason": "private-ref-mismatch", "private_ref_oid": private_ref_oid})
+            _write_result(job_dir, payload)
+            return 3
         payload.update(
             {
                 "status": "VERIFIED",
@@ -306,9 +323,14 @@ def validate_verified_receipt(
         return PublishVerificationReceiptValidation("failed", "checkpoint-hashes-mismatch", job_dir, job_key)
     if _command_receipts_valid(result.get("commands"), request.get("checkpoint_hashes")) is not True:
         return PublishVerificationReceiptValidation("failed", "command-receipts-invalid", job_dir, job_key)
+    candidate_sha = request.get("candidate_sha")
+    if not _is_full_sha(candidate_sha) or request.get("verified_sha") != candidate_sha:
+        return PublishVerificationReceiptValidation("failed", "request-sha-mismatch", job_dir, job_key)
+    if result.get("tested_sha") != candidate_sha or result.get("post_tested_sha") != candidate_sha:
+        return PublishVerificationReceiptValidation("failed", "tested-sha-mismatch", job_dir, job_key)
     git = git_runner or _repo_git(_repo_root_from_job_dir(job_dir))
     private_oid = _private_ref_oid(git, str(request["private_ref"]))
-    if private_oid != request.get("candidate_sha") or result.get("private_ref_oid") != private_oid:
+    if private_oid != candidate_sha or result.get("private_ref_oid") != private_oid:
         return PublishVerificationReceiptValidation("failed", "private-ref-mismatch", job_dir, job_key)
     return PublishVerificationReceiptValidation("verified", "verified", job_dir, job_key, str(request["verified_sha"]))
 
@@ -529,6 +551,25 @@ def _env_for_child(repo_root: Path, request: Mapping[str, Any]) -> dict[str, str
 def _private_ref_oid(git: GitRunner, private_ref: str) -> str:
     result = git(["rev-parse", "--verify", private_ref])
     return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _verify_worktree_subject(git: GitRunner, expected_sha: str) -> tuple[bool, str, str]:
+    head = git(["rev-parse", "HEAD"])
+    tested_sha = head.stdout.strip() if head.returncode == 0 else ""
+    if not _is_full_sha(tested_sha):
+        return False, "worktree-head-unavailable", tested_sha
+    if tested_sha != expected_sha:
+        return False, "worktree-head-mismatch", tested_sha
+    status = git(["status", "--porcelain"])
+    if status.returncode != 0:
+        return False, "worktree-status-unavailable", tested_sha
+    if status.stdout.strip():
+        return False, "worktree-dirty", tested_sha
+    return True, "verified", tested_sha
+
+
+def _is_full_sha(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 40 and all(ch in "0123456789abcdefABCDEF" for ch in value)
 
 
 def _repo_git(repo_root: Path) -> GitRunner:

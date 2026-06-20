@@ -116,7 +116,7 @@ class PublishVerificationTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.publish_verification.run_fixed_host_command", side_effect=fake_run):
             exit_code = publish_verification.run_one_publish_ratchet(
                 result.job_dir,
-                git_runner=self._private_ref_git("a" * 40),
+                git_runner=self._worktree_git(head_oid="a" * 40, private_ref_oid="a" * 40),
             )
 
         self.assertEqual(0, exit_code)
@@ -125,12 +125,37 @@ class PublishVerificationTests(unittest.TestCase):
         self.assertEqual("VERIFIED", receipt["status"])
         self.assertEqual(result.job_key, receipt["job_key"])
         self.assertEqual("a" * 40, receipt["verified_sha"])
+        self.assertEqual("a" * 40, receipt["tested_sha"])
+        self.assertEqual("a" * 40, receipt["post_tested_sha"])
         self.assertEqual("a" * 40, receipt["private_ref_oid"])
         self.assertEqual(["BUILD_CMD", "TEST_CMD"], [item["name"] for item in receipt["commands"]])
         self.assertTrue(all(item["exit"] == 0 and item["exit_marker"] is True for item in receipt["commands"]))
         validated = publish_verification.validate_verified_receipt(result.job_dir, env=self.env, git_runner=self._private_ref_git("a" * 40))
         self.assertTrue(validated.ok)
         self.assertEqual("verified", validated.reason)
+
+    def test_one_shot_child_rejects_moved_worktree_head_before_commands(self) -> None:
+        result = self._prepared_job_without_child()
+
+        with mock.patch("codex_refactor_loop.publish_verification.run_fixed_host_command", side_effect=AssertionError("mismatched subject must not run commands")):
+            exit_code = publish_verification.run_one_publish_ratchet(
+                result.job_dir,
+                git_runner=self._worktree_git(head_oid="b" * 40, private_ref_oid="a" * 40),
+            )
+
+        self.assertEqual(3, exit_code)
+        receipt = json.loads((result.job_dir / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual("FAILED", receipt["status"])
+        self.assertEqual("worktree-head-mismatch", receipt["reason"])
+        self.assertEqual("b" * 40, receipt["tested_sha"])
+        self.assertEqual([], receipt["commands"])
+        validated = publish_verification.validate_verified_receipt(
+            result.job_dir,
+            env=self.env,
+            git_runner=self._worktree_git(head_oid="b" * 40, private_ref_oid="a" * 40),
+        )
+        self.assertFalse(validated.ok)
+        self.assertEqual("worktree-head-mismatch", validated.reason)
 
     def test_verified_receipt_rejects_private_ref_mismatch_and_superseded_job(self) -> None:
         result = self._write_verified_receipt()
@@ -161,6 +186,8 @@ class PublishVerificationTests(unittest.TestCase):
             "reason": "running",
             "job_key": result.job_key,
             "verified_sha": "a" * 40,
+            "tested_sha": "a" * 40,
+            "post_tested_sha": "a" * 40,
             "gate_id": request["gate_id"],
             "command_digest": request["command_digest"],
             "checkpoint_hashes": request["checkpoint_hashes"],
@@ -312,6 +339,20 @@ class PublishVerificationTests(unittest.TestCase):
                 return subprocess.CompletedProcess(args, 0, "", "")
             if args[:2] == ["rev-parse", "--verify"]:
                 return subprocess.CompletedProcess(args, 0, oid + "\n", "")
+            raise AssertionError(f"unexpected git call: {args}")
+
+        return fake_git
+
+    def _worktree_git(self, *, head_oid: str, private_ref_oid: str, clean: bool = True):
+        def fake_git(args: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            if args == ["rev-parse", "HEAD"]:
+                return subprocess.CompletedProcess(args, 0, head_oid + "\n", "")
+            if args == ["status", "--porcelain"]:
+                return subprocess.CompletedProcess(args, 0, "" if clean else " M implementation.txt\n", "")
+            if args[:2] == ["rev-parse", "--verify"]:
+                return subprocess.CompletedProcess(args, 0, private_ref_oid + "\n", "")
+            if args[0] == "update-ref":
+                return subprocess.CompletedProcess(args, 0, "", "")
             raise AssertionError(f"unexpected git call: {args}")
 
         return fake_git
