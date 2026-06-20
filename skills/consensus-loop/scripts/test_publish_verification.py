@@ -219,6 +219,31 @@ class PublishVerificationTests(unittest.TestCase):
         self.assertEqual(new_result.job_key, superseded["superseded_by"])
         self.assertEqual("b" * 40, superseded["candidate_sha"])
 
+    def test_new_candidate_does_not_supersede_published_job(self) -> None:
+        published = self._write_verified_receipt()
+        publish_verification.mark_published(published.job_dir, pr_number=414, remote_oid="a" * 40)
+        newer = dict(self.identity)
+        newer["candidate_sha"] = "b" * 40
+
+        with mock.patch("codex_refactor_loop.publish_verification.subprocess.Popen", return_value=mock.Mock(pid=99)):
+            new_result = publish_verification.prepare_or_schedule(**newer, git_runner=self._private_ref_git("b" * 40))
+
+        self.assertNotEqual(published.job_key, new_result.job_key)
+        self.assertFalse((published.job_dir / "superseded.json").exists())
+        self.assertTrue((published.job_dir / "published.json").is_file())
+
+    def test_mark_published_records_pr_remote_oid_and_clears_retry_state(self) -> None:
+        result = self._prepared_job_without_child()
+        publish_verification.record_job_retry(result.job_dir, "push-failed:7", now=1_000_000.0)
+
+        publish_verification.mark_published(result.job_dir, pr_number=414, remote_oid="a" * 40)
+
+        payload = json.loads((result.job_dir / "published.json").read_text(encoding="utf-8"))
+        self.assertEqual("PublishVerificationPublished", payload["schema"])
+        self.assertEqual(414, payload["pr_number"])
+        self.assertEqual("a" * 40, payload["remote_oid"])
+        self.assertFalse((result.job_dir / "retry.json").exists())
+
     def test_failed_receipts_use_per_job_retry_schedule_then_quarantine(self) -> None:
         result = self._prepared_job_without_child()
         retry_path = result.job_dir / "retry.json"

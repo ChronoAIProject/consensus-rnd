@@ -2121,6 +2121,91 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn("git:commit", sequence)
         self.assertIn("git:origin-base", sequence)
 
+    def test_publish_implementation_output_queued_or_waiting_verification_returns_without_publish_side_effects(self) -> None:
+        for status, reason in (("queued", "started"), ("waiting", "retry-wait")):
+            with self.subTest(status=status, reason=reason):
+                worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+                worktree.mkdir(parents=True, exist_ok=True)
+                self.write_implementation_pr_artifacts()
+                decision = mock.Mock(
+                    allowed=True,
+                    owner_device="device-a",
+                    status="owner",
+                    action="publish-implementation-output",
+                    lease_id="lease",
+                    expires_at="soon",
+                )
+                sequence: list[str] = []
+                action = {
+                    "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+                    "target_kind": "issue",
+                    "target_number": 77,
+                    "linked_issue": 77,
+                    "head_ref": "refactor/iter77-issue-77",
+                    "worktree": str(worktree),
+                }
+                verification = PublishVerificationJobResult(
+                    status,
+                    reason,
+                    self.tmp / ".refactor-loop/state/publish-verification/jobs" / f"{status}-job",
+                    f"{status}-job",
+                    "b" * 40,
+                )
+                verification.job_dir.mkdir(parents=True)
+
+                def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+                    if args == ["issue", "view", "77", "--json", "labels,body"]:
+                        return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+                    if args[:4] == ["pr", "list", "--state", "open"]:
+                        sequence.append("gh:pr-list")
+                        return mock.Mock(returncode=0, stdout="[]", stderr="")
+                    raise AssertionError(f"unexpected gh call: {args}")
+
+                def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+                    if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                        sequence.append("git:branch")
+                        return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+                    if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                        sequence.append("git:diff-head")
+                        return mock.Mock(returncode=1, stdout="", stderr="")
+                    if args == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                        sequence.append("git:status")
+                        return mock.Mock(returncode=0, stdout=" M implementation.txt\n", stderr="")
+                    if args == ["git", "-C", str(worktree), "add", "-A"]:
+                        sequence.append("git:add")
+                        return mock.Mock(returncode=0, stdout="", stderr="")
+                    if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
+                        sequence.append("git:commit")
+                        return mock.Mock(returncode=0, stdout="", stderr="")
+                    if args == ["git", "-C", str(worktree), "fetch", "origin"]:
+                        sequence.append("git:fetch-origin")
+                        return mock.Mock(returncode=0, stdout="", stderr="")
+                    if args == ["git", "-C", str(worktree), "merge-base", "HEAD", "origin/canonical-integration"]:
+                        sequence.append("git:merge-base")
+                        return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
+                    if args == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/canonical-integration"]:
+                        sequence.append("git:origin-base")
+                        return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
+                    raise AssertionError(f"unexpected subprocess call: {args!r}")
+
+                with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+                    with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                        with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                            with mock.patch.object(self.actions, "_verify_publish_implementation_output", return_value=verification):
+                                with mock.patch.object(self.actions, "_push_verified_publish_sha", side_effect=AssertionError("queued/waiting verification must not push")):
+                                    with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("queued/waiting verification must not open PR")):
+                                        with mock.patch.object(self.actions, "_update_existing_implementation_pr", side_effect=AssertionError("queued/waiting verification must not edit PR")):
+                                            with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=AssertionError("queued/waiting verification must not dispatch reviewers")):
+                                                with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                                                    with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                                                        self.assertEqual(0, self.actions.publish_implementation_output(action))
+
+                self.assertEqual("", stdout.getvalue())
+                parent_stderr = stderr.getvalue()
+                self.assertIn(f"publish_implementation_output: verification_queued reason={reason}", parent_stderr)
+                self.assertIn("git:commit", sequence)
+                self.assertIn("git:origin-base", sequence)
+
     def test_publish_implementation_output_opens_pr_for_already_committed_diff_without_second_commit(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
