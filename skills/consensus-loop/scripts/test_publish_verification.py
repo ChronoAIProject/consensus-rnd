@@ -92,8 +92,7 @@ class PublishVerificationTests(unittest.TestCase):
         )
         self.assertEqual([["update-ref", request["private_ref"], "a" * 40]], git_calls)
         self.assertEqual(1, len(popen_calls))
-        self.assertEqual("wakeup-runner", popen_calls[0][-3])
-        self.assertEqual("--run-one-publish-ratchet", popen_calls[0][-2])
+        self.assertEqual("publish-verification-worker", popen_calls[0][-2])
         self.assertEqual(str(result.job_dir), popen_calls[0][-1])
 
         with mock.patch("codex_refactor_loop.publish_verification.subprocess.Popen", side_effect=AssertionError("immutable request must not relaunch while slot is held")):
@@ -133,6 +132,16 @@ class PublishVerificationTests(unittest.TestCase):
         validated = publish_verification.validate_verified_receipt(result.job_dir, env=self.env, git_runner=self._private_ref_git("a" * 40))
         self.assertTrue(validated.ok)
         self.assertEqual("verified", validated.reason)
+
+    def test_worker_cli_entrypoint_runs_exact_job_dir(self) -> None:
+        job_dir = self.tmp / ".refactor-loop/state/publish-verification/jobs/job123"
+        job_dir.mkdir(parents=True)
+
+        with mock.patch("codex_refactor_loop.publish_verification.run_one_publish_ratchet", return_value=0) as ratchet:
+            exit_code = publish_verification.main([str(job_dir)])
+
+        self.assertEqual(0, exit_code)
+        ratchet.assert_called_once_with(job_dir)
 
     def test_one_shot_child_rejects_moved_worktree_head_before_commands(self) -> None:
         result = self._prepared_job_without_child()

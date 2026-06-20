@@ -1116,7 +1116,9 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "`publish_verification.py` is the unique helper-private publish verification job/receipt owner",
             "immutable `request.json`",
             "`refs/consensus/publish/<job_key>`",
-            "hidden one-shot `wakeup-runner --run-one-publish-ratchet <job_dir>` child",
+            "`consensus-rnd-cli publish-verification-worker <job_dir>` helper-private child",
+            "runs only host-owned `BUILD_CMD`/`TEST_CMD`",
+            "writes verification evidence/logs",
             "`VERIFIED` receipt",
             "verified SHA",
             "`gate_id`",
@@ -1131,6 +1133,9 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "no new long-lived daemon",
             "no public lifecycle CLI",
             "no generic command executor",
+            "no GitHub/git lifecycle",
+            "no issue/PR/label/tag/release authority",
+            "no host production SSOT authority",
             "no second verification fact source",
         ):
             with self.subTest(required=required):

@@ -6605,15 +6605,15 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 2)
 
-    def test_wakeup_runner_hidden_publish_ratchet_runs_single_job_without_plan(self) -> None:
+    def test_wakeup_runner_rejects_publish_ratchet_mode(self) -> None:
         job_dir = self.repo / ".refactor-loop/state/publish-verification/jobs/job123"
         job_dir.mkdir(parents=True, exist_ok=True)
 
-        with mock.patch("codex_refactor_loop.wakeup_runner.run_one_publish_ratchet", return_value=0) as ratchet:
-            exit_code = wakeup_runner_main(["--run-one-publish-ratchet", str(job_dir)])
+        with mock.patch("codex_refactor_loop.wakeup_runner.WakeupRunner.run_once", side_effect=AssertionError("legacy publish ratchet mode must not enter runner tick")):
+            with self.assertRaises(SystemExit) as raised:
+                wakeup_runner_main(["--run-one-publish-ratchet", str(job_dir)])
 
-        self.assertEqual(0, exit_code)
-        ratchet.assert_called_once_with(job_dir)
+        self.assertEqual(2, raised.exception.code)
 
 
 if __name__ == "__main__":
