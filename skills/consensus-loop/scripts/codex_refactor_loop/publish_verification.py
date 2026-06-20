@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -449,7 +450,7 @@ def _start_hidden_child(repo_root: Path, job_dir: Path, env: Mapping[str, str]) 
     child_env.update(env)
     child_env["REPO_ROOT"] = str(repo_root)
     subprocess.Popen(
-        [str(cli), "wakeup-runner", "--run-one-publish-ratchet", str(job_dir)],
+        [str(cli), "publish-verification-worker", str(job_dir)],
         cwd=str(repo_root),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -621,6 +622,13 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="consensus-rnd-cli publish-verification-worker")
+    parser.add_argument("job_dir")
+    args = parser.parse_args(list(argv) if argv is not None else None)
+    return run_one_publish_ratchet(Path(args.job_dir))
+
+
 __all__ = [
     "PublishVerificationJobResult",
     "PublishVerificationReceiptValidation",
@@ -633,6 +641,7 @@ __all__ = [
     "prepare_or_schedule",
     "record_failed_receipt_retry",
     "record_job_retry",
+    "main",
     "run_one_publish_ratchet",
     "string_digest",
     "validate_verified_receipt",

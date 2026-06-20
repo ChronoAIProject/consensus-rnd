@@ -137,6 +137,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "spawn-codex",
                 "peek",
                 "pr-checks",
+                "publish-verification-worker",
                 "wakeup-plan",
                 "wakeup-runner",
                 "restart-daemons",
@@ -184,7 +185,14 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         self.assertIn("write-event", COMMANDS["concurrency"].authority)
         self.assertIn("write-event", COMMANDS["phase9-router"].authority)
 
-    def test_publish_ratchet_is_hidden_under_wakeup_runner_not_public_command(self) -> None:
+    def test_publish_verification_worker_is_helper_private_command_with_no_lifecycle_authority(self) -> None:
+        self.assertIn("publish-verification-worker", COMMANDS)
+        self.assertIn("helper-private", COMMANDS["publish-verification-worker"].description)
+        self.assertEqual(
+            ("read-state", "read-git", "write-state", "write-log"),
+            COMMANDS["publish-verification-worker"].authority,
+        )
+        self.assertFalse(set(COMMANDS["publish-verification-worker"].authority) & LIFECYCLE_TOKENS)
         self.assertNotIn("publish-ratchet", COMMANDS)
         self.assertNotIn("run-one-publish-ratchet", COMMANDS)
         result = subprocess.run(

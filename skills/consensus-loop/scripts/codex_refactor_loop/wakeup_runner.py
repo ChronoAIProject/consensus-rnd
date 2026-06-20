@@ -53,7 +53,6 @@ from .issue_decomposition import (
 )
 from .pr_checks import PrMergeReadinessProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
-from .publish_verification import run_one_publish_ratchet
 from .review_evidence_recovery import (
     DEFAULT_REVIEW_RECOVERY_CAP,
     RECOVERY_KIND,
@@ -2859,14 +2858,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--once", action="store_true")
     mode.add_argument("--daemon", action="store_true")
-    mode.add_argument("--run-one-publish-ratchet", help=argparse.SUPPRESS)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--repo-root")
     parser.add_argument("--plan-file")
     parser.add_argument("--interval-seconds", type=int, default=60)
     args = parser.parse_args(list(argv) if argv is not None else None)
-    if args.run_one_publish_ratchet:
-        return run_one_publish_ratchet(Path(args.run_one_publish_ratchet))
     if args.plan_file and not args.dry_run:
         sys.stderr.write("FATAL: --plan-file is dry-run/test-only and cannot apply side effects\n")
         return 2
