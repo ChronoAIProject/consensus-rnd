@@ -157,6 +157,135 @@ class PublishVerificationTests(unittest.TestCase):
         self.assertFalse(validated.ok)
         self.assertEqual("worktree-head-mismatch", validated.reason)
 
+    def test_missing_build_command_fails_closed_before_job_creation(self) -> None:
+        env = dict(self.env)
+        env.pop("BUILD_CMD")
+        identity = dict(self.identity)
+        identity["env"] = env
+
+        with mock.patch("codex_refactor_loop.publish_verification.subprocess.Popen", side_effect=AssertionError("missing command must not launch child")):
+            result = publish_verification.prepare_or_schedule(
+                **identity,
+                git_runner=self._unexpected_git("missing command must not pin private ref"),
+            )
+
+        self.assertEqual("failed", result.status)
+        self.assertEqual("missing-BUILD_CMD", result.reason)
+        self.assertFalse(result.job_dir.exists())
+
+    def test_missing_test_command_fails_closed_before_job_creation(self) -> None:
+        env = dict(self.env)
+        env.pop("TEST_CMD")
+        identity = dict(self.identity)
+        identity["env"] = env
+
+        with mock.patch("codex_refactor_loop.publish_verification.subprocess.Popen", side_effect=AssertionError("missing command must not launch child")):
+            result = publish_verification.prepare_or_schedule(
+                **identity,
+                git_runner=self._unexpected_git("missing command must not pin private ref"),
+            )
+
+        self.assertEqual("failed", result.status)
+        self.assertEqual("missing-TEST_CMD", result.reason)
+        self.assertFalse(result.job_dir.exists())
+
+    def test_one_shot_child_records_nonzero_command_exit_as_failed_receipt(self) -> None:
+        result = self._prepared_job_without_child()
+        commands: list[str] = []
+
+        def fake_run(command: str, *, cwd: Path, env: Mapping[str, str], log: Path) -> int:
+            commands.append(command)
+            log.write_text(f"COMMAND={command}\nEXIT=7\n", encoding="utf-8")
+            return 7
+
+        with mock.patch("codex_refactor_loop.publish_verification.run_fixed_host_command", side_effect=fake_run):
+            exit_code = publish_verification.run_one_publish_ratchet(
+                result.job_dir,
+                git_runner=self._worktree_git(head_oid="a" * 40, private_ref_oid="a" * 40),
+            )
+
+        self.assertEqual(3, exit_code)
+        self.assertEqual(["make build"], commands)
+        receipt = json.loads((result.job_dir / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual("FAILED", receipt["status"])
+        self.assertEqual("BUILD_CMD-failed:7", receipt["reason"])
+        self.assertEqual(
+            [{"name": "BUILD_CMD", "exit": 7, "exit_marker": False}],
+            [{"name": item["name"], "exit": item["exit"], "exit_marker": item["exit_marker"]} for item in receipt["commands"]],
+        )
+
+    def test_one_shot_child_requires_exit_zero_marker(self) -> None:
+        result = self._prepared_job_without_child()
+        commands: list[str] = []
+
+        def fake_run(command: str, *, cwd: Path, env: Mapping[str, str], log: Path) -> int:
+            commands.append(command)
+            log.write_text(f"COMMAND={command}\nno terminal marker\n", encoding="utf-8")
+            return 0
+
+        with mock.patch("codex_refactor_loop.publish_verification.run_fixed_host_command", side_effect=fake_run):
+            exit_code = publish_verification.run_one_publish_ratchet(
+                result.job_dir,
+                git_runner=self._worktree_git(head_oid="a" * 40, private_ref_oid="a" * 40),
+            )
+
+        self.assertEqual(3, exit_code)
+        self.assertEqual(["make build"], commands)
+        receipt = json.loads((result.job_dir / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual("FAILED", receipt["status"])
+        self.assertEqual("BUILD_CMD-failed:0", receipt["reason"])
+        self.assertEqual(False, receipt["commands"][0]["exit_marker"])
+
+    def test_one_shot_child_rejects_dirty_worktree_after_commands(self) -> None:
+        result = self._prepared_job_without_child()
+
+        def fake_run(command: str, *, cwd: Path, env: Mapping[str, str], log: Path) -> int:
+            log.write_text(f"COMMAND={command}\nEXIT=0\n", encoding="utf-8")
+            return 0
+
+        with mock.patch("codex_refactor_loop.publish_verification.run_fixed_host_command", side_effect=fake_run):
+            exit_code = publish_verification.run_one_publish_ratchet(
+                result.job_dir,
+                git_runner=self._worktree_git_with_statuses(
+                    head_oids=["a" * 40, "a" * 40],
+                    private_ref_oid="a" * 40,
+                    statuses=["", " M implementation.txt\n"],
+                ),
+            )
+
+        self.assertEqual(3, exit_code)
+        receipt = json.loads((result.job_dir / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual("FAILED", receipt["status"])
+        self.assertEqual("worktree-dirty", receipt["reason"])
+        self.assertEqual("a" * 40, receipt["tested_sha"])
+        self.assertEqual("a" * 40, receipt["post_tested_sha"])
+        self.assertEqual(["BUILD_CMD", "TEST_CMD"], [item["name"] for item in receipt["commands"]])
+
+    def test_one_shot_child_rejects_moved_worktree_head_after_commands(self) -> None:
+        result = self._prepared_job_without_child()
+
+        def fake_run(command: str, *, cwd: Path, env: Mapping[str, str], log: Path) -> int:
+            log.write_text(f"COMMAND={command}\nEXIT=0\n", encoding="utf-8")
+            return 0
+
+        with mock.patch("codex_refactor_loop.publish_verification.run_fixed_host_command", side_effect=fake_run):
+            exit_code = publish_verification.run_one_publish_ratchet(
+                result.job_dir,
+                git_runner=self._worktree_git_with_statuses(
+                    head_oids=["a" * 40, "b" * 40],
+                    private_ref_oid="a" * 40,
+                    statuses=["", ""],
+                ),
+            )
+
+        self.assertEqual(3, exit_code)
+        receipt = json.loads((result.job_dir / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual("FAILED", receipt["status"])
+        self.assertEqual("worktree-head-mismatch", receipt["reason"])
+        self.assertEqual("a" * 40, receipt["tested_sha"])
+        self.assertEqual("b" * 40, receipt["post_tested_sha"])
+        self.assertEqual(["BUILD_CMD", "TEST_CMD"], [item["name"] for item in receipt["commands"]])
+
     def test_verified_receipt_rejects_private_ref_mismatch_and_superseded_job(self) -> None:
         result = self._write_verified_receipt()
 
@@ -370,12 +499,39 @@ class PublishVerificationTests(unittest.TestCase):
 
         return fake_git
 
+    def _unexpected_git(self, message: str):
+        def fake_git(args: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            raise AssertionError(f"{message}: {args}")
+
+        return fake_git
+
     def _worktree_git(self, *, head_oid: str, private_ref_oid: str, clean: bool = True):
         def fake_git(args: Sequence[str]) -> subprocess.CompletedProcess[str]:
             if args == ["rev-parse", "HEAD"]:
                 return subprocess.CompletedProcess(args, 0, head_oid + "\n", "")
             if args == ["status", "--porcelain"]:
                 return subprocess.CompletedProcess(args, 0, "" if clean else " M implementation.txt\n", "")
+            if args[:2] == ["rev-parse", "--verify"]:
+                return subprocess.CompletedProcess(args, 0, private_ref_oid + "\n", "")
+            if args[0] == "update-ref":
+                return subprocess.CompletedProcess(args, 0, "", "")
+            raise AssertionError(f"unexpected git call: {args}")
+
+        return fake_git
+
+    def _worktree_git_with_statuses(self, *, head_oids: list[str], private_ref_oid: str, statuses: list[str]):
+        heads = list(head_oids)
+        worktree_statuses = list(statuses)
+
+        def fake_git(args: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            if args == ["rev-parse", "HEAD"]:
+                if not heads:
+                    raise AssertionError("unexpected extra HEAD probe")
+                return subprocess.CompletedProcess(args, 0, heads.pop(0) + "\n", "")
+            if args == ["status", "--porcelain"]:
+                if not worktree_statuses:
+                    raise AssertionError("unexpected extra status probe")
+                return subprocess.CompletedProcess(args, 0, worktree_statuses.pop(0), "")
             if args[:2] == ["rev-parse", "--verify"]:
                 return subprocess.CompletedProcess(args, 0, private_ref_oid + "\n", "")
             if args[0] == "update-ref":
