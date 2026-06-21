@@ -385,9 +385,11 @@ class PublishVerificationTests(unittest.TestCase):
     def test_failed_receipts_use_per_job_retry_schedule_then_quarantine(self) -> None:
         result = self._prepared_job_without_child()
         retry_path = result.job_dir / "retry.json"
+        root_quarantine_marker = self.tmp / "QUARANTINED"
 
         statuses: list[tuple[str, str]] = []
         now = 1_000_000.0
+        self.assertFalse(root_quarantine_marker.exists())
         for index, wait_seconds in enumerate((1800, 7200, 28800, None), start=1):
             self._write_failed_result(result.job_dir, f"failure-{index}")
             status = publish_verification.record_failed_receipt_retry(result.job_dir, now=now)
@@ -407,6 +409,7 @@ class PublishVerificationTests(unittest.TestCase):
             ],
             statuses,
         )
+        self.assertFalse(root_quarantine_marker.exists())
 
     def test_failed_receipt_wait_does_not_compound_and_elapsed_wait_relaunches_child(self) -> None:
         result = self._prepared_job_without_child()
