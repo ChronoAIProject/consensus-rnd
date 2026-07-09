@@ -253,7 +253,7 @@ If review exits `done with advisory surfaced`, report the final outcome by aggre
 
 If review exits `explicit user decision or another bounded review pass`, either run one more bounded pass with a concrete next iteration question tied to `GoalArtifact`, or ask the user to decide. Do not loop indefinitely.
 
-Every bounded pass in this skill - `meta-layer convergence`, a repeated review pass, and fix passes - defaults to at most one pass unless the user explicitly authorizes more, and the chosen bound is recorded before the first such pass.
+Every bounded pass in this skill - `meta-layer convergence`, a repeated review pass, and fix passes - defaults to at most five passes unless the user explicitly authorizes more, and the chosen bound is recorded before the first such pass.
 
 ## Boundaries
 
