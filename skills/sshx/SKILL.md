@@ -48,7 +48,7 @@ Run the stages in this exact order:
 
 1. `intake` (write `GoalArtifact` and normalize the goal)
 2. `choose_worker_mode`
-3. `thinking_triplet_workers`
+3. `thinking_panel_workers`
 4. `meta_judge`
 5. `implementation_worker`
 6. `review_triplet_workers`
@@ -118,7 +118,7 @@ If `codex-cli` exits abnormally without both the terminal envelope and the compl
 
 ## Result Envelope
 
-`SshxResultEnvelope` is a prompt-level record, not a runtime API. Every `SshxResultEnvelope` returned by `thinking_triplet_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields:
+`SshxResultEnvelope` is a prompt-level record, not a runtime API. Every `SshxResultEnvelope` returned by `thinking_panel_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields:
 
 - `conclusion`: compact structured result consumed by the caller. It may include verdicts, decisions, blocking goal gaps, final decision points, changed-file evidence, and test evidence when applicable. It must not include process logs, step-by-step reasoning, raw transcripts, debug output, or same-round peer output.
 - `log_ref`: artifact reference for the non-inline worker, meta-judge, implementation, review, or fix log, treated as an opaque diagnostic pointer. Caller-side routing, meta-judging, worker briefs, and final reports must not open, inline, summarize, or otherwise consume its content; they keep only the reference. Opening the artifact is allowed only for out-of-band debugging outside the consensus decision context.
@@ -157,7 +157,7 @@ Same-round thinking workers must not see one another's outputs before their own 
 
 ## Reasoning Discipline
 
-`## Reasoning Discipline` is the single source of truth for the reasoning pass used by both `## Thinking Triplet` and `## Review Triplet`. It is prompt-level guidance only: not a runtime API, not a daemon, not a CLI, not a parsed schema field, not marker data, not lifecycle authority, and not a second transcript channel. The stages reference this section; they do not restate it.
+`## Reasoning Discipline` is the single source of truth for the reasoning pass used by both `## Thinking Panel` and `## Review Triplet`. It is prompt-level guidance only: not a runtime API, not a daemon, not a CLI, not a parsed schema field, not marker data, not lifecycle authority, and not a second transcript channel. The stages reference this section; they do not restate it.
 
 sshx's essence is independent context-isolated perspectives that oppose ugliness to converge on a beautiful answer.
 
@@ -169,19 +169,23 @@ seek truth from facts: verify every factual premise against actual evidence befo
 
 Each thinking or review worker must surface one compact free-form reasoning-discipline note in `SshxResultEnvelope.conclusion` naming the reference frame, stating the known-good shape and alignment, deviation, or revision status; stating the ugly defect and beautiful form for each candidate weighed; and stating the verified-premise or `ASSUMED-UNVERIFIED` status needed for the verdict. This does not override `GoalArtifact`, assigned bias or review focus, truth tables, or allowed verdict sets, and it is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for valid `abstain`, `reject`, or `comment` outcomes.
 
-## Thinking Triplet
+## Thinking Panel
 
-Run three biased perspectives before choosing a plan:
+Run five whole-picture philosopher seats before choosing a plan — the same universal judgment lenses the consensus engine debates with. Each seat is one independent, context-isolated perspective that opposes ugliness from its own lens:
 
-- `minimal`: smallest coherent change on the root-cause-resolving path that satisfies the user goal, not a surface patch that leaves the root cause in place.
-- `structural`: architecture and contract integrity under future growth.
-- `delete`: whether the feature, abstraction, or work should be removed, collapsed, or avoided.
+- `teleology`: purpose and inevitability. What is this for, and is the form forced by that purpose? Attacks skipped-purpose and missing-inevitability.
+- `parsimony`: economy. Delete until nothing is left to delete; every element must prove its right to exist. Attacks magic numbers, symptom branches, and machinery that has not earned its place.
+- `fidelity`: truth over proxy. Does it measure the real thing, and is every premise verified at its source? Attacks proxy-over-truth and narrative-over-verification.
+- `natural-ownership`: locus dyad, ownership pole. Which layer naturally owns this invariant, duty, or constraint — the layer with semantic responsibility and causal control? Attacks symptom patches, duplicated enforcement, and invariants forced onto consumers of what a producer should own.
+- `proportional-containment`: locus dyad, containment pole. How far may this intervention rightfully bind, across scope, authority, and duration, given the evidence? Attacks over-hoisting, speculative abstraction, and turning a local fact into universal law.
 
-Before proposing, revising, rejecting, or abstaining, each thinking perspective must apply `## Reasoning Discipline` to every candidate conclusion it weighs and surface the compact reasoning-discipline note in `SshxResultEnvelope.conclusion` before returning a verdict.
+`natural-ownership` and `proportional-containment` are a coupled **must-clash locus dyad**: they run together, each must answer the other pole's claim, and they converge on the natural owner layer — not the highest layer imaginable. Ownership pulls the fix toward the layer that owns the invariant; containment resists over-reaching past it. This is the "go upstream to the root, but not past the natural owner" balance expressed as two adversarial seats the meta-judge converges, rather than a single balanced checklist.
 
-Every perspective must first identify the problem essence or root cause implied by `GoalArtifact`, then frame `propose`, `revise`, `reject`, or `abstain` as an answer to it: what satisfies it, what still differs from it, or why it cannot be satisfied. A plan that only patches a surface symptom while leaving that root cause in place does not satisfy `minimal` or the thinking gate. `revise` must name the goal gap and a next iteration question; it must not open an unrelated design search.
+Before proposing, revising, rejecting, or abstaining, each seat must apply `## Reasoning Discipline` to every candidate conclusion it weighs and surface the compact reasoning-discipline note in `SshxResultEnvelope.conclusion` before returning a verdict.
 
-Each perspective returns one of:
+Every seat must first identify the problem essence or root cause implied by `GoalArtifact`, then frame `propose`, `revise`, `reject`, or `abstain` as an answer to it: what satisfies it, what still differs from it, or why it cannot be satisfied. A plan that only patches a surface symptom while leaving that root cause in place does not satisfy the thinking gate. `revise` must name the goal gap and a next iteration question; it must not open an unrelated design search.
+
+Each seat returns one of:
 
 - `propose`
 - `revise`
@@ -203,7 +207,7 @@ The meta-judge applies this fixed thinking truth table:
 
 The convergence question must be "what still differs from `GoalArtifact`?" expressed against the fixed normalized goal, constraints, and success criteria. Do not generalize the convergence pass beyond that goal gap.
 
-Before any `implement` exit, the meta-judge must include in its `meta_judge.conclusion` a compact free-form ASCII relationship diagram built only from `GoalArtifact` and the returned `SshxResultEnvelope.conclusion` values: nodes are the goal subquestions or goal-gap items, the `minimal`, `structural`, and `delete` stances, and the concrete plan; edges are labeled `agree`, `conflict`, `depends-on`, `resolved-by`, or `converges-to`. The diagram rigidly constrains convergence: every surfaced subquestion or goal-gap node must appear, the concrete plan must resolve every `conflict` edge, and any unresolved `conflict` edge is an unclosed `GoalArtifact` goal gap, so the exit stays `meta-layer convergence` or `abstain/escalate with options`, never `implement`. The diagram is free-form prompt-level content synthesized from conclusions only; it must not inline worker full reasoning or same-round peer output, and it is not a parsed schema field, marker data, lifecycle authority, or a blocker for valid `abstain` or `reject fake consensus` exits.
+Before any `implement` exit, the meta-judge must include in its `meta_judge.conclusion` a compact free-form ASCII relationship diagram built only from `GoalArtifact` and the returned `SshxResultEnvelope.conclusion` values: nodes are the goal subquestions or goal-gap items, the five philosopher-seat stances (`teleology`, `parsimony`, `fidelity`, `natural-ownership`, `proportional-containment`), and the concrete plan; edges are labeled `agree`, `conflict`, `depends-on`, `resolved-by`, or `converges-to`. The diagram rigidly constrains convergence: every surfaced subquestion or goal-gap node must appear, the concrete plan must resolve every `conflict` edge — including the `natural-ownership` vs `proportional-containment` locus clash — and any unresolved `conflict` edge is an unclosed `GoalArtifact` goal gap, so the exit stays `meta-layer convergence` or `abstain/escalate with options`, never `implement`. The diagram is free-form prompt-level content synthesized from conclusions only; it must not inline worker full reasoning or same-round peer output, and it is not a parsed schema field, marker data, lifecycle authority, or a blocker for valid `abstain` or `reject fake consensus` exits.
 
 ## Implementation Worker
 
@@ -316,8 +320,8 @@ worker_flights:
     attempt:
     result_envelope_ref:
     completion_sentinel_ref:
-thinking_triplet_workers:
-  - role: minimal
+thinking_panel_workers:
+  - role: teleology
     bias:
     visible_inputs:
     worker_mode:
@@ -326,7 +330,7 @@ thinking_triplet_workers:
     verdict:
     conclusion:
     log_ref:
-  - role: structural
+  - role: parsimony
     bias:
     visible_inputs:
     worker_mode:
@@ -335,7 +339,25 @@ thinking_triplet_workers:
     verdict:
     conclusion:
     log_ref:
-  - role: delete
+  - role: fidelity
+    bias:
+    visible_inputs:
+    worker_mode:
+    worker_carrier:
+    worker_flight_ref:
+    verdict:
+    conclusion:
+    log_ref:
+  - role: natural-ownership
+    bias:
+    visible_inputs:
+    worker_mode:
+    worker_carrier:
+    worker_flight_ref:
+    verdict:
+    conclusion:
+    log_ref:
+  - role: proportional-containment
     bias:
     visible_inputs:
     worker_mode:

@@ -116,7 +116,7 @@ class SshxContractTests(unittest.TestCase):
             "## Worker Completion Contract",
             "## No Context Pollution",
             "## Reasoning Discipline",
-            "## Thinking Triplet",
+            "## Thinking Panel",
             "## Design Truth Table",
             "## Implementation Worker",
             "## Review Triplet",
@@ -129,13 +129,13 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(anchor, text)
         self.assertLess(heading_index(text, "## No Context Pollution"), heading_index(text, "## Reasoning Discipline"))
-        self.assertLess(heading_index(text, "## Reasoning Discipline"), heading_index(text, "## Thinking Triplet"))
-        self.assertLess(heading_index(text, "## Thinking Triplet"), heading_index(text, "## Design Truth Table"))
+        self.assertLess(heading_index(text, "## Reasoning Discipline"), heading_index(text, "## Thinking Panel"))
+        self.assertLess(heading_index(text, "## Thinking Panel"), heading_index(text, "## Design Truth Table"))
         self.assertLess(heading_index(text, "## Design Truth Table"), heading_index(text, "## Implementation Worker"))
         self.assertLess(heading_index(text, "## Implementation Worker"), heading_index(text, "## Review Triplet"))
         self.assertLess(heading_index(text, "## Review Triplet"), heading_index(text, "## Review Truth Table"))
         self.assertIn(
-            "`intake` (write `GoalArtifact` and normalize the goal)\n2. `choose_worker_mode`\n3. `thinking_triplet_workers`\n4. `meta_judge`\n5. `implementation_worker`\n6. `review_triplet_workers`\n7. `fix_or_done`",
+            "`intake` (write `GoalArtifact` and normalize the goal)\n2. `choose_worker_mode`\n3. `thinking_panel_workers`\n4. `meta_judge`\n5. `implementation_worker`\n6. `review_triplet_workers`\n7. `fix_or_done`",
             text,
         )
 
@@ -187,8 +187,8 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_triplets_require_reasoning_discipline_in_conclusion(self) -> None:
         text = read(SKILL)
-        reasoning_section = text[heading_index(text, "## Reasoning Discipline") : heading_index(text, "## Thinking Triplet")]
-        thinking_section = text[heading_index(text, "## Thinking Triplet") : heading_index(text, "## Design Truth Table")]
+        reasoning_section = text[heading_index(text, "## Reasoning Discipline") : heading_index(text, "## Thinking Panel")]
+        thinking_section = text[heading_index(text, "## Thinking Panel") : heading_index(text, "## Design Truth Table")]
         review_section = text[heading_index(text, "## Review Triplet") : heading_index(text, "## Review Truth Table")]
 
         for required in [
@@ -273,7 +273,7 @@ class SshxContractTests(unittest.TestCase):
             self.assertNotIn(forbidden, text)
 
         self.assertIn(
-            "Before proposing, revising, rejecting, or abstaining, each thinking perspective must apply `## Reasoning Discipline`",
+            "Before proposing, revising, rejecting, or abstaining, each seat must apply `## Reasoning Discipline`",
             thinking_section,
         )
         self.assertIn(
@@ -282,7 +282,7 @@ class SshxContractTests(unittest.TestCase):
         )
         self.assertLess(
             thinking_section.index("Before proposing, revising, rejecting, or abstaining"),
-            thinking_section.index("Each perspective returns one of:"),
+            thinking_section.index("Each seat returns one of:"),
         )
         self.assertIn(
             "Before approving, commenting, or rejecting, each reviewer must apply `## Reasoning Discipline`",
@@ -303,21 +303,33 @@ class SshxContractTests(unittest.TestCase):
         self.assertNotIn("applicable mature theory, engineering principle, industry best practice", thinking_section)
         self.assertNotIn("applicable mature theory, engineering principle, industry best practice", review_section)
 
-    def test_sshx_thinking_anchors_root_cause_and_minimal_path(self) -> None:
+    def test_sshx_thinking_panel_seats_and_anchors_root_cause(self) -> None:
         text = read(SKILL)
-        thinking_start = text.index("## Thinking Triplet")
+        thinking_start = text.index("## Thinking Panel")
         design_truth_start = text.index("## Design Truth Table")
         thinking_section = text[thinking_start:design_truth_start]
         self.assertIn(
-            "smallest coherent change on the root-cause-resolving path that satisfies the user goal, not a surface patch that leaves the root cause in place",
+            "Run five whole-picture philosopher seats before choosing a plan",
+            thinking_section,
+        )
+        for seat in [
+            "`teleology`",
+            "`parsimony`",
+            "`fidelity`",
+            "`natural-ownership`",
+            "`proportional-containment`",
+        ]:
+            self.assertIn(seat, thinking_section)
+        self.assertIn(
+            "coupled **must-clash locus dyad**",
             thinking_section,
         )
         self.assertIn(
-            "Every perspective must first identify the problem essence or root cause implied by `GoalArtifact`",
+            "Every seat must first identify the problem essence or root cause implied by `GoalArtifact`",
             thinking_section,
         )
         self.assertIn(
-            "A plan that only patches a surface symptom while leaving that root cause in place does not satisfy `minimal` or the thinking gate",
+            "A plan that only patches a surface symptom while leaving that root cause in place does not satisfy the thinking gate",
             thinking_section,
         )
 
@@ -583,7 +595,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("## Result Envelope", text)
         self.assertIn("`SshxResultEnvelope` is a prompt-level record, not a runtime API", text)
         self.assertIn(
-            "Every `SshxResultEnvelope` returned by `thinking_triplet_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields",
+            "Every `SshxResultEnvelope` returned by `thinking_panel_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields",
             text,
         )
         self.assertIn("A caller-carried stage record wraps this envelope", text)
@@ -735,16 +747,16 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_result_envelope_caller_context_excludes_inline_logs(self) -> None:
         caller_carried_transcript = {
-            "thinking_triplet_workers": [
+            "thinking_panel_workers": [
                 {
-                    "role": "minimal",
-                    "worker_flight_ref": "flight-thinking-minimal",
+                    "role": "teleology",
+                    "worker_flight_ref": "flight-thinking-teleology",
                     "verdict": "propose",
                     "conclusion": {
-                        "decision": "use the smallest contract edit",
+                        "decision": "the form is forced by the stated purpose",
                         "goal_gap": "none",
                     },
-                    "log_ref": "artifacts/sshx/minimal.log",
+                    "log_ref": "artifacts/sshx/teleology.log",
                 }
             ],
             "meta_judge": {
@@ -784,7 +796,7 @@ class SshxContractTests(unittest.TestCase):
             self.assertNotIn("report", node)
             self.assertNotIn("synthesis", node)
 
-        for worker in caller_carried_transcript["thinking_triplet_workers"]:
+        for worker in caller_carried_transcript["thinking_panel_workers"]:
             assert_envelope(worker)
         assert_envelope(caller_carried_transcript["meta_judge"])
         assert_envelope(caller_carried_transcript["implementation_worker"])
