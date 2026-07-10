@@ -93,7 +93,7 @@ def resolve_abnormal_codex_exit(flight: dict[str, object], fallback_available: b
     if flight.get("worker_mode") == "codex-cli" and attempt < retry_budget:
         return "retry-same-carrier"
     if fallback_available:
-        return "fallback-isolated-token-subagent"
+        return "fallback-next-carrier"
     return "abstain"
 
 
@@ -203,12 +203,12 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(required, reasoning_section)
         self.assertEqual(
             text.count(
-                "sshx's essence is independent context-isolated perspectives that oppose ugliness to converge on a beautiful answer"
+                "sshx's essence is independent context-isolated perspectives that oppose ugliness and waste to converge on an answer that is both beautiful and worth its cost"
             ),
             1,
         )
         self.assertIn(
-            "sshx's essence is independent context-isolated perspectives that oppose ugliness to converge on a beautiful answer",
+            "sshx's essence is independent context-isolated perspectives that oppose ugliness and waste to converge on an answer that is both beautiful and worth its cost",
             reasoning_section,
         )
         for required in [
@@ -225,6 +225,21 @@ class SshxContractTests(unittest.TestCase):
             "intent-revealing",
         ]:
             self.assertIn(required, reasoning_section)
+        # 美不美 stays the single strengthened aesthetic form judgment: a symmetric verdict, not a presumed indictment.
+        for required in [
+            "美不美",
+            "is it beautiful?",
+            "no material defect found",
+            "gold-plating past `GoalArtifact` is itself an ugly defect",
+        ]:
+            self.assertIn(required, reasoning_section)
+        # 值不值 (worth) is an independent SEAT, not a cross-cutting lens: it must not live in Reasoning Discipline,
+        # or every seat would be homogenized into re-deriving the same value verdict.
+        self.assertNotIn("值不值", reasoning_section)
+        self.assertNotIn("worth (值不值", reasoning_section)
+        self.assertNotIn("## Worth", text)
+        self.assertNotIn("worth_marker", text)
+        self.assertNotIn("worth_daemon", text)
         for required in [
             "seek truth from facts",
             "verify every factual premise against actual evidence",
@@ -309,7 +324,7 @@ class SshxContractTests(unittest.TestCase):
         design_truth_start = text.index("## Design Truth Table")
         thinking_section = text[thinking_start:design_truth_start]
         self.assertIn(
-            "Run five whole-picture philosopher seats before choosing a plan",
+            "Run six whole-picture philosopher seats before choosing a plan",
             thinking_section,
         )
         for seat in [
@@ -318,10 +333,26 @@ class SshxContractTests(unittest.TestCase):
             "`fidelity`",
             "`natural-ownership`",
             "`proportional-containment`",
+            "`worth`",
         ]:
             self.assertIn(seat, thinking_section)
         self.assertIn(
             "coupled **must-clash locus dyad**",
+            thinking_section,
+        )
+        # 值不值 is the sixth seat: an independent objective distinct from parsimony / containment / aesthetic.
+        self.assertIn("`worth` (值不值 — is it worth it?)", thinking_section)
+        self.assertIn("opportunity cost", thinking_section)
+        self.assertIn(
+            "it may reject a candidate every other seat finds beautiful and well-owned",
+            thinking_section,
+        )
+        self.assertIn(
+            "`worth` (值不值) is an independent objective, not the aesthetic lens repeated",
+            thinking_section,
+        )
+        self.assertIn(
+            "the panel is not homogenized into every seat re-deriving the same value verdict",
             thinking_section,
         )
         self.assertIn(
@@ -336,16 +367,37 @@ class SshxContractTests(unittest.TestCase):
     def test_sshx_worker_modes(self) -> None:
         text = read(SKILL)
         contract_text = without_refactor_comments(text)
-        mode_lines = re.findall(r"^\d+\. `(codex-cli|isolated-token-subagent|abstain)`$", text, re.MULTILINE)
-        self.assertEqual(mode_lines, ["codex-cli", "isolated-token-subagent", "abstain"])
+        mode_lines = re.findall(r"^\d+\. `(codex-cli|nyxid-oracle|isolated-token-subagent|abstain)`$", text, re.MULTILINE)
+        self.assertEqual(mode_lines, ["codex-cli", "nyxid-oracle", "isolated-token-subagent", "abstain"])
         self.assertIn("`WorkerDelegationContract`", text)
         self.assertIn("`codex-cli` is the default worker carrier after a non-mutating capability check", text)
-        self.assertIn("`isolated-token-subagent` is the fallback when `codex-cli` is unavailable", text)
         self.assertIn(
-            "`abstain` is required when neither `codex-cli` nor `isolated-token-subagent` is available",
+            "`nyxid-oracle` is a model-diverse out-of-process worker carrier",
+            text,
+        )
+        self.assertIn(
+            "`isolated-token-subagent` is the fallback when `codex-cli` and `nyxid-oracle` are both unavailable",
+            text,
+        )
+        self.assertIn(
+            "`abstain` is required when none of `codex-cli`, `nyxid-oracle`, or `isolated-token-subagent` is available",
             text,
         )
         self.assertIn("Do not self-apply the triplet inside the caller context", text)
+        # nyxid-oracle is a fallible advisory worker with no authority; the CLI name does not grant it one.
+        self.assertIn(
+            "it is a fallible advisory worker exactly like `codex-cli`, never a privileged oracle",
+            text,
+        )
+        self.assertIn("a distinct carrier is not automatically a distinct model family", text)
+        self.assertIn("a new browser conversation alone does not prove a sterile context", text)
+        # diversity-aware dispatch: registering a carrier is not dispatching to it; a fallback-only nyxid is decorative.
+        self.assertIn("Carrier registration and dispatch are separate", text)
+        self.assertIn("deliberately assign same-round seats across the available carriers", text)
+        self.assertIn(
+            "if every completed seat ran on one model family, do not present the result as model-diverse",
+            text,
+        )
         self.assertNotIn("sealed-transcript", contract_text)
         self.assertNotIn("actor-isolated", contract_text)
 
@@ -374,11 +426,11 @@ class SshxContractTests(unittest.TestCase):
     def test_sshx_codex_cli_fallback_reason_is_required(self) -> None:
         text = read(SKILL)
         self.assertIn(
-            "`isolated-token-subagent` is the fallback when `codex-cli` is unavailable or the capability check fails",
+            "`isolated-token-subagent` is the fallback when `codex-cli` and `nyxid-oracle` are both unavailable or their capability checks fail",
             text,
         )
         self.assertIn(
-            "Whenever this fallback is selected, `worker_delegation.reason` and the gate record must state the concrete `codex-cli` unavailable or failed reason",
+            "Whenever this fallback is selected, `worker_delegation.reason` and the gate record must state the concrete `codex-cli` and `nyxid-oracle` unavailable or failed reason",
             text,
         )
         self.assertIn("codex_cli_capability_check:", text)
@@ -389,6 +441,21 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("For `isolated-token-subagent` workers, terminal completion is recognized only when", text)
         self.assertIn("its `completion_sentinel_ref` is recorded as `n/a`", text)
         self.assertIn("the flight becomes `abstained`, the result is `abstain`", text)
+
+    def test_sshx_nyxid_oracle_completion_rule(self) -> None:
+        text = read(SKILL)
+        self.assertIn("For `nyxid-oracle` workers, terminal completion is recognized only when", text)
+        self.assertIn("structured terminal `status=completed`", text)
+        self.assertIn("single `nyxid oracle result` collection read", text)
+        self.assertIn("the `response` payload parses as a valid `SshxResultEnvelope`", text)
+        self.assertIn("Intermediate task statuses (`queued`, `dispatched`", text)
+        self.assertIn("the caller must not busy-poll the task", text)
+        self.assertIn("recorded as `completion_sentinel_ref` (`nyxid-task:<task_id>:completed`)", text)
+        self.assertIn("response prose, stdout, echoes, and log tails are never completion or verdict evidence", text)
+        self.assertIn(
+            "same-round perspective must run in its own new oracle conversation",
+            text,
+        )
 
     def test_sshx_abstain_is_terminal_transition(self) -> None:
         text = read(SKILL)
@@ -508,7 +575,10 @@ class SshxContractTests(unittest.TestCase):
         text = read(SKILL)
         self.assertIn("If `codex-cli` exits abnormally without both the terminal envelope and the completion sentinel", text)
         self.assertIn("consume the finite same-carrier retry budget", text)
-        self.assertIn("fall back to `isolated-token-subagent` when available", text)
+        self.assertIn(
+            "fall back to the next available carrier in priority order (`nyxid-oracle`, then `isolated-token-subagent`) when available",
+            text,
+        )
         self.assertIn(
             "marks the exhausted `codex-cli` flight `abstained` with empty `result_envelope_ref` and `completion_sentinel_ref`",
             text,
@@ -547,7 +617,7 @@ class SshxContractTests(unittest.TestCase):
                 },
                 fallback_available=True,
             ),
-            "fallback-isolated-token-subagent",
+            "fallback-next-carrier",
         )
         self.assertEqual(
             resolve_abnormal_codex_exit(
@@ -895,6 +965,22 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(row, text)
         self.assertIn("stop with options instead of inventing agreement", text)
+        design_truth_section = text[text.index("## Design Truth Table") : text.index("## Implementation Worker")]
+        self.assertIn(
+            "A concrete plan that fails the 值不值 (worth) judgment is an unclosed `GoalArtifact` goal gap",
+            design_truth_section,
+        )
+        # beauty <-> worth is a conditional challenge (not a forced dyad), with accepted-debt accounting.
+        self.assertIn("Beauty and worth are a conditional challenge, not a forced clash", design_truth_section)
+        self.assertIn("material elegance premium", design_truth_section)
+        self.assertIn(
+            "records the accepted debt with its owner, containment boundary, and removal or expiry condition",
+            design_truth_section,
+        )
+        self.assertIn("`temporary` without an expiry condition is not acceptable", design_truth_section)
+        # the relationship diagram now enumerates six seats, including worth.
+        self.assertIn("six philosopher-seat stances", design_truth_section)
+        self.assertIn("`proportional-containment`, `worth`", design_truth_section)
 
     def test_sshx_meta_judge_requires_relationship_diagram(self) -> None:
         text = read(SKILL)
@@ -942,7 +1028,10 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(forbidden_boundary, text)
         self.assertIn("It must not add or depend on", text)
         self.assertIn("does not grant permission to commit, push, merge", text)
-        self.assertIn("Allowed worker carriers are limited to `codex-cli` and `isolated-token-subagent`", text)
+        self.assertIn(
+            "Allowed worker carriers are limited to `codex-cli`, `nyxid-oracle`, and `isolated-token-subagent`",
+            text,
+        )
         self.assertIn("not as controller authority", text)
 
     def test_sshx_baseline_evidence_is_source_owned(self) -> None:
@@ -956,6 +1045,9 @@ class SshxContractTests(unittest.TestCase):
             "no same-shape review gate before done",
             "asserting current-system facts without verifying actual evidence",
             "silently relying on assumed factual premises",
+            "judging only whether a plan is beautiful while never asking whether it is worth its cost",
+            "over-building a beautiful form the goal does not need",
+            "running every perspective on one model family so the priors are correlated rather than independent",
             "only need inline consensus",
         ]:
             self.assertIn(failure_mode, text)
