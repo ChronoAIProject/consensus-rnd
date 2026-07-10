@@ -1009,7 +1009,7 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_bounded_passes_have_default_bound(self) -> None:
         text = read(SKILL)
-        self.assertIn("defaults to at most one pass unless the user explicitly authorizes more", text)
+        self.assertIn("defaults to at most five passes unless the user explicitly authorizes more", text)
 
     def test_sshx_no_runtime_control_plane_leakage(self) -> None:
         text = read(SKILL)
