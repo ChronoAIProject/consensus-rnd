@@ -33,6 +33,7 @@ jobs:
         shell: bash
         run: |
           removed_skill_dir="skills/consensus""-loop"
+          removed_runtime_pattern='consensus[-]loop|consensus[-]rnd[-]cli|codex[_]refactor[_]loop|[.]refactor[-]loop'
           if test ! -e "$removed_skill_dir" && test ! -L "$removed_skill_dir"; then
             :
           else
@@ -48,12 +49,36 @@ jobs:
             printf '%s\n' "$tracked_removed_files" >&2
             exit 1
           fi
-          if grep -rn -E "consensus[-]loop|consensus[-]rnd[-]cli|codex[_]refactor[_]loop|[.]refactor[-]loop" --exclude-dir=.git --exclude=.git .; then
+          if grep -rn -E "$removed_runtime_pattern" --exclude-dir=.git --exclude=.git .; then
             echo "Removed runtime reference found" >&2
             exit 1
           else
             scan_status=$?
             [ "$scan_status" -eq 1 ] || exit "$scan_status"
+          fi
+          if git ls-files -s -z | while IFS= read -r -d '' index_entry; do
+            index_metadata="${index_entry%%$'\t'*}"
+            tracked_path="${index_entry#*$'\t'}"
+            index_mode="${index_metadata%% *}"
+            [ "$index_mode" = "120000" ] || continue
+            object_and_stage="${index_metadata#* }"
+            object_id="${object_and_stage%% *}"
+            if ! link_target=$(git cat-file blob "$object_id"); then
+              echo "Unable to inspect tracked symlink target: $tracked_path" >&2
+              exit 1
+            fi
+            if printf '%s' "$link_target" | grep -Eq "$removed_runtime_pattern"; then
+              echo "Tracked symlink target contains removed runtime reference: $tracked_path" >&2
+              exit 1
+            else
+              link_scan_status=$?
+              [ "$link_scan_status" -eq 1 ] || exit "$link_scan_status"
+            fi
+          done; then
+            :
+          else
+            symlink_scan_status=$?
+            exit "$symlink_scan_status"
           fi
 
       - name: Run contract tests
