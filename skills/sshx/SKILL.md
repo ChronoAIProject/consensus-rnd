@@ -36,7 +36,7 @@ Do not use this skill for routine one-step answers where no separate perspective
 - `success_criteria`
 - `iteration_question`
 
-The user's current input is the only source for the goal. `sshx` must not discover or infer the goal from external lifecycle milestones, release state, `host.env`, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface.
+The user's current input is the only source for the goal. `sshx` must not discover or infer the goal from external lifecycle milestones, release state, runtime host configuration, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface.
 
 `iteration_question` must ask what still differs from `GoalArtifact`, using the normalized goal, constraints, and success criteria as the fixed target. It must not broaden the task into a generic improvement search.
 

@@ -154,7 +154,7 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(field, text)
         self.assertIn("The user's current input is the only source for the goal", text)
         self.assertIn(
-            "must not discover or infer the goal from external lifecycle milestones, release state, `host.env`, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface",
+            "must not discover or infer the goal from external lifecycle milestones, release state, runtime host configuration, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface",
             text,
         )
 
