@@ -9,7 +9,7 @@ SKILL = ROOT / "skills" / "sshx" / "SKILL.md"
 README = ROOT / "README.md"
 GEMINI = ROOT / "GEMINI.md"
 CI = ROOT / ".github" / "workflows" / "consensus-rnd-ci.yml"
-BASELINE_ARTIFACT = ROOT / ".refactor-loop" / "runs" / "baseline-issue342-sshx.md"
+BASELINE_ARTIFACT_PATHSPEC = "*baseline-issue342-sshx.md"
 
 THINKING_VERDICTS = {"propose", "revise", "reject", "abstain"}
 
@@ -154,7 +154,7 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(field, text)
         self.assertIn("The user's current input is the only source for the goal", text)
         self.assertIn(
-            "must not discover or infer the goal from `consensus-loop` milestones, release state, `host.env`, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface",
+            "must not discover or infer the goal from external lifecycle milestones, release state, runtime host configuration, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface",
             text,
         )
 
@@ -501,7 +501,7 @@ class SshxContractTests(unittest.TestCase):
             "before launch the caller must choose unique caller-assigned `result_ref` and `completion_sentinel` paths",
             "pass those exact paths in the worker brief",
             "parallel workers must receive disjoint paths",
-            "a direct non-interactive worker-carrier invocation, not a helper script, daemon, or `consensus-rnd-cli`",
+            "a direct non-interactive worker-carrier invocation, not a helper script, daemon, or repository-owned CLI",
             "the exact command and sandbox flags are not part of this contract",
             "The caller must not poll those paths while the worker is running",
             "the caller performs one collection read of the assigned `result_ref` and `completion_sentinel`",
@@ -1016,14 +1016,14 @@ class SshxContractTests(unittest.TestCase):
         for forbidden_boundary in [
             "helper scripts",
             "daemons",
-            "`consensus-rnd-cli`",
+            "repository-owned CLI",
             "GitHub lifecycle operations",
             "git lifecycle operations",
             "labels",
             "release authority",
             "a public marker family",
-            "`.refactor-loop/host.env` as a production source of truth",
-            "`consensus-loop` internal prompts or scripts as an implementation dependency",
+            "runtime host configuration as a production source of truth",
+            "other skills' or repository-owned internal prompts, scripts, or runtimes as an implementation dependency",
         ]:
             self.assertIn(forbidden_boundary, text)
         self.assertIn("It must not add or depend on", text)
@@ -1052,9 +1052,9 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(failure_mode, text)
         self.assertIn("source-owned contract or test evidence", text)
-        self.assertIn("Do not track `.refactor-loop/` runtime artifacts", text)
+        self.assertIn("Do not track runtime artifacts", text)
         tracked = subprocess.run(
-            ["git", "ls-files", "--", ".refactor-loop/runs/baseline-issue342-sshx.md"],
+            ["git", "ls-files", "--", BASELINE_ARTIFACT_PATHSPEC],
             cwd=ROOT,
             capture_output=True,
             text=True,

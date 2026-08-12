@@ -5,7 +5,7 @@ description: Use when a high-risk or multi-angle decision needs worker-delegated
 
 # sshx
 
-`sshx` is a lightweight worker-delegated inline consensus skill. It applies the consensus engine philosophy to a single decision or implementation task by dispatching isolated worker perspectives without using `consensus-loop` runtime surfaces.
+`sshx` is a lightweight worker-delegated inline consensus skill. It applies the consensus engine philosophy to a single decision or implementation task by dispatching isolated worker perspectives without depending on any long-running runtime or lifecycle surface.
 
 <!--
 Refactor (iter342/issue-342):
@@ -36,7 +36,7 @@ Do not use this skill for routine one-step answers where no separate perspective
 - `success_criteria`
 - `iteration_question`
 
-The user's current input is the only source for the goal. `sshx` must not discover or infer the goal from `consensus-loop` milestones, release state, `host.env`, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface.
+The user's current input is the only source for the goal. `sshx` must not discover or infer the goal from external lifecycle milestones, release state, runtime host configuration, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface.
 
 `iteration_question` must ask what still differs from `GoalArtifact`, using the normalized goal, constraints, and success criteria as the fixed target. It must not broaden the task into a generic improvement search.
 
@@ -115,9 +115,9 @@ Every worker dispatch must create a prompt-level `SshxWorkerFlightRecord` before
 
 While any `SshxWorkerFlightRecord` for the same `work_target` is `in-flight` or `retrying`, the caller is read-only for that target. The caller must not mutate files, Git state, GitHub state, labels, releases, host configuration, lifecycle state, or the same external resource. The caller must not take over the same `work_target` because a process snapshot, log text, or workspace state appears quiet.
 
-For each `codex-cli` attempt, before launch the caller must choose unique caller-assigned `result_ref` and `completion_sentinel` paths for that flight or attempt and pass those exact paths in the worker brief; parallel workers must receive disjoint paths. The launch is a direct non-interactive worker-carrier invocation, not a helper script, daemon, or `consensus-rnd-cli`, and the exact command and sandbox flags are not part of this contract. The caller must not poll those paths while the worker is running. After the process exits, the caller performs one collection read of the assigned `result_ref` and `completion_sentinel`, and records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the envelope validates and the sentinel exists; completion and verdict recognition stay governed by the `## Worker Completion Contract`.
+For each `codex-cli` attempt, before launch the caller must choose unique caller-assigned `result_ref` and `completion_sentinel` paths for that flight or attempt and pass those exact paths in the worker brief; parallel workers must receive disjoint paths. The launch is a direct non-interactive worker-carrier invocation, not a helper script, daemon, or repository-owned CLI, and the exact command and sandbox flags are not part of this contract. The caller must not poll those paths while the worker is running. After the process exits, the caller performs one collection read of the assigned `result_ref` and `completion_sentinel`, and records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the envelope validates and the sentinel exists; completion and verdict recognition stay governed by the `## Worker Completion Contract`.
 
-For each `nyxid-oracle` attempt, before dispatch the caller must start a new isolated oracle conversation for that flight or attempt and pass a worker brief that requires the reply to be exactly an `SshxResultEnvelope` payload; parallel workers must receive disjoint conversations. The dispatch is a direct `nyxid oracle` reasoning invocation, not a helper script, daemon, or `consensus-rnd-cli`, and the exact command and flags are not part of this contract. The caller must not poll the task while it runs; after the task reports a structured terminal status the caller performs one collection read of the oracle result, and records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the envelope validates and the terminal `status=completed` marker is present; completion and verdict recognition stay governed by the `## Worker Completion Contract`.
+For each `nyxid-oracle` attempt, before dispatch the caller must start a new isolated oracle conversation for that flight or attempt and pass a worker brief that requires the reply to be exactly an `SshxResultEnvelope` payload; parallel workers must receive disjoint conversations. The dispatch is a direct `nyxid oracle` reasoning invocation, not a helper script, daemon, or repository-owned CLI, and the exact command and flags are not part of this contract. The caller must not poll the task while it runs; after the task reports a structured terminal status the caller performs one collection read of the oracle result, and records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the envelope validates and the terminal `status=completed` marker is present; completion and verdict recognition stay governed by the `## Worker Completion Contract`.
 
 `codex-cli` completion is recognized only when the caller has both a terminal `SshxResultEnvelope` and the worker-owned `completion_sentinel_ref` recorded on the matching flight. `pgrep`, process-table snapshots, log marker strings, and empty `git status` output are never completion evidence.
 
@@ -275,14 +275,14 @@ This skill is only a prompt contract. It must not add or depend on:
 
 - helper scripts;
 - daemons;
-- `consensus-rnd-cli`;
+- repository-owned CLI;
 - GitHub lifecycle operations;
 - git lifecycle operations;
 - labels;
 - release authority;
 - a public marker family;
-- `.refactor-loop/host.env` as a production source of truth;
-- `consensus-loop` internal prompts or scripts as an implementation dependency.
+- runtime host configuration as a production source of truth;
+- other skills' or repository-owned internal prompts, scripts, or runtimes as an implementation dependency.
 
 Allowed worker carriers are limited to `codex-cli`, `nyxid-oracle`, and `isolated-token-subagent`. Use them only as worker delegation capability, not as controller authority. `nyxid oracle` is used only as the `nyxid-oracle` worker carrier — a reasoning channel in the same category as `codex-cli` — never as a helper script the skill owns, a daemon, or a lifecycle actor.
 
@@ -441,4 +441,4 @@ fix_or_done:
 
 The contract for this skill is verified by `skills/sshx/tests/test_sshx_contract.py`.
 
-Before adding or changing this skill, record the no-skill failure mode as source-owned contract or test evidence. Do not track `.refactor-loop/` runtime artifacts as published skill source.
+Before adding or changing this skill, record the no-skill failure mode as source-owned contract or test evidence. Do not track runtime artifacts as published skill source.

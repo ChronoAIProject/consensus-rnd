@@ -1,6 +1,6 @@
 {
   "name": "consensus-rnd",
-  "description": "通用共识式研发 skills 库：偏置独立的多角度共识构建引擎；repo-owned managed GitHub issue/PR 自治解决引擎，audit/refactor 仅 fallback producer",
+  "description": "worker-delegated inline consensus skills：隔离多视角、固定真值表，无 daemon、GitHub 或 git 编排",
   "version": "1.0.0-beta.28",
   "contextFileName": "GEMINI.md"
 }

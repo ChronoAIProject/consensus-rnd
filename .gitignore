@@ -5,10 +5,6 @@ __pycache__/
 # macOS
 .DS_Store
 
-# Host runtime artifacts (created when a skill runs inside a host repo,
-# never part of the published skill source)
-.refactor-loop/
-
 # Node / 跨平台工具
 node_modules/
 
