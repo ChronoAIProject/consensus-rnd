@@ -33,13 +33,13 @@ jobs:
         shell: bash
         run: |
           removed_skill_dir="skills/consensus""-loop"
-          if test ! -e "$removed_skill_dir"; then
+          if test ! -e "$removed_skill_dir" && test ! -L "$removed_skill_dir"; then
             :
           else
             echo "Removed skill directory still exists: $removed_skill_dir" >&2
             exit 1
           fi
-          if ! tracked_removed_files=$(git ls-files -- "$removed_skill_dir/**"); then
+          if ! tracked_removed_files=$(git ls-files -- "$removed_skill_dir" "$removed_skill_dir/**"); then
             echo "Unable to inspect tracked files under: $removed_skill_dir" >&2
             exit 1
           fi
