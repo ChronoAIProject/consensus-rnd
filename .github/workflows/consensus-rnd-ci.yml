@@ -3,11 +3,9 @@ name: consensus-rnd-ci
 on:
   pull_request:
     branches:
-      - auto-refact-dev
       - dev
   push:
     branches:
-      - auto-refact-dev
       - dev
   workflow_dispatch:
 
@@ -25,20 +23,41 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Fetch source-regression base
-        run: git fetch origin auto-refact-dev
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      - name: Reject removed runtime references
+        shell: bash
+        run: |
+          removed_skill_dir="skills/consensus""-loop"
+          if test ! -e "$removed_skill_dir"; then
+            :
+          else
+            echo "Removed skill directory still exists: $removed_skill_dir" >&2
+            exit 1
+          fi
+          if ! tracked_removed_files=$(git ls-files -- "$removed_skill_dir/**"); then
+            echo "Unable to inspect tracked files under: $removed_skill_dir" >&2
+            exit 1
+          fi
+          if [ -n "$tracked_removed_files" ]; then
+            echo "Removed skill files remain tracked:" >&2
+            printf '%s\n' "$tracked_removed_files" >&2
+            exit 1
+          fi
+          if grep -rn -E "consensus[-]loop|consensus[-]rnd[-]cli|codex[_]refactor[_]loop|[.]refactor[-]loop" --exclude-dir=.git --exclude=.git .; then
+            echo "Removed runtime reference found" >&2
+            exit 1
+          else
+            scan_status=$?
+            [ "$scan_status" -eq 1 ] || exit "$scan_status"
+          fi
+
       - name: Run contract tests
         run: |
-          python3 -m unittest discover -s skills/consensus-loop/scripts -p 'test_*.py'
           python3 -m unittest discover -s skills/sshx/tests -p 'test_*.py'
 
   manifest-version-sync:
@@ -54,22 +73,7 @@ jobs:
           python-version: "3.12"
 
       - name: Check manifest version sync
-        run: python3 skills/consensus-loop/scripts/consensus-rnd-cli check-manifest
-
-  skill-degradation:
-    name: skill-degradation
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Check skill degradation
-        run: python3 skills/consensus-loop/scripts/consensus-rnd-cli check-degradation --static
+        run: python3 .github/scripts/bump_version.py --check
 
   lint-advisory:
     name: lint-advisory
@@ -102,11 +106,11 @@ jobs:
         shell: bash
         run: |
           set +e
-          if compgen -G "skills/consensus-loop/scripts/*.sh" > /dev/null; then shellcheck skills/consensus-loop/scripts/*.sh; else true; fi
+          if compgen -G ".github/scripts/*.sh" > /dev/null; then shellcheck .github/scripts/*.sh; else true; fi
           SHELLCHECK_STATUS=$?
-          python3 -m ruff check --select E9,F63,F7,F82 skills/consensus-loop/scripts/consensus-rnd-cli skills/consensus-loop/scripts/codex_refactor_loop
+          python3 -m ruff check --select E9,F63,F7,F82 .github/scripts skills/sshx/tests
           RUFF_STATUS=$?
-          markdownlint-cli2 "**/*.md" "!node_modules" "!.git" "!.refactor-loop"
+          markdownlint-cli2 "**/*.md" "!node_modules" "!.git"
           MARKDOWNLINT_STATUS=$?
           {
             echo "## lint-advisory results"

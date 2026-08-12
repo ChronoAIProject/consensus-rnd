@@ -1,7 +1,7 @@
 {
   "name": "consensus-rnd",
   "version": "1.0.0-beta.28",
-  "description": "通用共识式研发 skills 库：偏置独立的多角度共识构建引擎；repo-owned managed GitHub issue/PR 自治解决引擎，audit/refactor 仅 fallback producer",
+  "description": "worker-delegated inline consensus skills：隔离多视角、固定真值表，无 daemon、GitHub 或 git 编排",
   "author": {
     "name": "auric",
     "email": "loning.ma@aelf.io",
@@ -14,17 +14,13 @@
     "skills",
     "consensus",
     "multi-agent",
-    "codex",
-    "orchestration",
-    "autonomous",
-    "refactor",
-    "workflow"
+    "codex"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Consensus R&D",
-    "shortDescription": "偏置独立的多角度共识构建引擎",
-    "longDescription": "把 repo-owned GitHub issue/PR work 当作可共识推进的研发单元：先解决 actionable managed GitHub issue/PR，经过 design-consensus、implementation、review、merge、release 的窄授权主路径；只有没有 actionable managed work 时，audit/refactor 才作为 fallback issue producer。多 solver 先验对立、互不可见，meta-judge 仲裁收敛，验证侧同构。",
+    "shortDescription": "隔离多视角的 worker-delegated inline consensus",
+    "longDescription": "为高风险决策和实现方案派发互不可见的独立 worker 视角，并用固定真值表完成 meta-judge 与 review gate；不提供 daemon、GitHub、git 或其他生命周期编排。",
     "developerName": "auric",
     "category": "Coding",
     "capabilities": [
@@ -33,7 +29,7 @@
       "Write"
     ],
     "defaultPrompt": [
-      "对本仓库跑一轮无人值守 Consensus R&D work-unit 循环：优先解决 actionable managed GitHub issue/PR；只有没有 actionable managed work 时，audit/refactor 才作为 fallback intake。"
+      "对一个高风险决策或实现方案运行 worker-delegated inline consensus：使用隔离多视角、meta-judge 和固定 review 真值表。"
     ],
     "websiteURL": "https://github.com/ChronoAIProject/consensus-rnd"
   }
