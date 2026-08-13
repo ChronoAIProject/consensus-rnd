@@ -1,10 +1,11 @@
 import json
 import os
 import re
+import select
 import shutil
+import signal
 import subprocess
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 RUNNER = ROOT / "skills" / "sshx" / "scripts" / "run-codex-worker.sh"
 SKILL = ROOT / "skills" / "sshx" / "SKILL.md"
+SPEC = ROOT / "skills" / "sshx" / "CODEX_WORKER_SPEC.md"
+TIMESTAMPED_LINE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z  \S")
 
 FAKE_CODEX = r'''#!/bin/bash
 set -u
@@ -34,6 +37,7 @@ write_sentinel() { printf '%s\n' complete > "$sentinel_ref.tmp"; mv "$sentinel_r
 printf '%s\n' 'fake last message' > "$last_message"
 case "${FAKE_MODE:-success}" in
   success) write_result; write_sentinel ;;
+  sleep_success) sleep "${FAKE_SLEEP_SECONDS:-1}"; write_result; write_sentinel ;;
   nonzero_with_artifacts) write_result; write_sentinel; exit 9 ;;
   nothing) ;;
   invalid_json) printf '%s' '{"conclusion":' > "$result_ref"; write_sentinel ;;
@@ -46,14 +50,13 @@ case "${FAKE_MODE:-success}" in
   log_marker) write_result; printf '%s\n' 'completion.sentinel exists' >&2 ;;
   diagnostic_result) printf '%s\n' '{"conclusion":{"verdict":"propose"},"log_ref":"fake-log"}' > "$last_message" ;;
   carrier_exit_write_failure) write_result; write_sentinel; mkdir "$run_dir/carrier.exit.tmp" ;;
-  artifacts_then_wait) write_result; write_sentinel; printf '%s\n' ready > "$FAKE_READY"; sleep 0.4; printf '%s\n' exited > "$FAKE_EXITED" ;;
-  self_kill) printf '%s\n' "$$" > "$FAKE_RUNNER_PID"; printf '%s\n' ready > "$FAKE_READY"; sleep 10 ;;
+  artifacts_then_wait) write_result; write_sentinel; printf '%s\n' ready > "$FAKE_READY"; command cat "$FAKE_RELEASE" >/dev/null; printf '%s\n' exited > "$FAKE_EXITED" ;;
+  interrupt_wait) printf '%s\n' "$$" > "$FAKE_CARRIER_PID"; printf '%s\n' ready > "$FAKE_READY"; command cat "$FAKE_RELEASE" >/dev/null ;;
   invalid_verdict_missing_sentinel) verdict=unexpected; write_result ;;
   exit_127) exit 127 ;;
   projection_collision)
     write_result; write_sentinel
     collision_target="$run_dir/$FAKE_COLLISION_TARGET"
-    [ "$FAKE_COLLISION_TARGET" = "status.json" ] && rm -f "$collision_target"
     case "$FAKE_COLLISION_SHAPE" in
       directory) mkdir "$collision_target" ;;
       fifo) mkfifo "$collision_target" ;;
@@ -87,8 +90,8 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.fake_codex = self.bin_dir / "codex"
         self.fake_codex.write_text(FAKE_CODEX)
         self.fake_codex.chmod(0o755)
-        jq = subprocess.run(["/bin/sh", "-c", "command -v jq"], check=True, capture_output=True, text=True).stdout.strip()
-        (self.bin_dir / "jq").symlink_to(jq)
+        self.real_jq = Path(subprocess.run(["/bin/sh", "-c", "command -v jq"], check=True, capture_output=True, text=True).stdout.strip())
+        (self.bin_dir / "jq").symlink_to(self.real_jq)
         self.counter = 0
 
     def tearDown(self) -> None:
@@ -115,6 +118,40 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         process = subprocess.run(self.command(selected, attempt=attempt, stage=stage), input="Perform the assigned worker task.\n", capture_output=True, text=True, env=env or self.environment(mode, **(extra_env or {})), timeout=10)
         return RunResult(process, self.expected_run_dir(selected, attempt))
 
+    def install_jq_wrapper(self) -> None:
+        wrapper = self.bin_dir / "jq"
+        wrapper.unlink()
+        wrapper.write_text(
+            "#!/bin/bash\n"
+            "set -u\n"
+            "case \" $* \" in *\" -n \"*)\n"
+            "  count=0\n"
+            "  [ ! -f \"$FAKE_JQ_STATE\" ] || count=$(command cat \"$FAKE_JQ_STATE\")\n"
+            "  count=$((count + 1))\n"
+            "  printf '%s\\n' \"$count\" > \"$FAKE_JQ_STATE\"\n"
+            "  case \"$FAKE_JQ_RENDER_MODE\" in\n"
+            "    primary_fail) [ \"$count\" -ne 1 ] || exit 71 ;;\n"
+            "    primary_empty) [ \"$count\" -ne 1 ] || exit 0 ;;\n"
+            "    double_fail) exit 72 ;;\n"
+            "    double_empty) exit 0 ;;\n"
+            "    finish_wait) printf '%s\\n' ready > \"$FAKE_READY\"; command cat \"$FAKE_RELEASE\" >/dev/null ;;\n"
+            "  esac\n"
+            "esac\n"
+            "exec \"$REAL_JQ\" \"$@\"\n"
+        )
+        wrapper.chmod(0o755)
+
+    def install_mv_observer(self) -> None:
+        wrapper = self.bin_dir / "mv"
+        wrapper.write_text(
+            "#!/bin/bash\n"
+            "for arg in \"$@\"; do\n"
+            "  case \"$arg\" in *status.json.tmp) [ -s \"$arg\" ] || printf '%s\\n' empty-status-move > \"$FAKE_MV_MARKER\" ;; esac\n"
+            "done\n"
+            "exec /bin/mv \"$@\"\n"
+        )
+        wrapper.chmod(0o755)
+
     def assert_terminal(self, result: RunResult, reason: str, expected_code: int | None = None) -> None:
         expected_code = 0 if reason == "COMPLETE" else 1 if expected_code is None else expected_code
         self.assertEqual(result.process.returncode, expected_code, result.process.stderr)
@@ -122,8 +159,14 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         assert result.status is not None
         self.assertEqual(result.status["reason_code"], reason)
         self.assertEqual(result.status["status"], "COMPLETE" if reason == "COMPLETE" else "NOT_COMPLETE")
-        self.assertEqual(result.process.stdout, result.run_dir.joinpath("status.json").read_text())
-        self.assertGreater(len(result.process.stdout.splitlines()), 1)
+        self.assertNotEqual(result.process.stdout, result.run_dir.joinpath("status.json").read_text())
+        self.assert_timestamped_stdout(result.process.stdout)
+
+    def assert_timestamped_stdout(self, stdout: str) -> None:
+        lines = stdout.splitlines()
+        self.assertGreater(len(lines), 1)
+        for line in lines:
+            self.assertRegex(line, TIMESTAMPED_LINE)
 
     def test_success_has_complete_status_and_fixed_artifacts(self) -> None:
         result = self.run_worker()
@@ -133,7 +176,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assertEqual(result.status["verdict"], "propose")
         self.assertEqual(result.status["carrier_exit"], 0)
 
-    def test_running_projection_has_new_fields_and_terminal_timestamps(self) -> None:
+    def test_terminal_status_has_context_and_timing_fields(self) -> None:
         result = self.run_worker()
         self.assert_terminal(result, "COMPLETE")
         assert result.status is not None
@@ -144,63 +187,127 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assertEqual(result.status["work_target"], str(ROOT))
         self.assertEqual(result.status["sandbox"], "workspace-write")
         self.assertEqual(result.status["brief_ref"], str(result.run_dir / "brief.md"))
-        self.assertIn("\n", result.process.stdout)
+        self.assertNotIn("RUNNING", result.run_dir.joinpath("status.json").read_text())
 
-    def test_status_spec_lists_running_projection_and_non_evidence_rule(self) -> None:
-        spec = (ROOT / "skills" / "sshx" / "CODEX_WORKER_SPEC.md").read_text()
-        self.assertIn('status: "RUNNING"', spec)
-        self.assertIn("`RUNNING` never means success or completion", spec)
-        self.assertIn("has never\nincluded `status.json`", spec)
+    def test_status_contract_source_regression(self) -> None:
+        spec = re.sub(r"\s+", " ", SPEC.read_text())
+        self.assertNotIn('status: "RUNNING"', spec)
+        self.assertNotIn("`RUNNING` never means success or completion", spec)
+        self.assertIn("Exit code is the sole authority", spec)
+        self.assertIn("terminal, machine-readable projection", spec)
+        self.assertIn("human-readable streaming log", spec)
+        self.assertIn("not guaranteed to be parseable", spec)
+        self.assertIn("not byte-for-byte identical to any file", spec)
         for field in ["started_at", "finished_at", "duration_seconds", "work_target", "sandbox", "brief_ref"]:
             self.assertIn(f"`{field}`", spec)
 
-    def test_startup_status_target_types_fail_closed(self) -> None:
-        for shape in ["directory", "symlink", "fifo"]:
-            with self.subTest(shape=shape):
-                flight = self.next_flight("startup-status")
-                wrapper = self.bin_dir / "mkdir"
-                real_mkdir = "/bin/mkdir"
-                outside = self.temp_dir / f"outside-{shape}"
-                if shape == "symlink":
-                    outside.write_text("unchanged\n")
-                wrapper.write_text(
-                    "#!/bin/bash\n"
-                    f"{real_mkdir} \"$@\" || exit $?\n"
-                    "case \"${1:-}\" in */attempt-1)\n"
-                    "  target=\"$1/status.json\"\n"
-                    f"  case \"$FAKE_STATUS_SHAPE\" in directory) {real_mkdir} \"$target\" ;; symlink) ln -s \"$FAKE_OUTSIDE\" \"$target\" ;; fifo) mkfifo \"$target\" ;; esac\n"
-                    "esac\n"
-                )
-                wrapper.chmod(0o755)
-                result = self.run_worker(extra_env={"FAKE_STATUS_SHAPE": shape, "FAKE_OUTSIDE": str(outside) }, flight_id=flight)
-                self.assertEqual(result.process.returncode, 1, result.process.stderr)
-                self.assertIsNone(result.status)
-                self.assertIn("INTERNAL_ERROR", result.process.stderr)
-                if shape == "symlink": self.assertEqual(outside.read_text(), "unchanged\n")
+    def test_trap_contract_source_regression(self) -> None:
+        trap_lines = [line.strip() for line in RUNNER.read_text().splitlines() if line.strip().startswith("trap")]
+        self.assertIn("trap finish EXIT", trap_lines)
+        self.assertIn("trap interrupt INT TERM", trap_lines)
+        self.assertIn("trap - EXIT", trap_lines)
+        self.assertIn("trap '' INT TERM", trap_lines)
+        self.assertNotIn("trap - EXIT INT TERM", trap_lines)
 
-    def test_terminal_status_publish_failure_replaces_running_projection(self) -> None:
+    def test_terminal_status_publish_failure_installs_no_projection(self) -> None:
         result = self.run_worker("projection_collision", extra_env={"FAKE_COLLISION_TARGET": "status.json.tmp", "FAKE_COLLISION_SHAPE": "directory", "FAKE_OUTSIDE": str(self.temp_dir / "unused")})
         self.assertEqual(result.process.returncode, 1, result.process.stderr)
         self.assertIsNone(result.status)
         self.assertIn("INTERNAL_ERROR", result.process.stderr)
 
-    def test_killed_carrier_overwrites_running_projection(self) -> None:
-        flight = self.next_flight("killed")
-        ready = self.temp_dir / "killed-ready"
-        runner_pid = self.temp_dir / "runner-pid"
-        process = subprocess.Popen(self.command(flight), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.environment("self_kill", FAKE_READY=str(ready), FAKE_RUNNER_PID=str(runner_pid)))
-        for _ in range(100):
-            if ready.exists(): break
-            time.sleep(0.01)
-        self.assertTrue(ready.exists())
-        self.assertEqual(ready.read_text().strip(), "ready")
-        running = json.loads(self.expected_run_dir(flight).joinpath("status.json").read_text())
-        self.assertEqual(running["status"], "RUNNING")
-        os.kill(int(runner_pid.read_text()), 15)
+    def test_primary_status_render_failure_publishes_internal_error_fallback(self) -> None:
+        for mode in ["primary_fail", "primary_empty"]:
+            with self.subTest(mode=mode):
+                self.install_jq_wrapper()
+                state = self.temp_dir / f"jq-{mode}-state"
+                result = self.run_worker(
+                    extra_env={"REAL_JQ": str(self.real_jq), "FAKE_JQ_STATE": str(state), "FAKE_JQ_RENDER_MODE": mode},
+                )
+                self.assert_terminal(result, "INTERNAL_ERROR")
+                self.assertGreater(result.run_dir.joinpath("status.json").stat().st_size, 0)
+
+    def test_double_status_render_failure_never_installs_empty_status(self) -> None:
+        for mode in ["double_fail", "double_empty"]:
+            with self.subTest(mode=mode):
+                self.install_jq_wrapper()
+                self.install_mv_observer()
+                state = self.temp_dir / f"jq-{mode}-state"
+                mv_marker = self.temp_dir / f"mv-{mode}-marker"
+                result = self.run_worker(
+                    extra_env={"REAL_JQ": str(self.real_jq), "FAKE_JQ_STATE": str(state), "FAKE_JQ_RENDER_MODE": mode, "FAKE_MV_MARKER": str(mv_marker)},
+                )
+                self.assertEqual(result.process.returncode, 1, result.process.stderr)
+                self.assertIsNone(result.status)
+                self.assertFalse(result.run_dir.joinpath("status.json").exists())
+                self.assertFalse(mv_marker.exists(), "empty status temporary file was passed to mv")
+                self.assertIn("cannot render failure status", result.process.stderr)
+
+    def test_signal_during_finish_cannot_interrupt_terminal_publication(self) -> None:
+        self.install_jq_wrapper()
+        flight = self.next_flight("finish-signal")
+        ready = self.temp_dir / "finish-ready"
+        release = self.temp_dir / "finish-release"
+        state = self.temp_dir / "jq-finish-state"
+        os.mkfifo(ready)
+        os.mkfifo(release)
+        process = subprocess.Popen(
+            self.command(flight),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=self.environment(
+                REAL_JQ=str(self.real_jq),
+                FAKE_JQ_STATE=str(state),
+                FAKE_JQ_RENDER_MODE="finish_wait",
+                FAKE_READY=str(ready),
+                FAKE_RELEASE=str(release),
+            ),
+        )
+        with ready.open() as ready_signal:
+            self.assertEqual(ready_signal.read().strip(), "ready")
+        os.kill(process.pid, signal.SIGTERM)
+        with release.open("w") as release_signal:
+            release_signal.write("release\n")
+        stdout, stderr = process.communicate(timeout=10)
+        self.assert_terminal(
+            RunResult(subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr), self.expected_run_dir(flight)),
+            "COMPLETE",
+        )
+
+    def run_interrupted_runner(self, signal_number: int) -> RunResult:
+        flight = self.next_flight("interrupted")
+        ready = self.temp_dir / f"ready-{flight}"
+        release = self.temp_dir / f"release-{flight}"
+        carrier_pid_ref = self.temp_dir / f"carrier-{flight}.pid"
+        os.mkfifo(ready)
+        os.mkfifo(release)
+        process = subprocess.Popen(
+            self.command(flight),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=self.environment("interrupt_wait", FAKE_READY=str(ready), FAKE_RELEASE=str(release), FAKE_CARRIER_PID=str(carrier_pid_ref)),
+        )
+        with ready.open() as ready_signal:
+            self.assertEqual(ready_signal.read().strip(), "ready")
+        carrier_pid = int(carrier_pid_ref.read_text())
+        os.kill(process.pid, signal_number)
+        with release.open("w") as release_signal:
+            release_signal.write("release\n")
         stdout, stderr = process.communicate(timeout=10)
         result = RunResult(subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr), self.expected_run_dir(flight))
-        self.assert_terminal(result, "CARRIER_EXIT_NONZERO")
-        self.assertNotEqual(result.status["status"], "RUNNING")
+        self.assert_terminal(result, "INTERRUPTED")
+        with self.assertRaises(ProcessLookupError):
+            os.kill(carrier_pid, 0)
+        return result
+
+    def test_sigterm_to_runner_writes_interrupted_terminal_status(self) -> None:
+        self.run_interrupted_runner(signal.SIGTERM)
+
+    def test_sigint_to_runner_writes_interrupted_terminal_status(self) -> None:
+        self.run_interrupted_runner(signal.SIGINT)
 
     def test_time_lookup_failure_is_diagnostic_only(self) -> None:
         date = self.bin_dir / "date"
@@ -228,34 +335,51 @@ class CodexWorkerRunnerTests(unittest.TestCase):
     def test_runner_waits_until_carrier_exits_after_artifacts_appear(self) -> None:
         flight = self.next_flight("foreground-wait")
         ready = self.temp_dir / "carrier-ready"
+        release = self.temp_dir / "carrier-release"
         exited = self.temp_dir / "carrier-exited"
         os.mkfifo(ready)
+        os.mkfifo(release)
         process = subprocess.Popen(
             self.command(flight),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=self.environment("artifacts_then_wait", FAKE_READY=str(ready), FAKE_EXITED=str(exited)),
+            env=self.environment("artifacts_then_wait", FAKE_READY=str(ready), FAKE_RELEASE=str(release), FAKE_EXITED=str(exited)),
         )
+        assert process.stdout is not None
+        startup_lines = []
+        while True:
+            readable, _, _ = select.select([process.stdout], [], [], 10)
+            self.assertTrue(readable, "no startup log line became readable")
+            line = process.stdout.readline()
+            self.assertNotEqual(line, "", "stdout closed before carrier start was reported")
+            startup_lines.append(line)
+            if "carrier starting" in line:
+                break
+        startup_stdout = "".join(startup_lines)
+        startup_is_timestamped = all(TIMESTAMPED_LINE.search(line) for line in startup_stdout.splitlines())
+        startup_has_status_file = any("status_file" in line for line in startup_lines)
         with ready.open() as ready_signal:
             self.assertEqual(ready_signal.read().strip(), "ready")
-        running = json.loads(self.expected_run_dir(flight).joinpath("status.json").read_text())
-        self.assertEqual(running["status"], "RUNNING")
-        self.assertIsNone(running["reason_code"])
-        self.assertRegex(running["started_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-        self.assertIsNone(running["finished_at"])
-        self.assertIsNone(running["duration_seconds"])
-        self.assertEqual(running["work_target"], str(ROOT))
-        self.assertEqual(running["sandbox"], "workspace-write")
-        self.assertEqual(running["brief_ref"], str(self.expected_run_dir(flight) / "brief.md"))
-        self.assertIsNone(process.poll(), "runner returned before the live carrier exited")
-        stdout, stderr = process.communicate(timeout=10)
+        status_existed_while_running = self.expected_run_dir(flight).joinpath("status.json").exists()
+        runner_returned_while_carrier_live = process.poll() is not None
+        with release.open("w") as release_signal:
+            release_signal.write("release\n")
+        stdout_tail, stderr = process.communicate(timeout=10)
+        stdout = "".join(startup_lines) + stdout_tail
+        self.assertTrue(startup_is_timestamped)
+        self.assertTrue(startup_has_status_file)
+        self.assertFalse(status_existed_while_running)
+        self.assertFalse(runner_returned_while_carrier_live, "runner returned before the live carrier exited")
         self.assertEqual(exited.read_text().strip(), "exited")
-        self.assert_terminal(
-            RunResult(subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr), self.expected_run_dir(flight)),
-            "COMPLETE",
-        )
+        result = RunResult(subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr), self.expected_run_dir(flight))
+        self.assert_terminal(result, "COMPLETE")
+        self.assertIn("carrier exited rc=0", stdout_tail)
+        self.assertIn("status        COMPLETE", stdout_tail)
+        self.assertIn("reason_code   COMPLETE", stdout_tail)
+        self.assertIn("verdict       propose", stdout_tail)
+        self.assertRegex(stdout_tail, r"duration\s+\d+s")
 
     def test_missing_result_is_not_complete(self) -> None:
         self.assert_terminal(self.run_worker("nothing"), "RESULT_MISSING")
@@ -283,7 +407,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assert_terminal(self.run_worker("carrier_exit_write_failure"), "INTERNAL_ERROR")
 
     def test_status_projection_rejects_non_regular_targets(self) -> None:
-        for target in ["status.json.tmp"]:
+        for target in ["status.json", "status.json.tmp"]:
             for shape in ["directory", "fifo", "symlink_directory", "symlink_file", "symlink_dangling"]:
                 with self.subTest(target=target, shape=shape):
                     outside = self.temp_dir / self.next_flight("outside-status")
@@ -380,6 +504,18 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assertIn("RUN_DIR_COLLISION", process.process.stderr)
         self.assertEqual(marker.read_text(), "unchanged\n")
 
+    def test_dangling_symlink_attempt_path_is_collision_without_launch(self) -> None:
+        flight = self.next_flight("dangling-attempt")
+        run_dir = self.expected_run_dir(flight)
+        run_dir.parent.mkdir(parents=True)
+        missing_target = self.temp_dir / "missing-attempt-target"
+        run_dir.symlink_to(missing_target, target_is_directory=True)
+        result = self.run_worker(flight_id=flight)
+        self.assertEqual(result.process.returncode, 1)
+        self.assertIn("RUN_DIR_COLLISION", result.process.stderr)
+        self.assertTrue(run_dir.is_symlink())
+        self.assertFalse(missing_target.exists())
+
     def test_run_hierarchy_rejects_symlinks_before_launch(self) -> None:
         for component in ["consensus-rnd", "sshx", "flight"]:
             with self.subTest(component=component):
@@ -404,7 +540,10 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         p2 = subprocess.Popen(self.command(b), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.environment())
         out1, err1 = p1.communicate("brief a\n", timeout=10); out2, err2 = p2.communicate("brief b\n", timeout=10)
         self.assertEqual(p1.returncode, 0, err1); self.assertEqual(p2.returncode, 0, err2)
-        self.assertNotEqual(json.loads(out1)["run_dir"], json.loads(out2)["run_dir"])
+        self.assert_timestamped_stdout(out1); self.assert_timestamped_stdout(out2)
+        status_a = json.loads(self.expected_run_dir(a).joinpath("status.json").read_text())
+        status_b = json.loads(self.expected_run_dir(b).joinpath("status.json").read_text())
+        self.assertNotEqual(status_a["run_dir"], status_b["run_dir"])
 
     def test_symlinks_cannot_impersonate_worker_artifacts(self) -> None:
         self.assert_terminal(self.run_worker("symlink_result"), "RESULT_MISSING")
@@ -435,21 +574,22 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         process = subprocess.run(self.command("."), input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
         self.assertEqual(process.returncode, 64); self.assertIn("USAGE_ERROR", process.stderr)
 
-    def test_stdout_publication_failure_is_internal_error(self) -> None:
+    def test_closed_stdout_does_not_change_authoritative_exit_or_status(self) -> None:
         flight = self.next_flight("stdout-failure")
         with subprocess.Popen(self.command(flight), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.environment()) as process:
             assert process.stdin is not None and process.stdout is not None
             process.stdin.write("brief\n"); process.stdin.close(); process.stdout.close(); process.wait(timeout=10)
-            self.assertEqual(process.returncode, 1)
+            self.assertEqual(process.returncode, 0)
         status = json.loads(self.expected_run_dir(flight).joinpath("status.json").read_text())
-        self.assertEqual(status["reason_code"], "INTERNAL_ERROR")
+        self.assertEqual(status["reason_code"], "COMPLETE")
         self.assertGreater(len(self.expected_run_dir(flight).joinpath("status.json").read_text().splitlines()), 1)
 
-    def test_status_rendering_uses_pretty_json_for_all_paths(self) -> None:
+    def test_pretty_status_rendering_source_regression(self) -> None:
         runner = RUNNER.read_text()
         self.assertNotIn('"$jq_path" -cn', runner)
-        self.assertGreaterEqual(runner.count('"$jq_path" -n'), 4)
-        self.assertGreater(len(self.run_worker("nothing").process.stdout.splitlines()), 1)
+        self.assertGreaterEqual(runner.count('"$jq_path" -n'), 3)
+        result = self.run_worker("nothing")
+        self.assertGreater(len(result.run_dir.joinpath("status.json").read_text().splitlines()), 1)
 
     def test_runner_verdict_sets_match_skill_contract(self) -> None:
         text = SKILL.read_text()

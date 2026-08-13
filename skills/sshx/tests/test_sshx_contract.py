@@ -517,6 +517,21 @@ class SshxContractTests(unittest.TestCase):
             worker_delegation.index("`codex-cli` completion is recognized only when"),
         )
 
+    def test_sshx_codex_cli_background_job_dispatch_source_regression(self) -> None:
+        text = read(SKILL)
+        worker_delegation = text[
+            heading_index(text, "## Worker Delegation") : heading_index(text, "## Result Envelope")
+        ]
+        normalized = re.sub(r"\s+", " ", worker_delegation).lower()
+
+        self.assertIn("host-provided background job mechanism", normalized)
+        self.assertRegex(normalized, r"(?:notif(?:y|ies)|completion notification).{0,100}caller|caller.{0,100}(?:notif(?:y|ies)|completion notification)")
+        self.assertIn("`&`", normalized)
+        self.assertRegex(normalized, r"(?:must not|forbidden).{0,80}`&`|`&`.{0,80}(?:must not|forbidden)")
+        self.assertRegex(normalized, r"detach\w*.{0,80}host tracking")
+        self.assertRegex(normalized, r"(?:must not|forbidden).{0,80}monitor|monitor\w*.{0,80}(?:must not|forbidden)")
+        self.assertRegex(normalized, r"files?.{0,30}logs?.{0,80}poll|poll.{0,80}files?.{0,30}logs?")
+
     def test_sshx_in_flight_worker_blocks_caller_mutation(self) -> None:
         text = read(SKILL)
         self.assertIn("While any `SshxWorkerFlightRecord` for the same `work_target` is `in-flight` or `retrying`", text)
@@ -751,7 +766,7 @@ class SshxContractTests(unittest.TestCase):
         verdict_tokens = {"propose", "revise", "reject", "abstain", "approve", "comment"}
         self.assertEqual(verdict_tokens.intersection(re.findall(r"\b[a-z]+\b", text)), set())
 
-    def test_worker_spec_has_executable_rollback_and_threat_boundaries(self) -> None:
+    def test_worker_spec_source_regression_has_executable_rollback_and_threat_boundaries(self) -> None:
         text = re.sub(r"\s+", " ", read(SPEC))
         for required in [
             "No other skill may depend on this runner",

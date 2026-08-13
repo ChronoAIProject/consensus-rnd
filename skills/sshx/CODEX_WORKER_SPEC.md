@@ -3,7 +3,9 @@
 This is the mechanical specification for
 `skills/sshx/scripts/run-codex-worker.sh`. The completion predicate is defined
 once in `SKILL.md` under `## Worker Completion Contract`; this file references
-that contract and does not restate it.
+that contract and does not restate it. Caller-side runner dispatch is governed
+solely by `SKILL.md` under `## Worker Delegation` and is likewise not restated
+here.
 
 ## Invocation
 
@@ -65,40 +67,33 @@ phase and does not tear down descendants.
 
 ## Status Projection
 
-After the attempt directory is created and all derived paths are known, but
-before the carrier is launched, the runner publishes a formatted JSON
-`status.json` with `status: "RUNNING"`. It contains invocation identity,
-derived artifact and log references, `work_target`, `sandbox`, `brief_ref`, and
-the diagnostic fields `started_at`, `finished_at: null`, and
-`duration_seconds: null`. `started_at` is UTC ISO-8601
-(`%Y-%m-%dT%H:%M:%SZ`) when BSD `date` can provide it; a failed time lookup
-writes `null` and does not fail the flight. The startup publication uses the
-same `regular_or_absent` target check as the terminal publication and is
-written through its temporary file and atomic rename.
+`status.json` is written only by terminal cleanup; there is no startup or
+in-progress status projection. Its `status` is exactly `COMPLETE` or
+`NOT_COMPLETE`. It contains invocation identity, derived artifact and log
+references, `started_at`, `finished_at`, `duration_seconds`, `work_target`,
+`sandbox`, and `brief_ref`. Times use UTC ISO-8601
+(`%Y-%m-%dT%H:%M:%SZ`); duration is the integer epoch-second difference when
+both lookups succeed. A failed time lookup writes `null` and does not fail the
+flight.
 
-After the carrier exits, `trap finish EXIT` replaces the current projection
-with the terminal projection. Terminal `status` is `COMPLETE` or
-`NOT_COMPLETE`; `finished_at` is the UTC terminal time and `duration_seconds`
-is the integer epoch-second difference when both values are available, or
-`null` otherwise. The terminal projection preserves `started_at`,
-`work_target`, `sandbox`, and `brief_ref`.
+Exit code is the sole authority: `0` means complete, `1` means not complete,
+and `64` means usage error. `status.json` is a terminal, machine-readable
+projection for callers that need structured data. stdout is a human-readable
+streaming log; it carries no decision authority, is not guaranteed to be
+parseable, and is not byte-for-byte identical to any file.
 
-`status.json` is a diagnostic projection, not evidence. In particular,
-`RUNNING` never means success or completion: the fail-closed completion
-predicate is the fixed four-way conjunction in `SKILL.md`, and it has never
-included `status.json`. Diagnostic surfaces never participate in completion
-checks.
+Before the synchronous carrier call, stdout reports all then-known invocation
+identity and derived artifact paths followed by `carrier starting`. After the
+call returns, it reports the carrier exit status; terminal cleanup then reports
+`status`, `reason_code`, `verdict`, and duration. Every stdout line begins with
+a UTC ISO-8601 timestamp. stdout write failure is diagnostic only and cannot
+change the authoritative exit decision.
 
-The six context and timing fields have this fixed lifecycle:
-
-| field | startup projection | terminal projection |
-| --- | --- | --- |
-| `started_at` | flight start time, or `null` | preserved |
-| `finished_at` | `null` | terminal time, or `null` |
-| `duration_seconds` | `null` | integer elapsed seconds, or `null` |
-| `work_target` | invocation value | preserved |
-| `sandbox` | invocation value | preserved |
-| `brief_ref` | absolute `brief.md` path | preserved |
+Each stdout write runs in a narrow subshell so a closed stream cannot override
+that exit decision or change the carrier's signal disposition. Terminal
+cleanup clears only its recursive `EXIT` trap and ignores
+`INT` and `TERM` for the rest of publication, so a second signal cannot leave
+the terminal projection half-published.
 
 ## Terminal Projection
 
@@ -113,15 +108,9 @@ the fixed check order determines `reason_code`:
 `ENVELOPE_INVALID`, `VERDICT_INVALID`, `SENTINEL_MISSING`,
 `INTERRUPTED`, or `INTERNAL_ERROR`.
 
-Exit code is authoritative because it is the process return value. `status.json`
-and stdout are projections of that decision. If either projection cannot be
-published, `reason_code=INTERNAL_ERROR` and exit 1; callers use the exit code
-as the authority rather than assuming three-way atomic consistency.
-
 After the attempt directory is owned, `finish` renders formatted (pretty-print)
-`status.json.tmp`,
-publishes the same JSON to stdout, then renames the temporary file to
-`status.json`. The status contains invocation identity, `status` (`COMPLETE` or
+`status.json.tmp`, then renames the temporary file to `status.json`. The status
+contains invocation identity, `status` (`COMPLETE` or
 `NOT_COMPLETE`), `reason_code`, `carrier_exit` (or `null`), derived artifact
 references, diagnostic log references, the six fields `started_at`,
 `finished_at`, `duration_seconds`, `work_target`, `sandbox`, and `brief_ref`,
@@ -130,8 +119,10 @@ runner-owned projection is written, its temporary
 and final target must be absent or a non-symbolic-link regular file. After each
 rename, the fixed `carrier.exit` or `status.json` path must be a non-symbolic-link
 regular file; every target-type or publication failure fails closed.
-The stdout payload is the complete formatted JSON document, byte-for-byte equal
-to the terminal `status.json` content; callers parse it as one JSON document.
+Both the primary rendering and the `INTERNAL_ERROR` fallback must exit zero and
+produce a non-empty temporary file before rename. If both renderings fail,
+the runner installs no `status.json`, reports `INTERNAL_ERROR`, and exits 1.
+The renderer is not asked to validate its own output.
 
 `jq` is mandatory. Parsing or structural failure is `ENVELOPE_INVALID`; no
 text matching fallback exists. `SKILL.md` is the sole source of the exact stage
