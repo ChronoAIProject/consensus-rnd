@@ -63,6 +63,43 @@ normal `EXIT` trap. Bash may defer these traps while the synchronous foreground
 command is running. The runner does not promise signal reachability in every
 phase and does not tear down descendants.
 
+## Status Projection
+
+After the attempt directory is created and all derived paths are known, but
+before the carrier is launched, the runner publishes a formatted JSON
+`status.json` with `status: "RUNNING"`. It contains invocation identity,
+derived artifact and log references, `work_target`, `sandbox`, `brief_ref`, and
+the diagnostic fields `started_at`, `finished_at: null`, and
+`duration_seconds: null`. `started_at` is UTC ISO-8601
+(`%Y-%m-%dT%H:%M:%SZ`) when BSD `date` can provide it; a failed time lookup
+writes `null` and does not fail the flight. The startup publication uses the
+same `regular_or_absent` target check as the terminal publication and is
+written through its temporary file and atomic rename.
+
+After the carrier exits, `trap finish EXIT` replaces the current projection
+with the terminal projection. Terminal `status` is `COMPLETE` or
+`NOT_COMPLETE`; `finished_at` is the UTC terminal time and `duration_seconds`
+is the integer epoch-second difference when both values are available, or
+`null` otherwise. The terminal projection preserves `started_at`,
+`work_target`, `sandbox`, and `brief_ref`.
+
+`status.json` is a diagnostic projection, not evidence. In particular,
+`RUNNING` never means success or completion: the fail-closed completion
+predicate is the fixed four-way conjunction in `SKILL.md`, and it has never
+included `status.json`. Diagnostic surfaces never participate in completion
+checks.
+
+The six context and timing fields have this fixed lifecycle:
+
+| field | startup projection | terminal projection |
+| --- | --- | --- |
+| `started_at` | flight start time, or `null` | preserved |
+| `finished_at` | `null` | terminal time, or `null` |
+| `duration_seconds` | `null` | integer elapsed seconds, or `null` |
+| `work_target` | invocation value | preserved |
+| `sandbox` | invocation value | preserved |
+| `brief_ref` | absolute `brief.md` path | preserved |
+
 ## Terminal Projection
 
 `trap finish EXIT` is the only terminal publisher and the script has one
@@ -81,15 +118,20 @@ and stdout are projections of that decision. If either projection cannot be
 published, `reason_code=INTERNAL_ERROR` and exit 1; callers use the exit code
 as the authority rather than assuming three-way atomic consistency.
 
-After the attempt directory is owned, `finish` renders `status.json.tmp`,
+After the attempt directory is owned, `finish` renders formatted (pretty-print)
+`status.json.tmp`,
 publishes the same JSON to stdout, then renames the temporary file to
 `status.json`. The status contains invocation identity, `status` (`COMPLETE` or
 `NOT_COMPLETE`), `reason_code`, `carrier_exit` (or `null`), derived artifact
-references, diagnostic log references, and a verdict only when the stage has a
-verdict mapping. Before either runner-owned projection is written, its temporary
+references, diagnostic log references, the six fields `started_at`,
+`finished_at`, `duration_seconds`, `work_target`, `sandbox`, and `brief_ref`,
+and a verdict only when the stage has a verdict mapping. Before either
+runner-owned projection is written, its temporary
 and final target must be absent or a non-symbolic-link regular file. After each
 rename, the fixed `carrier.exit` or `status.json` path must be a non-symbolic-link
 regular file; every target-type or publication failure fails closed.
+The stdout payload is the complete formatted JSON document, byte-for-byte equal
+to the terminal `status.json` content; callers parse it as one JSON document.
 
 `jq` is mandatory. Parsing or structural failure is `ENVELOPE_INVALID`; no
 text matching fallback exists. `SKILL.md` is the sole source of the exact stage

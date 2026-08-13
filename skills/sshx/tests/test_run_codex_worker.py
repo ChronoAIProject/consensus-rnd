@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -46,11 +47,13 @@ case "${FAKE_MODE:-success}" in
   diagnostic_result) printf '%s\n' '{"conclusion":{"verdict":"propose"},"log_ref":"fake-log"}' > "$last_message" ;;
   carrier_exit_write_failure) write_result; write_sentinel; mkdir "$run_dir/carrier.exit.tmp" ;;
   artifacts_then_wait) write_result; write_sentinel; printf '%s\n' ready > "$FAKE_READY"; sleep 0.4; printf '%s\n' exited > "$FAKE_EXITED" ;;
+  self_kill) printf '%s\n' "$$" > "$FAKE_RUNNER_PID"; printf '%s\n' ready > "$FAKE_READY"; sleep 10 ;;
   invalid_verdict_missing_sentinel) verdict=unexpected; write_result ;;
   exit_127) exit 127 ;;
   projection_collision)
     write_result; write_sentinel
     collision_target="$run_dir/$FAKE_COLLISION_TARGET"
+    [ "$FAKE_COLLISION_TARGET" = "status.json" ] && rm -f "$collision_target"
     case "$FAKE_COLLISION_SHAPE" in
       directory) mkdir "$collision_target" ;;
       fifo) mkfifo "$collision_target" ;;
@@ -120,6 +123,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assertEqual(result.status["reason_code"], reason)
         self.assertEqual(result.status["status"], "COMPLETE" if reason == "COMPLETE" else "NOT_COMPLETE")
         self.assertEqual(result.process.stdout, result.run_dir.joinpath("status.json").read_text())
+        self.assertGreater(len(result.process.stdout.splitlines()), 1)
 
     def test_success_has_complete_status_and_fixed_artifacts(self) -> None:
         result = self.run_worker()
@@ -129,10 +133,92 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assertEqual(result.status["verdict"], "propose")
         self.assertEqual(result.status["carrier_exit"], 0)
 
+    def test_running_projection_has_new_fields_and_terminal_timestamps(self) -> None:
+        result = self.run_worker()
+        self.assert_terminal(result, "COMPLETE")
+        assert result.status is not None
+        self.assertEqual(result.status["status"], "COMPLETE")
+        self.assertRegex(result.status["started_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertRegex(result.status["finished_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertIsInstance(result.status["duration_seconds"], int)
+        self.assertEqual(result.status["work_target"], str(ROOT))
+        self.assertEqual(result.status["sandbox"], "workspace-write")
+        self.assertEqual(result.status["brief_ref"], str(result.run_dir / "brief.md"))
+        self.assertIn("\n", result.process.stdout)
+
+    def test_status_spec_lists_running_projection_and_non_evidence_rule(self) -> None:
+        spec = (ROOT / "skills" / "sshx" / "CODEX_WORKER_SPEC.md").read_text()
+        self.assertIn('status: "RUNNING"', spec)
+        self.assertIn("`RUNNING` never means success or completion", spec)
+        self.assertIn("has never\nincluded `status.json`", spec)
+        for field in ["started_at", "finished_at", "duration_seconds", "work_target", "sandbox", "brief_ref"]:
+            self.assertIn(f"`{field}`", spec)
+
+    def test_startup_status_target_types_fail_closed(self) -> None:
+        for shape in ["directory", "symlink", "fifo"]:
+            with self.subTest(shape=shape):
+                flight = self.next_flight("startup-status")
+                wrapper = self.bin_dir / "mkdir"
+                real_mkdir = "/bin/mkdir"
+                outside = self.temp_dir / f"outside-{shape}"
+                if shape == "symlink":
+                    outside.write_text("unchanged\n")
+                wrapper.write_text(
+                    "#!/bin/bash\n"
+                    f"{real_mkdir} \"$@\" || exit $?\n"
+                    "case \"${1:-}\" in */attempt-1)\n"
+                    "  target=\"$1/status.json\"\n"
+                    f"  case \"$FAKE_STATUS_SHAPE\" in directory) {real_mkdir} \"$target\" ;; symlink) ln -s \"$FAKE_OUTSIDE\" \"$target\" ;; fifo) mkfifo \"$target\" ;; esac\n"
+                    "esac\n"
+                )
+                wrapper.chmod(0o755)
+                result = self.run_worker(extra_env={"FAKE_STATUS_SHAPE": shape, "FAKE_OUTSIDE": str(outside) }, flight_id=flight)
+                self.assertEqual(result.process.returncode, 1, result.process.stderr)
+                self.assertIsNone(result.status)
+                self.assertIn("INTERNAL_ERROR", result.process.stderr)
+                if shape == "symlink": self.assertEqual(outside.read_text(), "unchanged\n")
+
+    def test_terminal_status_publish_failure_replaces_running_projection(self) -> None:
+        result = self.run_worker("projection_collision", extra_env={"FAKE_COLLISION_TARGET": "status.json.tmp", "FAKE_COLLISION_SHAPE": "directory", "FAKE_OUTSIDE": str(self.temp_dir / "unused")})
+        self.assertEqual(result.process.returncode, 1, result.process.stderr)
+        self.assertIsNone(result.status)
+        self.assertIn("INTERNAL_ERROR", result.process.stderr)
+
+    def test_killed_carrier_overwrites_running_projection(self) -> None:
+        flight = self.next_flight("killed")
+        ready = self.temp_dir / "killed-ready"
+        runner_pid = self.temp_dir / "runner-pid"
+        process = subprocess.Popen(self.command(flight), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.environment("self_kill", FAKE_READY=str(ready), FAKE_RUNNER_PID=str(runner_pid)))
+        for _ in range(100):
+            if ready.exists(): break
+            time.sleep(0.01)
+        self.assertTrue(ready.exists())
+        self.assertEqual(ready.read_text().strip(), "ready")
+        running = json.loads(self.expected_run_dir(flight).joinpath("status.json").read_text())
+        self.assertEqual(running["status"], "RUNNING")
+        os.kill(int(runner_pid.read_text()), 15)
+        stdout, stderr = process.communicate(timeout=10)
+        result = RunResult(subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr), self.expected_run_dir(flight))
+        self.assert_terminal(result, "CARRIER_EXIT_NONZERO")
+        self.assertNotEqual(result.status["status"], "RUNNING")
+
+    def test_time_lookup_failure_is_diagnostic_only(self) -> None:
+        date = self.bin_dir / "date"
+        date.write_text("#!/bin/bash\nexit 1\n")
+        date.chmod(0o755)
+        result = self.run_worker()
+        self.assert_terminal(result, "COMPLETE")
+        self.assertIsNone(result.status["started_at"])
+        self.assertIsNone(result.status["finished_at"])
+        self.assertIsNone(result.status["duration_seconds"])
+
     def test_nonzero_carrier_wins_even_with_complete_artifacts(self) -> None:
         result = self.run_worker("nonzero_with_artifacts")
         self.assert_terminal(result, "CARRIER_EXIT_NONZERO")
         self.assertEqual(result.status["carrier_exit"], 9)
+        self.assertRegex(result.status["started_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertRegex(result.status["finished_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertIsInstance(result.status["duration_seconds"], int)
 
     def test_started_carrier_exit_127_is_nonzero_not_launch_failure(self) -> None:
         result = self.run_worker("exit_127")
@@ -154,6 +240,15 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         )
         with ready.open() as ready_signal:
             self.assertEqual(ready_signal.read().strip(), "ready")
+        running = json.loads(self.expected_run_dir(flight).joinpath("status.json").read_text())
+        self.assertEqual(running["status"], "RUNNING")
+        self.assertIsNone(running["reason_code"])
+        self.assertRegex(running["started_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        self.assertIsNone(running["finished_at"])
+        self.assertIsNone(running["duration_seconds"])
+        self.assertEqual(running["work_target"], str(ROOT))
+        self.assertEqual(running["sandbox"], "workspace-write")
+        self.assertEqual(running["brief_ref"], str(self.expected_run_dir(flight) / "brief.md"))
         self.assertIsNone(process.poll(), "runner returned before the live carrier exited")
         stdout, stderr = process.communicate(timeout=10)
         self.assertEqual(exited.read_text().strip(), "exited")
@@ -188,7 +283,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assert_terminal(self.run_worker("carrier_exit_write_failure"), "INTERNAL_ERROR")
 
     def test_status_projection_rejects_non_regular_targets(self) -> None:
-        for target in ["status.json", "status.json.tmp"]:
+        for target in ["status.json.tmp"]:
             for shape in ["directory", "fifo", "symlink_directory", "symlink_file", "symlink_dangling"]:
                 with self.subTest(target=target, shape=shape):
                     outside = self.temp_dir / self.next_flight("outside-status")
@@ -348,6 +443,13 @@ class CodexWorkerRunnerTests(unittest.TestCase):
             self.assertEqual(process.returncode, 1)
         status = json.loads(self.expected_run_dir(flight).joinpath("status.json").read_text())
         self.assertEqual(status["reason_code"], "INTERNAL_ERROR")
+        self.assertGreater(len(self.expected_run_dir(flight).joinpath("status.json").read_text().splitlines()), 1)
+
+    def test_status_rendering_uses_pretty_json_for_all_paths(self) -> None:
+        runner = RUNNER.read_text()
+        self.assertNotIn('"$jq_path" -cn', runner)
+        self.assertGreaterEqual(runner.count('"$jq_path" -n'), 4)
+        self.assertGreater(len(self.run_worker("nothing").process.stdout.splitlines()), 1)
 
     def test_runner_verdict_sets_match_skill_contract(self) -> None:
         text = SKILL.read_text()
