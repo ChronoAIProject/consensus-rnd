@@ -35,6 +35,26 @@ Do not use this skill for routine one-step answers where no separate perspective
 - `constraints`
 - `success_criteria`
 - `iteration_question`
+- `harness`
+- `revisions`
+
+`harness` is a prompt-level record containing exactly these three sub-items:
+
+- `provided_capabilities`: capabilities already supplied by the execution environment that the skill must not implement again;
+- `trust_boundary`: which roles are trusted and which are untrusted. The trusted declaration is **non-adversarial, not infallible**: failures, omissions, and uncertainty by a trusted party remain fully in review scope;
+- `decision_ownership`: product, governance, and boundary decisions; engineering judgments; and orchestration judgments, each assigned to its owner.
+
+`revisions` is an append-only list whose each item contains exactly these three sub-items:
+
+- `change`: what was corrected;
+- `authorization_source`: where authorization came from;
+- `invalidated_completed_work`: completed work invalidated by the correction, or `none`.
+
+A revision item missing any one of these sub-items is invalid and fails closed.
+
+Any explicit correction to `GoalArtifact` or `harness` must append one such revision item before routing continues.
+
+The caller must write and complete `harness` during `intake`, before any worker dispatch. If any `harness` sub-item is missing or ambiguous, or its source has not been confirmed by the boundary owner, stop and escalate to the maintainer; neither controller nor worker may infer or expand it.
 
 The user's current input is the only source for the goal. `sshx` must not discover or infer the goal from external lifecycle milestones, release state, runtime host configuration, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface.
 
@@ -70,7 +90,7 @@ Each thinking or review record must include these fields:
 
 Thinking, implementation, and review are worker dispatches. The caller context may intake the task, choose worker mode, dispatch workers, run the meta-judge over returned `SshxResultEnvelope.conclusion` values, aggregate conclusions, and produce the final report from conclusions only while preserving `log_ref` references.
 
-Each `visible_inputs` value must include the same `GoalArtifact.normalized_goal` and must not include same-round peer outputs.
+Each `visible_inputs` value must include the complete `GoalArtifact` (including `harness`) and must not include same-round peer outputs.
 
 ## Worker Delegation
 
@@ -176,6 +196,8 @@ Aesthetic/adversarial: give a symmetric 美不美 (is it beautiful?) verdict for
 
 seek truth from facts: verify every factual premise against actual evidence before relying on it. Evidence examples include source artifact or line, current file contents, command result, test assertion, visible input, implementation-worker conclusion, or declared `GoalArtifact` constraint. Any assumed-not-verified premise must be explicitly marked `ASSUMED-UNVERIFIED` in `SshxResultEnvelope.conclusion` and either verified before routing, treated as a `GoalArtifact` goal gap, or used as an abstain trigger. A perspective must never silently rely on an assumed premise.
 
+`CapabilityOverlap` is the candidate-solution boundary check: ask whether a candidate takes over a capability already declared in `harness.provided_capabilities`, or changes a decision assignment in `harness.decision_ownership`; either hit is an overlap and therefore out of bounds. `ThreatEligibility` is the review-finding boundary check: ask whether a finding would exist only if a role declared trusted by `harness.trust_boundary` deliberately acted maliciously; if so, the finding is ineligible. Trusted-party failure, omission, and uncertainty are always eligible. These are independent checks that share the `harness` fact source.
+
 Each thinking or review worker must surface one compact free-form reasoning-discipline note in `SshxResultEnvelope.conclusion` naming the reference frame, stating the known-good shape and alignment, deviation, or revision status; stating the aesthetic verdict (美不美) with the specific ugly defect and beautiful form, or `no material defect found`, for each candidate weighed; and stating the verified-premise or `ASSUMED-UNVERIFIED` status needed for the verdict. This does not override `GoalArtifact`, assigned bias or review focus, truth tables, or allowed verdict sets, and it is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for valid `abstain`, `reject`, or `comment` outcomes.
 
 ## Thinking Panel
@@ -194,6 +216,8 @@ Run six whole-picture philosopher seats before choosing a plan — the same univ
 `worth` (值不值) is an independent objective, not the aesthetic lens repeated: `parsimony` asks how much mechanism, `proportional-containment` asks where and how far it binds, and `worth` asks whether to pay for this at all, at this cost, now, versus the best alternative. A candidate can be minimal, beautiful, and properly contained yet still not worth doing, and a less minimal candidate can still be worth doing when the avoided downside justifies it. Because it is a seat rather than a cross-cutting lens, `worth` is judged once by its own perspective, so the panel is not homogenized into every seat re-deriving the same value verdict.
 
 Before proposing, revising, rejecting, or abstaining, each seat must apply `## Reasoning Discipline` to every candidate conclusion it weighs and surface the compact reasoning-discipline note in `SshxResultEnvelope.conclusion` before returning a verdict.
+
+When proposing, revising, or rejecting a candidate, each seat must state whether it hits `CapabilityOverlap`; a hit is an unclosed goal gap and must not enter `implement`.
 
 Every seat must first identify the problem essence or root cause implied by `GoalArtifact`, then frame `propose`, `revise`, `reject`, or `abstain` as an answer to it: what satisfies it, what still differs from it, or why it cannot be satisfied. A plan that only patches a surface symptom while leaving that root cause in place does not satisfy the thinking gate. `revise` must name the goal gap and a next iteration question; it must not open an unrelated design search.
 
@@ -219,6 +243,12 @@ The meta-judge applies this fixed thinking truth table:
 
 An `implement` exit requires the concrete plan to be both beautiful (per the `## Reasoning Discipline` aesthetic verdict) and worth its cost (per the `worth` seat). A concrete plan that fails the 值不值 (worth) judgment is an unclosed `GoalArtifact` goal gap: before `implement` the meta-judge must rebut the `worth` seat's factual premises, choose a cheaper sufficient alternative, show the omitted benefit clears the goal threshold, or record an explicit owner-level acceptance of the cost — otherwise the exit stays `meta-layer convergence` or `abstain/escalate with options`, never `implement`. Beauty and worth are a conditional challenge, not a forced clash: when the beautiful form carries a material elegance premium over the cheapest sufficient form, `worth` must justify or reject that premium; when `worth` prefers a cheaper, uglier form, the meta-judge records the accepted debt with its owner, containment boundary, and removal or expiry condition, since `temporary` without an expiry condition is not acceptable.
 
+An `implement` exit also requires no unresolved harness overlap or authority gap. A goal and its harness mismatch when it presupposes missing host/controller execution capability or asks the skill to repeat a capability already declared by the harness; the skill's own judgment responsibilities are not a mismatch. Route a mismatch as a goal gap to the maintainer rather than implementing it.
+
+At this existing `meta_judge` implement-exit gate, reflect on whether the goal or harness changed and whether current evidence has overturned the direction. Emit exactly one concrete action with its responsible party: `continue`, `revise`, `stop`, or `escalate`.
+
+When a seat's `SshxResultEnvelope.conclusion` records both a dedicated-domain objection and its falsifiable causal prediction, and the meta-judge's proposed convergence has not refuted that causal chain, the meta-judge must run a `FocusedRound` before converging. The three conditions must all hold simultaneously: the objection recorded in that conclusion is in that seat's exclusive domain (for example, mechanism necessity for `parsimony`, purpose-forced form for `teleology`, or cost worth for `worth`); the causal prediction recorded in that conclusion is falsifiable rather than a preference; and the meta-judge's proposed convergence has not answered that causal chain, including when it answers only a secondary point. In the focused round, all seats independently answer one question: "Does this causal chain hold, and if it does, how should the plan change?" The round does not reopen design search and preserves `## No Context Pollution`. The same causal chain triggers at most one focused round; if disagreement remains afterward, escalate to the maintainer rather than continuing. A focused round consumes the existing bounded-pass budget.
+
 The convergence question must be "what still differs from `GoalArtifact`?" expressed against the fixed normalized goal, constraints, and success criteria. Do not generalize the convergence pass beyond that goal gap.
 
 Before any `implement` exit, the meta-judge must include in its `meta_judge.conclusion` a compact free-form ASCII relationship diagram built only from `GoalArtifact` and the returned `SshxResultEnvelope.conclusion` values: nodes are the goal subquestions or goal-gap items, the six philosopher-seat stances (`teleology`, `parsimony`, `fidelity`, `natural-ownership`, `proportional-containment`, `worth`), and the concrete plan; edges are labeled `agree`, `conflict`, `depends-on`, `resolved-by`, or `converges-to`. The diagram rigidly constrains convergence: every surfaced subquestion or goal-gap node must appear, the concrete plan must resolve every `conflict` edge — including the `natural-ownership` vs `proportional-containment` locus clash and any `worth` not-worth-it edge — and any unresolved `conflict` edge is an unclosed `GoalArtifact` goal gap, so the exit stays `meta-layer convergence` or `abstain/escalate with options`, never `implement`. The diagram is free-form prompt-level content synthesized from conclusions only; it must not inline worker full reasoning or same-round peer output, and it is not a parsed schema field, marker data, lifecycle authority, or a blocker for valid `abstain` or `reject fake consensus` exits.
@@ -238,6 +268,8 @@ After implementation, run three review perspectives:
 - `architecture`: boundaries, contracts, coupling, and maintainability.
 - `quality`: behavior, edge cases, failure modes, and user impact.
 - `tests`: coverage, determinism, and verification strength.
+
+Reviewers must check protocol text for newly added exception clauses, statements that contradict existing clauses, and semantic weakening of existing propositions.
 
 Before approving, commenting, or rejecting, each reviewer must apply `## Reasoning Discipline` to every implementation interpretation, repair candidate, or approval path it weighs and surface the compact reasoning-discipline note in `SshxResultEnvelope.conclusion` before returning a verdict.
 
@@ -259,6 +291,10 @@ The meta-judge applies this fixed review truth table:
 
 Advisory comments do not count as approval. A reject blocks done until the issue is fixed or explicitly converted into a non-blocking advisory by a bounded review pass.
 
+Every blocking finding must explain which `GoalArtifact` term it violates and which class of failure, omission, or uncertainty within the declared trust boundary it addresses. A blocking finding that fails `ThreatEligibility` is downgraded by the meta-judge to an advisory with its reason recorded, then the remaining verdicts are routed again. Downgrade is allowed only for threat-model ineligibility, never because a finding is inconvenient. A missing, ambiguous, or stale harness declaration is never a downgrade shield: pause routing and escalate to the maintainer instead of declaring done.
+
+Before each fix or repeated review pass, use the existing gate to ask whether the goal or harness changed and whether evidence overturned the direction; emit exactly one concrete `continue`, `revise`, `stop`, or `escalate` action and name its responsible party.
+
 ## Fix Or Done
 
 If review exits `fix`, ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap by delegating it to a worker using the selected `WorkerMode` exactly as `## Implementation Worker` requires - open a new `SshxWorkerFlightRecord` for the same `work_target` and stay orchestration-only for the repair - then rerun the review triplet on the worker's returned `conclusion`. Stop after a bounded number of fix passes and report remaining blockers honestly.
@@ -266,6 +302,8 @@ If review exits `fix`, ask what still differs from `GoalArtifact`, apply the sma
 If review exits `done with advisory surfaced`, report the final outcome by aggregating `conclusion` values and include any non-blocking advisory feedback without inlining logs.
 
 If review exits `explicit user decision or another bounded review pass`, either run one more bounded pass with a concrete next iteration question tied to `GoalArtifact`, or ask the user to decide. Do not loop indefinitely.
+
+After any explicit correction, use the existing correction gate to ask whether the goal or harness changed and whether evidence overturned the direction; emit exactly one concrete `continue`, `revise`, `stop`, or `escalate` action and name its responsible party before further work.
 
 Every bounded pass in this skill - `meta-layer convergence`, a repeated review pass, and fix passes - defaults to at most five passes unless the user explicitly authorizes more, and the chosen bound is recorded before the first such pass.
 
@@ -314,6 +352,14 @@ intake:
     constraints:
     success_criteria:
     iteration_question:
+    harness:
+      provided_capabilities:
+      trust_boundary:
+      decision_ownership:
+    revisions:
+      - change:
+        authorization_source:
+        invalidated_completed_work:
   strict_peer_invisibility_required:
 worker_delegation:
   worker_mode_gate:
@@ -396,6 +442,8 @@ meta_judge:
   concrete_plan:
   goal_gap:
   next_iteration_question:
+  focused_round:
+  finding_downgrades:
   conclusion: # for an implement exit, includes the free-form ASCII relationship diagram (no separate diagram field)
   log_ref:
 implementation_worker:
