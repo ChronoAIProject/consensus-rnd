@@ -97,13 +97,13 @@ main() {
   attempt=$integer_value
   case "$stage" in thinking|implementation|review) ;; *) usage_error "invalid --stage"; return 1 ;; esac
   case "$work_target" in /*) ;; *) usage_error "--work-target must be an absolute path"; return 1 ;; esac
-  case "$work_target" in *[[:cntrl:]]*) usage_error "--work-target must not contain control characters"; return 1 ;; esac
+  case "$work_target" in *$'\n'*|*$'\r'*) usage_error "--work-target must not contain LF or CR"; return 1 ;; esac
   case "$sandbox" in read-only|workspace-write) ;; *) usage_error "invalid --sandbox"; return 1 ;; esac
   if ! jq_path=$(command -v jq 2>/dev/null) || [ ! -x "$jq_path" ]; then reason=PARSER_UNAVAILABLE; return 1; fi
   tmp_base=${TMPDIR:-/tmp}
   while [ "$tmp_base" != / ] && [ "${tmp_base%/}" != "$tmp_base" ]; do tmp_base=${tmp_base%/}; done
   case "$tmp_base" in /*) ;; *) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
-  case "$tmp_base" in *[[:cntrl:]]*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
+  case "$tmp_base" in *$'\n'*|*$'\r'*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
   if [ -n "${TMPDIR:-}" ] && [ -L "$tmp_base" ]; then reason=RUN_DIR_UNAVAILABLE; return 1; fi
   [ -d "$tmp_base" ] && [ -w "$tmp_base" ] || { reason=RUN_DIR_UNAVAILABLE; return 1; }
   ensure_dir() {

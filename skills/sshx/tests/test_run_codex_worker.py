@@ -102,7 +102,10 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         return f"{prefix}-{self.counter}"
 
     def command(self, flight_id: str, *, attempt: str = "1", stage: str = "thinking", work_target: str | None = None, sandbox: str = "workspace-write") -> list[str]:
-        return ["/bin/bash", str(RUNNER), "--flight-id", flight_id, "--attempt", attempt, "--stage", stage, "--work-target", work_target or str(ROOT), "--sandbox", sandbox]
+        return self.command_for_runner(RUNNER, flight_id, attempt=attempt, stage=stage, work_target=work_target, sandbox=sandbox)
+
+    def command_for_runner(self, runner: Path, flight_id: str, *, attempt: str = "1", stage: str = "thinking", work_target: str | None = None, sandbox: str = "workspace-write") -> list[str]:
+        return ["/bin/bash", str(runner), "--flight-id", flight_id, "--attempt", attempt, "--stage", stage, "--work-target", work_target or str(ROOT), "--sandbox", sandbox]
 
     def environment(self, mode: str = "success", **extra: str) -> dict[str, str]:
         env = os.environ.copy()
@@ -469,8 +472,8 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assert_terminal(log_marker, "SENTINEL_MISSING")
 
     def test_default_tmpdir_is_usable_without_environment_override(self) -> None:
-        flight = self.next_flight("default-tmp")
-        env = self.environment(); env.pop("TMPDIR")
+        flight = f"default-tmp-{os.getpid()}-{self.next_flight('default-tmp')}"
+        env = self.environment(); env.pop("TMPDIR"); env["LC_ALL"] = "C.UTF-8"
         run_dir = self.expected_run_dir(flight, base=Path("/tmp"))
         try:
             process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
@@ -576,22 +579,89 @@ class CodexWorkerRunnerTests(unittest.TestCase):
 
     def test_control_characters_cannot_enter_streamed_path_fields(self) -> None:
         spec = re.sub(r"\s+", " ", SPEC.read_text())
-        self.assertIn("`work-target` is absolute and contains no control characters", spec)
-        self.assertIn("An explicitly configured `TMPDIR` must be absolute, existing, writable, free of control characters", spec)
-        control_characters = ["\n", "\r", "\t", "\x1f", "\x7f", "\u0085", "\u009b"]
-        for character in control_characters:
-            with self.subTest(field="work_target", character=repr(character)):
-                flight = self.next_flight("control-work-target")
-                process = subprocess.run(self.command(flight, work_target=f"/tmp/a{character}b"), input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
-                self.assertEqual(process.returncode, 64); self.assertIn("USAGE_ERROR", process.stderr)
-                self.assertFalse(self.expected_run_dir(flight).exists())
-        for character in control_characters:
-            with self.subTest(field="TMPDIR", character=repr(character)):
-                control_tmp = self.temp_dir / f"tmp-{ord(character):x}{character}path"; control_tmp.mkdir()
-                flight = self.next_flight("control-tmpdir")
-                process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=self.environment(TMPDIR=str(control_tmp)), timeout=10)
-                self.assertEqual(process.returncode, 1); self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
-                self.assertFalse(self.expected_run_dir(flight, base=control_tmp).exists())
+        self.assertIn("`work-target` is absolute and contains neither LF (`0x0A`) nor CR (`0x0D`)", spec)
+        self.assertIn("writable, free of LF or CR, and not a symbolic link", spec)
+        locales = ["C", "C.UTF-8", "en_US.UTF-8"]
+        for locale in locales:
+            for character in ["\n", "\r"]:
+                with self.subTest(locale=locale, field="work_target", character=repr(character)):
+                    flight = self.next_flight("line-work-target")
+                    process = subprocess.run(
+                        self.command(flight, work_target=f"/tmp/a{character}b"), input="brief\n", capture_output=True,
+                        text=True, env=self.environment(LC_ALL=locale), timeout=10,
+                    )
+                    self.assertEqual(process.returncode, 64); self.assertIn("USAGE_ERROR", process.stderr)
+                    self.assertFalse(self.expected_run_dir(flight).exists())
+            for character in ["\n", "\r"]:
+                with self.subTest(locale=locale, field="TMPDIR", character=repr(character)):
+                    control_tmp = self.temp_dir / f"tmp-{locale.replace('.', '_')}-{ord(character):x}-{self.counter}{character}path"; control_tmp.mkdir()
+                    flight = self.next_flight("line-tmpdir")
+                    process = subprocess.run(
+                        self.command(flight), input="brief\n", capture_output=True, text=True,
+                        env=self.environment(LC_ALL=locale, TMPDIR=str(control_tmp)), timeout=10,
+                    )
+                    self.assertEqual(process.returncode, 1); self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
+                    self.assertFalse(self.expected_run_dir(flight, base=control_tmp).exists())
+
+        legal_samples = [
+            ("space", "a b"), ("Chinese", "中文"), ("Japanese", "日本語"),
+            ("single quote", "a'b"), ("double quote", 'a"b'), ("command syntax", "$(echo unsafe)"),
+            ("backslash", r"a\\b"), ("emoji", "🚀"), ("ZWJ emoji", "👩‍💻"),
+            ("ZWNJ", "\u200c"), ("TAB", "\t"), ("C1", "\u0085"),
+            ("Unicode line separator", "\u2028"),
+        ]
+        for locale in locales:
+            for label, character in legal_samples:
+                with self.subTest(locale=locale, sample=label):
+                    flight = self.next_flight("legal-path")
+                    process = subprocess.run(
+                        self.command(flight, work_target=f"/tmp/a{character}b"), input="brief\n", capture_output=True,
+                        text=True, env=self.environment(LC_ALL=locale), timeout=10,
+                    )
+                    self.assertEqual(process.returncode, 0, process.stderr)
+                    self.assertEqual(json.loads(self.expected_run_dir(flight).joinpath("status.json").read_text())["status"], "COMPLETE")
+
+    def test_legal_samples_pass_in_tmpdir(self) -> None:
+        legal_samples = [
+            ("space", "a b"), ("Chinese", "中文"), ("Japanese", "日本語"),
+            ("single quote", "a'b"), ("double quote", 'a"b'), ("command syntax", "$(echo unsafe)"),
+            ("backslash", r"a\\b"), ("emoji", "🚀"), ("ZWJ emoji", "👩‍💻"),
+            ("ZWNJ", "\u200c"), ("TAB", "\t"), ("C1", "\u0085"),
+            ("Unicode line separator", "\u2028"),
+        ]
+        for locale in ["C", "C.UTF-8", "en_US.UTF-8"]:
+            for label, character in legal_samples:
+                with self.subTest(locale=locale, sample=label):
+                    control_tmp = self.temp_dir / f"legal-{locale.replace('.', '_')}-{self.counter}-{label}-{character}"
+                    control_tmp.mkdir()
+                    flight = self.next_flight("legal-tmpdir")
+                    process = subprocess.run(
+                        self.command(flight), input="brief\n", capture_output=True, text=True,
+                        env=self.environment(LC_ALL=locale, TMPDIR=str(control_tmp)), timeout=10,
+                    )
+                    self.assertEqual(process.returncode, 0, process.stderr)
+                    self.assertEqual(json.loads(self.expected_run_dir(flight, base=control_tmp).joinpath("status.json").read_text())["status"], "COMPLETE")
+
+    def test_control_character_guard_mutation_is_locale_sensitive(self) -> None:
+        mutated = self.temp_dir / "mutated-runner.sh"
+        source = RUNNER.read_text()
+        source = source.replace(
+            'case "$work_target" in *$\'\\n\'*|*$\'\\r\'*) usage_error "--work-target must not contain LF or CR"; return 1 ;; esac',
+            'case "$work_target" in *[[:cntrl:]]*) usage_error "--work-target must not contain control characters"; return 1 ;; esac',
+        ).replace(
+            'case "$tmp_base" in *$\'\\n\'*|*$\'\\r\'*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac',
+            'case "$tmp_base" in *[[:cntrl:]]*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac',
+        )
+        mutated.write_text(source); mutated.chmod(0o755)
+        outcomes = []
+        for locale in ["C", "C.UTF-8"]:
+            flight = self.next_flight("mutated")
+            process = subprocess.run(
+                self.command_for_runner(mutated, flight, work_target="/tmp/a\u0085b"), input="brief\n",
+                capture_output=True, text=True, env=self.environment(LC_ALL=locale), timeout=10,
+            )
+            outcomes.append((locale, process.returncode))
+        self.assertEqual(outcomes, [("C", 0), ("C.UTF-8", 64)])
 
     def test_closed_stdout_does_not_change_authoritative_exit_or_status(self) -> None:
         flight = self.next_flight("stdout-failure")

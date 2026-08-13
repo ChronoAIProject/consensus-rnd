@@ -20,7 +20,11 @@ The five options are required. Missing, duplicate, unknown, or positional
 arguments are `USAGE_ERROR` (exit 64). `flight-id` is non-empty
 `[A-Za-z0-9._-]+`, rejects `..` and `.`, `attempt` is a positive integer,
 `stage` and `sandbox` use the enumerations above, and `work-target` is
-absolute and contains no control characters. The brief is read from stdin;
+absolute and contains neither LF (`0x0A`) nor CR (`0x0D`). This is a
+locale-independent POSIX text-line boundary: stdout lines are LF-separated,
+not Unicode logical lines. Other characters, including TAB, C1 controls,
+zero-width joiners/non-joiners, and U+2028/U+2029, are accepted in path values.
+The brief is read from stdin;
 artifact paths and extra Codex flags are never caller-supplied.
 
 ## Run Directory
@@ -33,7 +37,7 @@ ${TMPDIR:-/tmp}/consensus-rnd/sshx/<flight-id>/attempt-<attempt>
 
 Trailing slashes are removed except for `/`. The default `/tmp` may be a
 symbolic link. An explicitly configured `TMPDIR` must be absolute, existing,
-writable, free of control characters, and not a symbolic link. The
+writable, free of LF or CR, and not a symbolic link. The
 runner-created `consensus-rnd`, `sshx`, and flight directories are always
 rejected when symbolic links. Each is created or validated before one atomic
 `mkdir` of the attempt directory; an existing attempt is `RUN_DIR_COLLISION`.
@@ -132,6 +136,10 @@ to that contract by tests; this specification does not repeat the sets.
 No diagnostic surface participates in completion or verdict recognition:
 stdout, stderr, `last-message.txt`, log tails, marker text, event streams,
 process snapshots, repository state, and hashes are diagnostic only.
+Callers that need structured output must read `status.json`; a Unicode-aware
+splitter such as Python `str.splitlines()` may treat U+2028, U+2029, or U+0085
+inside a path as logical separators even though those bytes are valid under
+the POSIX text-line contract.
 
 ## Teardown Prerequisite
 
