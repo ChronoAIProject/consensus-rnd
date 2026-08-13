@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 SKILL = ROOT / "skills" / "sshx" / "SKILL.md"
+SPEC = ROOT / "skills" / "sshx" / "CODEX_WORKER_SPEC.md"
 README = ROOT / "README.md"
 GEMINI = ROOT / "GEMINI.md"
 CI = ROOT / ".github" / "workflows" / "consensus-rnd-ci.yml"
@@ -62,14 +63,14 @@ def completed_worker_verdict(
         raise ContractFailure("result_ref is not an SshxResultEnvelope")
     if not result_artifact["log_ref"]:
         raise ContractFailure("missing log_ref")
-    if not completion_sentinel_present:
-        raise ContractFailure("missing completion sentinel")
     conclusion = result_artifact["conclusion"]
     if not isinstance(conclusion, dict):
         raise ContractFailure("missing conclusion")
     verdict = conclusion.get("verdict")
     if verdict not in allowed_verdicts:
         raise ContractFailure("invalid conclusion.verdict")
+    if not completion_sentinel_present:
+        raise ContractFailure("missing completion sentinel")
     return str(verdict)
 
 
@@ -498,18 +499,21 @@ class SshxContractTests(unittest.TestCase):
         wd_end = text.index("## Result Envelope")
         worker_delegation = text[wd_start:wd_end]
         for contract_string in [
-            "before launch the caller must choose unique caller-assigned `result_ref` and `completion_sentinel` paths",
-            "pass those exact paths in the worker brief",
-            "parallel workers must receive disjoint paths",
-            "a direct non-interactive worker-carrier invocation, not a helper script, daemon, or repository-owned CLI",
-            "the exact command and sandbox flags are not part of this contract",
-            "The caller must not poll those paths while the worker is running",
-            "the caller performs one collection read of the assigned `result_ref` and `completion_sentinel`",
+            "the caller must choose a unique `flight_id` and `attempt`",
+            "pass them to `skills/sshx/scripts/run-codex-worker.sh`",
+            "the runner derives and owns every artifact path",
+            "the caller must not supply arbitrary result, sentinel, log, or state paths",
+            "Every formal `codex-cli` flight must use this runner",
+            "the runner launches exactly one direct non-interactive worker carrier",
+            "neither layer may introduce a daemon or wrap the carrier in a repository-owned CLI",
+            "owned by `CODEX_WORKER_SPEC.md`",
+            "The caller must not poll worker artifact paths while the runner is active",
+            "the runner performs one collection read of the derived `result_ref` and `completion_sentinel`",
             "completion and verdict recognition stay governed by the `## Worker Completion Contract`",
         ]:
             self.assertIn(contract_string, worker_delegation)
         self.assertLess(
-            worker_delegation.index("one collection read of the assigned"),
+            worker_delegation.index("one collection read of the derived"),
             worker_delegation.index("`codex-cli` completion is recognized only when"),
         )
 
@@ -699,10 +703,10 @@ class SshxContractTests(unittest.TestCase):
         text = read(SKILL)
         self.assertIn("## Worker Completion Contract", text)
         self.assertIn("worker carrier process has exited with status `0`", text)
-        self.assertIn("caller-assigned `result_ref` artifact exists", text)
+        self.assertIn("runner-derived, runner-owned `result_ref` artifact exists", text)
         self.assertIn("parses as a valid `SshxResultEnvelope`", text)
         self.assertIn(
-            "the caller-assigned `completion_sentinel` artifact exists and is recorded as `completion_sentinel_ref` on the matching `SshxWorkerFlightRecord`",
+            "the runner-derived, runner-owned `completion_sentinel` artifact exists and is recorded as `completion_sentinel_ref` on the matching `SshxWorkerFlightRecord`",
             text,
         )
         self.assertIn("`conclusion.verdict`", text)
@@ -721,6 +725,60 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("must not participate in done detection or verdict routing", text)
         self.assertIn("placeholder verdicts", text)
         self.assertIn("fail closed", text)
+        contract = text.split("For `codex-cli` workers, caller-side completion", 1)[1].split("\n\nA worker", 1)[0]
+        self.assertLess(contract.index("carrier process has exited"), contract.index("`result_ref` artifact exists"))
+        self.assertLess(contract.index("`result_ref` artifact exists"), contract.index("parses as a valid"))
+        self.assertLess(contract.index("parses as a valid"), contract.index("`conclusion.verdict`"))
+        self.assertLess(contract.index("`conclusion.verdict`"), contract.index("`completion_sentinel` artifact exists"))
+
+    def test_sshx_completion_model_validates_verdict_before_sentinel(self) -> None:
+        invalid_artifact = {
+            "conclusion": {"verdict": "invalid"},
+            "log_ref": "artifacts/sshx/worker.log",
+        }
+        with self.assertRaisesRegex(ContractFailure, "invalid conclusion.verdict"):
+            completed_worker_verdict(
+                process_exited=True,
+                exit_code=0,
+                result_artifact=invalid_artifact,
+                completion_sentinel_present=False,
+                allowed_verdicts=THINKING_VERDICTS,
+            )
+
+    def test_worker_spec_references_skill_without_exact_verdict_sets(self) -> None:
+        text = re.sub(r"\s+", " ", read(SPEC))
+        self.assertIn("`SKILL.md` is the sole source of the exact stage verdict sets", text)
+        verdict_tokens = {"propose", "revise", "reject", "abstain", "approve", "comment"}
+        self.assertEqual(verdict_tokens.intersection(re.findall(r"\b[a-z]+\b", text)), set())
+
+    def test_worker_spec_has_executable_rollback_and_threat_boundaries(self) -> None:
+        text = re.sub(r"\s+", " ", read(SPEC))
+        for required in [
+            "No other skill may depend on this runner",
+            "Delete `scripts/run-codex-worker.sh`, this specification, and `tests/test_run_codex_worker.py`",
+            "Restore the three narrow `SKILL.md` clauses",
+            "A new design review is required",
+            "daemon behavior",
+            "lifecycle authority",
+            "a second consuming skill",
+            "completion semantics cease to be isomorphic",
+            "trusted is non-adversarial, not infallible",
+            "TOCTOU races",
+            "an active `setsid` escape",
+            "forged runner artifact paths",
+            "A default `TERM` sent only to the runner PID may be deferred",
+            "An uncatchable `SIGKILL` sent only to the runner PID",
+            "Before either runner-owned projection is written",
+            "temporary and final target must be absent or a non-symbolic-link regular file",
+            "After each rename, the fixed `carrier.exit` or `status.json` path must be a non-symbolic-link regular file",
+        ]:
+            self.assertIn(required, text)
+
+    def test_sshx_runner_ownership_wording_has_no_legacy_assignment(self) -> None:
+        text = read(SKILL)
+        self.assertIn("the runner derives and owns every artifact path", text)
+        self.assertNotIn("caller-assigned `result_ref`", text)
+        self.assertNotIn("caller-assigned `completion_sentinel`", text)
 
     def test_sshx_worker_completion_ignores_log_only_fake_markers(self) -> None:
         log_only_fake_marker = {
@@ -1014,7 +1072,7 @@ class SshxContractTests(unittest.TestCase):
     def test_sshx_no_runtime_control_plane_leakage(self) -> None:
         text = read(SKILL)
         for forbidden_boundary in [
-            "helper scripts",
+            "any other helper script",
             "daemons",
             "repository-owned CLI",
             "GitHub lifecycle operations",
@@ -1027,6 +1085,9 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(forbidden_boundary, text)
         self.assertIn("It must not add or depend on", text)
+        self.assertIn("one named mechanical runner exception", text)
+        self.assertIn("`skills/sshx/scripts/run-codex-worker.sh`", text)
+        self.assertIn("`skills/sshx/CODEX_WORKER_SPEC.md` and its behavior tests", text)
         self.assertIn("does not grant permission to commit, push, merge", text)
         self.assertIn(
             "Allowed worker carriers are limited to `codex-cli`, `nyxid-oracle`, and `isolated-token-subagent`",
