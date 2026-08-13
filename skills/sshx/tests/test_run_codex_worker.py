@@ -645,14 +645,23 @@ class CodexWorkerRunnerTests(unittest.TestCase):
     def test_control_character_guard_mutation_is_locale_sensitive(self) -> None:
         mutated = self.temp_dir / "mutated-runner.sh"
         source = RUNNER.read_text()
-        source = source.replace(
-            'case "$work_target" in *$\'\\n\'*|*$\'\\r\'*) usage_error "--work-target must not contain LF or CR"; return 1 ;; esac',
-            'case "$work_target" in *[[:cntrl:]]*) usage_error "--work-target must not contain control characters"; return 1 ;; esac',
-        ).replace(
-            'case "$tmp_base" in *$\'\\n\'*|*$\'\\r\'*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac',
-            'case "$tmp_base" in *[[:cntrl:]]*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac',
-        )
-        mutated.write_text(source); mutated.chmod(0o755)
+        replacements = [
+            (
+                'case "$work_target" in *$\'\\n\'*|*$\'\\r\'*) usage_error "--work-target must not contain LF or CR"; return 1 ;; esac',
+                'case "$work_target" in *[[:cntrl:]]*) usage_error "--work-target must not contain control characters"; return 1 ;; esac',
+            ),
+            (
+                'case "$tmp_base" in *$\'\\n\'*|*$\'\\r\'*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac',
+                'case "$tmp_base" in *[[:cntrl:]]*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac',
+            ),
+        ]
+        for anchor, replacement in replacements:
+            self.assertEqual(source.count(anchor), 1, f"mutation anchor must appear exactly once: {anchor}")
+        mutated_source = source
+        for anchor, replacement in replacements:
+            mutated_source = mutated_source.replace(anchor, replacement)
+        self.assertNotEqual(mutated_source, source, "mutation must change the runner source")
+        mutated.write_text(mutated_source); mutated.chmod(0o755)
         outcomes = []
         for locale in ["C", "C.UTF-8"]:
             flight = self.next_flight("mutated")
