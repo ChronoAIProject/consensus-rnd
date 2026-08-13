@@ -135,7 +135,9 @@ Every worker dispatch must create a prompt-level `SshxWorkerFlightRecord` before
 
 While any `SshxWorkerFlightRecord` for the same `work_target` is `in-flight` or `retrying`, the caller is read-only for that target. The caller must not mutate files, Git state, GitHub state, labels, releases, host configuration, lifecycle state, or the same external resource. The caller must not take over the same `work_target` because a process snapshot, log text, or workspace state appears quiet.
 
-For each `codex-cli` attempt, before launch the caller must choose unique caller-assigned `result_ref` and `completion_sentinel` paths for that flight or attempt and pass those exact paths in the worker brief; parallel workers must receive disjoint paths. The launch is a direct non-interactive worker-carrier invocation, not a helper script, daemon, or repository-owned CLI, and the exact command and sandbox flags are not part of this contract. The caller must not poll those paths while the worker is running. After the process exits, the caller performs one collection read of the assigned `result_ref` and `completion_sentinel`, and records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the envelope validates and the sentinel exists; completion and verdict recognition stay governed by the `## Worker Completion Contract`.
+For each `codex-cli` attempt, before launch the caller must choose a unique `flight_id` and `attempt` and pass them to `skills/sshx/scripts/run-codex-worker.sh`; the runner derives and owns every artifact path, parallel attempts receive disjoint derived paths, and the caller must not supply arbitrary result, sentinel, log, or state paths. Every formal `codex-cli` flight must use this runner rather than a parallel direct-launch path. The caller invokes the runner, and the runner launches exactly one direct non-interactive worker carrier; neither layer may introduce a daemon or wrap the carrier in a repository-owned CLI. The command, sandbox, path, direct-process, and collection mechanics are owned by `CODEX_WORKER_SPEC.md`; time limits and final teardown of the whole job tree are the caller AI harness's responsibility. The runner does not propagate signals or manage carrier PIDs. The caller must not poll worker artifact paths while the runner is active. After the carrier exits, the runner performs one collection read of the derived `result_ref` and `completion_sentinel`; the caller records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the runner reports completion and the envelope and sentinel validate. Completion and verdict recognition stay governed by the `## Worker Completion Contract`.
+
+The caller must launch the runner through a host-provided background job mechanism that notifies the caller when the carrier process exits. It must not use shell `&` to background the runner, because that detaches the process from host tracking and can leave an init-adopted carrier running without ever notifying the caller of completion. It must not monitor files or logs to poll for completion; doing so conflicts with the no-polling rule above.
 
 For each `nyxid-oracle` attempt, before dispatch the caller must start a new isolated oracle conversation for that flight or attempt and pass a worker brief that requires the reply to be exactly an `SshxResultEnvelope` payload; parallel workers must receive disjoint conversations. The dispatch is a direct `nyxid oracle` reasoning invocation, not a helper script, daemon, or repository-owned CLI, and the exact command and flags are not part of this contract. The caller must not poll the task while it runs; after the task reports a structured terminal status the caller performs one collection read of the oracle result, and records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the envelope validates and the terminal `status=completed` marker is present; completion and verdict recognition stay governed by the `## Worker Completion Contract`.
 
@@ -159,10 +161,10 @@ Logs are not inline in caller context. Final reports aggregate `conclusion` valu
 For `codex-cli` workers, caller-side completion and verdict routing must be decided only from:
 
 - the worker carrier process has exited with status `0`;
-- the caller-assigned `result_ref` artifact exists;
+- the runner-derived, runner-owned `result_ref` artifact exists;
 - the `result_ref` artifact parses as a valid `SshxResultEnvelope`;
-- the caller-assigned `completion_sentinel` artifact exists and is recorded as `completion_sentinel_ref` on the matching `SshxWorkerFlightRecord`;
 - `conclusion.verdict`, when the stage requires a verdict, is present and is one of that stage's allowed verdict values.
+- the runner-derived, runner-owned `completion_sentinel` artifact exists and is recorded as `completion_sentinel_ref` on the matching `SshxWorkerFlightRecord`.
 
 A worker is not done while its carrier process is still running, even if a partial `result_ref` artifact already exists. A worker is not done when completion markers or verdict-looking text appear only in stdout, stderr, raw transcripts, final text, prompt echoes, `log_ref` content, or log tails. Those surfaces are diagnostic only and must not participate in done detection or verdict routing.
 
@@ -309,9 +311,11 @@ Every bounded pass in this skill - `meta-layer convergence`, a repeated review p
 
 ## Boundaries
 
-This skill is only a prompt contract. It must not add or depend on:
+This skill is a prompt contract with one named mechanical runner exception:
+`skills/sshx/scripts/run-codex-worker.sh`, governed only by
+`skills/sshx/CODEX_WORKER_SPEC.md` and its behavior tests. It must not add or depend on:
 
-- helper scripts;
+- any other helper script;
 - daemons;
 - repository-owned CLI;
 - GitHub lifecycle operations;
