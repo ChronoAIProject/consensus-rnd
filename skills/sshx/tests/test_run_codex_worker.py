@@ -574,6 +574,25 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         process = subprocess.run(self.command("."), input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
         self.assertEqual(process.returncode, 64); self.assertIn("USAGE_ERROR", process.stderr)
 
+    def test_control_characters_cannot_enter_streamed_path_fields(self) -> None:
+        spec = re.sub(r"\s+", " ", SPEC.read_text())
+        self.assertIn("`work-target` is absolute and contains no control characters", spec)
+        self.assertIn("An explicitly configured `TMPDIR` must be absolute, existing, writable, free of control characters", spec)
+        control_characters = ["\n", "\r", "\t", "\x1f", "\x7f", "\u0085", "\u009b"]
+        for character in control_characters:
+            with self.subTest(field="work_target", character=repr(character)):
+                flight = self.next_flight("control-work-target")
+                process = subprocess.run(self.command(flight, work_target=f"/tmp/a{character}b"), input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
+                self.assertEqual(process.returncode, 64); self.assertIn("USAGE_ERROR", process.stderr)
+                self.assertFalse(self.expected_run_dir(flight).exists())
+        for character in control_characters:
+            with self.subTest(field="TMPDIR", character=repr(character)):
+                control_tmp = self.temp_dir / f"tmp-{ord(character):x}{character}path"; control_tmp.mkdir()
+                flight = self.next_flight("control-tmpdir")
+                process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=self.environment(TMPDIR=str(control_tmp)), timeout=10)
+                self.assertEqual(process.returncode, 1); self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
+                self.assertFalse(self.expected_run_dir(flight, base=control_tmp).exists())
+
     def test_closed_stdout_does_not_change_authoritative_exit_or_status(self) -> None:
         flight = self.next_flight("stdout-failure")
         with subprocess.Popen(self.command(flight), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.environment()) as process:
@@ -609,7 +628,10 @@ class CodexWorkerRunnerTests(unittest.TestCase):
     def test_runner_never_produces_worker_owned_artifacts(self) -> None:
         result = self.run_worker("nothing")
         self.assert_terminal(result, "RESULT_MISSING")
-        self.assertFalse((result.run_dir / "result.json").exists()); self.assertFalse((result.run_dir / "completion.sentinel").exists())
+        for name in ["result.json", "completion.sentinel"]:
+            with self.subTest(name=name):
+                with self.assertRaises(FileNotFoundError):
+                    os.lstat(result.run_dir / name)
 
 
 if __name__ == "__main__":

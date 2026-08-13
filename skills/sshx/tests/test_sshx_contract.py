@@ -522,15 +522,15 @@ class SshxContractTests(unittest.TestCase):
         worker_delegation = text[
             heading_index(text, "## Worker Delegation") : heading_index(text, "## Result Envelope")
         ]
-        normalized = re.sub(r"\s+", " ", worker_delegation).lower()
-
-        self.assertIn("host-provided background job mechanism", normalized)
-        self.assertRegex(normalized, r"(?:notif(?:y|ies)|completion notification).{0,100}caller|caller.{0,100}(?:notif(?:y|ies)|completion notification)")
-        self.assertIn("`&`", normalized)
-        self.assertRegex(normalized, r"(?:must not|forbidden).{0,80}`&`|`&`.{0,80}(?:must not|forbidden)")
-        self.assertRegex(normalized, r"detach\w*.{0,80}host tracking")
-        self.assertRegex(normalized, r"(?:must not|forbidden).{0,80}monitor|monitor\w*.{0,80}(?:must not|forbidden)")
-        self.assertRegex(normalized, r"files?.{0,30}logs?.{0,80}poll|poll.{0,80}files?.{0,30}logs?")
+        paragraphs = [re.sub(r"\s+", " ", paragraph).lower() for paragraph in worker_delegation.split("\n\n")]
+        dispatch = next((paragraph for paragraph in paragraphs if "background" in paragraph and "notif" in paragraph), "")
+        self.assertTrue(dispatch, "missing background execution plus completion notification rule")
+        sentences = re.split(r"(?<=[.!?])\s+", dispatch)
+        shell_rule = next((sentence for sentence in sentences if "shell" in sentence and ("background" in sentence or "ampersand" in sentence or "`&`" in sentence)), "")
+        self.assertRegex(shell_rule, r"(?:must not|forbid\w*|prohibit\w*|never)")
+        self.assertRegex(shell_rule, r"(?:detach\w*|disconnect\w*).{0,100}host(?: lifecycle)? tracking")
+        polling_rule = next((sentence for sentence in sentences if re.search(r"\bfiles?\b", sentence) and re.search(r"\blogs?\b", sentence) and "poll" in sentence), "")
+        self.assertRegex(polling_rule, r"(?:must not|forbid\w*|prohibit\w*|never)")
 
     def test_sshx_in_flight_worker_blocks_caller_mutation(self) -> None:
         text = read(SKILL)

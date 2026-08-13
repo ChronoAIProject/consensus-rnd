@@ -20,8 +20,8 @@ The five options are required. Missing, duplicate, unknown, or positional
 arguments are `USAGE_ERROR` (exit 64). `flight-id` is non-empty
 `[A-Za-z0-9._-]+`, rejects `..` and `.`, `attempt` is a positive integer,
 `stage` and `sandbox` use the enumerations above, and `work-target` is
-absolute. The brief is read from stdin; artifact paths and extra Codex flags
-are never caller-supplied.
+absolute and contains no control characters. The brief is read from stdin;
+artifact paths and extra Codex flags are never caller-supplied.
 
 ## Run Directory
 
@@ -33,10 +33,10 @@ ${TMPDIR:-/tmp}/consensus-rnd/sshx/<flight-id>/attempt-<attempt>
 
 Trailing slashes are removed except for `/`. The default `/tmp` may be a
 symbolic link. An explicitly configured `TMPDIR` must be absolute, existing,
-writable, and not a symbolic link. The runner-created `consensus-rnd`, `sshx`,
-and flight directories are always rejected when symbolic links. Each is
-created or validated before one atomic `mkdir` of the attempt directory;
-an existing attempt is `RUN_DIR_COLLISION`.
+writable, free of control characters, and not a symbolic link. The
+runner-created `consensus-rnd`, `sshx`, and flight directories are always
+rejected when symbolic links. Each is created or validated before one atomic
+`mkdir` of the attempt directory; an existing attempt is `RUN_DIR_COLLISION`.
 
 The runner owns `brief.md`, the three diagnostic logs, `carrier.exit`, and
 `status.json`. The worker alone owns `result.json` and `completion.sentinel`.
