@@ -1,3 +1,28 @@
+"""Source-regression checks with explicit methodological limits.
+
+These assertions can prove the presence and location of sections, fields, enums,
+ordering, and stable anchors, and can expose obvious deletion or replacement.
+They cannot judge the semantics of free-form English. In particular, they cannot
+prevent a retained normative sentence from being weakened by a later exception.
+
+Known bypass evidence for that limit, each retaining the original normative text
+and appending a weakening:
+
+1. append that the single most salient condition is sufficient to trigger;
+2. append that a later pass resets the one-round limit;
+3. add panel-local precedence or reclassify the same event because of delay;
+4. treat an unavailable harness as approval;
+5. append ``merely recommended and may be omitted``;
+6. allow ``No Context Pollution`` to inline full reasoning as an exception;
+7. call the seven-stage order illustrative and permit skipped stages;
+8. allow one seat to count as a complete triplet.
+
+These are known limits of source regression, not defects queued for a new checking
+mechanism. This module does not provide end-to-end behavior validation.
+Three previously exercised whole-sentence equivalent rewrites now stay green;
+short anchors still have wording coupling and may reject other equivalent rewrites.
+"""
+
 import re
 import subprocess
 import unittest
@@ -128,7 +153,7 @@ class SshxContractTests(unittest.TestCase):
             "## Transcript Template",
             "## Verification",
         ]:
-            self.assertIn(anchor, text)
+            heading_index(text, anchor)
         self.assertLess(heading_index(text, "## No Context Pollution"), heading_index(text, "## Reasoning Discipline"))
         self.assertLess(heading_index(text, "## Reasoning Discipline"), heading_index(text, "## Thinking Panel"))
         self.assertLess(heading_index(text, "## Thinking Panel"), heading_index(text, "## Design Truth Table"))
@@ -142,17 +167,20 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_goal_contract_source_regression(self) -> None:
         text = read(SKILL)
-        self.assertIn("## Goal Contract", text)
+        heading_index(text, "## Goal Contract")
         self.assertIn("`GoalArtifact` is a prompt-level record, not a runtime API", text)
         self.assertIn("It is written during `intake` before worker mode selection or any worker dispatch", text)
-        for field in [
-            "`raw_user_input`",
-            "`normalized_goal`",
-            "`constraints`",
-            "`success_criteria`",
-            "`iteration_question`",
-        ]:
-            self.assertIn(field, text)
+        goal_section = text[heading_index(text, "## Goal Contract") : heading_index(text, "## InlineConsensusProtocol")]
+        field_block = goal_section.split("`GoalArtifact` has exactly these fields:\n\n", 1)[1].split("\n\n", 1)[0]
+        self.assertEqual(field_block.splitlines(), [
+            "- `raw_user_input`",
+            "- `normalized_goal`",
+            "- `constraints`",
+            "- `success_criteria`",
+            "- `iteration_question`",
+            "- `harness`",
+            "- `revisions`",
+        ])
         self.assertIn("The user's current input is the only source for the goal", text)
         self.assertIn(
             "must not discover or infer the goal from external lifecycle milestones, release state, runtime host configuration, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface",
@@ -162,10 +190,9 @@ class SshxContractTests(unittest.TestCase):
     def test_sshx_goal_iteration_behavior_contract(self) -> None:
         text = read(SKILL)
         self.assertIn("`intake` (write `GoalArtifact` and normalize the goal)", text)
-        self.assertIn(
-            "Each `visible_inputs` value must include the same `GoalArtifact.normalized_goal` and must not include same-round peer outputs",
-            text,
-        )
+        protocol_section = text[heading_index(text, "## InlineConsensusProtocol") : heading_index(text, "## Worker Delegation")]
+        for anchor in ["`visible_inputs`", "`GoalArtifact`", "`harness`", "same-round peer outputs"]:
+            self.assertIn(anchor, protocol_section)
         self.assertIn(
             "`revise` must name the goal gap and a next iteration question; it must not open an unrelated design search",
             text,
@@ -185,6 +212,40 @@ class SshxContractTests(unittest.TestCase):
         )
         self.assertIn("stay orchestration-only for the repair", text)
         self.assertIn("next_iteration_question:", text)
+
+    def test_sshx_harness_and_revisions_contract(self) -> None:
+        # Source-regression only: this checks fields and stable anchors, not prose semantics.
+        text = read(SKILL)
+        goal_section = text[text.index("## Goal Contract") : text.index("## InlineConsensusProtocol")]
+        for item in [
+            "`provided_capabilities`",
+            "`trust_boundary`",
+            "`decision_ownership`",
+            "`change`",
+            "`authorization_source`",
+            "`invalidated_completed_work`",
+        ]:
+            self.assertIn(item, goal_section)
+        self.assertIn("exactly these three sub-items", goal_section)
+        self.assertIn("append-only list", goal_section)
+        self.assertIn("missing any one of these sub-items is invalid and fails closed", goal_section)
+        self.assertIn("before any worker dispatch", goal_section)
+        self.assertIn("stop and escalate to the maintainer", goal_section)
+        self.assertIn("non-adversarial, not infallible", goal_section)
+        self.assertEqual(text.count("`harness` is a prompt-level record containing exactly these three sub-items"), 1)
+        self.assertEqual(text.count("`revisions` is an append-only list whose each item contains exactly these three sub-items"), 1)
+
+    def test_sshx_boundary_predicates_have_single_definitions(self) -> None:
+        # Source-regression only: this checks unique definitions and references, not runtime enforcement.
+        text = read(SKILL)
+        reasoning = text[heading_index(text, "## Reasoning Discipline") : heading_index(text, "## Thinking Panel")]
+        capability_definition = "`CapabilityOverlap` is the candidate-solution boundary check"
+        threat_definition = "`ThreatEligibility` is the review-finding boundary check"
+        self.assertEqual(text.count(capability_definition), 1)
+        self.assertEqual(text.count(threat_definition), 1)
+        self.assertIn(capability_definition, reasoning)
+        self.assertIn(threat_definition, reasoning)
+        self.assertIn("These are independent checks that share the `harness` fact source", reasoning)
 
     def test_sshx_triplets_require_reasoning_discipline_in_conclusion(self) -> None:
         text = read(SKILL)
@@ -356,6 +417,8 @@ class SshxContractTests(unittest.TestCase):
             "the panel is not homogenized into every seat re-deriving the same value verdict",
             thinking_section,
         )
+        self.assertIn("must state whether it hits `CapabilityOverlap`", thinking_section)
+        self.assertIn("a hit is an unclosed goal gap and must not enter `implement`", thinking_section)
         self.assertIn(
             "Every seat must first identify the problem essence or root cause implied by `GoalArtifact`",
             thinking_section,
@@ -364,6 +427,134 @@ class SshxContractTests(unittest.TestCase):
             "A plan that only patches a surface symptom while leaving that root cause in place does not satisfy the thinking gate",
             thinking_section,
         )
+
+    def test_sshx_fixed_routing_units_and_reflection_actions(self) -> None:
+        # Source-regression only: these are fixed routing anchors and action enums.
+        text = read(SKILL)
+        design_section = text[
+            heading_index(text, "## Design Truth Table") : heading_index(text, "## Implementation Worker")
+        ]
+        review_section = text[
+            heading_index(text, "## Review Truth Table") : heading_index(text, "## Fix Or Done")
+        ]
+        fix_section = text[heading_index(text, "## Fix Or Done") : heading_index(text, "## Boundaries")]
+        design_section_lower = design_section.lower()
+
+        conjunctive_trigger_present = (
+            "all three conditions" in design_section_lower
+            or all(anchor in design_section_lower for anchor in ["three conditions", "all hold", "simultaneously"])
+        )
+        self.assertTrue(
+            all(
+                anchor in design_section
+                for anchor in [
+                    "An `implement` exit also requires",
+                    "unresolved harness overlap",
+                    "authority gap",
+                    "missing host/controller execution capability",
+                    "repeat a capability already declared by the harness",
+                    "goal gap to the maintainer",
+                ]
+            ),
+            "missing Design Truth Table harness/authority implement route",
+        )
+        self.assertTrue(
+            conjunctive_trigger_present
+            and all(
+                anchor in design_section
+                for anchor in [
+                    "`FocusedRound`",
+                    "exclusive domain",
+                    "falsifiable rather than a preference",
+                    "has not answered that causal chain",
+                    "Does this causal chain hold",
+                    "how should the plan change?",
+                ]
+            ),
+            "missing FocusedRound three-condition trigger or fixed question",
+        )
+        one_round_bound_present = any(
+            anchor in design_section for anchor in ["at most one focused round", "only one focused round"]
+        )
+        self.assertTrue(
+            one_round_bound_present
+            and all(
+                anchor in design_section
+                for anchor in [
+                    "causal chain",
+                    "disagreement remains afterward",
+                    "escalate to the maintainer",
+                ]
+            ),
+            "missing FocusedRound same-chain one-round bound or maintainer escalation",
+        )
+        self.assertTrue(
+            all(
+                anchor in review_section
+                for anchor in [
+                    "fails `ThreatEligibility`",
+                    "downgraded",
+                    "only for threat-model ineligibility",
+                    "never because a finding is inconvenient",
+                ]
+            ),
+            "missing threat-ineligibility-only review downgrade guard",
+        )
+        self.assertTrue(
+            all(
+                anchor in review_section
+                for anchor in [
+                    "missing, ambiguous, or stale harness declaration",
+                    "never a downgrade shield",
+                    "pause routing",
+                    "escalate to the maintainer",
+                ]
+            ),
+            "missing unavailable-harness pause-and-escalate guard",
+        )
+        self.assertIn("`meta_judge` implement-exit gate", design_section)
+        self.assertIn("Before each fix or repeated review pass", review_section)
+        self.assertIn("After any explicit correction", fix_section)
+        self.assertIn("`ThreatEligibility`", review_section)
+        for section in [design_section, review_section, fix_section]:
+            for action in ["`continue`", "`revise`", "`stop`", "`escalate`"]:
+                self.assertIn(action, section)
+            self.assertIn("responsible party", section)
+
+    def test_sshx_review_triplet_runs_all_three_perspectives(self) -> None:
+        # Source-regression only: this checks triplet routing text, not reviewer quality or host execution.
+        text = read(SKILL)
+        triplet = text[text.index("## Review Triplet") : text.index("## Review Truth Table")]
+        role_lines = re.findall(r"^- `(architecture|quality|tests)`: .+$", triplet, flags=re.MULTILINE)
+        self.assertEqual(role_lines, ["architecture", "quality", "tests"])
+        self.assertIn("Same-round review workers follow the same rule", text)
+
+    def test_sshx_stable_core_remains_present(self) -> None:
+        # Source-regression only: presence of stable anchors is not end-to-end protocol validation.
+        text = read(SKILL)
+        for anchor in [
+            "`intake`",
+            "`choose_worker_mode`",
+            "`thinking_panel_workers`",
+            "`meta_judge`",
+            "`implementation_worker`",
+            "`review_triplet_workers`",
+            "`fix_or_done`",
+            "`WorkerDelegationContract`",
+            "`SshxResultEnvelope`",
+            "`FocusedRound`",
+        ]:
+            self.assertIn(anchor, text)
+        for heading in [
+            "## Worker Completion Contract",
+            "## No Context Pollution",
+            "## Reasoning Discipline",
+            "## Thinking Panel",
+            "## Review Triplet",
+            "## Design Truth Table",
+            "## Review Truth Table",
+        ]:
+            heading_index(text, heading)
 
     def test_sshx_worker_modes(self) -> None:
         text = read(SKILL)
@@ -681,7 +872,7 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_result_envelope_contract(self) -> None:
         text = read(SKILL)
-        self.assertIn("## Result Envelope", text)
+        heading_index(text, "## Result Envelope")
         self.assertIn("`SshxResultEnvelope` is a prompt-level record, not a runtime API", text)
         self.assertIn(
             "Every `SshxResultEnvelope` returned by `thinking_panel_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields",
@@ -716,7 +907,7 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_worker_completion_contract(self) -> None:
         text = read(SKILL)
-        self.assertIn("## Worker Completion Contract", text)
+        heading_index(text, "## Worker Completion Contract")
         self.assertIn("worker carrier process has exited with status `0`", text)
         self.assertIn("runner-derived, runner-owned `result_ref` artifact exists", text)
         self.assertIn("parses as a valid `SshxResultEnvelope`", text)
