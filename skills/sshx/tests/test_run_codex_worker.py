@@ -44,6 +44,16 @@ case "${FAKE_MODE:-success}" in
   extra_key) printf '%s\n' '{"conclusion":{"verdict":"propose"},"log_ref":"fake-log","notes":true}' > "$result_ref"; write_sentinel ;;
   missing_key) printf '%s\n' '{"conclusion":{"verdict":"propose"}}' > "$result_ref"; write_sentinel ;;
   empty_log_ref) printf '%s\n' '{"conclusion":{"verdict":"propose"},"log_ref":""}' > "$result_ref"; write_sentinel ;;
+  conclusion_string) printf '%s\n' '{"conclusion":"propose","log_ref":"fake-log"}' > "$result_ref"; write_sentinel ;;
+  log_ref_number) printf '%s\n' '{"conclusion":{"verdict":"propose"},"log_ref":1}' > "$result_ref"; write_sentinel ;;
+  verdict_number) printf '%s\n' '{"conclusion":{"verdict":1},"log_ref":"fake-log"}' > "$result_ref"; write_sentinel ;;
+  minimum_envelope)
+    envelope=$(printf '%s\n' "$brief" | sed -n 's/^Minimum structurally accepted envelope shape: //p')
+    [ -n "$envelope" ] || exit 94
+    printf '%s\n' "$envelope" > "$result_ref.tmp"
+    mv "$result_ref.tmp" "$result_ref"
+    write_sentinel
+    ;;
   bad_verdict) verdict=unexpected; write_result; write_sentinel ;;
   missing_sentinel) write_result ;;
   stdout_only) printf '%s\n' '{"conclusion":{"verdict":"propose"},"log_ref":"fake-log"}'; printf '%s\n' 'completion marker' ;;
@@ -152,6 +162,18 @@ class CodexWorkerRunnerTests(unittest.TestCase):
             "  case \"$arg\" in *status.json.tmp) [ -s \"$arg\" ] || printf '%s\\n' empty-status-move > \"$FAKE_MV_MARKER\" ;; esac\n"
             "done\n"
             "exec /bin/mv \"$@\"\n"
+        )
+        wrapper.chmod(0o755)
+
+    def install_skeleton_render_failing_jq(self) -> None:
+        wrapper = self.bin_dir / "jq"
+        wrapper.unlink()
+        wrapper.write_text(
+            "#!/bin/bash\n"
+            "for arg in \"$@\"; do\n"
+            "  [ \"$arg\" != --null-input ] || exit 73\n"
+            "done\n"
+            "exec \"$REAL_JQ\" \"$@\"\n"
         )
         wrapper.chmod(0o755)
 
@@ -394,6 +416,40 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         for mode in ["extra_key", "missing_key", "empty_log_ref"]:
             with self.subTest(mode=mode):
                 self.assert_terminal(self.run_worker(mode), "ENVELOPE_INVALID")
+
+    def test_runner_rendered_minimum_envelope_passes_production_validator(self) -> None:
+        expected_conclusions = {
+            "thinking": {"verdict": "propose"},
+            "review": {"verdict": "approve"},
+            "implementation": {},
+        }
+        for stage, expected_conclusion in expected_conclusions.items():
+            with self.subTest(stage=stage):
+                result = self.run_worker("minimum_envelope", stage=stage)
+                self.assert_terminal(result, "COMPLETE")
+                envelope = json.loads(result.run_dir.joinpath("result.json").read_text())
+                self.assertEqual(envelope["conclusion"], expected_conclusion)
+                self.assertEqual(envelope["log_ref"], str(result.run_dir / "worker.stdout.log"))
+                brief = result.run_dir.joinpath("brief.md").read_text()
+                self.assertEqual(brief.count("Minimum structurally accepted envelope shape: "), 1)
+                self.assertIn("must populate \"conclusion\" with the complete structured result", brief)
+                self.assertIn("must not submit this skeletal example unchanged", brief)
+
+    def test_minimum_envelope_render_failure_does_not_launch_carrier(self) -> None:
+        self.install_skeleton_render_failing_jq()
+        result = self.run_worker(extra_env={"REAL_JQ": str(self.real_jq)})
+        self.assert_terminal(result, "INTERNAL_ERROR")
+        self.assertNotIn("carrier starting", result.process.stdout)
+        self.assertIn("INTERNAL_ERROR: cannot render minimum envelope shape", result.process.stderr)
+        self.assertNotIn(
+            "Minimum structurally accepted envelope shape:",
+            result.run_dir.joinpath("brief.md").read_text(),
+        )
+
+    def test_envelope_field_types_are_strict(self) -> None:
+        for mode in ["conclusion_string", "log_ref_number", "verdict_number"]:
+            with self.subTest(mode=mode):
+                self.assert_terminal(self.run_worker(mode, stage="thinking"), "ENVELOPE_INVALID")
 
     def test_stage_verdict_requires_exact_set_member(self) -> None:
         for stage, verdict in [("thinking", "unexpected"), ("thinking", "propose|revise"), ("review", "approve|comment")]:
