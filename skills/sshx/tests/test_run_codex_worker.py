@@ -537,17 +537,44 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         finally:
             shutil.rmtree(run_dir.parent, ignore_errors=True)
 
-    def test_explicit_symlink_tmpdir_is_rejected(self) -> None:
+    def test_explicit_symlink_tmpdir_is_accepted_and_artifacts_reach_target(self) -> None:
         target = self.temp_dir / "target"; target.mkdir()
         link = self.temp_dir / "tmp-link"; link.symlink_to(target, target_is_directory=True)
+        flight = self.next_flight("tmp-link")
         env = self.environment(); env["TMPDIR"] = str(link)
-        process = subprocess.run(self.command(self.next_flight("tmp-link")), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
+        process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
+        linked_run_dir = self.expected_run_dir(flight, base=link)
+        physical_run_dir = self.expected_run_dir(flight, base=target)
+        self.assert_terminal(RunResult(process, linked_run_dir), "COMPLETE")
+        self.assertEqual(linked_run_dir.resolve(), physical_run_dir.resolve())
+        for artifact in ["result.json", "completion.sentinel", "status.json"]:
+            self.assertTrue(physical_run_dir.joinpath(artifact).is_file(), artifact)
+
+    def test_real_and_symlink_tmpdir_paths_have_same_complete_decision(self) -> None:
+        target = self.temp_dir / "symmetric-target"; target.mkdir()
+        link = self.temp_dir / "symmetric-link"; link.symlink_to(target, target_is_directory=True)
+        for label, tmp_base in [("real", target), ("symlink", link)]:
+            with self.subTest(path=label):
+                flight = self.next_flight(f"symmetric-{label}")
+                env = self.environment(); env["TMPDIR"] = str(tmp_base)
+                process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
+                self.assert_terminal(RunResult(process, self.expected_run_dir(flight, base=tmp_base)), "COMPLETE")
+
+    def test_dangling_symlink_tmpdir_is_unavailable_with_diagnostic(self) -> None:
+        missing_target = self.temp_dir / "missing-target"
+        link = self.temp_dir / "dangling-tmp-link"; link.symlink_to(missing_target, target_is_directory=True)
+        flight = self.next_flight("dangling-tmp")
+        env = self.environment(); env["TMPDIR"] = str(link)
+        process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
         self.assertEqual(process.returncode, 1)
         self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
+        self.assertIn("TMPDIR must resolve to an existing writable directory", process.stderr)
+        self.assertFalse(missing_target.exists())
 
     def test_tmpdir_validation_is_fail_closed(self) -> None:
         unwritable = self.temp_dir / "unwritable"; unwritable.mkdir(); unwritable.chmod(0o500)
-        values = ["relative", str(self.temp_dir / "missing"), str(unwritable)]
+        not_directory = self.temp_dir / "not-directory"; not_directory.write_text("not a directory\n")
+        values = ["relative", str(self.temp_dir / "missing"), str(unwritable), str(not_directory)]
         for value in values:
             env = self.environment(); env["TMPDIR"] = value
             process = subprocess.run(self.command(self.next_flight("bad-tmp")), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
@@ -639,7 +666,8 @@ class CodexWorkerRunnerTests(unittest.TestCase):
     def test_control_characters_cannot_enter_streamed_path_fields(self) -> None:
         spec = re.sub(r"\s+", " ", SPEC.read_text())
         self.assertIn("`work-target` is absolute and contains neither LF (`0x0A`) nor CR (`0x0D`)", spec)
-        self.assertIn("writable, free of LF or CR, and not a symbolic link", spec)
+        self.assertIn("`TMPDIR` must be absolute, contain neither LF nor CR, and resolve to an existing writable directory", spec)
+        self.assertIn("top-level `TMPDIR` may be a symbolic link to an existing writable directory", spec)
         locales = ["C", "C.UTF-8", "en_US.UTF-8"]
         for locale in locales:
             for character in ["\n", "\r"]:
