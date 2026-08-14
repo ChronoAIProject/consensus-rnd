@@ -864,6 +864,47 @@ class SshxContractTests(unittest.TestCase):
             worker_delegation.index("`codex-cli` completion is recognized only when"),
         )
 
+    def test_sshx_packaging_only_retry_contract(self) -> None:
+        text = read(SKILL)
+        worker_delegation = section(text, "## Worker Delegation", "## Result Envelope")
+        no_context_pollution = section(text, "## No Context Pollution", "## Reasoning Discipline")
+        packaging_retry = next(
+            paragraph
+            for paragraph in worker_delegation.split("\n\n")
+            if "This packaging-only retry" in paragraph
+        )
+        for contract_string in [
+            "When a `codex-cli` attempt",
+            "terminates with runner `reason_code` `ENVELOPE_INVALID`",
+            "by the runner's decision order, mechanically means that the carrier exited `0` and `result.json` exists but is invalid",
+            "same carrier's predeclared `retry_budget` still has capacity",
+            "include opaque path references",
+            "that seat's own immediately preceding attempt artifacts",
+            "next incremented attempt with the same `stage`, `role`, and `work_target`",
+            "The caller must not open, summarize, or repair those artifacts",
+            "read only its own immediately preceding attempt artifacts, never same-round peer output",
+            "confirm for itself that the predecessor artifacts contain complete analysis reusable for the task",
+            "must not package incomplete content into a terminal envelope",
+            "that attempt follows the existing ordinary retry and fallback path",
+            "That attempt consumes the predeclared `retry_budget`",
+            "This packaging-only retry covers only envelope assembly failure",
+            "`VERDICT_INVALID` and every other `reason_code` follow the existing ordinary retry and fallback path",
+        ]:
+            self.assertIn(contract_string, packaging_retry)
+        self.assertNotIn("`nyxid-oracle`", packaging_retry)
+        self.assertNotIn("`isolated-token-subagent`", packaging_retry)
+        self.assertIn(
+            "A seat's own immediately preceding attempt artifacts are not same-round peer output",
+            no_context_pollution,
+        )
+        self.assertIn("does not constitute context pollution", no_context_pollution)
+
+    def test_sshx_result_envelope_types_are_explicit(self) -> None:
+        result_envelope = section(read(SKILL), "## Result Envelope", "## Worker Completion Contract")
+        self.assertIn("`conclusion` is a structured JSON object, not a free-text string", result_envelope)
+        self.assertIn("`log_ref` is a non-empty string reference", result_envelope)
+        self.assertIn("it is the string at `conclusion.verdict`", result_envelope)
+
     def test_sshx_codex_cli_background_job_dispatch_source_regression(self) -> None:
         text = read(SKILL)
         worker_delegation = text[

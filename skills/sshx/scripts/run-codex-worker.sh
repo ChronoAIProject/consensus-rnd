@@ -129,6 +129,16 @@ main() {
   stage_verdict_specs='thinking=propose|revise|reject|abstain;review=approve|comment|reject;implementation='
   allowed_verdict_spec=${stage_verdict_specs#*"$stage="}; allowed_verdict_spec=${allowed_verdict_spec%%;*}
   allowed_verdict_text=${allowed_verdict_spec:-no-verdict-required}
+  if ! skeleton_json=$("$jq_path" --compact-output --null-input --arg stage "$stage" --arg verdict "${allowed_verdict_spec%%|*}" --arg log_ref "$stdout_ref" '{conclusion:(if $stage == "implementation" then {} else {verdict:$verdict} end),log_ref:$log_ref}'); then
+    reason=INTERNAL_ERROR
+    printf '%s\n' 'run-codex-worker: INTERNAL_ERROR: cannot render minimum envelope shape' >&2
+    return 1
+  fi
+  if [ -z "$skeleton_json" ]; then
+    reason=INTERNAL_ERROR
+    printf '%s\n' 'run-codex-worker: INTERNAL_ERROR: rendered minimum envelope shape is empty' >&2
+    return 1
+  fi
   cat >> "$brief_ref" <<EOF || return 1
 
 ## Runner-owned artifact contract
@@ -138,7 +148,12 @@ The runner never creates, repairs, copies, normalizes, or touches them.
 - Result envelope: $result_ref
 - Completion sentinel: $sentinel_ref
 - Stage: $stage; allowed verdict: $allowed_verdict_text
-The envelope must be strict JSON with exactly the top-level keys "conclusion" and "log_ref".
+The envelope must be strict JSON whose top-level value is an object containing exactly the keys "conclusion" and "log_ref".
+"conclusion" must be a JSON object, not a string. "log_ref" must be a non-empty JSON string.
+For the "thinking" and "review" stages, "conclusion.verdict" must be a JSON string and one of the values on the allowed verdict line above. The "implementation" stage does not require a verdict.
+Minimum structurally accepted envelope shape: $skeleton_json
+This example is only the minimum structurally accepted shape; the worker must populate "conclusion" with the complete structured result required by its task brief and must not submit this skeletal example unchanged.
+The example uses this attempt's worker stdout log for "log_ref"; the worker may replace it with another non-empty reference.
 Publish result.json.tmp then atomically rename it to result.json, then do the same for completion.sentinel.
 EOF
   : > "$stdout_ref" && : > "$stderr_ref" && : > "$last_message_ref" || return 1

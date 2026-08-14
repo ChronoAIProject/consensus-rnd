@@ -46,7 +46,9 @@ The runner owns `brief.md`, the three diagnostic logs, `carrier.exit`, and
 `status.json`. The worker alone owns `result.json` and `completion.sentinel`.
 The runner never creates, repairs, copies, normalizes, touches, or substitutes
 either worker artifact. The brief requests same-directory temporary files and
-atomic rename for those artifacts.
+atomic rename for those artifacts. It also states the envelope's structural
+acceptance conditions and includes one runner-rendered, stage-specific minimum
+valid envelope example.
 
 ## Carrier
 
