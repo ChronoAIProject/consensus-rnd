@@ -35,9 +35,10 @@ The runner derives exactly:
 ${TMPDIR:-/tmp}/consensus-rnd/sshx/<flight-id>/attempt-<attempt>
 ```
 
-Trailing slashes are removed except for `/`. The default `/tmp` may be a
-symbolic link. An explicitly configured `TMPDIR` must be absolute, existing,
-writable, free of LF or CR, and not a symbolic link. The
+Trailing slashes are removed except for `/`. Whether the default or an
+explicitly configured value is used, `TMPDIR` must be absolute, contain neither
+LF nor CR, and resolve to an existing writable directory. The top-level
+`TMPDIR` may be a symbolic link to an existing writable directory. The
 runner-created `consensus-rnd`, `sshx`, and flight directories are always
 rejected when symbolic links. Each is created or validated before one atomic
 `mkdir` of the attempt directory; an existing attempt is `RUN_DIR_COLLISION`.

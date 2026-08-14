@@ -104,8 +104,11 @@ main() {
   while [ "$tmp_base" != / ] && [ "${tmp_base%/}" != "$tmp_base" ]; do tmp_base=${tmp_base%/}; done
   case "$tmp_base" in /*) ;; *) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
   case "$tmp_base" in *$'\n'*|*$'\r'*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
-  if [ -n "${TMPDIR:-}" ] && [ -L "$tmp_base" ]; then reason=RUN_DIR_UNAVAILABLE; return 1; fi
-  [ -d "$tmp_base" ] && [ -w "$tmp_base" ] || { reason=RUN_DIR_UNAVAILABLE; return 1; }
+  [ -d "$tmp_base" ] && [ -w "$tmp_base" ] || {
+    reason=RUN_DIR_UNAVAILABLE
+    printf '%s\n' 'run-codex-worker: RUN_DIR_UNAVAILABLE: TMPDIR must resolve to an existing writable directory' >&2
+    return 1
+  }
   ensure_dir() {
     ensure_path=$1
     [ ! -L "$ensure_path" ] || return 1

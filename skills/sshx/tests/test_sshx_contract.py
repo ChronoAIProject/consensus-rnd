@@ -762,42 +762,98 @@ class SshxContractTests(unittest.TestCase):
         text = read(SKILL)
         worker_delegation = section(text, "## Worker Delegation", "## Result Envelope")
         completion_contract = section(text, "## Worker Completion Contract", "## No Context Pollution")
-        terminal_report = "dispatch invocation reports a structured terminal status"
-        collection_read = "single bounded `nyxid oracle result` collection read"
-        non_completion_route = (
-            "returns any status other than the structured terminal `status=completed`, "
-            "or its output is missing or invalid"
-        )
-        result_record = "records `result_envelope_ref` on the matching flight"
-
         self.assertIn(
+            "must start a new isolated oracle conversation before that attempt's first submission",
+            worker_delegation,
+        )
+        self.assertNotIn(
             "must start a new isolated oracle conversation for that flight or attempt",
             worker_delegation,
         )
-        for contract in (worker_delegation, completion_contract):
-            with self.subTest(section=contract.splitlines()[0]):
-                self.assertIn("must not poll or busy-poll the oracle task while it runs", contract)
-                self.assertIn(terminal_report, contract)
-                self.assertIn(collection_read, contract)
-                self.assertLess(contract.index(terminal_report), contract.index(collection_read))
-                self.assertIn("structured terminal `status=completed`", contract)
-                self.assertIn("the `response` payload parses as a valid `SshxResultEnvelope`", contract)
-                self.assertIn(non_completion_route, contract)
-                self.assertIn("the matching flight becomes `abstained`", contract)
-                self.assertIn("origin-agnostic fallback rule", contract)
-                self.assertIn(result_record, contract)
-                self.assertIn("records `completion_sentinel_ref` there as `n/a`", contract)
-                self.assertIn("stage record's `log_ref`", contract)
-                self.assertNotIn("the flight's `log_ref`", contract)
-                self.assertNotIn("result collection artifact", contract)
-
+        self.assertIn(
+            "governed solely by `## Worker Completion Contract` and are not restated here",
+            worker_delegation,
+        )
+        self.assertNotIn("finite recovery read sequence", worker_delegation)
+        self.assertIn("when an attempt's dispatch invocation reports a structured terminal status", completion_contract)
+        self.assertIn("that attempt does not enter recovery", completion_contract)
+        self.assertIn("one bounded `nyxid oracle result` read", completion_contract)
+        self.assertIn("that read is the attempt's single collection read", completion_contract)
+        normal_unparseable_route = (
+            "If that collection read's output is missing or unparseable, including empty or truncated output "
+            "or output without a parseable structured status/result wrapper, it is not terminal completion: "
+            "the matching flight becomes `abstained` and follows the origin-agnostic fallback rule"
+        )
+        self.assertIn(normal_unparseable_route, completion_contract)
         self.assertIn("only when both of these conditions hold", completion_contract)
+        self.assertIn("structured terminal `status=completed`", completion_contract)
+        self.assertIn("the `response` payload parses as a valid `SshxResultEnvelope`", completion_contract)
         self.assertIn("Intermediate task statuses (`queued`, `dispatched`", completion_contract)
         self.assertIn("no worker-owned independent completion sentinel", completion_contract)
+        self.assertIn("records `result_envelope_ref` on the matching flight", completion_contract)
+        self.assertIn("records `completion_sentinel_ref` there as `n/a`", completion_contract)
+        self.assertIn("stage record's `log_ref`", completion_contract)
+        self.assertNotIn("the flight's `log_ref`", completion_contract)
         self.assertIn(
             "response prose, stdout, echoes, and log tails are never completion or verdict evidence",
             completion_contract,
         )
+
+    def test_sshx_nyxid_oracle_recovery_trigger_and_bounds(self) -> None:
+        completion_contract = section(read(SKILL), "## Worker Completion Contract", "## No Context Pollution")
+        trigger = "enters dispatch-exit recovery only when both of these conditions hold"
+        submitted = "dispatch call successfully submitted the oracle task"
+        recorded = "caller recorded that task's oracle task reference"
+        abnormal_exit = "dispatch call then exited unexpectedly before reporting a structured terminal status"
+        self.assertIn(trigger, completion_contract)
+        self.assertIn(submitted, completion_contract)
+        self.assertIn(recorded, completion_contract)
+        self.assertIn(abnormal_exit, completion_contract)
+        self.assertIn("If the oracle task reference is unavailable, the attempt does not enter recovery", completion_contract)
+        self.assertIn("the matching flight becomes `abstained` and follows the origin-agnostic fallback rule", completion_contract)
+        self.assertIn("finite recovery read sequence against that same oracle task", completion_contract)
+        self.assertIn("read-count upper bound and delay schedule must be chosen and recorded before the first recovery read", completion_contract)
+        self.assertIn("Every scheduled delay must be positive and non-decreasing", completion_contract)
+        self.assertIn("subject to the caller harness's task deadline", completion_contract)
+
+    def test_sshx_nyxid_oracle_recovery_read_semantics(self) -> None:
+        completion_contract = section(read(SKILL), "## Worker Completion Contract", "## No Context Pollution")
+        non_terminal = "A recovery read that returns a structured non-terminal status is only a waiting recovery observation"
+        first_terminal = "The first recovery read that returns a structured terminal status becomes that attempt's one and only collection read"
+        self.assertIn(non_terminal, completion_contract)
+        self.assertIn("it is not that attempt's collection read and provides no completion or verdict evidence", completion_contract)
+        missing_or_unparseable = "A recovery read whose output is missing or unparseable is likewise only a waiting recovery observation"
+        self.assertIn(missing_or_unparseable, completion_contract)
+        self.assertIn("it consumes one predeclared recovery read slot", completion_contract)
+        self.assertIn("is not that attempt's collection read", completion_contract)
+        self.assertIn("provides no completion or verdict evidence", completion_contract)
+        self.assertIn("if a slot remains, the recovery sequence may continue", completion_contract)
+        self.assertIn(first_terminal, completion_contract)
+        self.assertIn("after that terminal read, the caller must perform no additional reads", completion_contract)
+        self.assertLess(completion_contract.index(non_terminal), completion_contract.index(first_terminal))
+        self.assertLess(completion_contract.index(missing_or_unparseable), completion_contract.index(first_terminal))
+        self.assertIn("Terminal completion is recognized only when both of these conditions hold", completion_contract)
+        self.assertIn("a unique collection read that returns any status other than the structured terminal `status=completed`", completion_contract)
+        self.assertIn("a `completed` collection read whose response envelope or required verdict is missing or invalid", completion_contract)
+        self.assertIn("exhaustion of the recovery sequence without any structured terminal status", completion_contract)
+        self.assertIn("makes the matching flight `abstained` under the origin-agnostic fallback rule", completion_contract)
+        self.assertIn("not a polling authorization", completion_contract)
+        self.assertIn("ordinary polling and busy-polling prohibition remains unchanged", completion_contract)
+        self.assertIn("server-side lifecycle is independent of the waiting client invocation", completion_contract)
+        self.assertIn("`result` reads are non-destructive state reads", completion_contract)
+
+    def test_sshx_nyxid_oracle_blind_redispatch_is_idempotent_and_bounded(self) -> None:
+        worker_delegation = section(read(SKILL), "## Worker Delegation", "## Result Envelope")
+        self.assertIn("When blindly redispatching the same `nyxid-oracle` attempt", worker_delegation)
+        self.assertIn("SHOULD reuse one stable submitter-scoped idempotency reference", worker_delegation)
+        self.assertIn("repeated submissions converge on the same oracle task", worker_delegation)
+        self.assertIn("carrier-supported client reference mechanism; this example is non-normative", worker_delegation)
+        self.assertIn("A new attempt must use a new idempotency reference", worker_delegation)
+        self.assertIn("This sentence does not itself authorize any redispatch", worker_delegation)
+        self.assertIn("any blind redispatch must already be authorized by the existing bounded-attempt rules", worker_delegation)
+        self.assertIn("it never replaces same-task recovery", worker_delegation)
+        self.assertNotIn("does not authorize unlimited redispatch", worker_delegation)
+        self.assertNotIn("--client-ref", worker_delegation)
 
     def test_sshx_external_carrier_claims_require_real_verification(self) -> None:
         text = read(SKILL)
