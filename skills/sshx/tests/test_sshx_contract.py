@@ -17,10 +17,27 @@ and appending a weakening:
 7. call the seven-stage order illustrative and permit skipped stages;
 8. allow one seat to count as a complete triplet.
 
-These are known limits of source regression, not defects queued for a new checking
-mechanism. This module does not provide end-to-end behavior validation.
-Three previously exercised whole-sentence equivalent rewrites now stay green;
-short anchors still have wording coupling and may reject other equivalent rewrites.
+These are known source-regression limits, not defects queued for another mechanism;
+this module does not provide end-to-end behavior validation.
+
+The canonical default-seat-allocation span is normative wording. Rewriting it
+requires a synchronized update to ``DEFAULT_SEAT_ALLOCATION_PATTERNS``. The
+positive anchors accept ``each`` or ``every`` and do not require the four carrier
+allocation propositions to stay in source order, but passive voice, tables, and
+cardinal mappings are intentionally not accepted. The ``not|unless|except``
+blocker catches appended weakening such as ``unless the caller prefers
+otherwise``; by design, it also rejects reinforcing negation such as ``This
+layout is not optional``.
+
+The residual quantity check recognizes only a digit or an English cardinal from
+``one`` through ``six`` directly adjacent to a backticked carrier identifier
+within ``## Worker Delegation`` but outside the canonical span. It is a limited
+heuristic, not the single-source guarantee; non-adjacent quantities and synonymous
+contradictory prose elsewhere are not mechanically detected. It also rejects
+same-shaped non-seat prose such as ``Only one `nyxid-oracle` conversation may be
+open per flight``; rewrite that as ``one conversation per `nyxid-oracle` flight``.
+The structural single-source checks are that the exact canonical span occurs once
+and both stage sections remain carrier-free.
 """
 
 import re
@@ -38,6 +55,26 @@ CI = ROOT / ".github" / "workflows" / "consensus-rnd-ci.yml"
 BASELINE_ARTIFACT_PATHSPEC = "*baseline-issue342-sshx.md"
 
 THINKING_VERDICTS = {"propose", "revise", "reject", "abstain"}
+CARRIER_NAMES = ("codex-cli", "nyxid-oracle", "isolated-token-subagent")
+CARRIER_IDENTIFIERS = tuple(f"`{carrier}`" for carrier in CARRIER_NAMES)
+DEFAULT_SEAT_ALLOCATION_PATTERNS = (
+    ("dispatch-time assertion", r"\b(?:at dispatch time|when dispatch begins)\b"),
+    ("multi-seat stage scope", r"\b(?:every|each) multi-seat stage assigns\b"),
+    ("one isolated-token-subagent seat", r"\bexactly one seat to `isolated-token-subagent`"),
+    ("one nyxid-oracle seat", r"\bexactly one seat to `nyxid-oracle`"),
+    (
+        "remaining codex-cli seats",
+        r"\b(?:every|each) remaining seat(?: in that stage)?(?: goes)? to `codex-cli`",
+    ),
+    (
+        "single-worker codex-cli assignment",
+        r"\b(?:every|each) single-worker stage assigns its worker to `codex-cli`",
+    ),
+)
+CARDINAL_CARRIER_BINDING_PATTERN = re.compile(
+    rf"\b(?:\d+|one|two|three|four|five|six)\s+(?:{'|'.join(map(re.escape, CARRIER_IDENTIFIERS))})",
+    flags=re.IGNORECASE,
+)
 
 
 class ContractFailure(ValueError):
@@ -57,6 +94,45 @@ def heading_index(text: str, anchor: str) -> int:
     if not match:
         raise AssertionError(f"missing heading anchor {anchor}")
     return match.start()
+
+
+def section(text: str, start: str, end: str) -> str:
+    return text[heading_index(text, start) : heading_index(text, end)]
+
+
+def default_seat_allocation_span(text: str) -> tuple[int, int]:
+    section_start = heading_index(text, "## Worker Delegation")
+    worker_delegation = section(text, "## Worker Delegation", "## Result Envelope")
+    start_anchor = "Do not self-apply the triplet inside the caller context and present it as worker consensus.\n\n"
+    end_anchor = "The carrier-role pairing must be chosen and recorded before any worker"
+    if worker_delegation.count(start_anchor) != 1 or worker_delegation.count(end_anchor) != 1:
+        raise AssertionError("default seat allocation boundaries must be unique")
+    relative_start = worker_delegation.index(start_anchor) + len(start_anchor)
+    allocation = worker_delegation[relative_start : worker_delegation.index(end_anchor, relative_start)].rstrip()
+    normalized = re.sub(r"\s+", " ", allocation)
+    blocked_token = re.search(r"\b(?:not|unless|except)\b", normalized, flags=re.IGNORECASE)
+    if blocked_token:
+        raise AssertionError(
+            f"default seat allocation contains blocked weakening token: {blocked_token.group(0).lower()}"
+        )
+    for proposition, pattern in DEFAULT_SEAT_ALLOCATION_PATTERNS:
+        if not re.search(pattern, normalized, flags=re.IGNORECASE):
+            raise AssertionError(f"default seat allocation is missing: {proposition}")
+    return section_start + relative_start, section_start + relative_start + len(allocation)
+
+
+def has_cardinal_carrier_binding_outside_default(text: str) -> bool:
+    allocation_start, allocation_end = default_seat_allocation_span(text)
+    remainder = section(text[:allocation_start] + text[allocation_end:], "## Worker Delegation", "## Result Envelope")
+    return CARDINAL_CARRIER_BINDING_PATTERN.search(remainder) is not None
+
+
+def stage_sections_are_carrier_free(text: str) -> bool:
+    stage_sections = (
+        section(text, "## Thinking Panel", "## Design Truth Table"),
+        section(text, "## Review Triplet", "## Review Truth Table"),
+    )
+    return all(carrier not in stage for stage in stage_sections for carrier in CARRIER_NAMES)
 
 
 def frontmatter(text: str) -> dict[str, str]:
@@ -111,15 +187,15 @@ def has_terminal_completion(flight: dict[str, object]) -> bool:
     )
 
 
-def resolve_abnormal_codex_exit(flight: dict[str, object], fallback_available: bool) -> str:
+def resolve_failed_flight(flight: dict[str, object], fallback_available: bool) -> str:
     if has_terminal_completion(flight):
         return "complete"
     retry_budget = int(flight.get("retry_budget", 0))
     attempt = int(flight.get("attempt", 0))
-    if flight.get("worker_mode") == "codex-cli" and attempt < retry_budget:
+    if attempt < retry_budget:
         return "retry-same-carrier"
     if fallback_available:
-        return "fallback-next-carrier"
+        return "fallback-highest-priority-untried-carrier"
     return "abstain"
 
 
@@ -207,7 +283,7 @@ class SshxContractTests(unittest.TestCase):
             text,
         )
         self.assertIn(
-            "by delegating it to a worker using the selected `WorkerMode` exactly as `## Implementation Worker` requires",
+            "by delegating it to a worker using the stage's default carrier exactly as `## Implementation Worker` requires",
             text,
         )
         self.assertIn("stay orchestration-only for the repair", text)
@@ -527,7 +603,7 @@ class SshxContractTests(unittest.TestCase):
         triplet = text[text.index("## Review Triplet") : text.index("## Review Truth Table")]
         role_lines = re.findall(r"^- `(architecture|quality|tests)`: .+$", triplet, flags=re.MULTILINE)
         self.assertEqual(role_lines, ["architecture", "quality", "tests"])
-        self.assertIn("Same-round review workers follow the same rule", text)
+        self.assertIn("no worker may see a same-round peer output", text)
 
     def test_sshx_stable_core_remains_present(self) -> None:
         # Source-regression only: presence of stable anchors is not end-to-end protocol validation.
@@ -562,36 +638,93 @@ class SshxContractTests(unittest.TestCase):
         mode_lines = re.findall(r"^\d+\. `(codex-cli|nyxid-oracle|isolated-token-subagent|abstain)`$", text, re.MULTILINE)
         self.assertEqual(mode_lines, ["codex-cli", "nyxid-oracle", "isolated-token-subagent", "abstain"])
         self.assertIn("`WorkerDelegationContract`", text)
-        self.assertIn("`codex-cli` is the default worker carrier after a non-mutating capability check", text)
-        self.assertIn(
-            "`nyxid-oracle` is a model-diverse out-of-process worker carrier",
-            text,
-        )
-        self.assertIn(
-            "`isolated-token-subagent` is the fallback when `codex-cli` and `nyxid-oracle` are both unavailable",
-            text,
-        )
         self.assertIn(
             "`abstain` is required when none of `codex-cli`, `nyxid-oracle`, or `isolated-token-subagent` is available",
             text,
         )
         self.assertIn("Do not self-apply the triplet inside the caller context", text)
-        # nyxid-oracle is a fallible advisory worker with no authority; the CLI name does not grant it one.
-        self.assertIn(
-            "it is a fallible advisory worker exactly like `codex-cli`, never a privileged oracle",
-            text,
-        )
-        self.assertIn("a distinct carrier is not automatically a distinct model family", text)
-        self.assertIn("a new browser conversation alone does not prove a sterile context", text)
-        # diversity-aware dispatch: registering a carrier is not dispatching to it; a fallback-only nyxid is decorative.
-        self.assertIn("Carrier registration and dispatch are separate", text)
-        self.assertIn("deliberately assign same-round seats across the available carriers", text)
-        self.assertIn(
-            "if every completed seat ran on one model family, do not present the result as model-diverse",
-            text,
-        )
+        self.assertIn("fallible advisory worker exactly like `codex-cli`, never a privileged oracle", text)
+        self.assertIn("carrier heterogeneity improves consensus quality", text)
+        self.assertIn("statistically independent priors is `ASSUMED-UNVERIFIED`", text)
+        self.assertIn("carrier-role pairing must be chosen and recorded before any worker", text)
+        self.assertIn("`tests` review seat must be assigned to a carrier capable of executing", text)
+        self.assertIn("repository verification commands in the `work_target`", text)
+        self.assertIn("if every completed seat ran on one model family, do not present the result as model-diverse", text)
+        self.assertIn("must not be rebalanced in response to completion outcomes", text)
+        self.assertIn("a retry or fallback may replace only the failed flight for the same seat and role", text)
+        self.assertIn("If any fallback occurs or any initially paired carrier is unavailable", text)
+        self.assertIn("do not claim that stage achieved model-diverse consensus", text)
         self.assertNotIn("sealed-transcript", contract_text)
         self.assertNotIn("actor-isolated", contract_text)
+
+    def test_sshx_default_seat_allocation_positive_anchors_with_mutations(self) -> None:
+        text = read(SKILL)
+        start, end = default_seat_allocation_span(text)
+        allocation = text[start:end]
+        self.assertEqual(text.count(allocation), 1)
+        with self.assertRaises(AssertionError):
+            default_seat_allocation_span(text.replace(allocation, "", 1))
+        for proposition, pattern in DEFAULT_SEAT_ALLOCATION_PATTERNS:
+            self.assertEqual(len(re.findall(pattern, allocation, flags=re.IGNORECASE)), 1)
+            weakened = re.sub(pattern, "allocation omitted", allocation, count=1, flags=re.IGNORECASE)
+            with self.assertRaisesRegex(
+                AssertionError,
+                re.escape(f"default seat allocation is missing: {proposition}"),
+            ):
+                default_seat_allocation_span(text[:start] + weakened + text[end:])
+        with self.assertRaisesRegex(AssertionError, r"blocked weakening token: unless"):
+            default_seat_allocation_span(
+                text[:start] + f"{allocation} Unless the caller prefers otherwise." + text[end:]
+            )
+        rewrites = (
+            "At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent` and exactly one seat to `nyxid-oracle`. Every remaining seat in that stage goes to `codex-cli`, and every single-worker stage assigns its worker to `codex-cli`.",
+            "At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `codex-cli`. Every single-worker stage assigns its worker to `codex-cli`.",
+            "At dispatch time:\n- Every multi-seat stage assigns exactly one seat to `isolated-token-subagent` and exactly one seat to `nyxid-oracle`.\n- Every remaining seat in that stage goes to `codex-cli`.\n- Every single-worker stage assigns its worker to `codex-cli`.",
+            "At dispatch time, each multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and each remaining seat to `codex-cli`; each single-worker stage assigns its worker to `codex-cli`.",
+            "At dispatch time, every multi-seat stage assigns exactly one seat to `nyxid-oracle`, exactly one seat to `isolated-token-subagent`, and every remaining seat to `codex-cli`; every single-worker stage assigns its worker to `codex-cli`.",
+        )
+        for rewrite in rewrites:
+            mutated = text[:start] + rewrite + text[end:]
+            rewritten_start, rewritten_end = default_seat_allocation_span(mutated)
+            self.assertEqual(mutated[rewritten_start:rewritten_end], rewrite)
+            self.assertFalse(has_cardinal_carrier_binding_outside_default(mutated), f"rewrite triggered quantity heuristic: {rewrite}")
+
+        role_swapped = allocation.replace(
+            "exactly one seat to `isolated-token-subagent`",
+            "exactly one seat to `codex-cli`",
+            1,
+        ).replace(
+            "every remaining seat to `codex-cli`",
+            "every remaining seat to `isolated-token-subagent`",
+            1,
+        )
+        with self.assertRaises(AssertionError):
+            default_seat_allocation_span(text[:start] + role_swapped + text[end:])
+
+        insertion_anchor = "\n## Worker Delegation\n\n"
+        self.assertEqual(text.count(insertion_anchor), 1)
+        for noun in ("workers", "slots", "seats"):
+            for carrier in CARRIER_NAMES:
+                hardcoded = f"The Thinking Panel uses four `{carrier}` {noun}."
+                mutated = text.replace(insertion_anchor, f"{insertion_anchor}{hardcoded}\n\n", 1)
+                self.assertTrue(has_cardinal_carrier_binding_outside_default(mutated), f"hardcoded binding was not detected: {hardcoded}")
+
+        legal_prose = (
+            "The three carrier modes include `codex-cli`, whose capability is checked before dispatch.",
+            "Attempt 2 for `codex-cli` consumes the same predeclared retry budget.",
+        )
+        for prose in legal_prose:
+            mutated = text.replace(insertion_anchor, f"{insertion_anchor}{prose}\n\n", 1)
+            self.assertFalse(has_cardinal_carrier_binding_outside_default(mutated), f"quantity heuristic matched legal prose: {prose}")
+
+    def test_sshx_stage_sections_have_no_carrier_owners_with_mutations(self) -> None:
+        text = read(SKILL)
+        self.assertTrue(stage_sections_are_carrier_free(text), "canonical stage sections unexpectedly name a carrier")
+        for heading in ("## Thinking Panel", "## Review Triplet"):
+            insertion = heading_index(text, heading) + len(heading)
+            for carrier in CARRIER_NAMES:
+                mutated = f"{text[:insertion]}\n\nThe {carrier} carrier owns this stage.{text[insertion:]}"
+                self.assertFalse(stage_sections_are_carrier_free(mutated), f"carrier owner was not detected: {carrier} in {heading}")
 
     def test_sshx_worker_mode_gate_blocks_delegated_dispatch_before_mode_resolution(self) -> None:
         text = read(SKILL)
@@ -604,35 +737,26 @@ class SshxContractTests(unittest.TestCase):
             "Before any worker dispatch, including delegated intake context-gathering by subagent, Agent, Task, or codex, the caller must complete the non-mutating `codex-cli` capability check and resolve `WorkerMode`",
             text,
         )
+        self.assertIn("codex_cli_capability_check:", text)
+        self.assertIn("worker_mode_gate:", text)
         self.assertIn("resolved_before_any_worker_dispatch:", text)
         self.assertIn("delegated_intake_context_gathering_allowed:", text)
+        self.assertIn("fallback_reason:", text)
+        self.assertIn("  reason:", text)
         self.assertLess(
             text.index("Before any worker dispatch"),
             text.index("Thinking, implementation, and review are worker dispatches"),
         )
         self.assertLess(
             text.index("`WorkerModeGate`"),
-            text.index("Implementation must be delegated to a worker using the selected `WorkerMode`"),
+            text.index("Implementation must be delegated to a worker using the stage's default carrier"),
         )
-
-    def test_sshx_codex_cli_fallback_reason_is_required(self) -> None:
-        text = read(SKILL)
-        self.assertIn(
-            "`isolated-token-subagent` is the fallback when `codex-cli` and `nyxid-oracle` are both unavailable or their capability checks fail",
-            text,
-        )
-        self.assertIn(
-            "Whenever this fallback is selected, `worker_delegation.reason` and the gate record must state the concrete `codex-cli` and `nyxid-oracle` unavailable or failed reason",
-            text,
-        )
-        self.assertIn("codex_cli_capability_check:", text)
-        self.assertIn("fallback_reason:", text)
 
     def test_sshx_isolated_subagent_completion_rule(self) -> None:
         text = read(SKILL)
         self.assertIn("For `isolated-token-subagent` workers, terminal completion is recognized only when", text)
         self.assertIn("its `completion_sentinel_ref` is recorded as `n/a`", text)
-        self.assertIn("the flight becomes `abstained`, the result is `abstain`", text)
+        self.assertIn("the flight becomes `abstained` and follows the origin-agnostic fallback rule", text)
 
     def test_sshx_nyxid_oracle_completion_rule(self) -> None:
         text = read(SKILL)
@@ -645,7 +769,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("recorded as `completion_sentinel_ref` (`nyxid-task:<task_id>:completed`)", text)
         self.assertIn("response prose, stdout, echoes, and log tails are never completion or verdict evidence", text)
         self.assertIn(
-            "same-round perspective must run in its own new oracle conversation",
+            "must start a new isolated oracle conversation for that flight or attempt",
             text,
         )
 
@@ -781,68 +905,34 @@ class SshxContractTests(unittest.TestCase):
             )
         )
 
-    def test_sshx_abnormal_codex_exit_retries_falls_back_or_abstains(self) -> None:
+    def test_sshx_exhausted_flight_fallback_is_origin_agnostic(self) -> None:
         text = read(SKILL)
-        self.assertIn("If `codex-cli` exits abnormally without both the terminal envelope and the completion sentinel", text)
-        self.assertIn("consume the finite same-carrier retry budget", text)
+        self.assertIn("If an initially paired carrier is unavailable before a flight can be opened", text)
+        self.assertIn("without claiming that a same-carrier retry budget was exhausted", text)
+        self.assertIn("If any flight lacks terminal completion after its finite same-carrier retry budget is exhausted", text)
         self.assertIn(
-            "fall back to the next available carrier in priority order (`nyxid-oracle`, then `isolated-token-subagent`) when available",
+            "marks that flight `abstained` with empty `result_envelope_ref` and `completion_sentinel_ref`",
             text,
         )
-        self.assertIn(
-            "marks the exhausted `codex-cli` flight `abstained` with empty `result_envelope_ref` and `completion_sentinel_ref`",
-            text,
-        )
-        self.assertIn(
-            "opening a new `SshxWorkerFlightRecord` for the same `stage`, `role`, and `work_target`",
-            text,
-        )
+        self.assertIn("highest-priority eligible untried carrier from the full `WorkerMode` list", text)
+        self.assertIn("rather than continuing strictly downward from the failed carrier", text)
+        self.assertIn("must satisfy this stage and role's carrier constraints", text)
+        self.assertIn("creates a new `SshxWorkerFlightRecord` for the same `stage`, `role`, and `work_target`", text)
         self.assertIn("until the fallback flight reaches `terminal` or `abstained`", text)
-        self.assertIn("the result is `abstain`", text)
+        self.assertIn("Only when no eligible untried carrier remains or every fallback fails", text)
+        self.assertIn("is the result `abstain`", text)
         self.assertIn("must not implement, repair, or otherwise mutate the same `work_target` itself", text)
+        self.assertIn("`worker_delegation.reason` and the gate record state", text)
 
-        self.assertEqual(
-            resolve_abnormal_codex_exit(
-                {
-                    "worker_mode": "codex-cli",
-                    "status": "retrying",
-                    "retry_budget": 2,
-                    "attempt": 1,
-                    "result_envelope_ref": "",
-                    "completion_sentinel_ref": "",
-                },
-                fallback_available=False,
-            ),
-            "retry-same-carrier",
-        )
-        self.assertEqual(
-            resolve_abnormal_codex_exit(
-                {
-                    "worker_mode": "codex-cli",
-                    "status": "retrying",
-                    "retry_budget": 2,
-                    "attempt": 2,
-                    "result_envelope_ref": "",
-                    "completion_sentinel_ref": "",
-                },
-                fallback_available=True,
-            ),
-            "fallback-next-carrier",
-        )
-        self.assertEqual(
-            resolve_abnormal_codex_exit(
-                {
-                    "worker_mode": "codex-cli",
-                    "status": "retrying",
-                    "retry_budget": 2,
-                    "attempt": 2,
-                    "result_envelope_ref": "",
-                    "completion_sentinel_ref": "",
-                },
-                fallback_available=False,
-            ),
-            "abstain",
-        )
+        flight = {"status": "retrying", "retry_budget": 2, "attempt": 1}
+        self.assertEqual(resolve_failed_flight(flight, fallback_available=False), "retry-same-carrier")
+        for worker_mode in ("codex-cli", "nyxid-oracle", "isolated-token-subagent"):
+            exhausted = {**flight, "worker_mode": worker_mode, "attempt": 2}
+            self.assertEqual(
+                resolve_failed_flight(exhausted, fallback_available=True),
+                "fallback-highest-priority-untried-carrier",
+            )
+            self.assertEqual(resolve_failed_flight(exhausted, fallback_available=False), "abstain")
 
     def test_sshx_no_context_pollution_contract(self) -> None:
         text = read(SKILL)
@@ -861,14 +951,15 @@ class SshxContractTests(unittest.TestCase):
             "final summary and report",
         ]:
             self.assertNotIn(removed_escape_hatch, text)
-        self.assertIn(
-            "Same-round thinking workers must not see one another's outputs before their own verdicts are returned",
-            text,
-        )
-        self.assertIn(
-            "If worker isolation is unavailable, exit through `abstain` instead of degrading the protocol into single-context roleplay",
-            text,
-        )
+        self.assertIn("Input isolation and prior sterility are separate dimensions", text)
+        self.assertIn("no worker may see a same-round peer output or caller-conversation transcript content", text)
+        self.assertIn("none of the allowed carriers provides it", text)
+        self.assertIn("unknown and uncontrollable account memory and project context", text)
+        self.assertIn("none may be described as context-sterile or cited as evidence that their priors are independent", text)
+        self.assertIn("permanently sterile-context-unverified", text)
+        for label in ("repo-prior-exposed", "external-prior-exposed", "caller-prior-exposed"):
+            self.assertIn(label, text)
+        self.assertIn("existing `visible_inputs` value", text)
 
     def test_sshx_result_envelope_contract(self) -> None:
         text = read(SKILL)
@@ -1150,6 +1241,10 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_transcript_worker_flights_shape(self) -> None:
         text = read(SKILL)
+        delegation_start = text.index("worker_delegation:")
+        flights_start = text.index("worker_flights:", delegation_start)
+        delegation_block = text[delegation_start:flights_start]
+        self.assertNotRegex(delegation_block, r"(?m)^  worker_(?:mode|carrier):$")
         for transcript_line in [
             "worker_flights:",
             "  - flight_id:",
@@ -1314,7 +1409,7 @@ class SshxContractTests(unittest.TestCase):
             "silently relying on assumed factual premises",
             "judging only whether a plan is beautiful while never asking whether it is worth its cost",
             "over-building a beautiful form the goal does not need",
-            "running every perspective on one model family so the priors are correlated rather than independent",
+            "overstating carrier or model-family differences as evidence of independent priors or improved consensus quality",
             "only need inline consensus",
         ]:
             self.assertIn(failure_mode, text)
