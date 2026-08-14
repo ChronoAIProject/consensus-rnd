@@ -214,6 +214,21 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assertEqual(result.status["brief_ref"], str(result.run_dir / "brief.md"))
         self.assertNotIn("RUNNING", result.run_dir.joinpath("status.json").read_text())
 
+    def test_sandbox_defaults_to_danger_full_access_and_accepts_explicit_values(self) -> None:
+        flight = self.next_flight("sandbox-default")
+        default_command = self.command(flight)[:-2]
+        process = subprocess.run(default_command, input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
+        result = RunResult(process, self.expected_run_dir(flight))
+        self.assert_terminal(result, "COMPLETE")
+        assert result.status is not None
+        self.assertEqual(result.status["sandbox"], "danger-full-access")
+        explicit = self.next_flight("sandbox-explicit")
+        process = subprocess.run(self.command(explicit, sandbox="danger-full-access"), input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
+        result = RunResult(process, self.expected_run_dir(explicit))
+        self.assert_terminal(result, "COMPLETE")
+        assert result.status is not None
+        self.assertEqual(result.status["sandbox"], "danger-full-access")
+
     def test_status_contract_source_regression(self) -> None:
         spec = re.sub(r"\s+", " ", SPEC.read_text())
         self.assertNotIn('status: "RUNNING"', spec)
@@ -651,7 +666,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
 
     def test_argument_validation_rejects_missing_duplicate_unknown_and_invalid_values(self) -> None:
         valid = self.command("valid")
-        cases = [valid[:-2], valid + ["--stage", "thinking"], valid + ["--unknown", "value"], self.command("../escape"), self.command("bad/id"), self.command("valid", attempt="0"), self.command("valid", attempt="one"), self.command("valid", stage="other"), self.command("valid", sandbox="read-only"), self.command("valid", sandbox="danger-full-access"), self.command("valid", work_target="relative")]
+        cases = [valid[:8] + valid[10:], valid + ["--stage", "thinking"], valid + ["--unknown", "value"], self.command("../escape"), self.command("bad/id"), self.command("valid", attempt="0"), self.command("valid", attempt="one"), self.command("valid", stage="other"), self.command("valid", sandbox="read-only"), self.command("valid", sandbox=""), self.command("valid", work_target="relative")]
         for command in cases:
             process = subprocess.run(command, input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
             self.assertEqual(process.returncode, 64, process.stderr); self.assertIn("USAGE_ERROR", process.stderr)

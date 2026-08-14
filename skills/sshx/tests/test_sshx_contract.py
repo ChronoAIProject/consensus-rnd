@@ -910,6 +910,8 @@ class SshxContractTests(unittest.TestCase):
             "the runner launches exactly one direct non-interactive worker carrier",
             "neither layer may introduce a daemon or wrap the carrier in a repository-owned CLI",
             "owned by `CODEX_WORKER_SPEC.md`",
+            "the required dispatch shape is the runner's default `danger-full-access` sandbox",
+            "the caller passes no sandbox selection unless the maintainer explicitly directs a narrower one",
             "The caller must not poll worker artifact paths while the runner is active",
             "the runner performs one collection read of the derived `result_ref` and `completion_sentinel`",
             "Completion and verdict recognition stay governed by the `## Worker Completion Contract`",

@@ -13,10 +13,11 @@ here.
 bash <skill-root>/scripts/run-codex-worker.sh \
   --flight-id <id> --attempt <positive-integer> \
   --stage <thinking|implementation|review> \
-  --work-target <absolute-path> --sandbox <workspace-write>
+  --work-target <absolute-path> [--sandbox <danger-full-access|workspace-write>]
 ```
 
-The five options are required. Missing, duplicate, unknown, or positional
+The first four options are required; `--sandbox` is optional and defaults to
+`danger-full-access` when omitted. Missing required, duplicate, unknown, or positional
 arguments are `USAGE_ERROR` (exit 64). `flight-id` is non-empty
 `[A-Za-z0-9._-]+`, rejects `..` and `.`, `attempt` is a positive integer,
 `stage` and `sandbox` use the enumerations above, and `work-target` is
