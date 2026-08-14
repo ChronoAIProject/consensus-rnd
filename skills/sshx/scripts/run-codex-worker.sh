@@ -98,7 +98,7 @@ main() {
   case "$stage" in thinking|implementation|review) ;; *) usage_error "invalid --stage"; return 1 ;; esac
   case "$work_target" in /*) ;; *) usage_error "--work-target must be an absolute path"; return 1 ;; esac
   case "$work_target" in *$'\n'*|*$'\r'*) usage_error "--work-target must not contain LF or CR"; return 1 ;; esac
-  case "$sandbox" in read-only|workspace-write) ;; *) usage_error "invalid --sandbox"; return 1 ;; esac
+  case "$sandbox" in workspace-write) ;; *) usage_error "invalid --sandbox"; return 1 ;; esac
   if ! jq_path=$(command -v jq 2>/dev/null) || [ ! -x "$jq_path" ]; then reason=PARSER_UNAVAILABLE; return 1; fi
   tmp_base=${TMPDIR:-/tmp}
   while [ "$tmp_base" != / ] && [ "${tmp_base%/}" != "$tmp_base" ]; do tmp_base=${tmp_base%/}; done

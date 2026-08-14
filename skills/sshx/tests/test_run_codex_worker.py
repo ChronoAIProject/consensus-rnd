@@ -568,10 +568,13 @@ class CodexWorkerRunnerTests(unittest.TestCase):
 
     def test_argument_validation_rejects_missing_duplicate_unknown_and_invalid_values(self) -> None:
         valid = self.command("valid")
-        cases = [valid[:-2], valid + ["--stage", "thinking"], valid + ["--unknown", "value"], self.command("../escape"), self.command("bad/id"), self.command("valid", attempt="0"), self.command("valid", attempt="one"), self.command("valid", stage="other"), self.command("valid", sandbox="danger-full-access"), self.command("valid", work_target="relative")]
+        cases = [valid[:-2], valid + ["--stage", "thinking"], valid + ["--unknown", "value"], self.command("../escape"), self.command("bad/id"), self.command("valid", attempt="0"), self.command("valid", attempt="one"), self.command("valid", stage="other"), self.command("valid", sandbox="read-only"), self.command("valid", sandbox="danger-full-access"), self.command("valid", work_target="relative")]
         for command in cases:
             process = subprocess.run(command, input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
             self.assertEqual(process.returncode, 64, process.stderr); self.assertIn("USAGE_ERROR", process.stderr)
+            flight_id = command[command.index("--flight-id") + 1]
+            self.assertFalse(self.expected_run_dir(flight_id).exists())
+            self.assertNotIn("carrier starting", process.stdout)
 
     def test_flight_id_dot_is_rejected(self) -> None:
         process = subprocess.run(self.command("."), input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)

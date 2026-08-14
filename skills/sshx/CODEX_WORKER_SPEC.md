@@ -13,7 +13,7 @@ here.
 bash <skill-root>/scripts/run-codex-worker.sh \
   --flight-id <id> --attempt <positive-integer> \
   --stage <thinking|implementation|review> \
-  --work-target <absolute-path> --sandbox <read-only|workspace-write>
+  --work-target <absolute-path> --sandbox <workspace-write>
 ```
 
 The five options are required. Missing, duplicate, unknown, or positional

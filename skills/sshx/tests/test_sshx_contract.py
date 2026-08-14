@@ -760,18 +760,50 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_nyxid_oracle_completion_rule(self) -> None:
         text = read(SKILL)
-        self.assertIn("For `nyxid-oracle` workers, terminal completion is recognized only when", text)
-        self.assertIn("structured terminal `status=completed`", text)
-        self.assertIn("single `nyxid oracle result` collection read", text)
-        self.assertIn("the `response` payload parses as a valid `SshxResultEnvelope`", text)
-        self.assertIn("Intermediate task statuses (`queued`, `dispatched`", text)
-        self.assertIn("the caller must not busy-poll the task", text)
-        self.assertIn("recorded as `completion_sentinel_ref` (`nyxid-task:<task_id>:completed`)", text)
-        self.assertIn("response prose, stdout, echoes, and log tails are never completion or verdict evidence", text)
+        worker_delegation = section(text, "## Worker Delegation", "## Result Envelope")
+        completion_contract = section(text, "## Worker Completion Contract", "## No Context Pollution")
+        terminal_report = "dispatch invocation reports a structured terminal status"
+        collection_read = "single bounded `nyxid oracle result` collection read"
+        non_completion_route = (
+            "returns any status other than the structured terminal `status=completed`, "
+            "or its output is missing or invalid"
+        )
+        result_record = "records `result_envelope_ref` on the matching flight"
+
         self.assertIn(
             "must start a new isolated oracle conversation for that flight or attempt",
-            text,
+            worker_delegation,
         )
+        for contract in (worker_delegation, completion_contract):
+            with self.subTest(section=contract.splitlines()[0]):
+                self.assertIn("must not poll or busy-poll the oracle task while it runs", contract)
+                self.assertIn(terminal_report, contract)
+                self.assertIn(collection_read, contract)
+                self.assertLess(contract.index(terminal_report), contract.index(collection_read))
+                self.assertIn("structured terminal `status=completed`", contract)
+                self.assertIn("the `response` payload parses as a valid `SshxResultEnvelope`", contract)
+                self.assertIn(non_completion_route, contract)
+                self.assertIn("the matching flight becomes `abstained`", contract)
+                self.assertIn("origin-agnostic fallback rule", contract)
+                self.assertIn(result_record, contract)
+                self.assertIn("records `completion_sentinel_ref` there as `n/a`", contract)
+                self.assertIn("stage record's `log_ref`", contract)
+                self.assertNotIn("the flight's `log_ref`", contract)
+                self.assertNotIn("result collection artifact", contract)
+
+        self.assertIn("only when both of these conditions hold", completion_contract)
+        self.assertIn("Intermediate task statuses (`queued`, `dispatched`", completion_contract)
+        self.assertIn("no worker-owned independent completion sentinel", completion_contract)
+        self.assertIn(
+            "response prose, stdout, echoes, and log tails are never completion or verdict evidence",
+            completion_contract,
+        )
+
+    def test_sshx_external_carrier_claims_require_real_verification(self) -> None:
+        text = read(SKILL)
+        self.assertIn("verify the exact composed workflow end to end with the real tool", text)
+        self.assertIn("Fake carriers may supplement deterministic contract tests but must not be the sole evidence for a supported capability", text)
+        self.assertIn("when real verification is unavailable, mark the claim ASSUMED-UNVERIFIED and do not expose it as a supported option", text)
 
     def test_sshx_abstain_is_terminal_transition(self) -> None:
         text = read(SKILL)
@@ -824,7 +856,7 @@ class SshxContractTests(unittest.TestCase):
             "owned by `CODEX_WORKER_SPEC.md`",
             "The caller must not poll worker artifact paths while the runner is active",
             "the runner performs one collection read of the derived `result_ref` and `completion_sentinel`",
-            "completion and verdict recognition stay governed by the `## Worker Completion Contract`",
+            "Completion and verdict recognition stay governed by the `## Worker Completion Contract`",
         ]:
             self.assertIn(contract_string, worker_delegation)
         self.assertLess(
