@@ -37,13 +37,16 @@ contradictory prose elsewhere are not mechanically detected. It also rejects
 same-shaped non-seat prose such as ``Only one `nyxid-oracle` conversation may be
 open per flight``; rewrite that as ``one conversation per `nyxid-oracle` flight``.
 The structural single-source checks are that the exact canonical span occurs once
-and both stage sections remain carrier-free.
+and all worker-panel or gate sections remain carrier-free.
 """
 
 import re
 import subprocess
 import unittest
+from dataclasses import dataclass
+from itertools import product
 from pathlib import Path
+from typing import TypeAlias
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -55,6 +58,8 @@ CI = ROOT / ".github" / "workflows" / "consensus-rnd-ci.yml"
 BASELINE_ARTIFACT_PATHSPEC = "*baseline-issue342-sshx.md"
 
 THINKING_VERDICTS = {"propose", "revise", "reject", "abstain"}
+TERMINATION_VERDICTS = {"satisfied", "unsatisfied", "abstain"}
+TERMINATION_ROLES = ("criterion-evidence", "residual-gap", "claim-integrity")
 CARRIER_NAMES = ("codex-cli", "nyxid-oracle", "isolated-token-subagent")
 CARRIER_IDENTIFIERS = tuple(f"`{carrier}`" for carrier in CARRIER_NAMES)
 DEFAULT_SEAT_ALLOCATION_PATTERNS = (
@@ -76,9 +81,27 @@ CARDINAL_CARRIER_BINDING_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 
+JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
+GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
+TerminationSeatResults: TypeAlias = tuple[tuple[JsonValue, JsonValue], ...]
+
+
+@dataclass(frozen=True)
+class TerminationResolution:
+    truth_table_exit: str
+    gap_route: str | None
+    shared_budget_remaining: int
+    roster_evaluations_consumed: int
+    fake_consensus_correction_allowed: bool
+
 
 class ContractFailure(ValueError):
     pass
+
+
+class EqualityRaises:
+    def __eq__(self, other: object) -> bool:
+        raise RuntimeError("comparison must not be invoked")
 
 
 def read(path: Path) -> str:
@@ -127,12 +150,13 @@ def has_cardinal_carrier_binding_outside_default(text: str) -> bool:
     return CARDINAL_CARRIER_BINDING_PATTERN.search(remainder) is not None
 
 
-def stage_sections_are_carrier_free(text: str) -> bool:
-    stage_sections = (
+def worker_dispatch_sections_are_carrier_free(text: str) -> bool:
+    worker_dispatch_sections = (
         section(text, "## Thinking Panel", "## Design Truth Table"),
         section(text, "## Review Triplet", "## Review Truth Table"),
+        section(text, "## Termination Gate", "## Termination Truth Table"),
     )
-    return all(carrier not in stage for stage in stage_sections for carrier in CARRIER_NAMES)
+    return all(carrier not in stage for stage in worker_dispatch_sections for carrier in CARRIER_NAMES)
 
 
 def frontmatter(text: str) -> dict[str, str]:
@@ -199,6 +223,114 @@ def resolve_failed_flight(flight: dict[str, object], fallback_available: bool) -
     return "abstain"
 
 
+def classify_termination_verdict(verdict: JsonValue) -> str:
+    if type(verdict) is not str:
+        return "invalid"
+    if verdict == "satisfied":
+        return "satisfied"
+    if verdict == "unsatisfied":
+        return "unsatisfied"
+    if verdict == "abstain":
+        return "abstain"
+    return "invalid"
+
+
+def resolve_named_goal_gap(owner_assignment: GapOwnerAssignment) -> str:
+    decision_class, declared_owner = owner_assignment
+    if type(decision_class) is not str or type(declared_owner) is not str:
+        return "stop and escalate with the unresolved ownership gap"
+    if decision_class == "engineering" and declared_owner == "work-target-engineering-path":
+        return "re-enter review-fix through the work-target engineering path"
+    if decision_class == "orchestration" and declared_owner == "caller":
+        return "await new evidence from the authorized caller"
+    if decision_class == "product-governance-boundary" and declared_owner == "maintainer":
+        return "stop and escalate for a maintainer-authorized correction"
+    if declared_owner == "":
+        return "stop and escalate with the unresolved ownership gap"
+    return "stop and escalate to the declared owner"
+
+
+def resolve_termination_claim(
+    seat_results: TerminationSeatResults,
+    *,
+    consensus_source: JsonValue = "termination-seats",
+    owner_assignment: GapOwnerAssignment = (None, None),
+    shared_budget_remaining: JsonValue = 1,
+) -> TerminationResolution:
+    if type(shared_budget_remaining) is not int or shared_budget_remaining <= 0:
+        return TerminationResolution(
+            truth_table_exit="withhold claim; shared bounded-pass ceiling reached",
+            gap_route=None,
+            shared_budget_remaining=0,
+            roster_evaluations_consumed=0,
+            fake_consensus_correction_allowed=False,
+        )
+
+    remaining = shared_budget_remaining - 1
+    if type(consensus_source) is not str:
+        return TerminationResolution(
+            truth_table_exit="reject fake termination consensus",
+            gap_route=None,
+            shared_budget_remaining=remaining,
+            roster_evaluations_consumed=1,
+            fake_consensus_correction_allowed=remaining > 0,
+        )
+    roles: list[str] = []
+    verdict_classes: list[str] = []
+    for role, verdict in seat_results:
+        if type(role) is not str:
+            return TerminationResolution(
+                truth_table_exit="reject fake termination consensus",
+                gap_route=None,
+                shared_budget_remaining=remaining,
+                roster_evaluations_consumed=1,
+                fake_consensus_correction_allowed=remaining > 0,
+            )
+        roles.append(role)
+        verdict_classes.append(classify_termination_verdict(verdict))
+
+    exact_roster = len(roles) == len(TERMINATION_ROLES) and set(roles) == set(TERMINATION_ROLES)
+    if consensus_source != "termination-seats" or not exact_roster:
+        return TerminationResolution(
+            truth_table_exit="reject fake termination consensus",
+            gap_route=None,
+            shared_budget_remaining=remaining,
+            roster_evaluations_consumed=1,
+            fake_consensus_correction_allowed=remaining > 0,
+        )
+    if all(verdict_class == "satisfied" for verdict_class in verdict_classes):
+        exit_name = "termination claim permitted"
+        gap_route = None
+    elif "unsatisfied" in verdict_classes:
+        exit_name = "withhold claim; continue against the named goal gap"
+        gap_route = resolve_named_goal_gap(owner_assignment)
+    else:
+        exit_name = "withhold claim; escalate with the unresolved evidence gap"
+        gap_route = None
+    return TerminationResolution(
+        truth_table_exit=exit_name,
+        gap_route=gap_route,
+        shared_budget_remaining=remaining,
+        roster_evaluations_consumed=1,
+        fake_consensus_correction_allowed=False,
+    )
+
+
+def resolve_termination_gate_applicability(
+    *,
+    harness_complete: bool,
+    capability_source_confirmed: bool,
+    continuation_entry: str | None,
+) -> str:
+    if not harness_complete or not capability_source_confirmed:
+        return "stop and escalate to the maintainer"
+    if continuation_entry == "present":
+        return "termination gate applies"
+    if continuation_entry in {None, "absent"}:
+        return "termination gate inapplicable"
+    return "stop and escalate to the maintainer"
+
+
 class SshxContractTests(unittest.TestCase):
     def test_sshx_frontmatter_contract(self) -> None:
         meta = frontmatter(read(SKILL))
@@ -224,6 +356,8 @@ class SshxContractTests(unittest.TestCase):
             "## Review Triplet",
             "## Review Truth Table",
             "## Fix Or Done",
+            "## Termination Gate",
+            "## Termination Truth Table",
             "## Boundaries",
             "## Baseline Failure Mode",
             "## Transcript Template",
@@ -236,6 +370,9 @@ class SshxContractTests(unittest.TestCase):
         self.assertLess(heading_index(text, "## Design Truth Table"), heading_index(text, "## Implementation Worker"))
         self.assertLess(heading_index(text, "## Implementation Worker"), heading_index(text, "## Review Triplet"))
         self.assertLess(heading_index(text, "## Review Triplet"), heading_index(text, "## Review Truth Table"))
+        self.assertLess(heading_index(text, "## Fix Or Done"), heading_index(text, "## Termination Gate"))
+        self.assertLess(heading_index(text, "## Termination Gate"), heading_index(text, "## Termination Truth Table"))
+        self.assertLess(heading_index(text, "## Termination Truth Table"), heading_index(text, "## Boundaries"))
         self.assertIn(
             "`intake` (write `GoalArtifact` and normalize the goal)\n2. `choose_worker_mode`\n3. `thinking_panel_workers`\n4. `meta_judge`\n5. `implementation_worker`\n6. `review_triplet_workers`\n7. `fix_or_done`",
             text,
@@ -310,6 +447,408 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("non-adversarial, not infallible", goal_section)
         self.assertEqual(text.count("`harness` is a prompt-level record containing exactly these three sub-items"), 1)
         self.assertEqual(text.count("`revisions` is an append-only list whose each item contains exactly these three sub-items"), 1)
+
+    def test_sshx_termination_trigger_and_claim_scope(self) -> None:
+        text = read(SKILL)
+        goal_section = section(text, "## Goal Contract", "## InlineConsensusProtocol")
+        termination = section(text, "## Termination Gate", "## Termination Truth Table")
+        harness_items = goal_section.split(
+            "`harness` is a prompt-level record containing exactly these three sub-items:\n\n",
+            1,
+        )[1].split("\n\n", 1)[0]
+        self.assertEqual(
+            [line.split("`", 2)[1] for line in harness_items.splitlines()],
+            ["provided_capabilities", "trust_boundary", "decision_ownership"],
+        )
+        self.assertIn(
+            "declare a host-provided goal-driven continuation mechanism only in `harness.provided_capabilities`",
+            goal_section,
+        )
+        self.assertIn("must not discover or infer whether one exists", goal_section)
+        for trigger_rule in [
+            "triggered only by a positive, boundary-owner-confirmed entry",
+            "whether silent or explicitly negative, the gate is inapplicable",
+            "without asserting that the host mechanism is absent",
+            "purported continuation entry that is ambiguous or unconfirmed",
+        ]:
+            self.assertIn(trigger_rule, goal_section)
+        self.assertIn("boundary-owner-confirmed `harness.provided_capabilities`", termination)
+        self.assertIn("permits only that `GoalArtifact`-scoped claim", termination)
+        self.assertIn("does not certify any broader host goal condition", termination)
+        for claim_surface in [
+            "in a final report",
+            "`done with advisory surfaced` outcome used as success",
+            "`stop` gate action carrying the claim",
+        ]:
+            self.assertIn(claim_surface, termination)
+        for non_application in [
+            "`abstain` exit",
+            "`escalate`",
+            "`stop` action that reports a blocker rather than achievement",
+            "`## Goal Contract` makes the gate inapplicable",
+        ]:
+            self.assertIn(non_application, termination)
+        self.assertIn(
+            "`## Goal Contract` solely owns missing or invalid trigger-entry routing",
+            termination,
+        )
+        self.assertNotIn("stop and escalate to the maintainer", termination)
+
+        protocol = section(text, "## InlineConsensusProtocol", "## Worker Delegation")
+        stage_lines = re.findall(r"^\d+\. `([^`]+)`(?: .*)?$", protocol, flags=re.MULTILINE)
+        self.assertEqual(stage_lines, [
+            "intake",
+            "choose_worker_mode",
+            "thinking_panel_workers",
+            "meta_judge",
+            "implementation_worker",
+            "review_triplet_workers",
+            "fix_or_done",
+        ])
+        self.assertIn("termination-gate work are worker dispatches", protocol)
+
+    def test_sshx_termination_trigger_routing_is_total(self) -> None:
+        cases = {
+            "affirmative-presence": (True, True, "present", "termination gate applies"),
+            "explicit-absence": (True, True, "absent", "termination gate inapplicable"),
+            "silence": (True, True, None, "termination gate inapplicable"),
+            "ambiguous-entry": (True, True, "ambiguous", "stop and escalate to the maintainer"),
+            "unconfirmed-source": (True, False, "present", "stop and escalate to the maintainer"),
+            "incomplete-harness": (False, True, "present", "stop and escalate to the maintainer"),
+        }
+        for name, (harness_complete, source_confirmed, entry, expected) in cases.items():
+            with self.subTest(case=name):
+                self.assertEqual(
+                    resolve_termination_gate_applicability(
+                        harness_complete=harness_complete,
+                        capability_source_confirmed=source_confirmed,
+                        continuation_entry=entry,
+                    ),
+                    expected,
+                )
+
+    def test_sshx_termination_gate_has_no_host_specific_coupling(self) -> None:
+        text = read(SKILL)
+        for host_specific_token in [
+            "/loop",
+            "create_goal",
+            "get_goal",
+            "update_goal",
+            "Codex Goals",
+            "OpenAI Goals",
+            "ChatGPT Goals",
+        ]:
+            with self.subTest(token=host_specific_token):
+                self.assertNotIn(host_specific_token, text)
+
+    def test_sshx_termination_gate_seats_and_existing_contract_references(self) -> None:
+        text = read(SKILL)
+        termination = section(text, "## Termination Gate", "## Termination Truth Table")
+        roles = re.findall(r"^- `(criterion-evidence|residual-gap|claim-integrity)`: .+$", termination, re.MULTILINE)
+        self.assertEqual(tuple(roles), TERMINATION_ROLES)
+        for contract in [
+            "`WorkerDelegationContract`",
+            "`## Result Envelope`",
+            "`## Worker Completion Contract`",
+            "`## No Context Pollution`",
+            "`## Reasoning Discipline`",
+        ]:
+            self.assertIn(contract, termination)
+        self.assertIn("every `normalized_goal` clause, constraint, and `success_criteria` item", termination)
+        self.assertIn("Absence of evidence is never satisfaction", termination)
+        self.assertIn("answering the existing `iteration_question` with one concrete remaining difference", termination)
+        self.assertIn("name the responsible party", termination)
+        self.assertIn("must not broaden into a generic improvement search", termination)
+        for proxy in [
+            "review exit",
+            "verdict count",
+            "caller narrative",
+            "host-provided capability",
+            "lifecycle milestone",
+        ]:
+            self.assertIn(proxy, termination)
+        verdict_block = termination.split("Each termination seat returns one of:\n\n", 1)[1]
+        self.assertEqual(
+            set(re.findall(r"^- `([^`]+)`$", verdict_block, re.MULTILINE)),
+            TERMINATION_VERDICTS,
+        )
+        self.assertIn("returns a judgment, never a routing action", termination)
+        self.assertIn("Termination flights use the existing `worker_flights` block", termination)
+        self.assertIn("`SshxWorkerFlightRecord.stage` set to `termination`", termination)
+        self.assertNotIn("surfaces its compact note", termination)
+
+    def test_sshx_termination_routing_is_exhaustive_and_fail_closed(self) -> None:
+        possible_results: tuple[JsonValue, ...] = ("satisfied", "unsatisfied", "abstain", None, "invalid")
+        permitted = 0
+        for verdicts in product(possible_results, repeat=3):
+            seat_results = tuple(zip(TERMINATION_ROLES, verdicts, strict=True))
+            for consensus_source in ("termination-seats", "caller", "review-exit"):
+                with self.subTest(verdicts=verdicts, consensus_source=consensus_source):
+                    resolution = resolve_termination_claim(
+                        seat_results,
+                        consensus_source=consensus_source,
+                        owner_assignment=("engineering", "work-target-engineering-path"),
+                    )
+                    if consensus_source != "termination-seats":
+                        self.assertEqual(resolution.truth_table_exit, "reject fake termination consensus")
+                    elif "unsatisfied" in verdicts:
+                        self.assertEqual(
+                            resolution.truth_table_exit,
+                            "withhold claim; continue against the named goal gap",
+                        )
+                    elif verdicts == ("satisfied",) * 3:
+                        self.assertEqual(resolution.truth_table_exit, "termination claim permitted")
+                        permitted += 1
+                    else:
+                        self.assertEqual(
+                            resolution.truth_table_exit,
+                            "withhold claim; escalate with the unresolved evidence gap",
+                        )
+        self.assertEqual(permitted, 1)
+
+    def test_sshx_termination_routing_classifies_invalid_values_without_comparing_them(self) -> None:
+        cases = {
+            "nested-object-valued": (
+                {"unexpected": {"nested": [True, None, 3.5]}},
+                "satisfied",
+                "satisfied",
+            ),
+            "nested-array-valued": (["unexpected", {"nested": [False, 7]}], "satisfied", "satisfied"),
+            "object-and-array-valued": ({"unexpected": "result"}, ["unexpected", "result"], "satisfied"),
+            "equality-raising-valued": (EqualityRaises(), "satisfied", "satisfied"),
+        }
+        for name, verdicts in cases.items():
+            with self.subTest(case=name):
+                seat_results = tuple(zip(TERMINATION_ROLES, verdicts, strict=True))
+                self.assertEqual(
+                    resolve_termination_claim(seat_results).truth_table_exit,
+                    "withhold claim; escalate with the unresolved evidence gap",
+                )
+
+        hostile = EqualityRaises()
+        invalid_role_results = ((hostile, "satisfied"),) + tuple(
+            (role, "satisfied") for role in TERMINATION_ROLES[1:]
+        )
+        self.assertEqual(
+            resolve_termination_claim(invalid_role_results).truth_table_exit,
+            "reject fake termination consensus",
+        )
+        satisfied_results = tuple((role, "satisfied") for role in TERMINATION_ROLES)
+        self.assertEqual(
+            resolve_termination_claim(satisfied_results, consensus_source=hostile).truth_table_exit,
+            "reject fake termination consensus",
+        )
+
+    def test_sshx_termination_owner_routing_is_exhaustive_by_behavior(self) -> None:
+        unsatisfied_results = tuple(
+            (role, "unsatisfied" if role == TERMINATION_ROLES[0] else "satisfied")
+            for role in TERMINATION_ROLES
+        )
+        decision_classes = ("engineering", "orchestration", "product-governance-boundary")
+        declared_owners = ("work-target-engineering-path", "caller", "maintainer", "another-owner")
+        expected_routes = {
+            ("engineering", "work-target-engineering-path"): (
+                "re-enter review-fix through the work-target engineering path"
+            ),
+            ("orchestration", "caller"): "await new evidence from the authorized caller",
+            ("product-governance-boundary", "maintainer"): (
+                "stop and escalate for a maintainer-authorized correction"
+            ),
+        }
+        review_fix_routes = 0
+        for decision_class, declared_owner in product(decision_classes, declared_owners):
+            with self.subTest(decision_class=decision_class, declared_owner=declared_owner):
+                resolution = resolve_termination_claim(
+                    unsatisfied_results,
+                    owner_assignment=(decision_class, declared_owner),
+                )
+                expected_route = expected_routes.get(
+                    (decision_class, declared_owner),
+                    "stop and escalate to the declared owner",
+                )
+                self.assertEqual(
+                    resolution.truth_table_exit,
+                    "withhold claim; continue against the named goal gap",
+                )
+                self.assertEqual(resolution.gap_route, expected_route)
+                if resolution.gap_route == "re-enter review-fix through the work-target engineering path":
+                    review_fix_routes += 1
+        self.assertEqual(review_fix_routes, 1)
+
+        for owner_assignment in [
+            ("engineering", None),
+            ("orchestration", ""),
+            ({"ambiguous": ["owner"]}, "caller"),
+        ]:
+            with self.subTest(owner_assignment=owner_assignment):
+                resolution = resolve_termination_claim(
+                    unsatisfied_results,
+                    owner_assignment=owner_assignment,
+                )
+                self.assertEqual(
+                    resolution.gap_route,
+                    "stop and escalate with the unresolved ownership gap",
+                )
+
+    def test_sshx_termination_resolution_consumes_one_shared_budget_unit(self) -> None:
+        satisfied_results = tuple((role, "satisfied") for role in TERMINATION_ROLES)
+        unsatisfied_results = ((TERMINATION_ROLES[0], "unsatisfied"),) + satisfied_results[1:]
+        abstained_results = ((TERMINATION_ROLES[0], "abstain"),) + satisfied_results[1:]
+        row_cases = {
+            "fake-consensus": (satisfied_results, "caller", "reject fake termination consensus"),
+            "permitted": (satisfied_results, "termination-seats", "termination claim permitted"),
+            "unsatisfied": (
+                unsatisfied_results,
+                "termination-seats",
+                "withhold claim; continue against the named goal gap",
+            ),
+            "unresolved": (
+                abstained_results,
+                "termination-seats",
+                "withhold claim; escalate with the unresolved evidence gap",
+            ),
+        }
+        for name, (seat_results, source, expected_exit) in row_cases.items():
+            with self.subTest(case=name):
+                resolution = resolve_termination_claim(
+                    seat_results,
+                    consensus_source=source,
+                    owner_assignment=("engineering", "work-target-engineering-path"),
+                    shared_budget_remaining=2,
+                )
+                self.assertEqual(resolution.truth_table_exit, expected_exit)
+                self.assertEqual(resolution.shared_budget_remaining, 1)
+                self.assertEqual(resolution.roster_evaluations_consumed, 1)
+                self.assertEqual(resolution.fake_consensus_correction_allowed, name == "fake-consensus")
+
+        last_unit = resolve_termination_claim(
+            satisfied_results,
+            consensus_source="caller",
+            shared_budget_remaining=1,
+        )
+        self.assertEqual(last_unit.shared_budget_remaining, 0)
+        self.assertFalse(last_unit.fake_consensus_correction_allowed)
+        at_ceiling = resolve_termination_claim(
+            satisfied_results,
+            shared_budget_remaining=last_unit.shared_budget_remaining,
+        )
+        self.assertEqual(at_ceiling.truth_table_exit, "withhold claim; shared bounded-pass ceiling reached")
+        self.assertEqual(at_ceiling.shared_budget_remaining, 0)
+        self.assertEqual(at_ceiling.roster_evaluations_consumed, 0)
+
+        for invalid_budget in (None, True, 1.5, [], {"remaining": 1}, EqualityRaises()):
+            with self.subTest(invalid_budget=invalid_budget):
+                resolution = resolve_termination_claim(
+                    satisfied_results,
+                    shared_budget_remaining=invalid_budget,
+                )
+                self.assertEqual(
+                    resolution.truth_table_exit,
+                    "withhold claim; shared bounded-pass ceiling reached",
+                )
+                self.assertEqual(resolution.roster_evaluations_consumed, 0)
+
+        first = resolve_termination_claim(satisfied_results, consensus_source="caller", shared_budget_remaining=3)
+        second = resolve_termination_claim(
+            satisfied_results,
+            consensus_source="caller",
+            shared_budget_remaining=first.shared_budget_remaining,
+        )
+        self.assertEqual((first.shared_budget_remaining, second.shared_budget_remaining), (2, 1))
+
+    def test_sshx_termination_routing_requires_exact_named_roster(self) -> None:
+        satisfied = "satisfied"
+        exact = tuple((role, satisfied) for role in TERMINATION_ROLES)
+        cases = {
+            "count-0": (),
+            "count-1": exact[:1],
+            "count-2-missing-role": exact[:2],
+            "count-3-exact": exact,
+            "count-4-extra-role": exact + (("extra-role", satisfied),),
+            "duplicate-role": ((TERMINATION_ROLES[0], satisfied),) * 2 + exact[1:2],
+            "unknown-role": exact[:2] + (("unknown-role", satisfied),),
+        }
+        permitted = []
+        for name, roster in cases.items():
+            with self.subTest(case=name):
+                exit_name = resolve_termination_claim(roster).truth_table_exit
+                if name == "count-3-exact":
+                    self.assertEqual(exit_name, "termination claim permitted")
+                    permitted.append(name)
+                else:
+                    self.assertEqual(exit_name, "reject fake termination consensus")
+        self.assertEqual(permitted, ["count-3-exact"])
+
+    def test_sshx_termination_routing_accepts_a_fallback_recovered_result(self) -> None:
+        exhausted_origin = {
+            "status": "abstained",
+            "retry_budget": 1,
+            "attempt": 1,
+            "result_envelope_ref": "",
+            "completion_sentinel_ref": "",
+        }
+        self.assertEqual(
+            resolve_failed_flight(exhausted_origin, fallback_available=True),
+            "fallback-highest-priority-untried-carrier",
+        )
+
+        recovered_fallback = {
+            "status": "terminal",
+            "retry_budget": 1,
+            "attempt": 1,
+            "result_envelope_ref": "result.json",
+            "completion_sentinel_ref": "completion.sentinel",
+        }
+        self.assertEqual(resolve_failed_flight(recovered_fallback, fallback_available=False), "complete")
+        recovered_results = tuple((role, "satisfied") for role in TERMINATION_ROLES)
+        self.assertEqual(
+            resolve_termination_claim(recovered_results).truth_table_exit,
+            "termination claim permitted",
+        )
+
+    def test_sshx_termination_truth_table_and_boundedness_contract(self) -> None:
+        text = read(SKILL)
+        truth_table = section(text, "## Termination Truth Table", "## Boundaries")
+        for row in [
+            "| caller judgment, a review exit, or any roster other than exactly the three distinct named isolated termination seats presented as termination consensus | `reject fake termination consensus` |",
+            "| unanimous `satisfied` | `termination claim permitted` |",
+            "| any `unsatisfied` | `withhold claim; continue against the named goal gap` |",
+            "| no `unsatisfied` and any `abstain`, invalid or missing seat result | `withhold claim; escalate with the unresolved evidence gap` |",
+        ]:
+            self.assertIn(row, truth_table)
+        for anchor in [
+            "rows are evaluated in this order and are complete and, under this evaluation order, unambiguous",
+            "unanimous `satisfied` means one valid `satisfied` result from each of the exactly three distinct named termination seats",
+            "Flight exhaustion is not an additional table input",
+            "fallback-recovered result is treated like any other valid result",
+            "Roster means the dispatch-time recorded named role identities",
+            "a named role absent from the roster reaches the first row",
+            "a named role present without a valid result remains in the roster and reaches the fourth row",
+            "meta-judge has no termination verdict of its own",
+            "routes that gap according to `harness.decision_ownership`",
+            "work-target engineering correction assigned to the existing engineering path re-enters the review-`fix` path in `## Fix Or Done`",
+            "required rerun review triplet must finish before any new termination candidate",
+            "caller-owned orchestration remains with the authorized caller",
+            "only new evidence from that owner may form a later candidate",
+            "maintainer-owned product, governance, or boundary gap stops and escalates",
+            "later routing requires a maintainer-authorized correction under `## Goal Contract`",
+            "Any gap whose declared owner does not match a route above stops and escalates to that declared owner",
+            "invalid ownership stops and escalates with the unresolved ownership gap",
+            "Failure withholds the affirmative claim",
+            "not authority to keep working indefinitely",
+            "carrier outage must not become an unbounded work generator",
+            "existing `abstain` discipline",
+            "gate may reach a completed result at most once per candidate affirmative termination",
+            "Every roster evaluation, including one that exits `reject fake termination consensus`",
+            "consumes exactly one unit of the shared bounded-pass budget in `## Fix Or Done`",
+            "creates no nested budget",
+            "never gates its own exit",
+            "presentation rejected as fake termination consensus is not a completed gate run and may be corrected only while that shared budget remains",
+            "later candidate is permitted only after new evidence or an authorized correction",
+            "At the ceiling, report the unresolved blocker and do not certify satisfaction",
+        ]:
+            self.assertIn(anchor, truth_table)
+        self.assertIn("This gate grants no authority over the host mechanism", text)
 
     def test_sshx_boundary_predicates_have_single_definitions(self) -> None:
         # Source-regression only: this checks unique definitions and references, not runtime enforcement.
@@ -629,6 +1168,8 @@ class SshxContractTests(unittest.TestCase):
             "## Review Triplet",
             "## Design Truth Table",
             "## Review Truth Table",
+            "## Termination Gate",
+            "## Termination Truth Table",
         ]:
             heading_index(text, heading)
 
@@ -647,6 +1188,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("carrier heterogeneity improves consensus quality", text)
         self.assertIn("statistically independent priors is `ASSUMED-UNVERIFIED`", text)
         self.assertIn("carrier-role pairing must be chosen and recorded before any worker", text)
+        self.assertIn("three-seat `## Termination Gate` follows that same layout", text)
         self.assertIn("`tests` review seat must be assigned to a carrier capable of executing", text)
         self.assertIn("repository verification commands in the `work_target`", text)
         self.assertIn("if every completed seat ran on one model family, do not present the result as model-diverse", text)
@@ -717,14 +1259,20 @@ class SshxContractTests(unittest.TestCase):
             mutated = text.replace(insertion_anchor, f"{insertion_anchor}{prose}\n\n", 1)
             self.assertFalse(has_cardinal_carrier_binding_outside_default(mutated), f"quantity heuristic matched legal prose: {prose}")
 
-    def test_sshx_stage_sections_have_no_carrier_owners_with_mutations(self) -> None:
+    def test_sshx_worker_dispatch_sections_have_no_carrier_owners_with_mutations(self) -> None:
         text = read(SKILL)
-        self.assertTrue(stage_sections_are_carrier_free(text), "canonical stage sections unexpectedly name a carrier")
-        for heading in ("## Thinking Panel", "## Review Triplet"):
+        self.assertTrue(
+            worker_dispatch_sections_are_carrier_free(text),
+            "canonical worker-dispatch sections unexpectedly name a carrier",
+        )
+        for heading in ("## Thinking Panel", "## Review Triplet", "## Termination Gate"):
             insertion = heading_index(text, heading) + len(heading)
             for carrier in CARRIER_NAMES:
                 mutated = f"{text[:insertion]}\n\nThe {carrier} carrier owns this stage.{text[insertion:]}"
-                self.assertFalse(stage_sections_are_carrier_free(mutated), f"carrier owner was not detected: {carrier} in {heading}")
+                self.assertFalse(
+                    worker_dispatch_sections_are_carrier_free(mutated),
+                    f"carrier owner was not detected: {carrier} in {heading}",
+                )
 
     def test_sshx_worker_mode_gate_blocks_delegated_dispatch_before_mode_resolution(self) -> None:
         text = read(SKILL)
@@ -745,7 +1293,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("  reason:", text)
         self.assertLess(
             text.index("Before any worker dispatch"),
-            text.index("Thinking, implementation, and review are worker dispatches"),
+            text.index("Thinking, implementation, review, and termination-gate work are worker dispatches"),
         )
         self.assertLess(
             text.index("`WorkerModeGate`"),
@@ -866,7 +1414,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("When `WorkerMode` resolves to `abstain`, the protocol terminates at `choose_worker_mode`", text)
         self.assertIn("creates no thinking, implementation, or review flight", text)
         self.assertIn(
-            "When a thinking, implementation, or review flight instead exhausts its bounded retries and fallback without terminal completion",
+            "When a thinking, implementation, review, or termination flight instead exhausts its bounded retries and fallback without terminal completion",
             text,
         )
         self.assertIn(
@@ -1445,6 +1993,42 @@ class SshxContractTests(unittest.TestCase):
         self.assertGreaterEqual(review_block.count("    visible_inputs:"), 3)
         self.assertGreaterEqual(review_block.count("    worker_carrier:"), 3)
 
+    def test_sshx_termination_transcript_is_nested_and_complete(self) -> None:
+        text = read(SKILL)
+        fix_start = text.index("fix_or_done:")
+        template_end = text.index("```", fix_start)
+        fix_block = text[fix_start:template_end]
+        self.assertIn("  termination_gate:", fix_block)
+        self.assertIn("    continuation_declaration_ref: # `GoalArtifact.harness.provided_capabilities`", fix_block)
+        self.assertEqual(
+            re.findall(r"^      - role: (criterion-evidence|residual-gap|claim-integrity)$", fix_block, re.MULTILINE),
+            ["criterion-evidence", "residual-gap", "claim-integrity"],
+        )
+        for role in ("criterion-evidence", "residual-gap", "claim-integrity"):
+            role_block = fix_block.split(f"      - role: {role}\n", 1)[1]
+            role_block = role_block.split("      - role:", 1)[0].split("    meta_judge:", 1)[0]
+            for field in [
+                "bias",
+                "visible_inputs",
+                "worker_mode",
+                "worker_carrier",
+                "worker_flight_ref",
+                "verdict",
+                "conclusion",
+                "log_ref",
+            ]:
+                self.assertIn(f"        {field}:", role_block)
+        meta_judge = fix_block.split("    meta_judge:\n", 1)[1]
+        for field in [
+            "exit",
+            "goal_gap",
+            "next_iteration_question",
+            "responsible_party",
+            "conclusion",
+            "log_ref",
+        ]:
+            self.assertIn(f"      {field}:", meta_judge)
+
     def test_sshx_design_truth_table(self) -> None:
         text = read(SKILL)
         for row in [
@@ -1536,6 +2120,7 @@ class SshxContractTests(unittest.TestCase):
             "no required worker mode declaration for peer perspectives",
             "no fixed thinking truth table",
             "no same-shape review gate before done",
+            "caller self-certification that a goal is satisfied inside a declared continuation context",
             "asserting current-system facts without verifying actual evidence",
             "silently relying on assumed factual premises",
             "judging only whether a plan is beautiful while never asking whether it is worth its cost",
