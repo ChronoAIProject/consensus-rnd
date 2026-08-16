@@ -75,11 +75,65 @@ positive_integer() {
   while [ "${integer_value#0}" != "$integer_value" ]; do integer_value=${integer_value#0}; done
   [ -n "$integer_value" ]
 }
+normalize_tmp_base() {
+  tmp_base=${TMPDIR:-/tmp}
+  while [ "$tmp_base" != / ] && [ "${tmp_base%/}" != "$tmp_base" ]; do tmp_base=${tmp_base%/}; done
+  case "$tmp_base" in /*) ;; *) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
+  case "$tmp_base" in *$'\n'*|*$'\r'*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
+}
+derive_project_paths() {
+  consensus_root="$tmp_base/consensus-rnd"
+  sshx_root="$consensus_root/sshx"
+  run_parent="$sshx_root/$flight_id"
+  run_dir="$run_parent/attempt-$attempt"
+  brief_ref="$run_dir/brief.md"; stdout_ref="$run_dir/worker.stdout.log"; stderr_ref="$run_dir/worker.stderr.log"
+  last_message_ref="$run_dir/last-message.txt"; result_ref="$run_dir/result.json"; sentinel_ref="$run_dir/completion.sentinel"
+  carrier_exit_ref="$run_dir/carrier.exit"; status_ref="$run_dir/status.json"
+}
+emit_project_paths() {
+  if ! projection_json=$("$jq_path" --compact-output --null-input --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg run_dir "$run_dir" --arg brief_ref "$brief_ref" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg carrier_exit_ref "$carrier_exit_ref" --arg status_ref "$status_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,run_dir:$run_dir,brief_ref:$brief_ref,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,carrier_exit_ref:$carrier_exit_ref,status_ref:$status_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref}}'); then
+    reason=INTERNAL_ERROR
+    return 1
+  fi
+  [ -n "$projection_json" ] || { reason=INTERNAL_ERROR; return 1; }
+  printf '%s\n' "$projection_json" || { reason=INTERNAL_ERROR; return 1; }
+}
+emit_project_flight() {
+  attempts_json='[]'
+  shopt -s nullglob
+  for projected_run_dir in "$run_parent"/attempt-*; do
+    attempt_name=${projected_run_dir##*/}
+    projected_attempt=${attempt_name#attempt-}
+    projected_attempt_json=null
+    case "$projected_attempt" in ''|0|0*|*[!0-9]*) ;; *) projected_attempt_json=$projected_attempt ;; esac
+    attempt=$projected_attempt
+    derive_project_paths
+    if ! attempts_json=$("$jq_path" --compact-output --null-input --argjson attempts "$attempts_json" --argjson attempt "$projected_attempt_json" --arg run_dir "$run_dir" --arg status_ref "$status_ref" '$attempts + [{attempt:$attempt,run_dir:$run_dir,status_ref:$status_ref}]'); then
+      reason=INTERNAL_ERROR
+      return 1
+    fi
+  done
+  shopt -u nullglob
+  if ! projection_json=$("$jq_path" --compact-output --null-input --argjson schema_version 1 --arg flight_id "$flight_id" --arg flight_dir "$run_parent" --arg sshx_root "$sshx_root" --argjson attempts "$attempts_json" '{schema_version:$schema_version,flight_id:$flight_id,flight_dir:$flight_dir,sshx_root:$sshx_root,attempts:$attempts}'); then
+    reason=INTERNAL_ERROR
+    return 1
+  fi
+  [ -n "$projection_json" ] || { reason=INTERNAL_ERROR; return 1; }
+  printf '%s\n' "$projection_json" || { reason=INTERNAL_ERROR; return 1; }
+}
 main() {
-  flight_id= attempt= stage= work_target= sandbox=; seen_options='|'
+  flight_id= attempt= stage= work_target= sandbox=; project_paths=0; project_flight=0; seen_options='|'
   while [ "$#" -gt 0 ]; do
     option=$1
     case "$option" in
+      --project-paths)
+        case "$seen_options" in *"$option"*) usage_error "duplicate option $option"; return 1 ;; esac
+        project_paths=1; seen_options="$seen_options$option|"; shift; continue
+        ;;
+      --project-flight)
+        case "$seen_options" in *"$option"*) usage_error "duplicate option $option"; return 1 ;; esac
+        project_flight=1; seen_options="$seen_options$option|"; shift; continue
+        ;;
       --flight-id) target=flight_id ;; --attempt) target=attempt ;; --stage) target=stage ;;
       --work-target) target=work_target ;; --sandbox) target=sandbox ;;
       --*) usage_error "unknown option $option"; return 1 ;; *) usage_error "unexpected positional argument $option"; return 1 ;;
@@ -89,22 +143,49 @@ main() {
     printf -v "$target" '%s' "$2"; seen_options="$seen_options$option|"
     shift 2
   done
-  for required_option in --flight-id --attempt --stage --work-target; do
-    case "$seen_options" in *"$required_option"*) ;; *) usage_error "missing $required_option"; return 1 ;; esac
-  done
-  case "$seen_options" in *'--sandbox'*) ;; *) sandbox=danger-full-access ;; esac
+  case "$seen_options" in *'--flight-id'*) ;; *) usage_error "missing --flight-id"; return 1 ;; esac
+  [ $((project_paths + project_flight)) -le 1 ] || { usage_error "query modes are mutually exclusive"; return 1; }
+  if [ "$project_flight" -eq 0 ]; then
+    case "$seen_options" in *'--attempt'*) ;; *) usage_error "missing --attempt"; return 1 ;; esac
+  fi
   case "$flight_id" in ''|.|*'..'*|*[!A-Za-z0-9._-]*) usage_error "invalid --flight-id"; return 1 ;; esac
-  positive_integer "$attempt" || { usage_error "--attempt must be a positive integer"; return 1; }
-  attempt=$integer_value
-  case "$stage" in thinking|implementation|review) ;; *) usage_error "invalid --stage"; return 1 ;; esac
-  case "$work_target" in /*) ;; *) usage_error "--work-target must be an absolute path"; return 1 ;; esac
-  case "$work_target" in *$'\n'*|*$'\r'*) usage_error "--work-target must not contain LF or CR"; return 1 ;; esac
-  case "$sandbox" in danger-full-access|workspace-write) ;; *) usage_error "invalid --sandbox"; return 1 ;; esac
+  if [ "$project_flight" -eq 0 ]; then
+    positive_integer "$attempt" || { usage_error "--attempt must be a positive integer"; return 1; }
+    attempt=$integer_value
+  fi
+  if [ "$project_paths" -eq 1 ]; then
+    for run_option in --stage --work-target --sandbox; do
+      case "$seen_options" in *"$run_option"*) usage_error "--project-paths cannot be combined with $run_option"; return 1 ;; esac
+    done
+  elif [ "$project_flight" -eq 1 ]; then
+    for other_option in --attempt --stage --work-target --sandbox; do
+      case "$seen_options" in *"$other_option"*) usage_error "--project-flight cannot be combined with $other_option"; return 1 ;; esac
+    done
+  else
+    for required_option in --stage --work-target; do
+      case "$seen_options" in *"$required_option"*) ;; *) usage_error "missing $required_option"; return 1 ;; esac
+    done
+  fi
+  case "$seen_options" in *'--sandbox'*) ;; *) sandbox=danger-full-access ;; esac
+  if [ "$project_paths" -eq 0 ] && [ "$project_flight" -eq 0 ]; then
+    case "$stage" in thinking|implementation|review) ;; *) usage_error "invalid --stage"; return 1 ;; esac
+    case "$work_target" in /*) ;; *) usage_error "--work-target must be an absolute path"; return 1 ;; esac
+    case "$work_target" in *$'\n'*|*$'\r'*) usage_error "--work-target must not contain LF or CR"; return 1 ;; esac
+    case "$sandbox" in danger-full-access|workspace-write) ;; *) usage_error "invalid --sandbox"; return 1 ;; esac
+  fi
   if ! jq_path=$(command -v jq 2>/dev/null) || [ ! -x "$jq_path" ]; then reason=PARSER_UNAVAILABLE; return 1; fi
-  tmp_base=${TMPDIR:-/tmp}
-  while [ "$tmp_base" != / ] && [ "${tmp_base%/}" != "$tmp_base" ]; do tmp_base=${tmp_base%/}; done
-  case "$tmp_base" in /*) ;; *) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
-  case "$tmp_base" in *$'\n'*|*$'\r'*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
+  normalize_tmp_base || return 1
+  derive_project_paths
+  if [ "$project_flight" -eq 1 ]; then
+    emit_project_flight || return 1
+    trap - EXIT
+    return 0
+  fi
+  if [ "$project_paths" -eq 1 ]; then
+    emit_project_paths || return 1
+    trap - EXIT
+    return 0
+  fi
   [ -d "$tmp_base" ] && [ -w "$tmp_base" ] || {
     reason=RUN_DIR_UNAVAILABLE
     printf '%s\n' 'run-codex-worker: RUN_DIR_UNAVAILABLE: TMPDIR must resolve to an existing writable directory' >&2
@@ -115,13 +196,6 @@ main() {
     [ ! -L "$ensure_path" ] || return 1
     if [ -e "$ensure_path" ]; then [ -d "$ensure_path" ]; elif mkdir "$ensure_path" 2>/dev/null; then [ -d "$ensure_path" ] && [ ! -L "$ensure_path" ]; else [ -d "$ensure_path" ] && [ ! -L "$ensure_path" ]; fi
   }
-  consensus_root="$tmp_base/consensus-rnd"
-  sshx_root="$consensus_root/sshx"
-  run_parent="$sshx_root/$flight_id"
-  run_dir="$run_parent/attempt-$attempt"
-  brief_ref="$run_dir/brief.md"; stdout_ref="$run_dir/worker.stdout.log"; stderr_ref="$run_dir/worker.stderr.log"
-  last_message_ref="$run_dir/last-message.txt"; result_ref="$run_dir/result.json"; sentinel_ref="$run_dir/completion.sentinel"
-  carrier_exit_ref="$run_dir/carrier.exit"; status_ref="$run_dir/status.json"
   ensure_dir "$consensus_root" && ensure_dir "$sshx_root" && ensure_dir "$run_parent" || { reason=RUN_DIR_UNAVAILABLE; return 1; }
   if [ -e "$run_dir" ] || [ -L "$run_dir" ]; then reason=RUN_DIR_COLLISION; return 1; fi
   if ! mkdir "$run_dir"; then

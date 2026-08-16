@@ -133,6 +133,12 @@ For each `codex-cli` attempt, before launch the caller must choose a unique `fli
 
 The caller must launch the runner through a host-provided background job mechanism that notifies the caller when the carrier process exits. It must not use shell `&` to background the runner, because that detaches the process from host tracking and can leave an init-adopted carrier running without ever notifying the caller of completion. It must not monitor files or logs to poll for completion; doing so conflicts with the no-polling rule above.
 
+`skills/sshx/scripts/run-codex-worker-batch.sh` is the permitted one-call fan-out alternative for the `codex-cli` subset of a multi-seat stage. It never covers a whole stage because the `nyxid-oracle` and `isolated-token-subagent` seats reserved by the dispatch-time layout above remain outside the batch. The dispatcher obtains every worker artifact path from the runner's pure path projection; worker artifact paths remain runner-derived and are never caller-supplied.
+
+Internal shell `&` followed by `wait` is permitted inside that one named batch script because it remains the foreground process of one host-tracked job, records every child, catches `INT` and `TERM` subject to inherited signal dispositions, and joins every recorded child before publishing a report. If the host starts the dispatcher with `SIGINT` ignored, Bash cannot make its `INT` trap effective, so those signals are inert and the dispatcher can finish with `interrupted: false`; the `TERM` guarantee likewise presumes that `TERM` is trappable on entry. Its join-then-publish handler records the first interruption, ignores later `INT` and `TERM`, and repeats a wait only when that wait returned the recorded signal status so Bash can return the retained child status; it then marks the report interrupted and exits nonzero after publication. It does not forward the signal to runners or carriers and does not promise prompt carrier teardown; the runner may defer its own traps during the synchronous carrier call, and whole-job-tree teardown remains the host's responsibility. Caller-authored `&`, `nohup`, `disown`, and `setsid` remain forbidden. Batching degrades host completion notification from per-carrier to per-batch. Launching one host job per seat remains permitted and is the form on which per-seat retry and fallback latency depends; batching is an alternative, not a mandate.
+
+The caller may invoke `skills/sshx/scripts/read-codex-worker-status.sh` only after host completion notification. Status reading is a one-shot, after-terminal collection convenience and is not authorization to poll while any runner is active. The batch report is dispatcher-owned orchestration evidence, not a worker artifact, and neither it nor the status projection changes completion or verdict routing.
+
 For each `nyxid-oracle` attempt, the caller must start a new isolated oracle conversation before that attempt's first submission and pass a worker brief that requires the reply to be exactly an `SshxResultEnvelope` payload; parallel workers must receive disjoint conversations. The dispatch is a direct `nyxid oracle` reasoning invocation, not a helper script, daemon, or repository-owned CLI, and the exact command and flags are not part of this contract. Dispatch-exit recovery and all completion and verdict recognition for this carrier are governed solely by `## Worker Completion Contract` and are not restated here.
 
 When blindly redispatching the same `nyxid-oracle` attempt, the caller SHOULD reuse one stable submitter-scoped idempotency reference so repeated submissions converge on the same oracle task (for example, a carrier-supported client reference mechanism; this example is non-normative). A new attempt must use a new idempotency reference. This sentence does not itself authorize any redispatch; any blind redispatch must already be authorized by the existing bounded-attempt rules, and it never replaces same-task recovery.
@@ -169,6 +175,8 @@ For `codex-cli` workers, caller-side completion and verdict routing must be deci
 A worker is not done while its carrier process is still running, even if a partial `result_ref` artifact already exists. A worker is not done when completion markers or verdict-looking text appear only in stdout, stderr, raw transcripts, final text, prompt echoes, `log_ref` content, or log tails. Those surfaces are diagnostic only and must not participate in done detection or verdict routing.
 
 `log_ref` remains required as a diagnostic artifact reference, but it is never a verdict source. Missing `conclusion`, missing `log_ref`, placeholder verdicts, and verdicts outside the stage's allowed set fail closed.
+
+Neither runner-owned `status.json` nor a dispatcher-owned batch report is a completion or verdict source.
 
 For `nyxid-oracle` workers, outside the bounded dispatch-exit recovery below, the caller must not poll or busy-poll the oracle task while it runs. On the normal path, when an attempt's dispatch invocation reports a structured terminal status, that attempt does not enter recovery: the caller performs one bounded `nyxid oracle result` read, and that read is the attempt's single collection read. If that collection read's output is missing or unparseable, including empty or truncated output or output without a parseable structured status/result wrapper, it is not terminal completion: the matching flight becomes `abstained` and follows the origin-agnostic fallback rule under `## Worker Delegation`.
 
@@ -323,9 +331,14 @@ Every bounded pass in this skill - `meta-layer convergence`, a repeated review p
 
 ## Boundaries
 
-This skill is a prompt contract with one named mechanical runner exception:
-`skills/sshx/scripts/run-codex-worker.sh`, governed only by
-`skills/sshx/CODEX_WORKER_SPEC.md` and its behavior tests. It must not add or depend on:
+This skill is a prompt contract with a closed set of exactly four named mechanical script exceptions, governed only by `skills/sshx/CODEX_WORKER_SPEC.md` and their behavior tests:
+
+- `skills/sshx/scripts/run-codex-worker.sh`;
+- `skills/sshx/scripts/run-codex-worker-batch.sh`;
+- `skills/sshx/scripts/read-codex-worker-status.sh`;
+- `skills/sshx/scripts/clean-codex-worker-runs.sh`.
+
+It must not add or depend on:
 
 - any other helper script;
 - daemons;
@@ -354,6 +367,7 @@ Without this skill, lightweight high-risk decisions tend to regress to:
 - silently relying on assumed factual premises instead of marking, verifying, gap-routing, or abstaining;
 - judging only whether a plan is beautiful while never asking whether it is worth its cost, or over-building a beautiful form the goal does not need;
 - overstating carrier or model-family differences as evidence of independent priors or improved consensus quality;
+- callers improvising per-run shell for worker fan-out, terminal status collection, and artifact deletion outside any source-owned specification or behavior test;
 - pressure to use daemon, GitHub, or git orchestration for cases that only need inline consensus.
 
 ## Transcript Template

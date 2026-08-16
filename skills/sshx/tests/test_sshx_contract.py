@@ -978,6 +978,50 @@ class SshxContractTests(unittest.TestCase):
         polling_rule = next((sentence for sentence in sentences if re.search(r"\bfiles?\b", sentence) and re.search(r"\blogs?\b", sentence) and "poll" in sentence), "")
         self.assertRegex(polling_rule, r"(?:must not|forbid\w*|prohibit\w*|never)")
 
+    def test_sshx_batch_signal_handling_joins_before_interrupted_publication(self) -> None:
+        worker_delegation = section(read(SKILL), "## Worker Delegation", "## Result Envelope")
+        for required in [
+            "catches `INT` and `TERM`",
+            "joins every recorded child before publishing a report",
+            "records the first interruption",
+            "ignores later `INT` and `TERM`",
+            "repeats a wait only when that wait returned the recorded signal status",
+            "marks the report interrupted",
+            "does not forward the signal to runners or carriers",
+            "whole-job-tree teardown remains the host's responsibility",
+        ]:
+            self.assertIn(required, worker_delegation)
+
+    def test_worker_tool_contract_keeps_presence_fact_without_lifecycle_inference(self) -> None:
+        specification = read(SPEC)
+        for required in [
+            "The present/absent file fact is required",
+            "derived completion or lifecycle boolean",
+            "lifecycle inference",
+            "verdict checking",
+            "`reason_code` remapping",
+            "semantic JSON equality",
+            "byte-for-byte whitespace and object-key formatting are not preserved",
+        ]:
+            self.assertIn(required, specification)
+
+    def test_worker_tool_spec_states_preflight_and_cleanup_limits(self) -> None:
+        specification = re.sub(r"\s+", " ", read(SPEC))
+        for required in [
+            "exclusively creates one unique same-directory report temporary file before launching any worker",
+            "report target must be absent",
+            "An internal pre-launch failure",
+            "no worker launches and no complete JSON report exists",
+            "the supported Bash must retain an exited child's status",
+            "Preflight makes no all-or-nothing claim that survives such replacement",
+            "Cleanup accepts the batch manifest document shape",
+            "invalid manifest document are `USAGE_ERROR` (exit 64)",
+            "This narrows the authorization window but does not eliminate TOCTOU",
+            "`state` equal to `removed`, `partially-removed`, or `untouched`",
+            "pure-Bash JSON fallback that does not invoke `jq`",
+        ]:
+            self.assertIn(required, specification)
+
     def test_sshx_in_flight_worker_blocks_caller_mutation(self) -> None:
         text = read(SKILL)
         self.assertIn("While any `SshxWorkerFlightRecord` for the same `work_target` is `in-flight` or `retrying`", text)
@@ -1182,9 +1226,10 @@ class SshxContractTests(unittest.TestCase):
     def test_worker_spec_source_regression_has_executable_rollback_and_threat_boundaries(self) -> None:
         text = re.sub(r"\s+", " ", read(SPEC))
         for required in [
-            "No other skill may depend on this runner",
-            "Delete `scripts/run-codex-worker.sh`, this specification, and `tests/test_run_codex_worker.py`",
-            "Restore the three narrow `SKILL.md` clauses",
+            "No other skill may depend on these mechanisms",
+            "Delete `scripts/run-codex-worker.sh`, `scripts/run-codex-worker-batch.sh`, `scripts/read-codex-worker-status.sh`, and `scripts/clean-codex-worker-runs.sh`",
+            "Delete this specification, `tests/test_run_codex_worker.py`, and `tests/test_codex_worker_tools.py`",
+            "Restore the narrow `SKILL.md` clauses",
             "A new design review is required",
             "daemon behavior",
             "lifecycle authority",
@@ -1517,15 +1562,72 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(forbidden_boundary, text)
         self.assertIn("It must not add or depend on", text)
-        self.assertIn("one named mechanical runner exception", text)
-        self.assertIn("`skills/sshx/scripts/run-codex-worker.sh`", text)
-        self.assertIn("`skills/sshx/CODEX_WORKER_SPEC.md` and its behavior tests", text)
+        self.assertIn("closed set of exactly four named mechanical script exceptions", text)
+        for script in [
+            "run-codex-worker.sh",
+            "run-codex-worker-batch.sh",
+            "read-codex-worker-status.sh",
+            "clean-codex-worker-runs.sh",
+        ]:
+            self.assertIn(f"`skills/sshx/scripts/{script}`", text)
+        self.assertIn("governed only by `skills/sshx/CODEX_WORKER_SPEC.md` and their behavior tests", text)
         self.assertIn("does not grant permission to commit, push, merge", text)
         self.assertIn(
             "Allowed worker carriers are limited to `codex-cli`, `nyxid-oracle`, and `isolated-token-subagent`",
             text,
         )
         self.assertIn("not as controller authority", text)
+
+    def test_sshx_mechanical_script_inventory_is_closed_and_reversible(self) -> None:
+        skill_text = read(SKILL)
+        boundary = section(skill_text, "## Boundaries", "## Baseline Failure Mode")
+        listed = set(re.findall(r"`(skills/sshx/scripts/[^`]+)`", boundary))
+        on_disk = {
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "skills" / "sshx" / "scripts").iterdir()
+            if path.is_file()
+        }
+        self.assertEqual(listed, on_disk)
+        self.assertTrue(all((ROOT / path).is_file() for path in listed))
+
+        spec_text = read(SPEC)
+        reversal = spec_text.split("To reverse the exception", 1)[1].split("A new design review", 1)[0]
+        for path in on_disk:
+            self.assertIn(f"`scripts/{Path(path).name}`", reversal)
+        for behavior_test in [
+            "tests/test_run_codex_worker.py",
+            "tests/test_codex_worker_tools.py",
+            "tests/test_sshx_contract.py",
+        ]:
+            self.assertIn(behavior_test, reversal)
+
+    def test_non_runner_scripts_contain_no_run_layout_literal(self) -> None:
+        layout_literals = [
+            "TMPDIR",
+            "consensus-rnd",
+            "/sshx/",
+            "attempt-",
+            "brief.md",
+            "worker.stdout.log",
+            "worker.stderr.log",
+            "last-message.txt",
+            "result.json",
+            "completion.sentinel",
+            "carrier.exit",
+            "status.json",
+        ]
+        for script_name in [
+            "run-codex-worker-batch.sh",
+            "read-codex-worker-status.sh",
+            "clean-codex-worker-runs.sh",
+        ]:
+            source = read(ROOT / "skills" / "sshx" / "scripts" / script_name)
+            with self.subTest(script=script_name):
+                self.assertEqual(
+                    [literal for literal in layout_literals if literal in source],
+                    [],
+                    "non-runner scripts must consume runner projections instead of layout literals",
+                )
 
     def test_sshx_baseline_evidence_is_source_owned(self) -> None:
         text = read(SKILL)
