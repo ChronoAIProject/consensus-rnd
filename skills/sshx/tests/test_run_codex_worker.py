@@ -436,6 +436,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         expected_conclusions = {
             "thinking": {"verdict": "propose"},
             "review": {"verdict": "approve"},
+            "termination": {"verdict": "abstain"},
             "implementation": {},
         }
         for stage, expected_conclusion in expected_conclusions.items():
@@ -467,7 +468,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
                 self.assert_terminal(self.run_worker(mode, stage="thinking"), "ENVELOPE_INVALID")
 
     def test_stage_verdict_requires_exact_set_member(self) -> None:
-        for stage, verdict in [("thinking", "unexpected"), ("thinking", "propose|revise"), ("review", "approve|comment")]:
+        for stage, verdict in [("thinking", "unexpected"), ("thinking", "propose|revise"), ("review", "approve|comment"), ("termination", "satisfied|abstain")]:
             with self.subTest(stage=stage, verdict=verdict):
                 self.assert_terminal(self.run_worker(stage=stage, extra_env={"FAKE_VERDICT": verdict}), "VERDICT_INVALID")
 
@@ -795,13 +796,21 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         text = SKILL.read_text()
         thinking = text.split("## Thinking Panel", 1)[1].split("## Design Truth Table", 1)[0].split("Each seat returns one of:", 1)[1]
         review = text.split("## Review Triplet", 1)[1].split("## Review Truth Table", 1)[0].split("Each reviewer returns one of:", 1)[1]
-        expected = {"thinking": set(re.findall(r"^- `([^`]+)`$", thinking, re.MULTILINE)), "review": set(re.findall(r"^- `([^`]+)`$", review, re.MULTILINE))}
+        termination = text.split("## Termination Gate", 1)[1].split("## Termination Truth Table", 1)[0].split("Each termination seat returns one of:", 1)[1]
+        expected = {
+            "thinking": set(re.findall(r"^- `([^`]+)`$", thinking, re.MULTILINE)),
+            "review": set(re.findall(r"^- `([^`]+)`$", review, re.MULTILINE)),
+            "termination": set(re.findall(r"^- `([^`]+)`$", termination, re.MULTILINE)),
+        }
         declaration = re.search(r"stage_verdict_specs='([^']*)'", RUNNER.read_text())
         assert declaration is not None
         runner_sets = {}
         for entry in declaration.group(1).split(";"):
             name, values = entry.split("=", 1); runner_sets[name] = set(values.split("|")) if values else set()
-        self.assertEqual(runner_sets["thinking"], expected["thinking"]); self.assertEqual(runner_sets["review"], expected["review"]); self.assertEqual(runner_sets["implementation"], set())
+        self.assertEqual(set(runner_sets), {*expected, "implementation"})
+        for stage, verdicts in expected.items():
+            self.assertEqual(runner_sets[stage], verdicts)
+        self.assertEqual(runner_sets["implementation"], set())
         for stage, verdicts in expected.items():
             for verdict in verdicts: self.assert_terminal(self.run_worker(stage=stage, extra_env={"FAKE_VERDICT": verdict}), "COMPLETE")
         self.assert_terminal(self.run_worker(stage="implementation", extra_env={"FAKE_VERDICT": "other"}), "COMPLETE")

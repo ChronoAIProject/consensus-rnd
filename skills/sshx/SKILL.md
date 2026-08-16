@@ -50,6 +50,8 @@ Any explicit correction to `GoalArtifact` or `harness` must append one such revi
 
 The caller must write and complete `harness` during `intake`, before any worker dispatch. If any `harness` sub-item is missing or ambiguous, or its source has not been confirmed by the boundary owner, stop and escalate to the maintainer; neither controller nor worker may infer or expand it.
 
+The boundary owner may declare a host-provided goal-driven continuation mechanism only in `harness.provided_capabilities`; the skill must not discover or infer whether one exists. The termination gate is triggered only by a positive, boundary-owner-confirmed entry declaring such a mechanism. When an otherwise complete, unambiguous, boundary-owner-confirmed `provided_capabilities` value contains no such entry, whether silent or explicitly negative, the gate is inapplicable without asserting that the host mechanism is absent. A purported continuation entry that is ambiguous or unconfirmed is governed by the existing harness rule above.
+
 The user's current input is the only source for the goal. `sshx` must not discover or infer the goal from external lifecycle milestones, release state, runtime host configuration, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface.
 
 `iteration_question` must ask what still differs from `GoalArtifact`, using the normalized goal, constraints, and success criteria as the fixed target. It must not broaden the task into a generic improvement search.
@@ -70,7 +72,7 @@ Run the stages in this exact order:
 
 `WorkerModeGate` is a prompt-level dispatch gate, not a runtime API. During `intake`, the caller may use its own read-only tools to inspect the user's input and write `GoalArtifact`; this caller-owned read-only intake is not worker dispatch. Before any worker dispatch, including delegated intake context-gathering by subagent, Agent, Task, or codex, the caller must complete the non-mutating `codex-cli` capability check and resolve `WorkerMode`.
 
-Each thinking or review record must include these fields:
+Each thinking, review, or termination record must include these fields:
 
 - `role`
 - `bias`
@@ -82,7 +84,7 @@ Each thinking or review record must include these fields:
 - `conclusion`
 - `log_ref`
 
-Thinking, implementation, and review are worker dispatches. The caller context may intake the task, choose worker mode, dispatch workers, run the meta-judge over returned `SshxResultEnvelope.conclusion` values, aggregate conclusions, and produce the final report from conclusions only while preserving `log_ref` references.
+Thinking, implementation, review, and termination-gate work are worker dispatches. The caller context may intake the task, choose worker mode, dispatch workers, run the meta-judge over returned `SshxResultEnvelope.conclusion` values, aggregate conclusions, and produce the final report from conclusions only while preserving `log_ref` references.
 
 Each `visible_inputs` value must include the complete `GoalArtifact` (including `harness`) and must not include same-round peer outputs.
 
@@ -105,9 +107,9 @@ Each `visible_inputs` value must include the complete `GoalArtifact` (including 
 
 `abstain` is required when none of `codex-cli`, `nyxid-oracle`, or `isolated-token-subagent` is available. Do not self-apply the triplet inside the caller context and present it as worker consensus.
 
-At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `codex-cli`; every single-worker stage assigns its worker to `codex-cli`. The carrier-role pairing must be chosen and recorded before any worker in that stage returns. This is the default dispatch-time layout; the numbered `WorkerMode` list governs only fallback after a carrier failure. The recorded initial pairing must not be rebalanced in response to completion outcomes; a retry or fallback may replace only the failed flight for the same seat and role, and neither is a mechanism for restoring the default layout. A `tests` review seat must be assigned to a carrier capable of executing repository verification commands in the `work_target`. Any claim that carrier heterogeneity improves consensus quality or yields statistically independent priors is `ASSUMED-UNVERIFIED` under `seek truth from facts`; whether `codex-cli` and `isolated-token-subagent` use different model families is also `ASSUMED-UNVERIFIED`, and a model identifier reported by a `nyxid-oracle` response is evidence only for that invocation. Any model-diverse-consensus claim must be truthful: if every completed seat ran on one model family, do not present the result as model-diverse; record that the stronger diversity claim was not achieved. If any fallback occurs or any initially paired carrier is unavailable, fails its capability check, exhausts its retry budget, or fails to produce terminal completion during a stage, do not claim that stage achieved model-diverse consensus, regardless of the model families on its completed seats.
+At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `codex-cli`, and the three-seat `## Termination Gate` follows that same layout; every single-worker stage assigns its worker to `codex-cli`. The carrier-role pairing must be chosen and recorded before any worker in that stage returns. This is the default dispatch-time layout; the numbered `WorkerMode` list governs only fallback after a carrier failure. The recorded initial pairing must not be rebalanced in response to completion outcomes; a retry or fallback may replace only the failed flight for the same seat and role, and neither is a mechanism for restoring the default layout. A `tests` review seat must be assigned to a carrier capable of executing repository verification commands in the `work_target`. Any claim that carrier heterogeneity improves consensus quality or yields statistically independent priors is `ASSUMED-UNVERIFIED` under `seek truth from facts`; whether `codex-cli` and `isolated-token-subagent` use different model families is also `ASSUMED-UNVERIFIED`, and a model identifier reported by a `nyxid-oracle` response is evidence only for that invocation. Any model-diverse-consensus claim must be truthful: if every completed seat ran on one model family, do not present the result as model-diverse; record that the stronger diversity claim was not achieved. If any fallback occurs or any initially paired carrier is unavailable, fails its capability check, exhausts its retry budget, or fails to produce terminal completion during a stage, do not claim that stage achieved model-diverse consensus, regardless of the model families on its completed seats.
 
-When `WorkerMode` resolves to `abstain`, the protocol terminates at `choose_worker_mode`: the caller emits a final `SshxResultEnvelope` whose `conclusion` records the `abstain` verdict, the reason, and any options, creates no thinking, implementation, or review flight, and runs no later stage. When a thinking, implementation, or review flight instead exhausts its bounded retries and fallback without terminal completion, that stage returns `abstain` rather than a synthesized worker conclusion or an incomplete triplet, the caller skips the remaining dependent stages, and the blocker is reported honestly. A thinking-stage exhaustion in particular skips `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done`.
+When `WorkerMode` resolves to `abstain`, the protocol terminates at `choose_worker_mode`: the caller emits a final `SshxResultEnvelope` whose `conclusion` records the `abstain` verdict, the reason, and any options, creates no thinking, implementation, or review flight, and runs no later stage. When a thinking, implementation, review, or termination flight instead exhausts its bounded retries and fallback without terminal completion, that stage returns `abstain` rather than a synthesized worker conclusion or an incomplete triplet, the caller skips the remaining dependent stages, and the blocker is reported honestly. A thinking-stage exhaustion in particular skips `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done`.
 
 Every worker dispatch must create a prompt-level `SshxWorkerFlightRecord` before the worker is launched. The caller-carried transcript must keep these records under `worker_flights`, and each worker result record must reference the matching `flight_id` through `worker_flight_ref`.
 
@@ -208,11 +210,11 @@ Prior sterility is weaker and none of the allowed carriers provides it: `codex-c
 
 ## Reasoning Discipline
 
-`## Reasoning Discipline` is the single source of truth for the reasoning pass used by both `## Thinking Panel` and `## Review Triplet`. It is prompt-level guidance only: not a runtime API, not a daemon, not a CLI, not a parsed schema field, not marker data, not lifecycle authority, and not a second transcript channel. The stages reference this section; they do not restate it.
+`## Reasoning Discipline` is the single source of truth for the reasoning pass used by `## Thinking Panel`, `## Review Triplet`, and `## Termination Gate`. It is prompt-level guidance only: not a runtime API, not a daemon, not a CLI, not a parsed schema field, not marker data, not lifecycle authority, and not a second transcript channel. The stages and gate reference this section; they do not restate it.
 
 sshx's essence is independent context-isolated perspectives that oppose ugliness and waste to converge on an answer that is both beautiful and worth its cost.
 
-Reference-frame: each thinking or review perspective identifies the applicable mature theory, engineering principle, industry best practice, mature industry case, mature pattern, or constraint framework governing this class of problem or implementation; surfaces the known-good shape; then re-checks each candidate conclusion, implementation interpretation, or repair candidate against it before settling the verdict. `no applicable mature theory found` is an acceptable explicit fallback; in that case the note says so and still records the root-cause and minimal-path re-check against `GoalArtifact`.
+Reference-frame: each thinking, review, or termination perspective identifies the applicable mature theory, engineering principle, industry best practice, mature industry case, mature pattern, or constraint framework governing this class of problem or implementation; surfaces the known-good shape; then re-checks each candidate conclusion, implementation interpretation, repair candidate, or termination judgment against it before settling the verdict. `no applicable mature theory found` is an acceptable explicit fallback; in that case the note says so and still records the root-cause and minimal-path re-check against `GoalArtifact`.
 
 Aesthetic/adversarial: give a symmetric 美不美 (is it beautiful?) verdict for each candidate approach weighed, including the chosen, revised, rejected, or repair approach — beautiful, mixed, or ugly, earned from evidence, not a presumed indictment. Name any specific locatable ugly defect, or state `no material defect found` when none exists; where a defect exists, state why the approach is ugly as a specific locatable defect and what the beautiful form would be. Ugly defects include leaked abstraction, duplicated source of truth, special-case, bad coupling, asymmetry, lying name, hidden intent, or unverifiable premise. The beautiful form is the smaller, symmetric, single-responsibility, single-source-of-truth, intent-revealing form that satisfies `GoalArtifact` — smaller, not maximally complete; gold-plating past `GoalArtifact` is itself an ugly defect, not beauty. Beauty judges the coherence and integrity of the form that remains; whether any element is unnecessary is `parsimony`'s question, and whether the whole intervention is worth its cost is the `worth` seat's — beauty must not become a second parsimony or worth vote.
 
@@ -220,7 +222,7 @@ seek truth from facts: verify every factual premise against actual evidence befo
 
 `CapabilityOverlap` is the candidate-solution boundary check: ask whether a candidate takes over a capability already declared in `harness.provided_capabilities`, or changes a decision assignment in `harness.decision_ownership`; either hit is an overlap and therefore out of bounds. `ThreatEligibility` is the review-finding boundary check: ask whether a finding would exist only if a role declared trusted by `harness.trust_boundary` deliberately acted maliciously; if so, the finding is ineligible. Trusted-party failure, omission, and uncertainty are always eligible. These are independent checks that share the `harness` fact source.
 
-Each thinking or review worker must surface one compact free-form reasoning-discipline note in `SshxResultEnvelope.conclusion` naming the reference frame, stating the known-good shape and alignment, deviation, or revision status; stating the aesthetic verdict (美不美) with the specific ugly defect and beautiful form, or `no material defect found`, for each candidate weighed; and stating the verified-premise or `ASSUMED-UNVERIFIED` status needed for the verdict. This does not override `GoalArtifact`, assigned bias or review focus, truth tables, or allowed verdict sets, and it is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for valid `abstain`, `reject`, or `comment` outcomes.
+Each thinking, review, or termination worker must surface one compact free-form reasoning-discipline note in `SshxResultEnvelope.conclusion` naming the reference frame, stating the known-good shape and alignment, deviation, or revision status; stating the aesthetic verdict (美不美) with the specific ugly defect and beautiful form, or `no material defect found`, for each candidate weighed; and stating the verified-premise or `ASSUMED-UNVERIFIED` status needed for the verdict. This does not override `GoalArtifact`, assigned bias or review focus, truth tables, or allowed verdict sets, and it is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for valid `abstain`, `reject`, or `comment` outcomes.
 
 ## Thinking Panel
 
@@ -321,13 +323,58 @@ Before each fix or repeated review pass, use the existing gate to ask whether th
 
 If review exits `fix`, ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap by delegating it to a worker using the stage's default carrier exactly as `## Implementation Worker` requires - open a new `SshxWorkerFlightRecord` for the same `work_target` and stay orchestration-only for the repair - then rerun the review triplet on the worker's returned `conclusion`. Stop after a bounded number of fix passes and report remaining blockers honestly.
 
-If review exits `done with advisory surfaced`, report the final outcome by aggregating `conclusion` values and include any non-blocking advisory feedback without inlining logs.
+If review exits `done with advisory surfaced`, treat that exit as a candidate for an affirmative success claim rather than the claim itself when `## Termination Gate` applies, and route the candidate through that gate before reporting success. Include any non-blocking advisory feedback without inlining logs.
 
 If review exits `explicit user decision or another bounded review pass`, either run one more bounded pass with a concrete next iteration question tied to `GoalArtifact`, or ask the user to decide. Do not loop indefinitely.
 
 After any explicit correction, use the existing correction gate to ask whether the goal or harness changed and whether evidence overturned the direction; emit exactly one concrete `continue`, `revise`, `stop`, or `escalate` action and name its responsible party before further work.
 
-Every bounded pass in this skill - `meta-layer convergence`, a repeated review pass, and fix passes - defaults to at most five passes unless the user explicitly authorizes more, and the chosen bound is recorded before the first such pass.
+Every bounded pass in this skill - `meta-layer convergence`, a repeated review pass, fix passes, and termination-gate passes - shares one budget that defaults to at most five passes unless the user explicitly authorizes more, and the chosen bound is recorded before the first such pass.
+
+## Termination Gate
+
+`## Termination Gate` is a conditional subgate reached inside `fix_or_done`, never an additional `InlineConsensusProtocol` stage. It applies only when `## Goal Contract` supplies its positive, boundary-owner-confirmed `harness.provided_capabilities` entry and the caller is about to assert that `GoalArtifact` is satisfied. The gate permits only that `GoalArtifact`-scoped claim; it does not certify any broader host goal condition.
+
+The gate binds that claim wherever it appears: in a final report, in a `done with advisory surfaced` outcome used as success, or in a `stop` gate action carrying the claim. It does not bind an `abstain` exit, `escalate`, a `stop` action that reports a blocker rather than achievement, or any exit for which `## Goal Contract` makes the gate inapplicable; those non-achievement exits keep their existing routing and must never be relabelled as goal satisfaction. `## Goal Contract` solely owns missing or invalid trigger-entry routing; this gate does not restate it.
+
+This gate grants no authority over the host mechanism: it must not end, extend, replace, probe, discover, infer, clear, or implement that mechanism. It adds only the duty not to assert satisfaction without termination evidence; whether host continuation ends remains host-owned.
+
+Dispatch exactly three purpose-built, independent, context-isolated termination seats. Their dispatch and completion use `WorkerDelegationContract`, `## Result Envelope`, `## Worker Completion Contract`, `## No Context Pollution`, and `## Reasoning Discipline` by reference:
+
+- `criterion-evidence`: map every `normalized_goal` clause, constraint, and `success_criteria` item to current evidence. Absence of evidence is never satisfaction.
+- `residual-gap`: adversarially falsify termination by answering the existing `iteration_question` with one concrete remaining difference from `GoalArtifact`, and name the responsible party for it. It must not broaden into a generic improvement search.
+- `claim-integrity`: reject a review exit, verdict count, caller narrative, host-provided capability, or lifecycle milestone as proxy evidence that a `GoalArtifact` obligation is discharged; also check whether any remaining obligation belongs to an owner declared in `harness.decision_ownership`.
+
+Each termination seat returns one of:
+
+- `satisfied`
+- `unsatisfied`
+- `abstain`
+
+A termination seat returns a judgment, never a routing action. Termination flights use the existing `worker_flights` block with `SshxWorkerFlightRecord.stage` set to `termination`.
+
+## Termination Truth Table
+
+The meta-judge applies this fixed termination truth table in the caller context, exactly as it applies the design and review tables. The rows are evaluated in this order and are complete and, under this evaluation order, unambiguous:
+
+| Inputs | Exit |
+|---|---|
+| caller judgment, a review exit, or any roster other than exactly the three distinct named isolated termination seats presented as termination consensus | `reject fake termination consensus` |
+| unanimous `satisfied` | `termination claim permitted` |
+| any `unsatisfied` | `withhold claim; continue against the named goal gap` |
+| no `unsatisfied` and any `abstain`, invalid or missing seat result | `withhold claim; escalate with the unresolved evidence gap` |
+
+For this table, unanimous `satisfied` means one valid `satisfied` result from each of the exactly three distinct named termination seats. Flight exhaustion is not an additional table input: after the existing retry and fallback path in `## Worker Delegation`, the table evaluates only the resulting seat roster and results, so a fallback-recovered result is treated like any other valid result.
+
+Roster means the dispatch-time recorded named role identities: a named role absent from the roster reaches the first row, while a named role present without a valid result remains in the roster and reaches the fourth row unless an earlier row matches.
+
+The meta-judge has no termination verdict of its own and must not convert `unsatisfied`, `abstain`, or missing or invalid worker output into permission to claim success. A caller judgment or review exit is never termination consensus, and only the exact distinct named termination-seat roster can be presented as such.
+
+The `withhold claim; continue against the named goal gap` exit routes that gap according to `harness.decision_ownership`. Only a work-target engineering correction assigned to the existing engineering path re-enters the review-`fix` path in `## Fix Or Done`, and its required rerun review triplet must finish before any new termination candidate. Only caller-owned orchestration remains with the authorized caller, and only new evidence from that owner may form a later candidate. A maintainer-owned product, governance, or boundary gap stops and escalates; any later routing requires a maintainer-authorized correction under `## Goal Contract`. Any gap whose declared owner does not match a route above stops and escalates to that declared owner; absent, ambiguous, or otherwise invalid ownership stops and escalates with the unresolved ownership gap.
+
+Failure withholds the affirmative claim; it is not authority to keep working indefinitely, and a carrier outage must not become an unbounded work generator. A withheld claim reports honestly under the existing `abstain` discipline, while the host retains ownership of whether its continuation ends.
+
+The gate may reach a completed result at most once per candidate affirmative termination and never gates its own exit. Every roster evaluation, including one that exits `reject fake termination consensus`, consumes exactly one unit of the shared bounded-pass budget in `## Fix Or Done` and creates no nested budget. A presentation rejected as fake termination consensus is not a completed gate run and may be corrected only while that shared budget remains. A later candidate is permitted only after new evidence or an authorized correction. At the ceiling, report the unresolved blocker and do not certify satisfaction.
 
 ## Boundaries
 
@@ -363,6 +410,7 @@ Without this skill, lightweight high-risk decisions tend to regress to:
 - no required worker mode declaration for peer perspectives;
 - no fixed thinking truth table;
 - no same-shape review gate before done;
+- caller self-certification that a goal is satisfied inside a declared continuation context, with no isolated termination seat behind the terminal claim;
 - asserting current-system facts without verifying actual evidence;
 - silently relying on assumed factual premises instead of marking, verifying, gap-routing, or abstaining;
 - judging only whether a plan is beautiful while never asking whether it is worth its cost, or over-building a beautiful form the goal does not need;
@@ -509,6 +557,44 @@ review_triplet_workers:
     log_ref:
 fix_or_done:
   exit:
+  termination_gate:
+    applies:
+    continuation_declaration_ref: # `GoalArtifact.harness.provided_capabilities`
+    seats:
+      - role: criterion-evidence
+        bias:
+        visible_inputs:
+        worker_mode:
+        worker_carrier:
+        worker_flight_ref:
+        verdict:
+        conclusion:
+        log_ref:
+      - role: residual-gap
+        bias:
+        visible_inputs:
+        worker_mode:
+        worker_carrier:
+        worker_flight_ref:
+        verdict:
+        conclusion:
+        log_ref:
+      - role: claim-integrity
+        bias:
+        visible_inputs:
+        worker_mode:
+        worker_carrier:
+        worker_flight_ref:
+        verdict:
+        conclusion:
+        log_ref:
+    meta_judge:
+      exit:
+      goal_gap:
+      next_iteration_question:
+      responsible_party:
+      conclusion:
+      log_ref:
   conclusion:
   log_ref:
 ```

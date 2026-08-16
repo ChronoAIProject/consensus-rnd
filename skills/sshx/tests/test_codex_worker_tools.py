@@ -1,9 +1,9 @@
 import json
 import os
+import select
 import signal
 import subprocess
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -14,6 +14,7 @@ RUNNER = SCRIPTS / "run-codex-worker.sh"
 BATCH = SCRIPTS / "run-codex-worker-batch.sh"
 STATUS_READER = SCRIPTS / "read-codex-worker-status.sh"
 CLEANUP = SCRIPTS / "clean-codex-worker-runs.sh"
+WATCHDOG_SECONDS = 60
 
 FAKE_CODEX = r'''#!/bin/bash
 set -u
@@ -35,15 +36,16 @@ printf '%s\n' "$brief" > "$run_dir/brief.seen"
 printf '%s|%s\n' "$run_dir" "$marker" >> "$FAKE_LAUNCH_LOG"
 case "$brief" in
   *BLOCK*)
-    : > "$CARRIER_MARKER_DIR/$marker"
-    while [ ! -e "$CARRIER_RELEASE" ]; do sleep 0.01; done
+    printf '%s\n' "$marker" > "$CARRIER_SYNC_DIR/$marker.ready"
+    IFS= read -r _ < "$CARRIER_SYNC_DIR/$marker.release"
     ;;
-  *SLOW*) sleep 0.7 ;;
-  *FAST*) sleep 0.1 ;;
 esac
 case "$brief" in
   *"Stage: implementation"*) printf '{"conclusion":{"marker":"%s"},"log_ref":"fake-log"}\n' "$marker" > "$result_ref.tmp" ;;
-  *) printf '{"conclusion":{"verdict":"propose","marker":"%s"},"log_ref":"fake-log"}\n' "$marker" > "$result_ref.tmp" ;;
+  *"Stage: thinking"*) printf '{"conclusion":{"verdict":"propose","marker":"%s"},"log_ref":"fake-log"}\n' "$marker" > "$result_ref.tmp" ;;
+  *"Stage: review"*) printf '{"conclusion":{"verdict":"approve","marker":"%s"},"log_ref":"fake-log"}\n' "$marker" > "$result_ref.tmp" ;;
+  *"Stage: termination"*) printf '{"conclusion":{"verdict":"abstain","marker":"%s"},"log_ref":"fake-log"}\n' "$marker" > "$result_ref.tmp" ;;
+  *) exit 98 ;;
 esac
 mv "$result_ref.tmp" "$result_ref"
 printf '%s\n' complete > "$sentinel_ref.tmp"
@@ -71,8 +73,11 @@ class CodexWorkerToolTests(unittest.TestCase):
         (self.bin_dir / "jq").symlink_to(self.real_jq)
         self.launch_log = self.temp_dir / "launch.log"
         self.counter = 0
+        self.gate_fds: dict[Path, int] = {}
 
     def tearDown(self) -> None:
+        for fd in self.gate_fds.values():
+            os.close(fd)
         self.temp_context.cleanup()
 
     def environment(self, *, tmpdir: Path | None = None) -> dict[str, str]:
@@ -82,6 +87,7 @@ class CodexWorkerToolTests(unittest.TestCase):
                 "PATH": f"{self.bin_dir}:/bin:/usr/bin",
                 "TMPDIR": str(tmpdir or self.temp_dir),
                 "FAKE_LAUNCH_LOG": str(self.launch_log),
+                "CARRIER_SYNC_DIR": str(self.temp_dir),
             }
         )
         return env
@@ -89,6 +95,40 @@ class CodexWorkerToolTests(unittest.TestCase):
     def next_name(self, prefix: str) -> str:
         self.counter += 1
         return f"{prefix}-{self.counter}"
+
+    def make_gate(self, name: str) -> Path:
+        gate = self.temp_dir / name
+        os.mkfifo(gate)
+        self.gate_fds[gate] = os.open(gate, os.O_RDWR | os.O_NONBLOCK)
+        return gate
+
+    def await_gate(self, gate: Path, expected: str) -> None:
+        readable, _, _ = select.select([self.gate_fds[gate]], [], [], WATCHDOG_SECONDS)
+        self.assertTrue(readable, f"watchdog expired waiting for {gate.name}")
+        observed = os.read(self.gate_fds[gate], 4096).decode().strip()
+        self.assertEqual(observed, expected)
+
+    def await_any_gate(self, gates: list[Path]) -> tuple[Path, str]:
+        gate_by_fd = {self.gate_fds[gate]: gate for gate in gates}
+        readable, _, _ = select.select(list(gate_by_fd), [], [], WATCHDOG_SECONDS)
+        self.assertTrue(readable, "watchdog expired waiting for any gate")
+        gate = gate_by_fd[readable[0]]
+        observed = os.read(readable[0], 4096).decode().strip()
+        return gate, observed
+
+    def release_gate(self, gate: Path, token: str = "release") -> None:
+        os.write(self.gate_fds[gate], f"{token}\n".encode())
+
+    def make_carrier_gates(self, markers: list[str]) -> None:
+        for marker in markers:
+            self.make_gate(f"{marker}.ready")
+            self.make_gate(f"{marker}.release")
+
+    def await_carrier(self, marker: str) -> None:
+        self.await_gate(self.temp_dir / f"{marker}.ready", marker)
+
+    def release_carrier(self, marker: str) -> None:
+        self.release_gate(self.temp_dir / f"{marker}.release")
 
     def run_dir(self, flight_id: str, attempt: int = 1) -> Path:
         return self.temp_dir / "consensus-rnd" / "sshx" / flight_id / f"attempt-{attempt}"
@@ -131,7 +171,7 @@ class CodexWorkerToolTests(unittest.TestCase):
             capture_output=True,
             text=True,
             env=self.environment(),
-            timeout=10,
+            timeout=WATCHDOG_SECONDS,
         )
 
     def worker(self, flight_id: str, attempt: int, brief_ref: Path, **overrides: object) -> dict[str, object]:
@@ -290,26 +330,54 @@ class CodexWorkerToolTests(unittest.TestCase):
 
     def test_batch_overlaps_workers_waits_for_all_and_reports_mixed_exits(self) -> None:
         flights = [self.next_name("batch") for _ in range(3)]
+        markers = ["failing", "held-a", "held-b"]
+        self.make_carrier_gates(markers)
         briefs = [
-            self.make_brief("failing", "FAIL"),
-            self.make_brief("slow-a", "SLOW"),
-            self.make_brief("slow-b", "SLOW"),
+            self.make_brief(markers[0], "BLOCK FAIL"),
+            self.make_brief(markers[1], "BLOCK"),
+            self.make_brief(markers[2], "BLOCK"),
         ]
         manifest = self.write_manifest([self.worker(flights[i], 1, briefs[i]) for i in range(3)])
         report = self.temp_dir / "batch-report.json"
-        started = time.monotonic()
+        wait_log = self.temp_dir / "batch-waits.log"
+        publication_log = self.temp_dir / "batch-publication.log"
+        bash_env = self.temp_dir / "batch-observer.bash"
+        bash_env.write_text(
+            "wait() {\n"
+            '  if [ "$0" != "$BATCH_SCRIPT" ]; then builtin wait "$@"; return $?; fi\n'
+            '  builtin wait "$@"\n'
+            "  wait_result=$?\n"
+            '  printf "%s|%s\\n" "$1" "$wait_result" >> "$WAIT_LOG"\n'
+            '  return "$wait_result"\n'
+            "}\n"
+            "mv() {\n"
+            '  for argument in "$@"; do target=$argument; done\n'
+            '  if [ "$0" = "$BATCH_SCRIPT" ] && [ "$target" = "$REPORT_TARGET" ]; then\n'
+            '    completed=0; [ ! -f "$WAIT_LOG" ] || completed=$(wc -l < "$WAIT_LOG")\n'
+            '    printf "%s\\n" "$completed" > "$PUBLICATION_LOG"\n'
+            "  fi\n"
+            '  command mv "$@"\n'
+            "}\n"
+        )
+        env = self.environment()
+        env.update(
+            {
+                "BASH_ENV": str(bash_env),
+                "BATCH_SCRIPT": str(BATCH),
+                "REPORT_TARGET": str(report),
+                "WAIT_LOG": str(wait_log),
+                "PUBLICATION_LOG": str(publication_log),
+            }
+        )
         process = subprocess.Popen(
             ["/bin/bash", str(BATCH), "--manifest", str(manifest), "--report", str(report)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=self.environment(),
+            env=env,
         )
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            if all((self.run_dir(flight_id) / "brief.seen").is_file() for flight_id in flights):
-                break
-            time.sleep(0.02)
+        for marker in markers:
+            self.await_carrier(marker)
         self.assertIsNone(process.poll(), "dispatcher returned while slow siblings were active")
         self.assertTrue(report.is_file(), "dispatcher did not reserve the final report path")
         self.assertEqual(report.read_text(), "", "reserved report target became visible as a report")
@@ -318,9 +386,12 @@ class CodexWorkerToolTests(unittest.TestCase):
             self.assertTrue((self.run_dir(flight_id) / "brief.seen").read_text().startswith(brief.read_text()))
         for flight_id in flights[1:]:
             self.assertFalse((self.run_dir(flight_id) / "carrier.exit").exists())
-        _, stderr = process.communicate(timeout=10)
+        for marker in markers:
+            self.release_carrier(marker)
+        _, stderr = process.communicate(timeout=WATCHDOG_SECONDS)
         self.assertEqual(process.returncode, 1, stderr)
-        self.assertLess(time.monotonic() - started, 2.5)
+        self.assertEqual(len(wait_log.read_text().splitlines()), len(flights))
+        self.assertEqual(publication_log.read_text().strip(), str(len(flights)))
         document = json.loads(report.read_text())
         self.assertTrue(document["all_workers_waited"])
         self.assertFalse(document["interrupted"])
@@ -333,20 +404,99 @@ class CodexWorkerToolTests(unittest.TestCase):
             self.assertEqual(item["run_dir"], projected["run_dir"])
             self.assertEqual(item["status_ref"], projected["status_ref"])
 
+    def test_batch_accepts_exact_runner_stage_domain(self) -> None:
+        expected_verdicts = {
+            "thinking": "propose",
+            "implementation": None,
+            "review": "approve",
+            "termination": "abstain",
+        }
+        for stage, expected_verdict in expected_verdicts.items():
+            with self.subTest(stage=stage):
+                flight_id = self.next_name(f"batch-{stage}")
+                brief = self.make_brief(flight_id)
+                manifest = self.write_manifest(
+                    [self.worker(flight_id, 1, brief, stage=stage)],
+                    f"batch-{stage}.json",
+                )
+                report = self.temp_dir / f"batch-{stage}-report.json"
+                process = subprocess.run(
+                    ["/bin/bash", str(BATCH), "--manifest", str(manifest), "--report", str(report)],
+                    capture_output=True,
+                    text=True,
+                    env=self.environment(),
+                )
+                self.assertEqual(process.returncode, 0, process.stderr)
+                worker_report = json.loads(report.read_text())["workers"][0]
+                self.assertEqual(worker_report["runner_exit_code"], 0)
+                status = json.loads(Path(worker_report["status_ref"]).read_text())
+                self.assertEqual(status["stage"], stage)
+                self.assertEqual(status["status"], "COMPLETE")
+                if expected_verdict is None:
+                    self.assertNotIn("verdict", status)
+                else:
+                    self.assertEqual(status["verdict"], expected_verdict)
+
+        launch_count = len(self.launch_log.read_text().splitlines())
+        invalid_brief = self.make_brief("invalid-stage")
+        invalid_manifest = self.write_manifest(
+            [self.worker(self.next_name("batch-invalid"), 1, invalid_brief, stage="other")],
+            "batch-invalid-stage.json",
+        )
+        invalid_report = self.temp_dir / "batch-invalid-stage-report.json"
+        invalid = subprocess.run(
+            ["/bin/bash", str(BATCH), "--manifest", str(invalid_manifest), "--report", str(invalid_report)],
+            capture_output=True,
+            text=True,
+            env=self.environment(),
+        )
+        self.assertEqual(invalid.returncode, 64, invalid.stderr)
+        self.assertFalse(invalid_report.exists())
+        self.assertEqual(len(self.launch_log.read_text().splitlines()), launch_count)
+
     def test_batch_signals_rewait_every_child_and_preserve_runner_exits(self) -> None:
         for dispatch_signal in [signal.SIGINT, signal.SIGTERM]:
             with self.subTest(signal=dispatch_signal):
                 flights = [self.next_name("interrupted") for _ in range(2)]
-                briefs = [self.make_brief(f"interrupted-{flight_id}", "SLOW") for flight_id in flights]
+                markers = [f"interrupted-{flight_id}" for flight_id in flights]
+                self.make_carrier_gates(markers)
+                briefs = [self.make_brief(marker, "BLOCK") for marker in markers]
                 manifest = self.write_manifest(
                     [self.worker(flights[i], 1, briefs[i]) for i in range(2)],
                     f"interrupted-{dispatch_signal}.json",
                 )
                 report = self.temp_dir / f"interrupted-report-{dispatch_signal}.json"
-                bash_env = self.temp_dir / f"slow-kill-{dispatch_signal}.bash"
-                bash_env.write_text('kill() { sleep 0.8; builtin kill "$@"; }\n')
+                signal_ready = self.make_gate(f"signal-ready-{dispatch_signal}")
+                signal_release = self.make_gate(f"signal-release-{dispatch_signal}")
+                wait_log = self.temp_dir / f"interrupted-waits-{dispatch_signal}.log"
+                bash_env = self.temp_dir / f"interrupt-wait-{dispatch_signal}.bash"
+                bash_env.write_text(
+                    "wait() {\n"
+                    '  if [ "$0" != "$BATCH_SCRIPT" ]; then builtin wait "$@"; return $?; fi\n'
+                    "  wait_call_count=$(( ${wait_call_count:-0} + 1 ))\n"
+                    '  if [ "$wait_call_count" -eq 1 ]; then\n'
+                    '    printf "ready\\n" > "$SIGNAL_READY"\n'
+                    '    IFS= read -r _ < "$SIGNAL_RELEASE" || :\n'
+                    '    printf "%s|%s\\n" "$1" "$INTERRUPT_STATUS" >> "$WAIT_LOG"\n'
+                    '    return "$INTERRUPT_STATUS"\n'
+                    "  fi\n"
+                    '  builtin wait "$@"\n'
+                    "  wait_result=$?\n"
+                    '  printf "%s|%s\\n" "$1" "$wait_result" >> "$WAIT_LOG"\n'
+                    '  return "$wait_result"\n'
+                    "}\n"
+                )
                 env = self.environment()
-                env["BASH_ENV"] = str(bash_env)
+                env.update(
+                    {
+                        "BASH_ENV": str(bash_env),
+                        "BATCH_SCRIPT": str(BATCH),
+                        "SIGNAL_READY": str(signal_ready),
+                        "SIGNAL_RELEASE": str(signal_release),
+                        "INTERRUPT_STATUS": str(128 + dispatch_signal),
+                        "WAIT_LOG": str(wait_log),
+                    }
+                )
                 process = subprocess.Popen(
                     ["/bin/bash", str(BATCH), "--manifest", str(manifest), "--report", str(report)],
                     stdout=subprocess.PIPE,
@@ -354,18 +504,23 @@ class CodexWorkerToolTests(unittest.TestCase):
                     text=True,
                     env=env,
                 )
-                deadline = time.monotonic() + 2
-                while time.monotonic() < deadline:
-                    if all((self.run_dir(flight_id) / "brief.seen").is_file() for flight_id in flights):
-                        break
-                    time.sleep(0.02)
-                self.assertTrue(all((self.run_dir(flight_id) / "brief.seen").is_file() for flight_id in flights))
+                for marker in markers:
+                    self.await_carrier(marker)
+                self.await_gate(signal_ready, "ready")
                 process.send_signal(dispatch_signal)
+                self.release_gate(signal_release)
                 self.assertIsNone(process.poll(), "dispatcher exited before joining signalled children")
                 self.assertTrue(report.is_file())
                 self.assertEqual(report.read_text(), "")
-                _, stderr = process.communicate(timeout=10)
+                for marker in markers:
+                    self.release_carrier(marker)
+                _, stderr = process.communicate(timeout=WATCHDOG_SECONDS)
                 self.assertEqual(process.returncode, 1, stderr)
+                waits = [entry.split("|") for entry in wait_log.read_text().splitlines()]
+                self.assertEqual(len(waits), len(flights) + 1)
+                self.assertEqual(waits[0][0], waits[1][0], "interrupted child was not waited again")
+                self.assertEqual(waits[0][1], str(128 + dispatch_signal))
+                self.assertEqual(waits[1][1:], ["0"])
                 document = json.loads(report.read_text())
                 self.assertTrue(document["all_workers_waited"])
                 self.assertTrue(document["interrupted"])
@@ -374,16 +529,25 @@ class CodexWorkerToolTests(unittest.TestCase):
 
     def test_batch_signal_between_joins_does_not_discard_completed_wait(self) -> None:
         flights = [self.next_name("between-joins") for _ in range(2)]
-        briefs = [self.make_brief("between-fast", "FAST"), self.make_brief("between-slow", "SLOW")]
+        markers = ["between-first", "between-second"]
+        self.make_carrier_gates(markers)
+        briefs = [self.make_brief(marker, "BLOCK") for marker in markers]
         manifest = self.write_manifest([self.worker(flights[i], 1, briefs[i]) for i in range(2)])
         report = self.temp_dir / "between-joins-report.json"
         wait_log = self.temp_dir / "between-joins-waits.log"
-        between_marker = self.temp_dir / "between-joins.marker"
+        between_ready = self.make_gate("between-joins.ready")
+        between_release = self.make_gate("between-joins.release")
+        term_handled = self.make_gate("between-joins-term-handled")
         bash_env = self.temp_dir / "between-joins.bash"
         bash_env.write_text(
             "wait() {\n"
+            '  if [ "$0" != "$BATCH_SCRIPT" ]; then builtin wait "$@"; return $?; fi\n'
             "  wait_call_count=$(( ${wait_call_count:-0} + 1 ))\n"
-            '  if [ "$wait_call_count" -eq 2 ]; then : > "$BETWEEN_JOIN_MARKER"; sleep 0.4; fi\n'
+            '  if [ "$wait_call_count" -eq 2 ]; then\n'
+            '    printf "ready\\n" > "$BETWEEN_READY"\n'
+            '    IFS= read -r _ < "$BETWEEN_RELEASE" || :\n'
+            '    printf "handled\\n" > "$TERM_HANDLED"\n'
+            "  fi\n"
             '  builtin wait "$@"\n'
             "  wait_result=$?\n"
             '  printf "%s|%s\\n" "$1" "$wait_result" >> "$WAIT_LOG"\n'
@@ -394,7 +558,10 @@ class CodexWorkerToolTests(unittest.TestCase):
         env.update(
             {
                 "BASH_ENV": str(bash_env),
-                "BETWEEN_JOIN_MARKER": str(between_marker),
+                "BATCH_SCRIPT": str(BATCH),
+                "BETWEEN_READY": str(between_ready),
+                "BETWEEN_RELEASE": str(between_release),
+                "TERM_HANDLED": str(term_handled),
                 "WAIT_LOG": str(wait_log),
             }
         )
@@ -405,13 +572,16 @@ class CodexWorkerToolTests(unittest.TestCase):
             text=True,
             env=env,
         )
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline and not between_marker.exists():
-            time.sleep(0.02)
-        self.assertTrue(between_marker.exists(), "dispatcher never reached the between-join window")
+        for marker in markers:
+            self.await_carrier(marker)
+        self.release_carrier(markers[0])
+        self.await_gate(between_ready, "ready")
         process.send_signal(signal.SIGTERM)
+        self.release_gate(between_release)
+        self.await_gate(term_handled, "handled")
         process.send_signal(signal.SIGINT)
-        _, stderr = process.communicate(timeout=10)
+        self.release_carrier(markers[1])
+        _, stderr = process.communicate(timeout=WATCHDOG_SECONDS)
         self.assertEqual(process.returncode, 1, stderr)
         waits = wait_log.read_text().splitlines()
         self.assertEqual(len(waits), 2, f"a completed wait was discarded: {waits}")
@@ -422,23 +592,22 @@ class CodexWorkerToolTests(unittest.TestCase):
 
     def test_batch_signal_during_launch_gives_every_runner_the_same_term_disposition(self) -> None:
         flights = [self.next_name("launch-signal") for _ in range(2)]
+        self.make_carrier_gates(flights)
         briefs = [self.make_brief(flight_id, "BLOCK") for flight_id in flights]
         manifest = self.write_manifest([self.worker(flights[i], 1, briefs[i]) for i in range(2)])
         report = self.temp_dir / "launch-signal-report.json"
-        launch_paused = self.temp_dir / "launch-paused"
-        launch_release = self.temp_dir / "launch-release"
+        launch_ready = self.make_gate("launch-loop.ready")
+        launch_release = self.make_gate("launch-loop.release")
         pid_log = self.temp_dir / "launch-pids.log"
-        carrier_marker_dir = self.temp_dir / "carrier-markers"
-        carrier_marker_dir.mkdir()
-        carrier_release = self.temp_dir / "carrier-release"
         bash_env = self.temp_dir / "launch-signal.bash"
         bash_env.write_text(
             "trap '\n"
             '  if [ "$0" = "$BATCH_SCRIPT" ] && [ "$BASH_COMMAND" = "pids[\\$i]=\\$!" ]; then\n'
             '    printf "%s\\n" "$!" >> "$PID_LOG"\n'
-            '    if [ ! -e "$LAUNCH_PAUSED" ]; then\n'
-            '      : > "$LAUNCH_PAUSED"\n'
-            '      while [ ! -e "$LAUNCH_RELEASE" ]; do :; done\n'
+            '    if [ "${launch_gate_used:-0}" -eq 0 ]; then\n'
+            "      launch_gate_used=1\n"
+            '      printf "ready\\n" > "$LAUNCH_READY"\n'
+            '      IFS= read -r _ < "$LAUNCH_RELEASE"\n'
             "    fi\n"
             "  fi\n"
             "' DEBUG\n"
@@ -449,10 +618,8 @@ class CodexWorkerToolTests(unittest.TestCase):
                 "BASH_ENV": str(bash_env),
                 "BATCH_SCRIPT": str(BATCH),
                 "PID_LOG": str(pid_log),
-                "LAUNCH_PAUSED": str(launch_paused),
+                "LAUNCH_READY": str(launch_ready),
                 "LAUNCH_RELEASE": str(launch_release),
-                "CARRIER_MARKER_DIR": str(carrier_marker_dir),
-                "CARRIER_RELEASE": str(carrier_release),
             }
         )
         process = subprocess.Popen(
@@ -462,26 +629,19 @@ class CodexWorkerToolTests(unittest.TestCase):
             text=True,
             env=env,
         )
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline and (not launch_paused.exists() or not pid_log.exists()):
-            time.sleep(0.01)
-        self.assertTrue(launch_paused.exists(), "dispatcher never paused inside the launch loop")
+        self.await_gate(launch_ready, "ready")
         self.assertTrue(pid_log.exists(), "first runner PID was not recorded")
         process.send_signal(signal.SIGTERM)
-        launch_release.write_text("continue\n")
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            runner_pids = pid_log.read_text().splitlines()
-            carrier_markers = list(carrier_marker_dir.iterdir())
-            if len(runner_pids) == 2 and len(carrier_markers) == 2:
-                break
-            time.sleep(0.01)
+        self.release_gate(launch_release)
+        for marker in flights:
+            self.await_carrier(marker)
+        runner_pids = pid_log.read_text().splitlines()
         self.assertEqual(len(runner_pids), 2)
-        self.assertEqual(len(carrier_markers), 2)
         for runner_pid in runner_pids:
             os.kill(int(runner_pid), signal.SIGTERM)
-        carrier_release.write_text("continue\n")
-        _, stderr = process.communicate(timeout=10)
+        for marker in flights:
+            self.release_carrier(marker)
+        _, stderr = process.communicate(timeout=WATCHDOG_SECONDS)
         self.assertEqual(process.returncode, 1, stderr)
         document = json.loads(report.read_text())
         self.assertTrue(document["interrupted"])
@@ -489,11 +649,11 @@ class CodexWorkerToolTests(unittest.TestCase):
 
     def test_batch_retains_colliding_child_status_and_ignores_second_recovery_signal(self) -> None:
         bash_wrapper = self.bin_dir / "bash"
-        child_exited = self.temp_dir / "colliding-child-exited"
+        child_exited = self.make_gate("colliding-child-exited")
         bash_wrapper.write_text(
             "#!/bin/bash\n"
             'if [ "${1:-}" = "$RUNNER_SCRIPT" ] && [ "${2:-}" = "--flight-id" ]; then\n'
-            '  : > "$CHILD_EXITED"\n'
+            '  printf "exited\\n" > "$CHILD_EXITED"\n'
             "  exit 143\n"
             "fi\n"
             'exec /bin/bash "$@"\n'
@@ -502,21 +662,24 @@ class CodexWorkerToolTests(unittest.TestCase):
         brief = self.make_brief("status-collision")
         manifest = self.write_manifest([self.worker("status-collision", 1, brief)])
         report = self.temp_dir / "status-collision-report.json"
-        wait_one = self.temp_dir / "wait-one"
-        allow_wait_one = self.temp_dir / "allow-wait-one"
-        wait_two = self.temp_dir / "wait-two"
-        allow_wait_two = self.temp_dir / "allow-wait-two"
+        wait_one = self.make_gate("wait-one")
+        allow_wait_one = self.make_gate("allow-wait-one")
+        wait_two = self.make_gate("wait-two")
+        allow_wait_two = self.make_gate("allow-wait-two")
         wait_log = self.temp_dir / "status-collision-waits.log"
+        int_disposition_log = self.temp_dir / "status-collision-int-disposition.log"
         bash_env = self.temp_dir / "status-collision.bash"
         bash_env.write_text(
             "wait() {\n"
+            '  if [ "$0" != "$BATCH_SCRIPT" ]; then builtin wait "$@"; return $?; fi\n'
             "  wait_call_count=$(( ${wait_call_count:-0} + 1 ))\n"
             '  if [ "$wait_call_count" -eq 1 ]; then\n'
-            '    : > "$WAIT_ONE"\n'
-            '    while [ ! -e "$ALLOW_WAIT_ONE" ]; do :; done\n'
+            '    printf "ready\\n" > "$WAIT_ONE"\n'
+            '    IFS= read -r _ < "$ALLOW_WAIT_ONE" || :\n'
             '  elif [ "$wait_call_count" -eq 2 ]; then\n'
-            '    : > "$WAIT_TWO"\n'
-            '    while [ ! -e "$ALLOW_WAIT_TWO" ]; do :; done\n'
+            '    trap -p INT > "$INT_DISPOSITION_LOG"\n'
+            '    printf "ready\\n" > "$WAIT_TWO"\n'
+            '    IFS= read -r _ < "$ALLOW_WAIT_TWO" || :\n'
             "  fi\n"
             '  builtin wait "$@"\n'
             "  wait_result=$?\n"
@@ -528,6 +691,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         env.update(
             {
                 "BASH_ENV": str(bash_env),
+                "BATCH_SCRIPT": str(BATCH),
                 "RUNNER_SCRIPT": str(RUNNER),
                 "CHILD_EXITED": str(child_exited),
                 "WAIT_ONE": str(wait_one),
@@ -535,6 +699,7 @@ class CodexWorkerToolTests(unittest.TestCase):
                 "WAIT_TWO": str(wait_two),
                 "ALLOW_WAIT_TWO": str(allow_wait_two),
                 "WAIT_LOG": str(wait_log),
+                "INT_DISPOSITION_LOG": str(int_disposition_log),
             }
         )
         process = subprocess.Popen(
@@ -544,21 +709,17 @@ class CodexWorkerToolTests(unittest.TestCase):
             text=True,
             env=env,
         )
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline and (not wait_one.exists() or not child_exited.exists()):
-            time.sleep(0.01)
-        self.assertTrue(wait_one.exists())
-        self.assertTrue(child_exited.exists())
+        self.await_gate(child_exited, "exited")
+        self.await_gate(wait_one, "ready")
         process.send_signal(signal.SIGTERM)
-        allow_wait_one.write_text("continue\n")
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline and not wait_two.exists():
-            time.sleep(0.01)
-        self.assertTrue(wait_two.exists(), "dispatcher did not repeat the colliding wait")
+        self.release_gate(allow_wait_one)
+        self.await_gate(wait_two, "ready")
+        int_disposition = int_disposition_log.read_text().strip()
         process.send_signal(signal.SIGINT)
-        allow_wait_two.write_text("continue\n")
-        _, stderr = process.communicate(timeout=10)
+        self.release_gate(allow_wait_two)
+        _, stderr = process.communicate(timeout=WATCHDOG_SECONDS)
         self.assertEqual(process.returncode, 1, stderr)
+        self.assertEqual(int_disposition, "trap -- '' SIGINT")
         waits = wait_log.read_text().splitlines()
         self.assertEqual([entry.rsplit("|", 1)[1] for entry in waits], ["143", "143"])
         self.assertEqual(len({entry.rsplit("|", 1)[0] for entry in waits}), 1)
@@ -735,10 +896,14 @@ class CodexWorkerToolTests(unittest.TestCase):
         shared_report = self.temp_dir / "shared-report.json"
         processes = []
         flights = []
+        markers = []
         for index in range(2):
             flight_id = self.next_name("shared-report")
             flights.append(flight_id)
-            brief = self.make_brief(f"shared-report-{index}", "SLOW")
+            marker = f"shared-report-{index}"
+            markers.append(marker)
+            self.make_carrier_gates([marker])
+            brief = self.make_brief(marker, "BLOCK")
             manifest = self.write_manifest(
                 [self.worker(flight_id, 1, brief)], f"shared-report-{index}.json"
             )
@@ -751,18 +916,17 @@ class CodexWorkerToolTests(unittest.TestCase):
                     env=self.environment(),
                 )
             )
-        deadline = time.monotonic() + 2
-        temporaries: list[Path] = []
-        while time.monotonic() < deadline:
-            temporaries = list(self.temp_dir.glob("shared-report.json.tmp.*"))
-            if len(temporaries) == 1 and self.launch_log.exists():
-                break
-            time.sleep(0.02)
+        ready_gate, winning_marker = self.await_any_gate(
+            [self.temp_dir / f"{marker}.ready" for marker in markers]
+        )
+        self.assertEqual(ready_gate.name, f"{winning_marker}.ready")
+        temporaries = list(self.temp_dir.glob("shared-report.json.tmp.*"))
         self.assertEqual(len(temporaries), 1, "exactly one dispatcher may reserve the report identity")
         self.assertTrue(shared_report.is_file())
+        self.release_carrier(winning_marker)
         outcomes = []
         for process in processes:
-            _, stderr = process.communicate(timeout=10)
+            _, stderr = process.communicate(timeout=WATCHDOG_SECONDS)
             outcomes.append((process.returncode, stderr))
         self.assertEqual(sorted(returncode for returncode, _ in outcomes), [0, 64])
         collision_stderr = next(stderr for returncode, stderr in outcomes if returncode == 64)
@@ -793,7 +957,7 @@ class CodexWorkerToolTests(unittest.TestCase):
             capture_output=True,
             text=True,
             env=env,
-            timeout=10,
+            timeout=WATCHDOG_SECONDS,
         )
         self.assertEqual(process.returncode, 1, process.stderr)
         document = json.loads(report.read_text())
@@ -1139,20 +1303,27 @@ class CodexWorkerToolTests(unittest.TestCase):
         )
         flight_dirs = [Path(str(self.project_flight(flight_id)["flight_dir"])) for flight_id in flights]
         fake_rm = self.bin_dir / "rm"
-        delete_marker = self.temp_dir / "second-removal-started"
+        delete_ready = self.make_gate("second-removal.ready")
+        delete_release = self.make_gate("second-removal.release")
         fake_rm.write_text(
             "#!/bin/bash\n"
             'for argument in "$@"; do target=$argument; done\n'
             'if [ "$target" = "$SIGNAL_TARGET" ]; then\n'
-            '  : > "$DELETE_MARKER"\n'
-            "  sleep 0.6\n"
+            '  printf "ready\\n" > "$DELETE_READY"\n'
+            '  IFS= read -r _ < "$DELETE_RELEASE"\n'
             "  exit 0\n"
             "fi\n"
             'exec /bin/rm "$@"\n'
         )
         fake_rm.chmod(0o755)
         env = self.environment()
-        env.update({"SIGNAL_TARGET": str(flight_dirs[1]), "DELETE_MARKER": str(delete_marker)})
+        env.update(
+            {
+                "SIGNAL_TARGET": str(flight_dirs[1]),
+                "DELETE_READY": str(delete_ready),
+                "DELETE_RELEASE": str(delete_release),
+            }
+        )
         process = subprocess.Popen(
             ["/bin/bash", str(CLEANUP), "--manifest", str(manifest), "--delete"],
             stdout=subprocess.PIPE,
@@ -1160,12 +1331,10 @@ class CodexWorkerToolTests(unittest.TestCase):
             text=True,
             env=env,
         )
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline and not delete_marker.exists():
-            time.sleep(0.02)
-        self.assertTrue(delete_marker.exists(), "cleanup never entered the signalled removal")
+        self.await_gate(delete_ready, "ready")
         process.send_signal(signal.SIGTERM)
-        stdout, stderr = process.communicate(timeout=10)
+        self.release_gate(delete_release)
+        stdout, stderr = process.communicate(timeout=WATCHDOG_SECONDS)
         self.assertEqual(process.returncode, 1, stderr)
         report = json.loads(stdout)
         self.assertEqual(report["removed"], [str(flight_dirs[0])])
@@ -1252,7 +1421,7 @@ class CodexWorkerToolTests(unittest.TestCase):
             capture_output=True,
             text=True,
             env=env,
-            timeout=10,
+            timeout=WATCHDOG_SECONDS,
         )
         self.assertEqual(run.returncode, 0, run.stderr)
         placeholder = self.temp_dir / "unused-encoder-corpus.brief"

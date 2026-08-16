@@ -47,7 +47,7 @@ if ! "$jq_path" -e -s '
     (.flight_id | test("^[A-Za-z0-9._-]+$")) and
     .flight_id != "." and
     (.flight_id | contains("..") | not) and
-    (.stage == "thinking" or .stage == "implementation" or .stage == "review") and
+    (.stage == "thinking" or .stage == "implementation" or .stage == "review" or .stage == "termination") and
     (.work_target | type) == "string" and (.work_target | startswith("/")) and (.work_target | test("[\\n\\r]") | not) and
     (.brief_ref | type) == "string" and (.brief_ref | startswith("/")) and (.brief_ref | test("[\\n\\r]") | not) and
     ((has("sandbox") | not) or .sandbox == "danger-full-access" or .sandbox == "workspace-write")

@@ -168,7 +168,7 @@ main() {
   fi
   case "$seen_options" in *'--sandbox'*) ;; *) sandbox=danger-full-access ;; esac
   if [ "$project_paths" -eq 0 ] && [ "$project_flight" -eq 0 ]; then
-    case "$stage" in thinking|implementation|review) ;; *) usage_error "invalid --stage"; return 1 ;; esac
+    case "$stage" in thinking|implementation|review|termination) ;; *) usage_error "invalid --stage"; return 1 ;; esac
     case "$work_target" in /*) ;; *) usage_error "--work-target must be an absolute path"; return 1 ;; esac
     case "$work_target" in *$'\n'*|*$'\r'*) usage_error "--work-target must not contain LF or CR"; return 1 ;; esac
     case "$sandbox" in danger-full-access|workspace-write) ;; *) usage_error "invalid --sandbox"; return 1 ;; esac
@@ -204,7 +204,7 @@ main() {
   fi
   run_dir_owned=1
   cat > "$brief_ref" || return 1
-  stage_verdict_specs='thinking=propose|revise|reject|abstain;review=approve|comment|reject;implementation='
+  stage_verdict_specs='thinking=propose|revise|reject|abstain;review=approve|comment|reject;termination=abstain|satisfied|unsatisfied;implementation='
   allowed_verdict_spec=${stage_verdict_specs#*"$stage="}; allowed_verdict_spec=${allowed_verdict_spec%%;*}
   allowed_verdict_text=${allowed_verdict_spec:-no-verdict-required}
   if ! skeleton_json=$("$jq_path" --compact-output --null-input --arg stage "$stage" --arg verdict "${allowed_verdict_spec%%|*}" --arg log_ref "$stdout_ref" '{conclusion:(if $stage == "implementation" then {} else {verdict:$verdict} end),log_ref:$log_ref}'); then
@@ -228,7 +228,7 @@ The runner never creates, repairs, copies, normalizes, or touches them.
 - Stage: $stage; allowed verdict: $allowed_verdict_text
 The envelope must be strict JSON whose top-level value is an object containing exactly the keys "conclusion" and "log_ref".
 "conclusion" must be a JSON object, not a string. "log_ref" must be a non-empty JSON string.
-For the "thinking" and "review" stages, "conclusion.verdict" must be a JSON string and one of the values on the allowed verdict line above. The "implementation" stage does not require a verdict.
+For the "thinking", "review", and "termination" stages, "conclusion.verdict" must be a JSON string and one of the values on the allowed verdict line above. The "implementation" stage does not require a verdict.
 Minimum structurally accepted envelope shape: $skeleton_json
 This example is only the minimum structurally accepted shape; the worker must populate "conclusion" with the complete structured result required by its task brief and must not submit this skeletal example unchanged.
 The example uses this attempt's worker stdout log for "log_ref"; the worker may replace it with another non-empty reference.

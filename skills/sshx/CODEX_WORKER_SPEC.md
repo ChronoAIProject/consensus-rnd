@@ -17,7 +17,7 @@ not restate it. Caller-side dispatch and collection are governed solely by
 ```text
 bash <skill-root>/scripts/run-codex-worker.sh \
   --flight-id <id> --attempt <positive-integer> \
-  --stage <thinking|implementation|review> \
+  --stage <thinking|implementation|review|termination> \
   --work-target <absolute-path> [--sandbox <danger-full-access|workspace-write>]
 ```
 
