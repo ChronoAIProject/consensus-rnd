@@ -4,7 +4,7 @@
 
 ## 旁路推理通道: nyxid oracle (ChatGPT Pro)
 
-`nyxid oracle` 可作为 codex / Claude 之外的独立推理通道。命令、参数和输出字段以 `nyxid oracle --help` 为准；长 prompt 可用 `--file -`，多轮可用 `--new-conversation` / `--conversation`。异步请求只在完成后读取一次结果，不 busy-loop 轮询。
+`nyxid oracle` 可作为 codex / Claude 之外的独立推理通道。命令、参数和输出字段以 `nyxid oracle --help` 为准；长 prompt 可用 `--file -`，多轮可用 `--new-conversation` / `--conversation`。异步请求只在完成后读取一次结果，不 busy-loop 轮询。oracle 能自行抓取公开可访问的 GitHub 链接，所以大段仓库内容可改为附 pin 到 commit SHA 的 permalink，而不是塞进 prompt；未公开的内容不得外链，也不得为了外链而推送或改仓库可见性。
 
 ## 仓库性质
 

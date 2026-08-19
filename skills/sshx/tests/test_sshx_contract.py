@@ -1403,6 +1403,34 @@ class SshxContractTests(unittest.TestCase):
         self.assertNotIn("does not authorize unlimited redispatch", worker_delegation)
         self.assertNotIn("--client-ref", worker_delegation)
 
+    def test_sshx_nyxid_oracle_public_github_reference_rule(self) -> None:
+        skill = read(SKILL)
+        worker_delegation = section(skill, "## Worker Delegation", "## Result Envelope")
+        reference_rule = next(
+            paragraph
+            for paragraph in worker_delegation.split("\n\n")
+            if "public GitHub URL" in paragraph
+        )
+        for required in [
+            "A `nyxid-oracle` worker has no access to the caller's filesystem",
+            "caller-local paths, including `work_target` paths, are not readable content references for it",
+            "may instead reference repository content by public GitHub URL",
+            "pinned to an immutable commit SHA so every seat reads the same bytes",
+            "branch, tag, and `HEAD` URLs drift between reads and must not be used",
+            "permitted only when the referenced content is already anonymously readable on the remote",
+            "which the caller confirms before the first submission",
+            "must never push, publish, change repository visibility, or otherwise mutate remote state to make content linkable",
+            "When the needed content is not already public, the brief inlines it instead",
+            "never a goal source under `## Goal Contract`",
+            "never a pointer to same-round peer output or another seat's artifacts",
+            "worker-reported data rather than caller-verified evidence",
+            "If the oracle cannot retrieve a referenced URL",
+            "mark every premise that depended on it `ASSUMED-UNVERIFIED`",
+            "never reconstructing the content from memory",
+        ]:
+            self.assertIn(required, reference_rule)
+        self.assertIn("- GitHub lifecycle operations;", section(skill, "## Boundaries", "## Baseline Failure Mode"))
+
     def test_sshx_external_carrier_claims_require_real_verification(self) -> None:
         text = read(SKILL)
         self.assertIn("verify the exact composed workflow end to end with the real tool", text)
