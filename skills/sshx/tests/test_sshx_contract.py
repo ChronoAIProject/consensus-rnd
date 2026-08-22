@@ -40,6 +40,7 @@ The structural single-source checks are that the exact canonical span occurs onc
 and all worker-panel or gate sections remain carrier-free.
 """
 
+import ast
 import re
 import subprocess
 import unittest
@@ -56,6 +57,10 @@ README = ROOT / "README.md"
 GEMINI = ROOT / "GEMINI.md"
 CI = ROOT / ".github" / "workflows" / "consensus-rnd-ci.yml"
 BASELINE_ARTIFACT_PATHSPEC = "*baseline-issue342-sshx.md"
+DECISION_GROUNDING_PREVENTIVE_BASIS = (
+    "a current consumer (an existing call site) or an explicit `GoalArtifact` demand — "
+    "a `normalized_goal` clause, `constraints`, or `success_criteria` item"
+)
 
 THINKING_VERDICTS = {"propose", "revise", "reject", "abstain"}
 TERMINATION_VERDICTS = {"satisfied", "unsatisfied", "abstain"}
@@ -332,6 +337,61 @@ def resolve_termination_gate_applicability(
 
 
 class SshxContractTests(unittest.TestCase):
+    def test_sshx_lowered_haystack_assert_not_in_needles_are_lowercase(self) -> None:
+        source_path = Path(__file__)
+        tree = ast.parse(source_path.read_text())
+        parents = {
+            child: parent
+            for parent in ast.walk(tree)
+            for child in ast.iter_child_nodes(parent)
+        }
+        offending_literals: list[str] = []
+
+        for call in ast.walk(tree):
+            if not (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "assertNotIn"
+                and len(call.args) >= 2
+            ):
+                continue
+            haystack = call.args[1]
+            if not (
+                isinstance(haystack, ast.Call)
+                and isinstance(haystack.func, ast.Attribute)
+                and haystack.func.attr == "lower"
+            ):
+                continue
+
+            needle = call.args[0]
+            literals: list[str] = []
+            if isinstance(needle, ast.Constant) and isinstance(needle.value, str):
+                literals.append(needle.value)
+            elif isinstance(needle, ast.Name):
+                ancestor: ast.AST = call
+                while ancestor in parents:
+                    ancestor = parents[ancestor]
+                    if (
+                        isinstance(ancestor, ast.For)
+                        and isinstance(ancestor.target, ast.Name)
+                        and ancestor.target.id == needle.id
+                        and isinstance(ancestor.iter, (ast.List, ast.Tuple, ast.Set))
+                    ):
+                        literals.extend(
+                            element.value
+                            for element in ancestor.iter.elts
+                            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+                        )
+                        break
+
+            offending_literals.extend(literal for literal in literals if literal != literal.lower())
+
+        self.assertFalse(
+            offending_literals,
+            "assertNotIn needles used with a lowercased haystack must be lowercase: "
+            + ", ".join(repr(literal) for literal in sorted(offending_literals)),
+        )
+
     def test_sshx_frontmatter_contract(self) -> None:
         meta = frontmatter(read(SKILL))
         self.assertEqual(set(meta), {"name", "description"})
@@ -492,7 +552,7 @@ class SshxContractTests(unittest.TestCase):
             "`## Goal Contract` solely owns missing or invalid trigger-entry routing",
             termination,
         )
-        self.assertNotIn("stop and escalate to the maintainer", termination)
+        self.assertNotIn("stop and escalate to the maintainer", termination.lower())
 
         protocol = section(text, "## InlineConsensusProtocol", "## Worker Delegation")
         stage_lines = re.findall(r"^\d+\. `([^`]+)`(?: .*)?$", protocol, flags=re.MULTILINE)
@@ -575,7 +635,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("returns a judgment, never a routing action", termination)
         self.assertIn("Termination flights use the existing `worker_flights` block", termination)
         self.assertIn("`SshxWorkerFlightRecord.stage` set to `termination`", termination)
-        self.assertNotIn("surfaces its compact note", termination)
+        self.assertNotIn("surfaces its compact note", termination.lower())
 
     def test_sshx_termination_routing_is_exhaustive_and_fail_closed(self) -> None:
         possible_results: tuple[JsonValue, ...] = ("satisfied", "unsatisfied", "abstain", None, "invalid")
@@ -856,11 +916,147 @@ class SshxContractTests(unittest.TestCase):
         reasoning = text[heading_index(text, "## Reasoning Discipline") : heading_index(text, "## Thinking Panel")]
         capability_definition = "`CapabilityOverlap` is the candidate-solution boundary check"
         threat_definition = "`ThreatEligibility` is the review-finding boundary check"
+        grounding_definition = "`DecisionGrounding` is the decision-input admissibility check"
         self.assertEqual(text.count(capability_definition), 1)
         self.assertEqual(text.count(threat_definition), 1)
+        self.assertEqual(text.count(grounding_definition), 1)
         self.assertIn(capability_definition, reasoning)
         self.assertIn(threat_definition, reasoning)
+        self.assertIn(grounding_definition, reasoning)
         self.assertIn("These are independent checks that share the `harness` fact source", reasoning)
+
+    def test_sshx_decision_grounding_contract(self) -> None:
+        text = read(SKILL)
+        reasoning = section(text, "## Reasoning Discipline", "## Thinking Panel")
+        for anchor in [
+            "no inadmissible input receives implementation work or blocking authority",
+            "For predicted harm, name a current path through which the predicted harm is reachable",
+            "a current call site or input path, an observed failure that demonstrates reachability, or a `GoalArtifact` term that makes the harm reachable",
+            "`DecisionGrounding` judges only admissibility, never evidence strength",
+            "how well an admissible premise is evidenced stays with `seek truth from facts` and its existing dispositions, which this check neither repeats nor overrides",
+            "For preventive work — a defense, validation, abstraction, or compatibility path",
+            f"name {DECISION_GROUNDING_PREVENTIVE_BASIS}",
+            "a test introduced together with the defense under judgment may corroborate grounding but never creates it",
+            "the defense would ground itself",
+            "For blocking detail, this is the rabbit-holing limb, not an aesthetic matter",
+            "exact `GoalArtifact` term it prevents satisfying",
+            "pass the deletion counterfactual",
+            "if omitting the detail changes no named `GoalArtifact` decision, it does not block",
+            "depth past that point is not thoroughness",
+            "Failure is objective, not semantic",
+            f"only when it names none of the bases its applicable limb requires — a current path through which the predicted harm is reachable, {DECISION_GROUNDING_PREVENTIVE_BASIS}, or the exact `GoalArtifact` term the blocking detail prevents satisfying together with the deletion counterfactual",
+            "A named basis that evidence shows to be false no longer counts as a named basis, so the input is inadmissible on that basis",
+            "disputed grounding, not absent grounding",
+            "keeps its full blocking force until the dispute is settled against evidence",
+            "no one may declare an input ungrounded merely because its named basis is unpersuasive",
+            "removes no actual defect",
+            "a reachable failure, a trusted-party mistake, an omission, and a stated uncertainty stay grounded regardless of how expensive, inconvenient, or late the repair is",
+            "sole basis of a `revise`, `reject`, `abstain`, blocking finding, `unsatisfied`, or any element of a concrete plan",
+        ]:
+            self.assertIn(anchor, reasoning)
+        for forbidden in [
+            "an unverified path has no blocking force",
+            "an unverified named basis loses blocking force",
+        ]:
+            self.assertNotIn(forbidden, reasoning.lower())
+        axis_separation = (
+            "`DecisionGrounding` asks only whether a decision input is admissible; "
+            "`ThreatEligibility` asks who the actor is; `parsimony` asks how much mechanism; "
+            "`proportional-containment` asks how far it binds; `worth` asks whether to pay at all; "
+            "and the aesthetic verdict asks whether the remaining form is coherent."
+        )
+        self.assertEqual(text.count(axis_separation), 1)
+        self.assertIn(axis_separation, reasoning)
+        self.assertIn(
+            "a third independent check sharing the `GoalArtifact` and `harness` fact sources with the two above",
+            reasoning,
+        )
+        self.assertNotIn("Concern" + "Grounding", text)
+
+    def test_sshx_decision_grounding_preventive_basis_is_consistent(self) -> None:
+        text = read(SKILL)
+        reasoning_start = heading_index(text, "## Reasoning Discipline")
+        reasoning_end = heading_index(text, "## Thinking Panel")
+        reasoning = text[reasoning_start:reasoning_end]
+        outside_reasoning = text[:reasoning_start] + text[reasoning_end:]
+        self.assertEqual(reasoning.count(DECISION_GROUNDING_PREVENTIVE_BASIS), 2)
+        self.assertEqual(outside_reasoning.count(DECISION_GROUNDING_PREVENTIVE_BASIS), 0)
+        self.assertNotIn("an explicit `constraints` or `success_criteria` demand", text)
+        self.assertNotIn("current consumer or explicit `constraints` or `success_criteria` demand", text)
+
+    def test_sshx_decision_grounding_stage_references_and_downgrade_guards(self) -> None:
+        text = read(SKILL)
+        thinking = section(text, "## Thinking Panel", "## Design Truth Table")
+        design = section(text, "## Design Truth Table", "## Implementation Worker")
+        review = section(text, "## Review Truth Table", "## Fix Or Done")
+        termination_gate = section(text, "## Termination Gate", "## Termination Truth Table")
+        termination_table = section(text, "## Termination Truth Table", "## Boundaries")
+
+        for contract_section in [thinking, design, review, termination_gate, termination_table]:
+            self.assertIn("`DecisionGrounding`", contract_section)
+        for anchor in [
+            "every proposed plan element and every `propose`, `revise`, `reject`, or `abstain` basis",
+            "named current path, current consumer, or `GoalArtifact` term",
+            "An ungrounded basis is not a goal gap",
+            "machinery that only defends against one must not enter a proposed plan",
+        ]:
+            self.assertIn(anchor, thinking)
+
+        focused_round = design.split(
+            "When a seat's `SshxResultEnvelope.conclusion` records", 1
+        )[1].split("\n\n", 1)[0]
+        self.assertIn(
+            "the causal prediction recorded in that conclusion is falsifiable rather than a preference;",
+            focused_round,
+        )
+        for anchor in [
+            "provided the objection passes the `DecisionGrounding` prerequisite below",
+            "objectively fails `DecisionGrounding` does not trigger a `FocusedRound`",
+            "checks only whether the seat named any admissible basis at all and must not assess its persuasiveness",
+            "named a basis whose correctness is disputed still triggers the round because disputed is not absent",
+            "records that decline in the existing `finding_downgrades` record under the same own-words requirement that governs downgrades",
+        ]:
+            self.assertIn(anchor, focused_round)
+        for anchor in [
+            "fails `DecisionGrounding` under its objective-failure rule",
+            "not an unclosed `GoalArtifact` goal gap and does not by itself hold the exit out of `implement`: the meta-judge records it as advisory",
+            "existing `finding_downgrades` record",
+            "the objecting seat itself named, or that it named none",
+            "using the objecting seat's own words and never a paraphrase",
+            "Disputed grounding stays blocking",
+            "not permission to set aside a reachable defect",
+        ]:
+            self.assertIn(anchor, design)
+        for anchor in [
+            "must state its applicable `DecisionGrounding` basis under `## Reasoning Discipline`",
+            "fails `ThreatEligibility` or `DecisionGrounding`",
+            "A `DecisionGrounding` downgrade obeys its objective-failure rule",
+            "the finder itself named, or that it named none",
+            "using the finder's own words and never a paraphrase",
+            "disputed grounding stays blocking",
+            "only for threat-model ineligibility",
+            "never because a finding is inconvenient",
+            "never sets aside a reachable defect",
+            "missing, ambiguous, or stale harness declaration",
+            "never a downgrade shield",
+        ]:
+            self.assertIn(anchor, review)
+        self.assertIn(
+            "A blocking finding that fails `ThreatEligibility` or `DecisionGrounding` is downgraded by the meta-judge to an advisory with its reason recorded, then the remaining verdicts are routed again.",
+            review,
+        )
+        self.assertIn(
+            "Downgrade is allowed only for threat-model ineligibility or an ungrounded input, never because a finding is inconvenient, expensive, or late, and never sets aside a reachable defect.",
+            review,
+        )
+        self.assertIn("named difference must pass `DecisionGrounding`", termination_gate)
+        self.assertIn("an ungrounded worry is not a remaining difference", termination_gate)
+        for anchor in [
+            "Each termination seat applies `DecisionGrounding` itself before returning",
+            "never a meta-judge downgrade path here",
+            "no valid returned `unsatisfied` that passed the seat's check may be converted into permission by calling it ungrounded",
+        ]:
+            self.assertIn(anchor, termination_table)
 
     def test_sshx_triplets_require_reasoning_discipline_in_conclusion(self) -> None:
         text = read(SKILL)
@@ -913,7 +1109,7 @@ class SshxContractTests(unittest.TestCase):
         # 值不值 (worth) is an independent SEAT, not a cross-cutting lens: it must not live in Reasoning Discipline,
         # or every seat would be homogenized into re-deriving the same value verdict.
         self.assertNotIn("值不值", reasoning_section)
-        self.assertNotIn("worth (值不值", reasoning_section)
+        self.assertNotIn("worth (值不值", reasoning_section.lower())
         self.assertNotIn("## Worth", text)
         self.assertNotIn("worth_marker", text)
         self.assertNotIn("worth_daemon", text)
@@ -952,6 +1148,9 @@ class SshxContractTests(unittest.TestCase):
             "## Aesthetic Frame",
             "## Aesthetic Discipline",
             "## Seek Truth From Facts",
+        ]:
+            self.assertNotIn(forbidden, text)
+        for forbidden in [
             "why_ugly:",
             "beautiful_form:",
             "verified_premises:",
@@ -962,7 +1161,7 @@ class SshxContractTests(unittest.TestCase):
             "aesthetic_daemon",
             "truth_daemon",
         ]:
-            self.assertNotIn(forbidden, text)
+            self.assertNotIn(forbidden, text.lower())
 
         self.assertIn(
             "Before proposing, revising, rejecting, or abstaining, each seat must apply `## Reasoning Discipline`",
@@ -992,8 +1191,14 @@ class SshxContractTests(unittest.TestCase):
             "applicable mature theory, engineering principle, industry best practice",
             reasoning_section,
         )
-        self.assertNotIn("applicable mature theory, engineering principle, industry best practice", thinking_section)
-        self.assertNotIn("applicable mature theory, engineering principle, industry best practice", review_section)
+        self.assertNotIn(
+            "applicable mature theory, engineering principle, industry best practice",
+            thinking_section.lower(),
+        )
+        self.assertNotIn(
+            "applicable mature theory, engineering principle, industry best practice",
+            review_section.lower(),
+        )
 
     def test_sshx_thinking_panel_seats_and_anchors_root_cause(self) -> None:
         text = read(SKILL)
@@ -1196,8 +1401,8 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("a retry or fallback may replace only the failed flight for the same seat and role", text)
         self.assertIn("If any fallback occurs or any initially paired carrier is unavailable", text)
         self.assertIn("do not claim that stage achieved model-diverse consensus", text)
-        self.assertNotIn("sealed-transcript", contract_text)
-        self.assertNotIn("actor-isolated", contract_text)
+        self.assertNotIn("sealed-transcript", contract_text.lower())
+        self.assertNotIn("actor-isolated", contract_text.lower())
 
     def test_sshx_default_seat_allocation_positive_anchors_with_mutations(self) -> None:
         text = read(SKILL)
@@ -1316,13 +1521,13 @@ class SshxContractTests(unittest.TestCase):
         )
         self.assertNotIn(
             "must start a new isolated oracle conversation for that flight or attempt",
-            worker_delegation,
+            worker_delegation.lower(),
         )
         self.assertIn(
             "governed solely by `## Worker Completion Contract` and are not restated here",
             worker_delegation,
         )
-        self.assertNotIn("finite recovery read sequence", worker_delegation)
+        self.assertNotIn("finite recovery read sequence", worker_delegation.lower())
         self.assertIn("when an attempt's dispatch invocation reports a structured terminal status", completion_contract)
         self.assertIn("that attempt does not enter recovery", completion_contract)
         self.assertIn("one bounded `nyxid oracle result` read", completion_contract)
@@ -1341,7 +1546,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("records `result_envelope_ref` on the matching flight", completion_contract)
         self.assertIn("records `completion_sentinel_ref` there as `n/a`", completion_contract)
         self.assertIn("stage record's `log_ref`", completion_contract)
-        self.assertNotIn("the flight's `log_ref`", completion_contract)
+        self.assertNotIn("the flight's `log_ref`", completion_contract.lower())
         self.assertIn(
             "response prose, stdout, echoes, and log tails are never completion or verdict evidence",
             completion_contract,
@@ -1400,7 +1605,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("This sentence does not itself authorize any redispatch", worker_delegation)
         self.assertIn("any blind redispatch must already be authorized by the existing bounded-attempt rules", worker_delegation)
         self.assertIn("it never replaces same-task recovery", worker_delegation)
-        self.assertNotIn("does not authorize unlimited redispatch", worker_delegation)
+        self.assertNotIn("does not authorize unlimited redispatch", worker_delegation.lower())
         self.assertNotIn("--client-ref", worker_delegation)
 
     def test_sshx_nyxid_oracle_public_github_reference_rule(self) -> None:
@@ -1701,7 +1906,7 @@ class SshxContractTests(unittest.TestCase):
             "meta-judge synthesis",
             "final summary and report",
         ]:
-            self.assertNotIn(removed_escape_hatch, text)
+            self.assertNotIn(removed_escape_hatch, text.lower())
         self.assertIn("Input isolation and prior sterility are separate dimensions", text)
         self.assertIn("no worker may see a same-round peer output or caller-conversation transcript content", text)
         self.assertIn("none of the allowed carriers provides it", text)
@@ -1826,8 +2031,8 @@ class SshxContractTests(unittest.TestCase):
     def test_sshx_runner_ownership_wording_has_no_legacy_assignment(self) -> None:
         text = read(SKILL)
         self.assertIn("the runner derives and owns every artifact path", text)
-        self.assertNotIn("caller-assigned `result_ref`", text)
-        self.assertNotIn("caller-assigned `completion_sentinel`", text)
+        self.assertNotIn("caller-assigned `result_ref`", text.lower())
+        self.assertNotIn("caller-assigned `completion_sentinel`", text.lower())
 
     def test_sshx_worker_completion_ignores_log_only_fake_markers(self) -> None:
         log_only_fake_marker = {
@@ -1989,7 +2194,7 @@ class SshxContractTests(unittest.TestCase):
             "step-by-step reasoning:",
             "same-round peer output:",
         ]:
-            self.assertNotIn(inline_log_phrase, rendered)
+            self.assertNotIn(inline_log_phrase, rendered.lower())
 
     def test_sshx_transcript_worker_flights_shape(self) -> None:
         text = read(SKILL)
@@ -2255,6 +2460,9 @@ class SshxContractTests(unittest.TestCase):
             "silently relying on assumed factual premises",
             "judging only whether a plan is beautiful while never asking whether it is worth its cost",
             "over-building a beautiful form the goal does not need",
+            "treating an imagined adversary, consumer, caller, or input path as an established premise and defending against it",
+            "building defenses, validation, abstraction, or compatibility paths for a consumer no current call site or `GoalArtifact` term requires",
+            "rabbit-holing into local detail that no `GoalArtifact` term reaches and letting it block done",
             "overstating carrier or model-family differences as evidence of independent priors or improved consensus quality",
             "only need inline consensus",
         ]:
