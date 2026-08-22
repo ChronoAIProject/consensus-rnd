@@ -1,6 +1,6 @@
 {
   "name": "consensus-rnd",
-  "version": "1.0.0-beta.32",
+  "version": "1.0.0-beta.33",
   "description": "worker-delegated inline consensus skills：隔离多视角、固定真值表，无 daemon、GitHub 或 git 编排",
   "author": {
     "name": "auric",
