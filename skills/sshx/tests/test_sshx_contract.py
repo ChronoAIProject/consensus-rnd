@@ -973,6 +973,35 @@ class SshxContractTests(unittest.TestCase):
         )
         self.assertNotIn("Concern" + "Grounding", text)
 
+    def test_sshx_depth_discipline_contract(self) -> None:
+        text = read(SKILL)
+        reasoning = section(text, "## Reasoning Discipline", "## Thinking Panel")
+        self.assertEqual(text.count("Depth discipline:"), 1)
+        for anchor in [
+            "钻牛角尖 (rabbit-holing) is the failure this discipline prevents, never the standard of care it demands",
+            "settled at the shallowest depth that still changes a `GoalArtifact`-named decision, a verdict, or a routing exit",
+            "ask one bounded question: would the additional detail change any of those?",
+            "record the stopping point and return",
+            "exhaustive enumeration past verdict-settling evidence is itself an ugly defect",
+            "chase a premise only as far as the verdict depends on it",
+            "a premise the verdict does not depend on needs no verification and no mark",
+            "never what may block",
+            "does not weaken `DecisionGrounding`, does not unblock a grounded reachable defect, and does not skip a truth-table row",
+            "not a depth model for the work: do not mirror it as the required granularity of every judgment",
+        ]:
+            self.assertIn(anchor, reasoning)
+        trigger = section(text, "## Trigger", "## Goal Contract")
+        self.assertIn(
+            "protocol weight follows decision risk, not available budget",
+            trigger,
+        )
+        baseline = section(text, "## Baseline Failure Mode", "## Transcript Template")
+        self.assertIn(
+            "rabbit-holing into analysis depth, premise-chasing, and advisory volume "
+            "that changes no `GoalArtifact`-named decision even when nothing blocks done",
+            baseline,
+        )
+
     def test_sshx_decision_grounding_preventive_basis_is_consistent(self) -> None:
         text = read(SKILL)
         reasoning_start = heading_index(text, "## Reasoning Discipline")
@@ -1085,7 +1114,7 @@ class SshxContractTests(unittest.TestCase):
             reasoning_section,
         )
         for required in [
-            "for each candidate approach weighed",
+            "for each candidate approach materially weighed",
             "why the approach is ugly as a specific locatable defect",
             "what the beautiful form would be",
             "leaked abstraction",
