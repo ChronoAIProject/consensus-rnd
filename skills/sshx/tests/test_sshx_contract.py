@@ -977,29 +977,32 @@ class SshxContractTests(unittest.TestCase):
         text = read(SKILL)
         reasoning = section(text, "## Reasoning Discipline", "## Thinking Panel")
         self.assertEqual(text.count("Depth discipline:"), 1)
+        self.assertIn("Depth discipline:", reasoning)
         for anchor in [
             "钻牛角尖 (rabbit-holing) is the failure this discipline prevents, never the standard of care it demands",
             "settled at the shallowest depth that still changes a `GoalArtifact`-named decision, a verdict, or a routing exit",
             "ask one bounded question: would the additional detail change any of those?",
-            "record the stopping point and return",
+            "stop and name the stop in the reasoning-discipline note",
             "exhaustive enumeration past verdict-settling evidence is itself an ugly defect",
             "chase a premise only as far as the verdict depends on it",
             "a premise the verdict does not depend on needs no verification and no mark",
-            "never what may block",
+            "The bound limits elaboration, never coverage",
+            "a seat's assigned bias, review focus, or termination charter defines what must be searched, enumerated, or mapped",
+            'an unevidenced "no" to the bounded question never discharges the duty',
             "does not weaken `DecisionGrounding`, does not unblock a grounded reachable defect, and does not skip a truth-table row",
             "not a depth model for the work: do not mirror it as the required granularity of every judgment",
         ]:
             self.assertIn(anchor, reasoning)
+        self.assertIn(
+            "for each candidate materially weighed; stating the verified-premise or "
+            "`ASSUMED-UNVERIFIED` status needed for the verdict; and naming any "
+            "depth-bound stop that settled a judgment",
+            reasoning,
+        )
         trigger = section(text, "## Trigger", "## Goal Contract")
         self.assertIn(
-            "protocol weight follows decision risk, not available budget",
+            "whether to run it follows decision risk, not available budget",
             trigger,
-        )
-        baseline = section(text, "## Baseline Failure Mode", "## Transcript Template")
-        self.assertIn(
-            "rabbit-holing into analysis depth, premise-chasing, and advisory volume "
-            "that changes no `GoalArtifact`-named decision even when nothing blocks done",
-            baseline,
         )
 
     def test_sshx_decision_grounding_preventive_basis_is_consistent(self) -> None:
@@ -1115,6 +1118,8 @@ class SshxContractTests(unittest.TestCase):
         )
         for required in [
             "for each candidate approach materially weighed",
+            "each rejected alternative whose rejection changed the conclusion",
+            "a micro-variation that changed no decision needs no separate verdict",
             "why the approach is ugly as a specific locatable defect",
             "what the beautiful form would be",
             "leaked abstraction",
@@ -2492,6 +2497,7 @@ class SshxContractTests(unittest.TestCase):
             "treating an imagined adversary, consumer, caller, or input path as an established premise and defending against it",
             "building defenses, validation, abstraction, or compatibility paths for a consumer no current call site or `GoalArtifact` term requires",
             "rabbit-holing into local detail that no `GoalArtifact` term reaches and letting it block done",
+            "rabbit-holing into analysis depth, premise-chasing, and advisory volume that changes no `GoalArtifact`-named decision even when nothing blocks done",
             "overstating carrier or model-family differences as evidence of independent priors or improved consensus quality",
             "only need inline consensus",
         ]:

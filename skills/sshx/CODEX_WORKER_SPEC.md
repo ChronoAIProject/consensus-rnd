@@ -78,6 +78,13 @@ runner-created `consensus-rnd`, `sshx`, and flight directories are always
 rejected when symbolic links. Each is created or validated before one atomic
 `mkdir` of the attempt directory; an existing attempt is `RUN_DIR_COLLISION`.
 
+Every invocation projects this layout from its own effective `TMPDIR`, so
+dispatch, pure queries, batch dispatch, status read, and cleanup must run with
+the same effective `TMPDIR` as the dispatch they inspect. A different value
+projects a disjoint layout: cleanup fails closed on its consistency checks, but
+a status read there reports every artifact absent and exits zero, which is
+indistinguishable from a pre-terminal flight.
+
 The runner owns `brief.md`, the three diagnostic logs, `carrier.exit`, and
 `status.json`. The worker alone owns `result.json` and `completion.sentinel`.
 The runner never creates, repairs, copies, normalizes, touches, or substitutes
@@ -415,7 +422,7 @@ exit 1; only the final successful path changes the reason to `COMPLETE` and
 exit 0. Other ordinary failures also exit 1. The first failure encountered in
 the fixed check order determines `reason_code`:
 
-`RUN_DIR_COLLISION`, `RUN_DIR_UNAVAILABLE`, `PARSER_UNAVAILABLE`,
+`PARSER_UNAVAILABLE`, `RUN_DIR_UNAVAILABLE`, `RUN_DIR_COLLISION`,
 `LAUNCH_FAILED`, `CARRIER_EXIT_NONZERO`, `RESULT_MISSING`,
 `ENVELOPE_INVALID`, `VERDICT_INVALID`, `SENTINEL_MISSING`,
 `INTERRUPTED`, or `INTERNAL_ERROR`.

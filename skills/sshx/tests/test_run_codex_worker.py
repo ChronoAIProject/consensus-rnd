@@ -657,6 +657,12 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
         self.assertEqual(process.returncode, 1); self.assertIn("PARSER_UNAVAILABLE", process.stderr); self.assertFalse(self.expected_run_dir(flight).exists())
 
+    def test_combined_failure_reports_parser_before_run_dir(self) -> None:
+        flight = self.next_flight("precedence"); empty = self.temp_dir / "empty-path-precedence"; empty.mkdir()
+        env = self.environment(); env["PATH"] = str(empty); env["TMPDIR"] = str(self.temp_dir / "missing-precedence-tmp")
+        process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
+        self.assertEqual(process.returncode, 1); self.assertIn("PARSER_UNAVAILABLE", process.stderr); self.assertNotIn("RUN_DIR_UNAVAILABLE", process.stderr)
+
     def test_codex_preflight_reports_launch_failed(self) -> None:
         flight = self.next_flight("launch")
         no_codex = self.temp_dir / "no-codex"; no_codex.mkdir(); (no_codex / "jq").symlink_to((self.bin_dir / "jq").resolve())
