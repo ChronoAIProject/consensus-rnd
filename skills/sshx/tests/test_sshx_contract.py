@@ -1005,6 +1005,24 @@ class SshxContractTests(unittest.TestCase):
             trigger,
         )
 
+    def test_sshx_prospective_evidence_is_reasoning_owned(self) -> None:
+        text = read(SKILL)
+        reasoning = section(text, "## Reasoning Discipline", "## Thinking Panel")
+        outside_reasoning = text.replace(reasoning, "", 1)
+        for anchor in [
+            "Retrospective fit is not prospective evidence",
+            "only replays facts already present in its visible inputs",
+            "supports no causal, transfer, benefit, or future-performance claim",
+            "An explanation compatible with every possible outcome carries zero prospective weight",
+            "used to settle a `GoalArtifact`-named decision",
+            "the check or observation that could falsify it before consulting its outcome",
+            "forward commitment must not be replaced by post-hoc fitting",
+            "A prospective claim with no stated falsifier is `ASSUMED-UNVERIFIED`",
+            "follows the existing `ASSUMED-UNVERIFIED` dispositions",
+        ]:
+            self.assertIn(anchor, reasoning)
+            self.assertNotIn(anchor, outside_reasoning)
+
     def test_sshx_decision_grounding_preventive_basis_is_consistent(self) -> None:
         text = read(SKILL)
         reasoning_start = heading_index(text, "## Reasoning Discipline")
@@ -1367,13 +1385,35 @@ class SshxContractTests(unittest.TestCase):
             "missing unavailable-harness pause-and-escalate guard",
         )
         self.assertIn("`meta_judge` implement-exit gate", design_section)
-        self.assertIn("Before each fix or repeated review pass", review_section)
-        self.assertIn("After any explicit correction", fix_section)
+        pre_fix_gate_start = fix_section.index("Before each fix or repeated review pass")
+        pre_fix_gate_end = fix_section.index(". ", pre_fix_gate_start) + 1
+        pre_fix_gate = fix_section[pre_fix_gate_start:pre_fix_gate_end]
+        correction_gate_start = fix_section.index("After any explicit correction")
+        correction_gate_end = fix_section.index("\n\n", correction_gate_start)
+        correction_gate = fix_section[correction_gate_start:correction_gate_end]
+        self.assertIn("Before each fix or repeated review pass", pre_fix_gate)
+        self.assertIn("After any explicit correction", correction_gate)
         self.assertIn("`ThreatEligibility`", review_section)
-        for section in [design_section, review_section, fix_section]:
+        for contract_section in [design_section, pre_fix_gate, correction_gate]:
             for action in ["`continue`", "`revise`", "`stop`", "`escalate`"]:
-                self.assertIn(action, section)
-            self.assertIn("responsible party", section)
+                self.assertIn(action, contract_section)
+            self.assertIn("responsible party", contract_section)
+
+    def test_sshx_repeated_pass_evidence_is_fix_or_done_owned(self) -> None:
+        text = read(SKILL)
+        fix_or_done = section(text, "## Fix Or Done", "## Termination Gate")
+        outside_fix_or_done = text.replace(fix_or_done, "", 1)
+        for anchor in [
+            "across repeated passes on the same blocking goal gap",
+            "distinguish evidence that the gap is reachable by the current approach from evidence that it is not",
+            "Consecutive passes without improvement are, alone, evidence of neither",
+            "do not prove the current approach is exhausted",
+            "do not license further identical passes as progress",
+            "Evidenced unreachability by the current approach routes through the gate's existing `revise`, `stop`, or `escalate` actions",
+            "rather than respending the shared bounded-pass budget on an unchanged approach",
+        ]:
+            self.assertIn(anchor, fix_or_done)
+            self.assertNotIn(anchor, outside_fix_or_done)
 
     def test_sshx_review_triplet_runs_all_three_perspectives(self) -> None:
         # Source-regression only: this checks triplet routing text, not reviewer quality or host execution.
@@ -2368,6 +2408,23 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("six philosopher-seat stances", design_truth_section)
         self.assertIn("`proportional-containment`, `worth`", design_truth_section)
 
+    def test_sshx_comparison_coordinates_are_design_truth_owned(self) -> None:
+        text = read(SKILL)
+        design_truth = section(text, "## Design Truth Table", "## Implementation Worker")
+        outside_design_truth = text.replace(design_truth, "", 1)
+        for anchor in [
+            "keeps their material comparison coordinates separate",
+            "dominates another only when the former is no worse on every material coordinate",
+            "must not replace those coordinates with a self-invented single scalar score",
+            "only a trade-off rule authorized by the decision owner",
+            "recorded in `GoalArtifact` or assigned through `harness.decision_ownership`",
+            "same pair of compared endpoints receives inconsistent gain accounts for the same coordinate",
+            "unresolved accounting gap and must be reconciled before it can support convergence",
+            "never itself a convergence basis",
+        ]:
+            self.assertIn(anchor, design_truth)
+            self.assertNotIn(anchor, outside_design_truth)
+
     def test_sshx_meta_judge_requires_relationship_diagram(self) -> None:
         text = read(SKILL)
         design_truth_section = text[text.index("## Design Truth Table") : text.index("## Implementation Worker")]
@@ -2498,6 +2555,9 @@ class SshxContractTests(unittest.TestCase):
             "building defenses, validation, abstraction, or compatibility paths for a consumer no current call site or `GoalArtifact` term requires",
             "rabbit-holing into local detail that no `GoalArtifact` term reaches and letting it block done",
             "rabbit-holing into analysis depth, premise-chasing, and advisory volume that changes no `GoalArtifact`-named decision even when nothing blocks done",
+            "retrospective replay of already-visible evidence presented as support for a causal or future-performance claim",
+            "repeating an unchanged approach across passes and presenting the repetition itself as progress, or conversely presenting a finite run of flat passes as proof the approach is exhausted",
+            "collapsing heterogeneous comparison coordinates into a self-invented scalar, or letting the same change carry different gain accounts depending on the narrative path",
             "overstating carrier or model-family differences as evidence of independent priors or improved consensus quality",
             "only need inline consensus",
         ]:
@@ -2512,6 +2572,16 @@ class SshxContractTests(unittest.TestCase):
             check=True,
         ).stdout.strip()
         self.assertEqual(tracked, "")
+
+    def test_sshx_has_no_scientific_source_coupling(self) -> None:
+        text = read(SKILL)
+        for source_identifier in [
+            "trureturing",
+            "the-omega-institute",
+            "D5/S3",
+            "ConceptDynamics",
+        ]:
+            self.assertNotIn(source_identifier, text)
 
     def test_sshx_docs_and_ci_discovery(self) -> None:
         self.assertRegex(read(README), r"\| `sshx` \|")
