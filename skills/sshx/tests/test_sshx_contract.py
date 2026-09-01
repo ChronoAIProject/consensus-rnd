@@ -945,6 +945,7 @@ class SshxContractTests(unittest.TestCase):
             "depth past that point is not thoroughness",
             "Failure is objective, not semantic",
             f"only when it names none of the bases its applicable limb requires — a current path through which the predicted harm is reachable, {DECISION_GROUNDING_PREVENTIVE_BASIS}, or the exact `GoalArtifact` term the blocking detail prevents satisfying together with the deletion counterfactual",
+            "when `AbsorbedFailure` below finds it absorbed, or when a defense against a condition ordinary operation does not exercise names no occurrence",
             "A named basis that evidence shows to be false no longer counts as a named basis, so the input is inadmissible on that basis",
             "disputed grounding, not absent grounding",
             "keeps its full blocking force until the dispute is settled against evidence",
@@ -972,6 +973,76 @@ class SshxContractTests(unittest.TestCase):
             reasoning,
         )
         self.assertNotIn("Concern" + "Grounding", text)
+
+    def test_sshx_absorbed_failure_limb_contract(self) -> None:
+        text = read(SKILL)
+        reasoning = section(text, "## Reasoning Discipline", "## Thinking Panel")
+        definition = "`AbsorbedFailure` is the second stage of `DecisionGrounding`"
+        self.assertEqual(text.count(definition), 1)
+        self.assertIn(definition, reasoning)
+        for anchor in [
+            "ask what residue remains visible to `GoalArtifact` once the recovery path this contract or the work target already declares runs to completion",
+            "a retry, a carrier fallback, a fail-closed stop, an honestly reported `abstain`, or an escalation to the declared owner",
+            "An input is absorbed when it names no residue that escapes that path",
+            "no per-case diagnosis, error taxonomy, or dedicated repair path is owed for the class it names",
+            "Deciding which specific error occurred earns its place only when a `GoalArtifact`-named decision routes differently on that answer",
+            "An input is not absorbed and keeps its full blocking force when it names one escaping residue",
+            "a wrong result accepted as correct, a success or satisfaction claim that is not true, state left corrupted or unrecoverable, an unbounded work generator, a violated contract term that nothing detects, or a `GoalArtifact` success criterion the declared recovery path itself cannot satisfy",
+            "absorption is decided from what the input names against the declared recovery path, never from how unlikely, inconvenient, expensive, or late the failure is",
+            "a named escaping residue follows the same false-basis and disputed-basis rules as every other named basis",
+            "a recovery path that is itself missing, unreachable, or undeclared absorbs nothing",
+            "A downgrade on this limb records the declared recovery path that absorbs the input and that the input named no escaping residue, in the input's own words and never a paraphrase",
+        ]:
+            self.assertIn(anchor, reasoning)
+
+    def test_sshx_enumeration_is_not_an_absorber(self) -> None:
+        text = read(SKILL)
+        reasoning = section(text, "## Reasoning Discipline", "## Thinking Panel")
+        anchor = "Enumeration is not an absorber"
+        self.assertEqual(text.count(anchor), 1)
+        for fragment in [
+            "any finite list of failure cases can be escaped by a case built from that list",
+            "the longer the list grows the likelier a fresh case escapes it",
+            "each further case entry buys less protection than the last while costing more to keep true",
+            "widen or verify the absorber instead of extending the register",
+            "extending an enumeration over an absorbed class is an ugly defect under the aesthetic verdict, not diligence",
+        ]:
+            self.assertIn(fragment, reasoning)
+        verification = text[heading_index(text, "## Verification") :]
+        self.assertIn(
+            "prefer widening or verifying the absorber that already covers its class to adding another case entry",
+            verification,
+        )
+        self.assertIn("the register cannot be completed", verification)
+
+    def test_sshx_preventive_defense_requires_named_occurrence(self) -> None:
+        text = read(SKILL)
+        reasoning = section(text, "## Reasoning Discipline", "## Thinking Panel")
+        anchor = (
+            "A defense whose only named consumer is a hostile or extreme condition that "
+            "the work target's ordinary operation does not exercise needs one further "
+            "named basis: an occurrence"
+        )
+        self.assertEqual(text.count(anchor), 1)
+        for fragment in [
+            "an incident in this work target's own recorded evidence, or a documented external precedent for the same mechanism",
+            "A defense that names no occurrence is advisory",
+            "This limb asks for a named occurrence, never for a probability estimate, and it never reaches a defect in the work as built",
+        ]:
+            self.assertIn(fragment, reasoning)
+
+    def test_sshx_blocking_gap_repair_order_is_main_path_first(self) -> None:
+        text = read(SKILL)
+        fix_or_done = section(text, "## Fix Or Done", "## Termination Gate")
+        anchor = (
+            "When a pass carries more than one blocking goal gap, repair them in "
+            "`GoalArtifact` order — a gap that blocks `normalized_goal` before one that "
+            "blocks only its periphery — so the shared bounded budget reaches the main "
+            "path first."
+        )
+        self.assertEqual(text.count(anchor), 1)
+        self.assertIn(anchor, fix_or_done)
+        self.assertIn("Stop after a bounded number of fix passes", fix_or_done)
 
     def test_sshx_depth_discipline_contract(self) -> None:
         text = read(SKILL)
@@ -1062,7 +1133,9 @@ class SshxContractTests(unittest.TestCase):
         for anchor in [
             "provided the objection passes the `DecisionGrounding` prerequisite below",
             "objectively fails `DecisionGrounding` does not trigger a `FocusedRound`",
-            "checks only whether the seat named any admissible basis at all and must not assess its persuasiveness",
+            "under `AbsorbedFailure`, whether it named a residue escaping the declared recovery path",
+            "checks only whether the seat named any admissible basis at all",
+            "must not assess its persuasiveness",
             "named a basis whose correctness is disputed still triggers the round because disputed is not absent",
             "records that decline in the existing `finding_downgrades` record under the same own-words requirement that governs downgrades",
         ]:
@@ -2555,6 +2628,10 @@ class SshxContractTests(unittest.TestCase):
             "building defenses, validation, abstraction, or compatibility paths for a consumer no current call site or `GoalArtifact` term requires",
             "rabbit-holing into local detail that no `GoalArtifact` term reaches and letting it block done",
             "rabbit-holing into analysis depth, premise-chasing, and advisory volume that changes no `GoalArtifact`-named decision even when nothing blocks done",
+            "blocking on a failure the declared retry, fallback, fail-closed, or `abstain` path already absorbs, and owing a per-case error taxonomy for a class that routes to one absorber",
+            "extending an enumeration of failure cases over a class that can always be escaped by construction, instead of widening or verifying the absorber that covers it",
+            "demanding a defense against a hostile or extreme condition with no named occurrence and no consumer that ordinary operation exercises",
+            "spending the shared bounded budget on a peripheral blocking gap while the main-path goal gap stays open",
             "retrospective replay of already-visible evidence presented as support for a causal or future-performance claim",
             "repeating an unchanged approach across passes and presenting the repetition itself as progress, or conversely presenting a finite run of flat passes as proof the approach is exhausted",
             "collapsing heterogeneous comparison coordinates into a self-invented scalar, or letting the same change carry different gain accounts depending on the narrative path",
