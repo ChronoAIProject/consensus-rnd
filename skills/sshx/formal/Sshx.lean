@@ -21,3 +21,6 @@ import Sshx.Reasoning.Convergence
 import Sshx.Reasoning.Review
 import Sshx.Reasoning.Repair
 import Sshx.Reasoning.Termination
+import Sshx.Clauses.Contract
+import Sshx.Clauses.Boundaries
+import Sshx.Clauses.Delegation

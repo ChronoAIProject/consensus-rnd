@@ -60,6 +60,11 @@ inductive ContextItem
   deriving DecidableEq, Repr
 
 -- SKILL[def]: "The caller context must not carry worker full reasoning or same-round peer outputs."
+-- SKILL[def]: "- intake inputs and constraints;"
+-- SKILL[def]: "- dispatch briefs sent to each worker;"
+-- SKILL[def]: "- `SshxResultEnvelope.conclusion` values, including verdicts and explicitly surfaced blockers;"
+-- SKILL[def]: "- `SshxResultEnvelope.log_ref` artifact references;"
+-- SKILL[def]: "- final reports that aggregate conclusions only."
 /-- `## No Context Pollution`: the closed list of what the caller context may carry. -/
 def ContextItem.permitted : ContextItem → Bool
   | .intakeInput | .brief _ | .conclusion _ | .logRef _ | .finalReport => true

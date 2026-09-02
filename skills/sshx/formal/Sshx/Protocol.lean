@@ -29,6 +29,13 @@ def Stage.next : Stage → Option Stage
   | .reviewTriplet => some .fixOrDone
   | .fixOrDone => none
 
+-- SKILL[def]: "1. `intake` (write `GoalArtifact` and normalize the goal)"
+-- SKILL[def]: "2. `choose_worker_mode`"
+-- SKILL[def]: "3. `thinking_panel_workers`"
+-- SKILL[def]: "4. `meta_judge`"
+-- SKILL[def]: "5. `implementation_worker`"
+-- SKILL[def]: "6. `review_triplet_workers`"
+-- SKILL[def]: "7. `fix_or_done`"
 def Stage.order : List Stage :=
   [.intake, .chooseWorkerMode, .thinkingPanel, .metaJudge, .implementation, .reviewTriplet,
     .fixOrDone]

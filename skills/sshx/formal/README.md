@@ -1,16 +1,31 @@
 # sshx formal model
 
-A Lean 4 model of the `sshx` prompt contract in [`../SKILL.md`](../SKILL.md), in two layers:
+A Lean 4 model of the whole `sshx` prompt contract in [`../SKILL.md`](../SKILL.md). Every
+atomic clause of the contract — every sentence, bullet item, and table row outside fenced
+blocks — is quoted verbatim by a `-- SKILL[kind]: "..."` trace line that sits next to the
+Lean object modeling it. `tests/test_sshx_formal_model.py` splits the contract into those
+clauses and holds coverage at 100%: an edit to any clause fails the suite until the model is
+revisited. `SKILL.md` stays the contract; the model is evidence about it.
 
-- **Mechanics** (`Sshx/*.lean`): verdict alphabets, carriers and fallback, flight accounting,
-  `BlockingAuthority`, the three truth tables, `pass_budget`, gate applicability and binding,
-  isolation, records, stage order. Core Lean, finite, decided by cases.
-- **Semantics** (`Sshx/Semantics/*.lean`): the contract's concepts as instances of the
-  kernel-frozen theorems of [trureturing](https://github.com/the-omega-institute/trureturing)
-  (`D5`, pinned by commit in `lakefile.toml`). Each instance discharges the theorem's
-  premises with `sshx` structures; nothing is used by analogy.
+No module contains `sorry`, `axiom`, `native_decide`, or a proposition defined as bare `True`.
 
-No module contains `sorry`, `axiom`, or `native_decide`.
+## Layers
+
+| Layer | Modules | What it formalizes |
+|---|---|---|
+| Mechanics | `Sshx/*.lean` | verdict alphabets, carriers and fallback, flight accounting, the completion predicate, `BlockingAuthority` and downgrade, the three truth tables (exhaustive, order-sensitive), `pass_budget`, gate applicability and binding, isolation, records, stage order |
+| Behavior | `Sshx/Behavior/*.lean` | the caller as an operational model: `ProtocolState`, one `Action` per caller act, one guard per "must" clause, `step`, `Reachable`, and safety invariants over every reachable state |
+| Reasoning | `Sshx/Reasoning/*.lean` | the reasoning logic every seat applies: reference frame, aesthetic verdict, seek truth from facts, mathematical applicability, prospective evidence, depth discipline, boundary checks, blocking authority in full, the six seats and the locus dyad, meta-judge convergence and the focused round, review downgrade, repair passes, termination seats and ownership routing |
+| Semantics | `Sshx/Semantics/*.lean` | the contract's concepts as instances of the kernel-frozen theorems of [trureturing](https://github.com/the-omega-institute/trureturing) (`D5`, pinned by commit in `lakefile.toml`); each instance discharges the theorem's premises with `sshx` structures |
+| Clauses | `Sshx/Clauses/*.lean` | the remaining definitional clauses: identity and trigger, goal contract records, protocol records, envelope, completion, context pollution, worker delegation mechanics, boundaries, baseline failure modes, verification |
+
+## Trace kinds
+
+`def` a definition or closed list; `guard` a precondition on a caller action; `inv` a
+safety property over reachable states; `thm` a derived statement; `policy` a constant fixed
+by protocol policy, not derived; `ref` a clause that restates or cross-references an object
+defined elsewhere; `prose` an explanatory sentence with no norm of its own, which must carry a
+`-- why:` line. The kind set is closed and checked.
 
 ## Semantic instances
 
@@ -35,7 +50,14 @@ Declared non-instances, with the reason each premise does not match `sshx`:
   registered as `open` in their source volumes, not kernel-frozen; the corresponding `sshx`
   clauses (a gate never gates its own exit; a stage record's verdict is a projection of
   `conclusion.verdict`; widen the absorber instead of adding a case) are modeled in the
-  mechanics layer only.
+  mechanics and reasoning layers only.
+
+## What the model cannot verify
+
+The trace ties each clause to a Lean object, and the Lean kernel checks the object. Whether
+the object *means* what the English says is a human correspondence judgment, kept reviewable
+by placing each quote next to its object. A clause traced as `prose` carries no norm in the
+model and is the first candidate for deletion from the contract.
 
 ## Build
 
@@ -50,25 +72,3 @@ already built `trureturing` checkout instead, place symbolic links in the untrac
 whose `HEAD` is the pinned commit, and one per entry of that checkout's own
 `.lake/packages/`. Lake verifies the revisions and reuses the existing build outputs without
 touching the linked checkout.
-
-## Trace
-
-Each module carries `-- SKILL: "..."` lines quoting the contract verbatim next to the
-definition or theorem that models the quote. `tests/test_sshx_formal_model.py` asserts every
-quote is still a substring of `SKILL.md`, that every truth-table row is traced in
-`Sshx/Tables.lean`, and that the package builds when `lake` is installed. An edit to a modeled
-clause therefore fails the suite until the model is revisited. `SKILL.md` stays the contract;
-the model is evidence about it.
-
-| Mechanics module | Contract section |
-|---|---|
-| `Verdicts` | verdict alphabets of the thinking, review, and termination seats |
-| `Carrier` | `WorkerMode` priority, fallback selection, bounded fallback chain |
-| `Flight` | flight status, same-carrier retry accounting, the completion predicate |
-| `Blocking` | `BlockingAuthority`, `ThreatEligibility`, review downgrade |
-| `Tables` | design, review, and termination truth tables; exhaustiveness and order |
-| `Budget` | `pass_budget` decrement and termination |
-| `Gate` | termination-gate applicability, binding, sealed inputs, diversity claim |
-| `Isolation` | same-round invisibility and the append-only role ledger |
-| `Records` | `GoalArtifact`, `harness`, `revisions`, envelope, stage-record mirror |
-| `Protocol` | stage order and the `abstain` exit at `choose_worker_mode` |

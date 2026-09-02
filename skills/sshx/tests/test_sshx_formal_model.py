@@ -39,7 +39,7 @@ WHY_PATTERN = re.compile(r"^-- why: \S")
 TRACE_WINDOW = 8
 TRUTH_TABLE_HEADINGS = ("## Design Truth Table", "## Review Truth Table", "## Termination Truth Table")
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?;])\s+(?=[A-Z`\d(])")
-MINIMUM_COVERAGE = 0.59
+MINIMUM_COVERAGE = 1.0
 
 
 @dataclass(frozen=True)
