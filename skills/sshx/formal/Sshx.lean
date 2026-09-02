@@ -12,3 +12,5 @@ import Sshx.Semantics.Register
 import Sshx.Semantics.GoalGap
 import Sshx.Semantics.Adjudication
 import Sshx.Semantics.Stop
+import Sshx.Behavior.Model
+import Sshx.Behavior.Invariant

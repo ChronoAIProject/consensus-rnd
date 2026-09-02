@@ -27,7 +27,7 @@ open D5.S3.AnalyticClosure.Budget.BudgetedEscapeRateAntitone
 
 variable {Outcome Intent Written : Type*}
 
--- SKILL: "`iteration_question` must ask what still differs from `GoalArtifact`"
+-- SKILL[def]: "`iteration_question` must ask what still differs from `GoalArtifact`"
 /-- The goal gap: pairs of outcomes the written goal cannot tell apart but the intent does. -/
 def goalGap (written : Concept Outcome Written) (intent : Concept Outcome Intent) :
     Set (Outcome × Outcome) :=
@@ -36,7 +36,7 @@ def goalGap (written : Concept Outcome Written) (intent : Concept Outcome Intent
 /-- Every check costs exactly one `pass_budget` unit. -/
 def checkCost : ℕ → Real := fun _ => 1
 
--- SKILL: "rather than respending `pass_budget` on an unchanged approach"
+-- SKILL[thm]: "rather than respending `pass_budget` on an unchanged approach"
 /-- With a fixed language of checks, the best residual gap affordable at a budget is antitone
 in the budget and bounded below by the infimum over all finite selections from that language.
 Only a different language — a changed approach — can go below that floor. -/

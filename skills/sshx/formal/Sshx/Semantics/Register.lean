@@ -32,14 +32,14 @@ theorem flip_fixfree : Nat.card {y : Sshx.Force // Force.flip y = y} = 0 := by
     ⟨fun ⟨y, hy⟩ => by cases y <;> simp [Force.flip] at hy⟩
   exact Nat.card_of_isEmpty
 
--- SKILL: "every finite listing of cases is escaped by a fixed-point-free self-application"
+-- SKILL[thm]: "every finite listing of cases is escaped by a fixed-point-free self-application"
 /-- Every finite register of advisory shapes is escaped by its own diagonal
 (`escape_all_of_fixfree` instantiated at `Force` and `flip`). -/
 theorem every_register_escaped {A : Type*} [Fintype A] (register : A → A → Sshx.Force) :
     IsEscaped Force.flip register :=
   escape_all_of_fixfree Force.flip flip_fixfree register
 
--- SKILL: "no extension of this or any register can complete it"
+-- SKILL[thm]: "no extension of this or any register can complete it"
 /-- The diagonal classification is never one of the register's rows: no extension of the
 register lists it, because the escaped listings are all `2 ^ |A|²` listings
 (`escaped_card_of_fixfree`). -/

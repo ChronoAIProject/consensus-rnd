@@ -26,7 +26,7 @@ structure Observation where
   sentinelPresent : Bool
   deriving DecidableEq, Repr
 
--- SKILL: "completion and verdict routing use one fail-closed predicate"
+-- SKILL[def]: "completion and verdict routing use one fail-closed predicate"
 /-- `## Worker Completion Contract`: the single fail-closed completion predicate. -/
 def done (o : Observation) : Bool :=
   o.carrierExited && o.exitZero && o.envelopeValid && o.verdictAllowed && o.sentinelPresent
@@ -57,7 +57,7 @@ theorem not_done_of_missing_sentinel (o : Observation) (h : o.sentinelPresent = 
     done o = false := by
   simp [done, h]
 
--- SKILL: "`retry_budget` is a finite integer decided before the first launch for that flight"
+-- SKILL[def]: "`retry_budget` is a finite integer decided before the first launch for that flight"
 /-- Same-carrier retry accounting for one flight. `retryBudget` is fixed before the first
 launch; `attempt` counts launches already made. -/
 structure Flight where

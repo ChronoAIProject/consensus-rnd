@@ -22,7 +22,7 @@ universe u v
 
 /-! ## Dependency closure -/
 
--- SKILL: "Enlarging that closure may only remove admission, never restore it."
+-- SKILL[thm]: "Enlarging that closure may only remove admission, never restore it."
 /-- Enlarging the candidate's dependency closure can only remove admissible adjudication
 evidence (`dependency_closure_admission_antitone`). -/
 theorem enlarging_closure_only_removes_admission
@@ -32,7 +32,7 @@ theorem enlarging_closure_only_removes_admission
     AdmissibleJudge context large record → AdmissibleJudge context small record :=
   dependency_closure_admission_antitone context included record
 
--- SKILL: "inadmissible when its recorded use to generate, tune, or select reaches the candidate's dependency closure"
+-- SKILL[thm]: "inadmissible when its recorded use to generate, tune, or select reaches the candidate's dependency closure"
 /-- A record with a recorded generate, tune, or select use touching the closure is not an
 admissible judge. -/
 theorem adaptive_use_is_inadmissible
@@ -44,7 +44,7 @@ theorem adaptive_use_is_inadmissible
 
 /-! ## Append-only settlement -/
 
--- SKILL: "Revisions never rewrite an earlier target or recompute an earlier settlement."
+-- SKILL[thm]: "Revisions never rewrite an earlier target or recompute an earlier settlement."
 /-- Appending revisions cannot change the settlement of an earlier round
 (`append_only_old_settlement_unchanged`). -/
 theorem revision_keeps_old_settlement
@@ -65,7 +65,7 @@ theorem correction_is_append_only
 
 /-! ## Comparison coordinates -/
 
--- SKILL: "Material comparison coordinates form a product preorder"
+-- SKILL[thm]: "Material comparison coordinates form a product preorder"
 /-- Weak Pareto dominance over the declared coordinates is reflexive and transitive
 (`pareto_weak_reflexive_transitive`); it is a preorder, not a stop rule. -/
 theorem candidate_dominance_is_preorder
@@ -77,7 +77,7 @@ theorem candidate_dominance_is_preorder
       (∀ ⦃a b c⦄, ParetoWeak value a b → ParetoWeak value b c → ParetoWeak value a c) :=
   pareto_weak_reflexive_transitive value
 
--- SKILL: "Path-summed gain reconciliation applies only to coordinates with declared additive structure"
+-- SKILL[thm]: "Path-summed gain reconciliation applies only to coordinates with declared additive structure"
 /-- On coordinates with additive structure, gain differences are path independent
 (`gain_difference_self_zero_and_cocycle`). -/
 theorem additive_gain_is_path_independent
@@ -92,7 +92,7 @@ theorem additive_gain_is_path_independent
 
 /-! ## Retrospective fit -/
 
--- SKILL: "Retrospective fit is not prospective evidence"
+-- SKILL[thm]: "Retrospective fit is not prospective evidence"
 /-- A rationale that only replays the facts in its visible inputs is a lookup copy: zero
 retrospective loss, every record dependency-contaminated, and no prospective gain implied
 (`lookup_copy_zero_loss_and_nonanticipating_failure`). -/

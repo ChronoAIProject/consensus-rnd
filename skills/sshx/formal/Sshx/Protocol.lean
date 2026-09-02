@@ -19,7 +19,7 @@ inductive Stage
   | fixOrDone
   deriving DecidableEq, Repr
 
--- SKILL: "Run the stages in this exact order:"
+-- SKILL[def]: "Run the stages in this exact order:"
 def Stage.next : Stage → Option Stage
   | .intake => some .chooseWorkerMode
   | .chooseWorkerMode => some .thinkingPanel
@@ -43,7 +43,7 @@ inductive StageOutcome
   | abstain
   deriving DecidableEq, Repr
 
--- SKILL: "When `WorkerMode` resolves to `abstain`, the protocol terminates at `choose_worker_mode`"
+-- SKILL[def]: "When `WorkerMode` resolves to `abstain`, the protocol terminates at `choose_worker_mode`"
 /-- `WorkerModeGate`: when the resolved mode is `abstain`, the protocol terminates at
 `choose_worker_mode` and no later stage runs. -/
 def afterModeSelection : WorkerMode → Option Stage

@@ -19,7 +19,7 @@ inductive ReviewExit
   | userDecisionOrBoundedPass
   deriving DecidableEq, Repr
 
--- SKILL: "| any explicit reject | `fix` |"
+-- SKILL[def]: "| any explicit reject | `fix` |"
 def reviewRoute (a b c : ReviewVerdict) : ReviewExit :=
   if a = .reject ∨ b = .reject ∨ c = .reject then .fix
   else if a = .approve ∨ b = .approve ∨ c = .approve then .doneWithAdvisory
@@ -27,11 +27,11 @@ def reviewRoute (a b c : ReviewVerdict) : ReviewExit :=
 
 /-- Row 1: any explicit reject. -/
 def reviewRow1 (a b c : ReviewVerdict) : Prop := a = .reject ∨ b = .reject ∨ c = .reject
--- SKILL: "| no reject and at least one approve | `done with advisory surfaced` |"
+-- SKILL[def]: "| no reject and at least one approve | `done with advisory surfaced` |"
 /-- Row 2: no reject and at least one approve. -/
 def reviewRow2 (a b c : ReviewVerdict) : Prop :=
   ¬ reviewRow1 a b c ∧ (a = .approve ∨ b = .approve ∨ c = .approve)
--- SKILL: "| all comment | `explicit user decision or another bounded review pass` |"
+-- SKILL[def]: "| all comment | `explicit user decision or another bounded review pass` |"
 /-- Row 3: all comment. The contract adds "and no approve", which all-comment already implies. -/
 def reviewRow3 (a b c : ReviewVerdict) : Prop := a = .comment ∧ b = .comment ∧ c = .comment
 
@@ -101,9 +101,9 @@ structure DesignInputs where
   unresolvedGroundedConflict : Bool
   deriving DecidableEq, Repr
 
--- SKILL: "| close disagreement with compatible plans | `meta-layer convergence` |"
--- SKILL: "| bounded true stall | `abstain/escalate with options` |"
--- SKILL: "| any attempt to use one perspective as consensus | `reject fake consensus` |"
+-- SKILL[def]: "| close disagreement with compatible plans | `meta-layer convergence` |"
+-- SKILL[def]: "| bounded true stall | `abstain/escalate with options` |"
+-- SKILL[def]: "| any attempt to use one perspective as consensus | `reject fake consensus` |"
 inductive DesignExit
   | implement
   | metaLayerConvergence
@@ -111,7 +111,7 @@ inductive DesignExit
   | rejectFakeConsensus
   deriving DecidableEq, Repr
 
--- SKILL: "An `implement` exit requires the concrete plan to be both beautiful"
+-- SKILL[def]: "An `implement` exit requires the concrete plan to be both beautiful"
 /-- When a unanimous plan fails a precondition the contract permits either
 `meta-layer convergence` or `abstain/escalate`, "never `implement`"; the model takes
 convergence first. -/
@@ -119,7 +119,7 @@ def implementAllowed (d : DesignInputs) : Bool :=
   d.unanimousPropose && d.beautiful && d.worth && !d.harnessOverlapOrAuthorityGap &&
     !d.unresolvedGroundedConflict
 
--- SKILL: "| unanimous actionable plan | `implement` |"
+-- SKILL[def]: "| unanimous actionable plan | `implement` |"
 def designRoute (d : DesignInputs) : DesignExit :=
   if !d.rosterIsSixWorkerSeats then .rejectFakeConsensus
   else if implementAllowed d then .implement
@@ -188,23 +188,23 @@ inductive TerminationExit
 def Roster.seats (r : Roster) : List TerminationSeat :=
   [r.criterionEvidence, r.residualGap, r.claimIntegrity]
 
--- SKILL: "| unanimous `satisfied` | `termination claim permitted` |"
+-- SKILL[def]: "| unanimous `satisfied` | `termination claim permitted` |"
 def terminationRoute (s : ClaimSource) (r : Roster) : TerminationExit :=
   if s ≠ .terminationSeats ∨ r.exactThreeNamed = false then .rejectFakeConsensus
   else if r.seats.all (· = .satisfied) then .claimPermitted
   else if r.seats.any (· = .unsatisfied) then .withholdContinue
   else .withholdEscalate
 
--- SKILL: "| caller judgment, a review exit, or any roster other than exactly the three distinct named isolated termination seats presented as termination consensus | `reject fake termination consensus` |"
+-- SKILL[def]: "| caller judgment, a review exit, or any roster other than exactly the three distinct named isolated termination seats presented as termination consensus | `reject fake termination consensus` |"
 def termRow1 (s : ClaimSource) (r : Roster) : Prop :=
   s ≠ .terminationSeats ∨ r.exactThreeNamed = false
 def termRow2 (_ : ClaimSource) (r : Roster) : Prop :=
   r.criterionEvidence = .satisfied ∧ r.residualGap = .satisfied ∧ r.claimIntegrity = .satisfied
--- SKILL: "| any `unsatisfied` | `withhold claim; continue against the named goal gap` |"
+-- SKILL[def]: "| any `unsatisfied` | `withhold claim; continue against the named goal gap` |"
 def termRow3 (_ : ClaimSource) (r : Roster) : Prop :=
   r.criterionEvidence = .unsatisfied ∨ r.residualGap = .unsatisfied ∨
     r.claimIntegrity = .unsatisfied
--- SKILL: "| no `unsatisfied` and any `abstain`, invalid or missing seat result | `withhold claim; escalate with the unresolved evidence gap` |"
+-- SKILL[def]: "| no `unsatisfied` and any `abstain`, invalid or missing seat result | `withhold claim; escalate with the unresolved evidence gap` |"
 def termRow4 (s : ClaimSource) (r : Roster) : Prop :=
   ¬ termRow3 s r ∧ r.seats.any (fun v => v = .abstain ∨ v = .invalid ∨ v = .missing)
 
@@ -279,7 +279,7 @@ theorem caller_never_consensus (r : Roster) :
       terminationRoute .reviewExit r = .rejectFakeConsensus := by
   simp [terminationRoute]
 
--- SKILL: "treating a repeated `unsatisfied` that again names no `GoalArtifact` term as `abstain`"
+-- SKILL[def]: "treating a repeated `unsatisfied` that again names no `GoalArtifact` term as `abstain`"
 /-- `## Termination Truth Table` (beta.39): an `unsatisfied` that names no `GoalArtifact`
 term is advisory; the seat is re-dispatched once and a repeated unnamed `unsatisfied` is
 read as `abstain`. The first phase is a process step; this function is the table input

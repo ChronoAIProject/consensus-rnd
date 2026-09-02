@@ -9,7 +9,7 @@ Each alphabet is closed; `mem_univ` certifies the enumeration is complete so eve
 
 namespace Sshx
 
--- SKILL: "Each seat returns one of:"
+-- SKILL[def]: "Each seat returns one of:"
 /-- `## Thinking Panel`: each seat returns exactly one of these. -/
 inductive ThinkingVerdict
   | propose
@@ -18,7 +18,7 @@ inductive ThinkingVerdict
   | abstain
   deriving DecidableEq, Repr
 
--- SKILL: "Each reviewer returns one of:"
+-- SKILL[def]: "Each reviewer returns one of:"
 /-- `## Review Triplet`: each reviewer returns exactly one of these. -/
 inductive ReviewVerdict
   | approve
@@ -26,7 +26,7 @@ inductive ReviewVerdict
   | reject
   deriving DecidableEq, Repr
 
--- SKILL: "Each termination seat returns one of:"
+-- SKILL[def]: "Each termination seat returns one of:"
 /-- `## Termination Gate` seat result as the termination truth table sees it.
 `invalid` and `missing` are the fail-closed classes of row 4; `missing` is a named
 role present in the roster without a valid result. -/

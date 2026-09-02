@@ -26,7 +26,7 @@ inductive Force
   | advisory
   deriving DecidableEq, Repr
 
--- SKILL: "Advisory is the default; blocking is the exception, and the exception has exactly two conjuncts that the input itself must name"
+-- SKILL[def]: "Advisory is the default; blocking is the exception, and the exception has exactly two conjuncts that the input itself must name"
 /-- `BlockingAuthority`: advisory is the default; blocking needs both named conjuncts. -/
 def force (i : Input) : Force :=
   if i.namesGoalTerm && i.namesWorkEvidence && !i.basisShownFalse then .blocking else .advisory
@@ -63,11 +63,11 @@ structure Finding where
   requiresTrustedMalice : Bool
   deriving DecidableEq, Repr
 
--- SKILL: "ask whether a finding would exist only if a role declared trusted by `harness.trust_boundary` deliberately acted maliciously; if so, the finding is ineligible"
+-- SKILL[def]: "ask whether a finding would exist only if a role declared trusted by `harness.trust_boundary` deliberately acted maliciously; if so, the finding is ineligible"
 /-- `ThreatEligibility`. -/
 def eligible (f : Finding) : Bool := !f.requiresTrustedMalice
 
--- SKILL: "A blocking finding that fails `ThreatEligibility` or `BlockingAuthority` is downgraded by the meta-judge to an advisory with its reason recorded, then the remaining verdicts are routed again."
+-- SKILL[def]: "A blocking finding that fails `ThreatEligibility` or `BlockingAuthority` is downgraded by the meta-judge to an advisory with its reason recorded, then the remaining verdicts are routed again."
 /-- `## Review Truth Table`: a blocking finding that fails either check is an advisory. -/
 def downgrade (f : Finding) : ReviewVerdict :=
   match f.verdict with

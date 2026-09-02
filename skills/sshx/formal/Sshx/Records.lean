@@ -22,7 +22,7 @@ structure Revision where
   invalidatedCompletedWork : String
   deriving DecidableEq, Repr
 
--- SKILL: "`GoalArtifact` has exactly these fields:"
+-- SKILL[def]: "`GoalArtifact` has exactly these fields:"
 /-- `GoalArtifact` has exactly these seven fields. -/
 structure GoalArtifact where
   rawUserInput : String
@@ -34,7 +34,7 @@ structure GoalArtifact where
   revisions : List Revision
   deriving DecidableEq, Repr
 
--- SKILL: "`revisions` is an append-only list"
+-- SKILL[def]: "`revisions` is an append-only list"
 /-- The only way to correct a `GoalArtifact`: append one revision. -/
 def GoalArtifact.correct (g : GoalArtifact) (r : Revision) : GoalArtifact :=
   { g with revisions := g.revisions ++ [r] }
@@ -63,7 +63,7 @@ structure StageRecord (Verdict : Type) where
   role : String
   deriving DecidableEq, Repr
 
--- SKILL: "A stage record's `verdict` field, when present, is a read-only mirror of its envelope's `conclusion.verdict`"
+-- SKILL[def]: "A stage record's `verdict` field, when present, is a read-only mirror of its envelope's `conclusion.verdict`"
 def StageRecord.verdict {V : Type} (r : StageRecord V) : V := r.envelope.conclusionVerdict
 
 theorem StageRecord.verdict_mirrors {V : Type} (r : StageRecord V) :

@@ -25,13 +25,13 @@ def Transition.counted : Transition → Bool
   | .repeatedReviewPass | .terminationGateEvaluation => true
   | .carrierRetry | .carrierFallback | .initialReviewTriplet => false
 
--- SKILL: "consumes exactly one unit when it is dispatched"
+-- SKILL[def]: "consumes exactly one unit when it is dispatched"
 /-- One step: a counted pass needs a unit and consumes it at dispatch; `none` is
 "no pass authority". -/
 def step (budget : Nat) (t : Transition) : Option Nat :=
   if t.counted then (if budget = 0 then none else some (budget - 1)) else some budget
 
--- SKILL: "A run with no recorded `pass_budget` has no pass authority"
+-- SKILL[def]: "A run with no recorded `pass_budget` has no pass authority"
 /-- A run consumes transitions in order; the first refused pass stops the run. -/
 def run : Nat → List Transition → Option Nat
   | b, [] => some b

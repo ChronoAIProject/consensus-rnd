@@ -22,7 +22,7 @@ inductive Artifact
   | callerTranscript
   deriving DecidableEq, Repr
 
--- SKILL: "no worker may see a same-round peer output or caller-conversation transcript content that was not explicitly included in its dispatch brief or `GoalArtifact`"
+-- SKILL[def]: "no worker may see a same-round peer output or caller-conversation transcript content that was not explicitly included in its dispatch brief or `GoalArtifact`"
 /-- What seat `w` may see: the complete `GoalArtifact`, its own brief, its own prior
 attempt for the same seat, and conclusions of strictly earlier rounds that its brief
 carries. Never a same-round peer output and never caller-conversation transcript content
@@ -45,7 +45,7 @@ theorem transcript_invisible (w : Seat) : visible w .callerTranscript = false :=
 
 theorem goal_always_visible (w : Seat) : visible w .goalArtifact = true := rfl
 
--- SKILL: "An event may use only evidence in its recorded prefix."
+-- SKILL[def]: "An event may use only evidence in its recorded prefix."
 /-- Append-only role ledger: an event may use only evidence in its recorded prefix. -/
 def ledgerValid (events : List (Nat × List Nat)) : Bool :=
   events.all fun e => e.2.all fun used => used < e.1

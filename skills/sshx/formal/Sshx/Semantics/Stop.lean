@@ -26,14 +26,14 @@ universe u
 variable {Goal Action Source Version Scope : Type u} [DecidableEq Action]
   (AdmTarget : Goal → Set Action) (InScope : Scope → Action → Prop)
 
--- SKILL: "seal the current affirmative candidate, the feasible termination decision set, and an owner-sourced, versioned, scoped orientation"
+-- SKILL[def]: "The affirmative claim is computed only from that sealed set and orientation."
 /-- The termination claim over sealed inputs. -/
 def terminationClaim
     (O : OrientationSpec Goal Action Source Version Scope AdmTarget InScope)
     (D : DecisionSet Action) : Prop :=
   AdjudicationStopTargetOnDecisionSet AdmTarget InScope O D
 
--- SKILL: "A missing current candidate, an empty feasible set, or a current candidate outside the feasible set fails closed"
+-- SKILL[thm]: "A missing current candidate, an empty feasible set, or a current candidate outside the feasible set fails closed"
 theorem no_claim_without_candidate
     (O : OrientationSpec Goal Action Source Version Scope AdmTarget InScope)
     (D : DecisionSet Action) (h : D.current = none) :
@@ -57,7 +57,7 @@ theorem no_claim_outside_feasible
   cases hcurrent
   exact hout hmem
 
--- SKILL: "late narrative and logs are not stop inputs"
+-- SKILL[thm]: "late narrative and logs are not stop inputs"
 /-- `stopCheck` decides the claim from the orientation and the decision set alone
 (`adjudication_stop_target_correctness`, third conjunct); equal sealed inputs give equal
 verdicts (`settle_stop_depends_only_on_decision_and_orientation` at the decision-set level). -/
@@ -74,7 +74,7 @@ theorem claim_reads_only_sealed_inputs
   subst hD
   congr
 
--- SKILL: "neither a Pareto frontier nor a linear extension is itself a stop rule"
+-- SKILL[thm]: "neither a Pareto frontier nor a linear extension is itself a stop rule"
 /-- One Pareto frontier yields opposite stops under two sourced orientations
 (`pareto_frontier_requires_sourced_orientation`): the frontier alone decides nothing. -/
 theorem frontier_is_not_a_stop_rule :

@@ -24,7 +24,7 @@ inductive Applicability
   | escalateToMaintainer
   deriving DecidableEq, Repr
 
--- SKILL: "The termination gate is triggered only by a positive, boundary-owner-confirmed entry declaring such a mechanism."
+-- SKILL[def]: "The termination gate is triggered only by a positive, boundary-owner-confirmed entry declaring such a mechanism."
 /-- The gate is triggered only by a positive, boundary-owner-confirmed entry; a silent or
 explicitly negative complete harness makes the gate inapplicable without asserting the
 mechanism is absent; anything else is the harness rule: stop and escalate. -/
@@ -88,7 +88,7 @@ structure Sealed where
   orientationScoped : Bool
   deriving DecidableEq, Repr
 
--- SKILL: "seal the current affirmative candidate, the feasible termination decision set, and an owner-sourced, versioned, scoped orientation"
+-- SKILL[def]: "seal the current affirmative candidate, the feasible termination decision set, and an owner-sourced, versioned, scoped orientation"
 def sealedAdmits (s : Sealed) : Bool :=
   match s.candidate with
   | none => false
@@ -107,7 +107,7 @@ theorem sealed_outside_feasible (s : Sealed) (c : Nat) (hc : s.candidate = some 
 
 /-! ## Three independent predicates -/
 
--- SKILL: "Method stop, a protocol or review exit, and `GoalArtifact` completion are separate predicates."
+-- SKILL[def]: "Method stop, a protocol or review exit, and `GoalArtifact` completion are separate predicates."
 /-- Method stop, a protocol or review exit, and `GoalArtifact` completion are separate
 coordinates: every combination is a legal state, so none implies another. -/
 structure StopState where

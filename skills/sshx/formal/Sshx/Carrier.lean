@@ -14,7 +14,7 @@ inductive Carrier
   | isolatedTokenSubagent
   deriving DecidableEq, Repr
 
--- SKILL: "`WorkerMode` has exactly these values, in priority order:"
+-- SKILL[def]: "`WorkerMode` has exactly these values, in priority order:"
 /-- `WorkerMode` priority order: a lower number is tried first. -/
 def Carrier.priority : Carrier → Nat
   | .codexCli => 0
@@ -66,7 +66,7 @@ theorem CarrierSet.mem_univ (s : CarrierSet) : s ∈ CarrierSet.univ := by
   cases s with
   | mk a b c => cases a <;> cases b <;> cases c <;> decide
 
--- SKILL: "reopen the assignment on the highest-priority eligible untried carrier from the full `WorkerMode` list"
+-- SKILL[def]: "reopen the assignment on the highest-priority eligible untried carrier from the full `WorkerMode` list"
 /-- `## Worker Delegation` fallback rule: reopen the seat on the highest-priority eligible
 carrier not yet tried for this stage and role, from the full `WorkerMode` list, never
 "strictly downward from the failed carrier". -/
@@ -117,7 +117,7 @@ theorem fallbackChain_from_empty_le_three (e : CarrierSet) :
     (fallbackChain e CarrierSet.empty 4).length ≤ 3 :=
   fallbackChain_length_le e (CarrierSet.mem_univ e) CarrierSet.empty (by decide)
 
--- SKILL: "Only when no eligible untried carrier remains or every fallback fails to produce terminal completion is the result `abstain`"
+-- SKILL[def]: "Only when no eligible untried carrier remains or every fallback fails to produce terminal completion is the result `abstain`"
 /-- Every seat ends in a carrier flight or `abstain`: when nothing eligible remains untried,
 the only result is `abstain`. -/
 def resolveSeat (eligible tried : CarrierSet) : WorkerMode :=
