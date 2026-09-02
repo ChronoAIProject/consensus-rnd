@@ -1,0 +1,10 @@
+name = "sshx-formal"
+version = "0.1.0"
+defaultTargets = ["Sshx"]
+
+[leanOptions]
+relaxedAutoImplicit = false
+autoImplicit = false
+
+[[lean_lib]]
+name = "Sshx"
