@@ -31,7 +31,7 @@ def reviewRow1 (a b c : ReviewVerdict) : Prop := a = .reject ∨ b = .reject ∨
 /-- Row 2: no reject and at least one approve. -/
 def reviewRow2 (a b c : ReviewVerdict) : Prop :=
   ¬ reviewRow1 a b c ∧ (a = .approve ∨ b = .approve ∨ c = .approve)
--- SKILL: "| all comment and no approve | `explicit user decision or another bounded review pass` |"
+-- SKILL: "| all comment | `explicit user decision or another bounded review pass` |"
 /-- Row 3: all comment. The contract adds "and no approve", which all-comment already implies. -/
 def reviewRow3 (a b c : ReviewVerdict) : Prop := a = .comment ∧ b = .comment ∧ c = .comment
 

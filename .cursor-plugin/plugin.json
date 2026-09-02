@@ -2,7 +2,7 @@
   "name": "consensus-rnd",
   "displayName": "Consensus R&D",
   "description": "worker-delegated inline consensus skills：隔离多视角、固定真值表，无 daemon、GitHub 或 git 编排",
-  "version": "1.0.0-beta.39",
+  "version": "1.0.0-beta.40",
   "author": {
     "name": "auric",
     "email": "loning.ma@aelf.io"
