@@ -8,7 +8,9 @@ Two mechanical couplings, neither of which judges English semantics:
    model is revisited;
 2. when ``lake`` is installed the model must build with no ``sorry``, ``axiom``, or
    ``native_decide``. When ``lake`` is absent the build test is skipped with a visible
-   reason; it never passes vacuously.
+   reason; it never passes vacuously. The build resolves the pinned ``trureturing``
+   dependency (and Mathlib through it); ``skills/sshx/formal/README.md`` says how to
+   reuse an already built checkout instead of cloning.
 """
 
 import re
@@ -21,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 SKILL = ROOT / "skills" / "sshx" / "SKILL.md"
 FORMAL = ROOT / "skills" / "sshx" / "formal"
-MODULES = sorted((FORMAL / "Sshx").glob("*.lean"))
+MODULES = sorted((FORMAL / "Sshx").rglob("*.lean"))
 TRACE_PATTERN = re.compile(r'^-- SKILL: "(.+)"$', re.MULTILINE)
 TRUTH_TABLE_HEADINGS = ("## Design Truth Table", "## Review Truth Table", "## Termination Truth Table")
 
@@ -44,7 +46,8 @@ def truth_table_rows(text: str, heading: str) -> list[str]:
 class SshxFormalModelTests(unittest.TestCase):
     def test_every_module_traces_the_contract_verbatim(self) -> None:
         skill = read(SKILL)
-        self.assertGreaterEqual(len(MODULES), 10)
+        self.assertGreaterEqual(len(MODULES), 14)
+        self.assertTrue(any(module.parent.name == "Semantics" for module in MODULES))
         for module in MODULES:
             quotes = trace_quotes(module)
             with self.subTest(module=module.name):
