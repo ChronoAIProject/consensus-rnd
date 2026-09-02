@@ -20,7 +20,7 @@ Do not use this skill for routine one-step answers where no separate perspective
 
 ## Goal Contract
 
-`GoalArtifact` is a prompt-level record, not a runtime API. It is written during `intake` before worker mode selection or any worker dispatch.
+`GoalArtifact` is written during `intake` before worker mode selection or any worker dispatch.
 
 `GoalArtifact` has exactly these fields:
 
@@ -48,6 +48,8 @@ A revision item missing any one of these sub-items is invalid and fails closed.
 
 Any explicit correction to `GoalArtifact` or `harness` must append one such revision item before routing continues.
 
+Revisions never rewrite an earlier target or recompute an earlier settlement. A correction is appended after the settlement it supersedes, and only a later settlement may consume the corrected target.
+
 The caller must write and complete `harness` during `intake`, before any worker dispatch. If any `harness` sub-item is missing or ambiguous, or its source has not been confirmed by the boundary owner, stop and escalate to the maintainer; neither controller nor worker may infer or expand it.
 
 The boundary owner may declare a host-provided goal-driven continuation mechanism only in `harness.provided_capabilities`; the skill must not discover or infer whether one exists. The termination gate is triggered only by a positive, boundary-owner-confirmed entry declaring such a mechanism. When an otherwise complete, unambiguous, boundary-owner-confirmed `provided_capabilities` value contains no such entry, whether silent or explicitly negative, the gate is inapplicable without asserting that the host mechanism is absent. A purported continuation entry that is ambiguous or unconfirmed is governed by the existing harness rule above.
@@ -57,8 +59,6 @@ The user's current input is the only source for the goal. `sshx` must not discov
 `iteration_question` must ask what still differs from `GoalArtifact`, using the normalized goal, constraints, and success criteria as the fixed target. It must not broaden the task into a generic improvement search.
 
 ## InlineConsensusProtocol
-
-`InlineConsensusProtocol` is a prompt-level protocol, not a runtime API.
 
 Run the stages in this exact order:
 
@@ -70,7 +70,7 @@ Run the stages in this exact order:
 6. `review_triplet_workers`
 7. `fix_or_done`
 
-`WorkerModeGate` is a prompt-level dispatch gate, not a runtime API. During `intake`, the caller may use its own read-only tools to inspect the user's input and write `GoalArtifact`; this caller-owned read-only intake is not worker dispatch. Before any worker dispatch, including delegated intake context-gathering by subagent, Agent, Task, or codex, the caller must complete the non-mutating `codex-cli` capability check and resolve `WorkerMode`.
+`WorkerModeGate` requires resolution before dispatch. During `intake`, the caller may use its own read-only tools to inspect the user's input and write `GoalArtifact`; this caller-owned read-only intake is not worker dispatch. Before any worker dispatch, including delegated intake context-gathering by subagent, Agent, Task, or codex, the caller must complete the non-mutating `codex-cli` capability check and resolve `WorkerMode`.
 
 Each thinking, review, or termination record must include these fields:
 
@@ -90,7 +90,7 @@ Each `visible_inputs` value must include the complete `GoalArtifact` (including 
 
 ## Worker Delegation
 
-`WorkerDelegationContract` is the source-owned contract for choosing and using worker carriers. It is a prompt-level contract, not a runtime API.
+`WorkerDelegationContract` is the source-owned contract for choosing and using worker carriers.
 
 `WorkerMode` has exactly these values, in priority order:
 
@@ -107,7 +107,7 @@ Each `visible_inputs` value must include the complete `GoalArtifact` (including 
 
 `abstain` is required when none of `codex-cli`, `nyxid-oracle`, or `isolated-token-subagent` is available. Do not self-apply the triplet inside the caller context and present it as worker consensus.
 
-At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `codex-cli`, and the three-seat `## Termination Gate` follows that same layout; every single-worker stage assigns its worker to `codex-cli`. The carrier-role pairing must be chosen and recorded before any worker in that stage returns. This is the default dispatch-time layout; the numbered `WorkerMode` list governs only fallback after a carrier failure. The recorded initial pairing must not be rebalanced in response to completion outcomes; a retry or fallback may replace only the failed flight for the same seat and role, and neither is a mechanism for restoring the default layout. A `tests` review seat must be assigned to a carrier capable of executing repository verification commands in the `work_target`. Any claim that carrier heterogeneity improves consensus quality or yields statistically independent priors is `ASSUMED-UNVERIFIED` under `seek truth from facts`; whether `codex-cli` and `isolated-token-subagent` use different model families is also `ASSUMED-UNVERIFIED`, and a model identifier reported by a `nyxid-oracle` response is evidence only for that invocation. Any model-diverse-consensus claim must be truthful: if every completed seat ran on one model family, do not present the result as model-diverse; record that the stronger diversity claim was not achieved. If any fallback occurs or any initially paired carrier is unavailable, fails its capability check, exhausts its retry budget, or fails to produce terminal completion during a stage, do not claim that stage achieved model-diverse consensus, regardless of the model families on its completed seats.
+Protocol policy, not a mathematical consequence: at dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `codex-cli`, and the three-seat `## Termination Gate` follows that same layout; every single-worker stage assigns its worker to `codex-cli`. The carrier-role pairing must be chosen and recorded before any worker in that stage returns. This is the default dispatch-time layout; the numbered `WorkerMode` list governs only fallback after a carrier failure. The recorded initial pairing must not be rebalanced in response to completion outcomes; a retry or fallback may replace only the failed flight for the same seat and role, and neither is a mechanism for restoring the default layout. A `tests` review seat must be assigned to a carrier capable of executing repository verification commands in the `work_target`. Carrier heterogeneity is this protocol's policy, not a theorem premise or consequence. Any claim that it improves consensus quality or yields statistically independent priors is `ASSUMED-UNVERIFIED` under `seek truth from facts`; whether `codex-cli` and `isolated-token-subagent` use different model families is also `ASSUMED-UNVERIFIED`, and a model identifier reported by a `nyxid-oracle` response is evidence only for that invocation. Any model-diverse-consensus claim must be truthful: if every completed seat ran on one model family, do not present the result as model-diverse; record that the stronger diversity claim was not achieved. If any fallback occurs or any initially paired carrier is unavailable, fails its capability check, exhausts its retry budget, or fails to produce terminal completion during a stage, do not claim that stage achieved model-diverse consensus, regardless of the model families on its completed seats.
 
 When `WorkerMode` resolves to `abstain`, the protocol terminates at `choose_worker_mode`: the caller emits a final `SshxResultEnvelope` whose `conclusion` records the `abstain` verdict, the reason, and any options, creates no thinking, implementation, or review flight, and runs no later stage. When a thinking, implementation, review, or termination flight instead exhausts its bounded retries and fallback without terminal completion, that stage returns `abstain` rather than a synthesized worker conclusion or an incomplete triplet, the caller skips the remaining dependent stages, and the blocker is reported honestly. A thinking-stage exhaustion in particular skips `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done`.
 
@@ -141,13 +141,9 @@ Internal shell `&` followed by `wait` is permitted inside that one named batch s
 
 The caller may invoke `skills/sshx/scripts/read-codex-worker-status.sh` only after host completion notification. Status reading is a one-shot, after-terminal collection convenience and is not authorization to poll while any runner is active. The batch report is dispatcher-owned orchestration evidence, not a worker artifact, and neither it nor the status projection changes completion or verdict routing.
 
-For each `nyxid-oracle` attempt, the caller must start a new isolated oracle conversation before that attempt's first submission and pass a worker brief that requires the reply to be exactly an `SshxResultEnvelope` payload; parallel workers must receive disjoint conversations. The dispatch is a direct `nyxid oracle` reasoning invocation, not a helper script, daemon, or repository-owned CLI, and the exact command and flags are not part of this contract. Dispatch-exit recovery and all completion and verdict recognition for this carrier are governed solely by `## Worker Completion Contract` and are not restated here.
+For each `nyxid-oracle` attempt, the caller must start a new isolated oracle conversation before that attempt's first submission and pass a worker brief that requires the reply to be exactly an `SshxResultEnvelope` payload; parallel workers must receive disjoint conversations. The dispatch is a direct `nyxid oracle` reasoning invocation, not a helper script, daemon, or repository-owned CLI, and the exact command and flags are not part of this contract. Completion and verdict recognition use only `## Worker Completion Contract`.
 
 A `nyxid-oracle` worker has no access to the caller's filesystem, so caller-local paths, including `work_target` paths, are not readable content references for it. Its brief may instead reference repository content by public GitHub URL, pinned to an immutable commit SHA so every seat reads the same bytes; branch, tag, and `HEAD` URLs drift between reads and must not be used. Such a URL is permitted only when the referenced content is already anonymously readable on the remote, which the caller confirms before the first submission; the caller must never push, publish, change repository visibility, or otherwise mutate remote state to make content linkable. When the needed content is not already public, the brief inlines it instead. A referenced URL is worker context only: it is never a goal source under `## Goal Contract`, never a pointer to same-round peer output or another seat's artifacts, and whatever the oracle reports from it is worker-reported data rather than caller-verified evidence. If the oracle cannot retrieve a referenced URL, it must record that in `SshxResultEnvelope.conclusion` and mark every premise that depended on it `ASSUMED-UNVERIFIED` under `## Reasoning Discipline`, never reconstructing the content from memory.
-
-When blindly redispatching the same `nyxid-oracle` attempt, the caller SHOULD reuse one stable submitter-scoped idempotency reference so repeated submissions converge on the same oracle task (for example, a carrier-supported client reference mechanism; this example is non-normative). A new attempt must use a new idempotency reference. This sentence does not itself authorize any redispatch; any blind redispatch must already be authorized by the existing bounded-attempt rules, and it never replaces same-task recovery.
-
-`codex-cli` completion is recognized only when the caller has both a terminal `SshxResultEnvelope` and the worker-owned `completion_sentinel_ref` recorded on the matching flight. `pgrep`, process-table snapshots, log marker strings, and empty `git status` output are never completion evidence.
 
 If an initially paired carrier is unavailable before a flight can be opened, the caller records the unavailable origin in `worker_delegation.reason` and the gate record, then immediately applies the fallback selection rule below without claiming that a same-carrier retry budget was exhausted. If any flight lacks terminal completion after its finite same-carrier retry budget is exhausted, the caller marks that flight `abstained` with empty `result_envelope_ref` and `completion_sentinel_ref`. In either case, when an eligible untried carrier exists, the caller must reopen the assignment on the highest-priority eligible untried carrier from the full `WorkerMode` list, rather than continuing strictly downward from the failed carrier; the chosen carrier must satisfy this stage and role's carrier constraints and must not have been tried for that stage and role. The caller creates a new `SshxWorkerFlightRecord` for the same `stage`, `role`, and `work_target`, and `worker_delegation.reason` and the gate record state the exhausted or unavailable origin and chosen fallback. The caller stays read-only for that `work_target` until the fallback flight reaches `terminal` or `abstained`. Only when no eligible untried carrier remains or every fallback fails to produce terminal completion is the result `abstain`; the caller must not implement, repair, or otherwise mutate the same `work_target` itself.
 
@@ -155,7 +151,7 @@ When a `codex-cli` attempt terminates with runner `reason_code` `ENVELOPE_INVALI
 
 ## Result Envelope
 
-`SshxResultEnvelope` is a prompt-level record, not a runtime API. Every `SshxResultEnvelope` returned by `thinking_panel_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields:
+Every `SshxResultEnvelope` returned by `thinking_panel_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields:
 
 - `conclusion`: compact structured result consumed by the caller. It may include verdicts, decisions, blocking goal gaps, final decision points, changed-file evidence, and test evidence when applicable. It must not include process logs, step-by-step reasoning, raw transcripts, debug output, or same-round peer output.
 - `log_ref`: artifact reference for the non-inline worker, meta-judge, implementation, review, or fix log, treated as an opaque diagnostic pointer. Caller-side routing, meta-judging, worker briefs, and final reports must not open, inline, summarize, or otherwise consume its content; they keep only the reference. Opening the artifact is allowed only for out-of-band debugging outside the consensus decision context.
@@ -168,31 +164,9 @@ Logs are not inline in caller context. Final reports aggregate `conclusion` valu
 
 ## Worker Completion Contract
 
-For `codex-cli` workers, caller-side completion and verdict routing must be decided only from:
+For every worker carrier, completion and verdict routing use one fail-closed predicate: the carrier has successfully exited or returned terminally; the matching flight records a valid `SshxResultEnvelope`; any required `conclusion.verdict` is in that stage's allowed set; and the carrier's required completion evidence is recorded in `completion_sentinel_ref`, using `n/a` only when the carrier has no independent sentinel. Runner collection mechanics stay in `CODEX_WORKER_SPEC.md`; they do not create a carrier-specific meaning of completion.
 
-- the worker carrier process has exited with status `0`;
-- the runner-derived, runner-owned `result_ref` artifact exists;
-- the `result_ref` artifact parses as a valid `SshxResultEnvelope`;
-- `conclusion.verdict`, when the stage requires a verdict, is present and is one of that stage's allowed verdict values.
-- the runner-derived, runner-owned `completion_sentinel` artifact exists and is recorded as `completion_sentinel_ref` on the matching `SshxWorkerFlightRecord`.
-
-A worker is not done while its carrier process is still running, even if a partial `result_ref` artifact already exists. A worker is not done when completion markers or verdict-looking text appear only in stdout, stderr, raw transcripts, final text, prompt echoes, `log_ref` content, or log tails. Those surfaces are diagnostic only and must not participate in done detection or verdict routing.
-
-`log_ref` remains required as a diagnostic artifact reference, but it is never a verdict source. Missing `conclusion`, missing `log_ref`, placeholder verdicts, and verdicts outside the stage's allowed set fail closed.
-
-Neither runner-owned `status.json` nor a dispatcher-owned batch report is a completion or verdict source.
-
-For `nyxid-oracle` workers, outside the bounded dispatch-exit recovery below, the caller must not poll or busy-poll the oracle task while it runs. On the normal path, when an attempt's dispatch invocation reports a structured terminal status, that attempt does not enter recovery: the caller performs one bounded `nyxid oracle result` read, and that read is the attempt's single collection read. If that collection read's output is missing or unparseable, including empty or truncated output or output without a parseable structured status/result wrapper, it is not terminal completion: the matching flight becomes `abstained` and follows the origin-agnostic fallback rule under `## Worker Delegation`.
-
-An attempt enters dispatch-exit recovery only when both of these conditions hold: its dispatch call successfully submitted the oracle task and the caller recorded that task's oracle task reference; and the dispatch call then exited unexpectedly before reporting a structured terminal status. If the oracle task reference is unavailable, the attempt does not enter recovery: the matching flight becomes `abstained` and follows the origin-agnostic fallback rule under `## Worker Delegation`.
-
-For an attempt that enters recovery, the caller may perform a finite recovery read sequence against that same oracle task. The read-count upper bound and delay schedule must be chosen and recorded before the first recovery read. Every scheduled delay must be positive and non-decreasing, and the entire sequence remains subject to the caller harness's task deadline. A recovery read that returns a structured non-terminal status is only a waiting recovery observation: it is not that attempt's collection read and provides no completion or verdict evidence. A recovery read whose output is missing or unparseable is likewise only a waiting recovery observation: it consumes one predeclared recovery read slot, is not that attempt's collection read, and provides no completion or verdict evidence; if a slot remains, the recovery sequence may continue. The first recovery read that returns a structured terminal status becomes that attempt's one and only collection read; after that terminal read, the caller must perform no additional reads for the attempt.
-
-Terminal completion is recognized only when both of these conditions hold: the attempt's unique collection read returns the oracle task's structured terminal `status=completed`, and the `response` payload parses as a valid `SshxResultEnvelope` with any required `conclusion.verdict` in the stage's allowed set. Any of the following is not terminal completion and makes the matching flight `abstained` under the origin-agnostic fallback rule in `## Worker Delegation`: a unique collection read that returns any status other than the structured terminal `status=completed`; a `completed` collection read whose response envelope or required verdict is missing or invalid; or exhaustion of the recovery sequence without any structured terminal status. Intermediate task statuses (`queued`, `dispatched`, and any non-terminal phase) are not completion. This bounded dispatch-exit recovery is not a polling authorization; the ordinary polling and busy-polling prohibition remains unchanged.
-
-This recovery is grounded in verified carrier behavior: the oracle task's server-side lifecycle is independent of the waiting client invocation, and `result` reads are non-destructive state reads. This carrier has no worker-owned independent completion sentinel. After terminal completion, the caller records `result_envelope_ref` on the matching flight and records `completion_sentinel_ref` there as `n/a`. The oracle task is traceable through the `result_envelope_ref` recorded on that flight and the stage record's `log_ref`; response prose, stdout, echoes, and log tails are never completion or verdict evidence.
-
-For `isolated-token-subagent` workers, terminal completion is recognized only when the isolated subagent returns a valid `SshxResultEnvelope` to the caller, with any required `conclusion.verdict` in the stage's allowed set; this carrier runs in-context rather than as a separate process, so it has no completion sentinel and its `completion_sentinel_ref` is recorded as `n/a`. The same isolation, fail-closed, and no-stdout-evidence rules apply. Missing or invalid output is not terminal completion: the flight becomes `abstained` and follows the origin-agnostic fallback rule under `## Worker Delegation`.
+A worker is not done while its carrier is still running, from a partial artifact, or from completion markers or verdict-looking text in stdout, stderr, raw transcripts, final text, prompt echoes, `log_ref`, log tails, `status.json`, a batch report, or a process snapshot. `log_ref` remains required only as a diagnostic reference. A missing or invalid terminal observation, envelope, required verdict, or completion reference fails closed: the flight follows the declared finite retry and fallback path and otherwise returns `abstain`.
 
 ## No Context Pollution
 
@@ -208,11 +182,13 @@ Input isolation and prior sterility are separate dimensions. As a hard invariant
 
 A seat's own immediately preceding attempt artifacts are not same-round peer output; referencing them under the narrow packaging-only retry in `## Worker Delegation` does not constitute context pollution.
 
+Each dispatch roster is an append-only role ledger ordered by the existing `worker_flights` and corresponding result order. An event may use only evidence in its recorded prefix. One event that uses out-of-prefix evidence invalidates that roster, not an unrelated earlier roster; later appends cannot change a frozen prefix or recompute an earlier settlement.
+
 Prior sterility is weaker and none of the allowed carriers provides it: `codex-cli` inherits repository `CLAUDE.md` or `AGENTS.md` context, `nyxid-oracle` may inherit unknown and uncontrollable account memory and project context, and `isolated-token-subagent` inherits `CLAUDE.md` and the caller's `MEMORY.md`. All three still count as independent seats, but none may be described as context-sterile or cited as evidence that their priors are independent. The oracle seat is permanently sterile-context-unverified. Each seat must disclose these inherited context sources in its existing `visible_inputs` value and state whether each source is unknown or uncontrollable, using `repo-prior-exposed` for `codex-cli`, `external-prior-exposed` for `nyxid-oracle`, and `caller-prior-exposed` for `isolated-token-subagent`; these are disclosure labels, not new fields.
 
 ## Reasoning Discipline
 
-`## Reasoning Discipline` is the single source of truth for the reasoning pass used by `## Thinking Panel`, `## Review Triplet`, and `## Termination Gate`. It is prompt-level guidance only: not a runtime API, not a daemon, not a CLI, not a parsed schema field, not marker data, not lifecycle authority, and not a second transcript channel. The stages and gate reference this section; they do not restate it.
+`## Reasoning Discipline` is the single source of truth for the reasoning pass used by `## Thinking Panel`, `## Review Triplet`, and `## Termination Gate`. The stages and gate reference this section; they do not restate it.
 
 sshx's essence is independent context-isolated perspectives that oppose ugliness and waste to converge on an answer that is both beautiful and worth its cost.
 
@@ -222,23 +198,27 @@ Aesthetic/adversarial: give a symmetric 美不美 (is it beautiful?) verdict for
 
 seek truth from facts: verify every factual premise against actual evidence before relying on it. Evidence examples include source artifact or line, current file contents, command result, test assertion, visible input, implementation-worker conclusion, or declared `GoalArtifact` constraint. Any assumed-not-verified premise must be explicitly marked `ASSUMED-UNVERIFIED` in `SshxResultEnvelope.conclusion` and either verified before routing, treated as a `GoalArtifact` goal gap, or used as an abstain trigger. A perspective must never silently rely on an assumed premise.
 
+A mathematical conclusion binds a mechanism only when that mechanism's recorded state instantiates every hypothesis the conclusion needs. A name applied by analogy carries no blocking, convergence, or completion force. A missing or disputed instantiation is `ASSUMED-UNVERIFIED`; a false instantiation makes the conclusion inapplicable.
+
 Retrospective fit is not prospective evidence: a rationale that only replays facts already present in its visible inputs may establish consistency with those facts, but by itself supports no causal, transfer, benefit, or future-performance claim. An explanation compatible with every possible outcome carries zero prospective weight. When such a prospective claim is used to settle a `GoalArtifact`-named decision, state the check or observation that could falsify it before consulting its outcome; this forward commitment must not be replaced by post-hoc fitting. A prospective claim with no stated falsifier is `ASSUMED-UNVERIFIED` and follows the existing `ASSUMED-UNVERIFIED` dispositions.
 
 Depth discipline: 钻牛角尖 (rabbit-holing) is the failure this discipline prevents, never the standard of care it demands. Every judgment — a premise check, a candidate comparison, an objection, a review finding, or a convergence step — is settled at the shallowest depth that still changes a `GoalArtifact`-named decision, a verdict, or a routing exit. Before drilling into further detail, ask one bounded question: would the additional detail change any of those? If not, stop and name the stop in the reasoning-discipline note; depth past that point is waste, and exhaustive enumeration past verdict-settling evidence is itself an ugly defect under the aesthetic verdict. The same bound governs premise verification under `seek truth from facts`: chase a premise only as far as the verdict depends on it; a premise the verdict does not depend on needs no verification and no mark. The bound limits elaboration, never coverage: a seat's assigned bias, review focus, or termination charter defines what must be searched, enumerated, or mapped; the bound only caps how deeply the seat elaborates what that duty surfaced and how much advisory volume it emits; and an unevidenced "no" to the bounded question never discharges the duty. The bound also limits nothing that may block: it does not weaken `DecisionGrounding`, does not unblock a grounded reachable defect, and does not skip a truth-table row. The contract's own exhaustive register is a specification style for protocol edge-case completeness, not a depth model for the work: do not mirror it as the required granularity of every judgment.
 
 `CapabilityOverlap` is the candidate-solution boundary check: ask whether a candidate takes over a capability already declared in `harness.provided_capabilities`, or changes a decision assignment in `harness.decision_ownership`; either hit is an overlap and therefore out of bounds. `ThreatEligibility` is the review-finding boundary check: ask whether a finding would exist only if a role declared trusted by `harness.trust_boundary` deliberately acted maliciously; if so, the finding is ineligible. Trusted-party failure, omission, and uncertainty are always eligible. These are independent checks that share the `harness` fact source.
 
-`DecisionGrounding` is the decision-input admissibility check shared by candidate solutions and review findings: no inadmissible input receives implementation work or blocking authority. For predicted harm, name a current path through which the predicted harm is reachable — a current call site or input path, an observed failure that demonstrates reachability, or a `GoalArtifact` term that makes the harm reachable. `DecisionGrounding` judges only admissibility, never evidence strength; how well an admissible premise is evidenced stays with `seek truth from facts` and its existing dispositions, which this check neither repeats nor overrides. For preventive work — a defense, validation, abstraction, or compatibility path — name a current consumer (an existing call site) or an explicit `GoalArtifact` demand — a `normalized_goal` clause, `constraints`, or `success_criteria` item; a test introduced together with the defense under judgment may corroborate grounding but never creates it, or the defense would ground itself. A defense whose only named consumer is a hostile or extreme condition that the work target's ordinary operation does not exercise needs one further named basis: an occurrence — an incident in this work target's own recorded evidence, or a documented external precedent for the same mechanism. A defense that names no occurrence is advisory. This limb asks for a named occurrence, never for a probability estimate, and it never reaches a defect in the work as built. For blocking detail, this is the rabbit-holing limb, not an aesthetic matter: name the exact `GoalArtifact` term it prevents satisfying and pass the deletion counterfactual — if omitting the detail changes no named `GoalArtifact` decision, it does not block; depth past that point is not thoroughness. Failure is objective, not semantic: an input fails `DecisionGrounding` only when it names none of the bases its applicable limb requires — a current path through which the predicted harm is reachable, a current consumer (an existing call site) or an explicit `GoalArtifact` demand — a `normalized_goal` clause, `constraints`, or `success_criteria` item, or the exact `GoalArtifact` term the blocking detail prevents satisfying together with the deletion counterfactual, when `AbsorbedFailure` below finds it absorbed, or when a defense against a condition ordinary operation does not exercise names no occurrence. A named basis that evidence shows to be false no longer counts as a named basis, so the input is inadmissible on that basis. An input that names one whose correctness is disputed has disputed grounding, not absent grounding, and keeps its full blocking force until the dispute is settled against evidence; no one may declare an input ungrounded merely because its named basis is unpersuasive. This check removes no actual defect: a reachable failure, a trusted-party mistake, an omission, and a stated uncertainty stay grounded regardless of how expensive, inconvenient, or late the repair is. An ungrounded input may be recorded as advisory, but it must never be the sole basis of a `revise`, `reject`, `abstain`, blocking finding, `unsatisfied`, or any element of a concrete plan. `DecisionGrounding` asks only whether a decision input is admissible; `ThreatEligibility` asks who the actor is; `parsimony` asks how much mechanism; `proportional-containment` asks how far it binds; `worth` asks whether to pay at all; and the aesthetic verdict asks whether the remaining form is coherent. It is a third independent check sharing the `GoalArtifact` and `harness` fact sources with the two above.
+`DecisionGrounding` is the decision-input admissibility check shared by candidate solutions and review findings: no inadmissible input receives implementation work or blocking authority. Protocol policy, not mathematics, defines its relevance bases. For predicted harm, name a current path through which the predicted harm is reachable — a current call site or input path, an observed failure that demonstrates reachability, or a `GoalArtifact` term that makes the harm reachable. `DecisionGrounding` judges only admissibility, never evidence strength; how well an admissible premise is evidenced stays with `seek truth from facts` and its existing dispositions, which this check neither repeats nor overrides. For preventive work — a defense, validation, abstraction, or compatibility path — name a current consumer (an existing call site) or an explicit `GoalArtifact` demand — a `normalized_goal` clause, `constraints`, or `success_criteria` item; a test introduced together with the defense under judgment may corroborate grounding but never creates it, or the defense would ground itself. A defense whose only named consumer is a hostile or extreme condition that the work target's ordinary operation does not exercise needs one further named basis: an occurrence — an incident in this work target's own recorded evidence, or a documented external precedent for the same mechanism. A defense that names no occurrence is advisory. This limb asks for a named occurrence, never for a probability estimate, and it never reaches a defect in the work as built. For blocking detail, this is the rabbit-holing limb, not an aesthetic matter: name the exact `GoalArtifact` term it prevents satisfying and pass the deletion counterfactual — if omitting the detail changes no named `GoalArtifact` decision, it does not block; depth past that point is not thoroughness. Failure is objective, not semantic: an input fails `DecisionGrounding` only when it names none of the bases its applicable limb requires — a current path through which the predicted harm is reachable, a current consumer (an existing call site) or an explicit `GoalArtifact` demand — a `normalized_goal` clause, `constraints`, or `success_criteria` item, or the exact `GoalArtifact` term the blocking detail prevents satisfying together with the deletion counterfactual, when `AbsorbedFailure` below finds it absorbed, or when a defense against a condition ordinary operation does not exercise names no occurrence. A named basis that evidence shows to be false no longer counts as a named basis, so the input is inadmissible on that basis. An input that names one whose correctness is disputed has disputed grounding, not absent grounding, and keeps its full blocking force until the dispute is settled against evidence; no one may declare an input ungrounded merely because its named basis is unpersuasive. This check removes no actual defect: a reachable failure, a trusted-party mistake, an omission, and a stated uncertainty stay grounded regardless of how expensive, inconvenient, or late the repair is. An ungrounded input may be recorded as advisory, but it must never be the sole basis of a `revise`, `reject`, `abstain`, blocking finding, `unsatisfied`, or any element of a concrete plan.
+
+A result offered as independent adjudication evidence is inadmissible when its recorded use to generate, tune, or select reaches the candidate's dependency closure. Enlarging that closure may only remove admission, never restore it. A shared model family, inherited repository prior, or disclosed prior alone does not prove contamination; only a recorded dependency path does. `DecisionGrounding` asks only whether a decision input is admissible; `ThreatEligibility` asks who the actor is; `parsimony` asks how much mechanism; `proportional-containment` asks how far it binds; `worth` asks whether to pay at all; and the aesthetic verdict asks whether the remaining form is coherent. It is a third independent check sharing the `GoalArtifact` and `harness` fact sources with the two above.
 
 `AbsorbedFailure` is the second stage of `DecisionGrounding`, reached after a predicted-harm or blocking-detail basis is named: ask what residue remains visible to `GoalArtifact` once the recovery path this contract or the work target already declares runs to completion — a retry, a carrier fallback, a fail-closed stop, an honestly reported `abstain`, or an escalation to the declared owner. An input is absorbed when it names no residue that escapes that path, and an absorbed input is inadmissible: it may be recorded as advisory, it must never be the sole basis of a `revise`, `reject`, `abstain`, blocking finding, `unsatisfied`, or any element of a concrete plan, and no per-case diagnosis, error taxonomy, or dedicated repair path is owed for the class it names. Deciding which specific error occurred earns its place only when a `GoalArtifact`-named decision routes differently on that answer. An input is not absorbed and keeps its full blocking force when it names one escaping residue: a wrong result accepted as correct, a success or satisfaction claim that is not true, state left corrupted or unrecoverable, an unbounded work generator, a violated contract term that nothing detects, or a `GoalArtifact` success criterion the declared recovery path itself cannot satisfy. Naming the residue is the whole test: absorption is decided from what the input names against the declared recovery path, never from how unlikely, inconvenient, expensive, or late the failure is; a named escaping residue follows the same false-basis and disputed-basis rules as every other named basis; and a recovery path that is itself missing, unreachable, or undeclared absorbs nothing. A downgrade on this limb records the declared recovery path that absorbs the input and that the input named no escaping residue, in the input's own words and never a paraphrase, under the same downgrade-record duty that governs every other `DecisionGrounding` downgrade.
 
-Enumeration is not an absorber: any finite list of failure cases can be escaped by a case built from that list, and the longer the list grows the likelier a fresh case escapes it, so each further case entry buys less protection than the last while costing more to keep true. When a class is absorbed, widen or verify the absorber instead of extending the register; extending an enumeration over an absorbed class is an ugly defect under the aesthetic verdict, not diligence.
+Enumeration is not itself an absorber. A finite listing is not closure evidence when the recorded case class has a verified fixed-point-free self-application constructor, because that constructor builds an escaping case from the listing; without that construction hypothesis, a separately proven finite-domain completeness result remains admissible. When a class is absorbed, widen or verify the absorber instead of extending the register; extending an enumeration over an absorbed class is an ugly defect under the aesthetic verdict, not diligence.
 
-Each thinking, review, or termination worker must surface one compact free-form reasoning-discipline note in `SshxResultEnvelope.conclusion` naming the reference frame, stating the known-good shape and alignment, deviation, or revision status; stating the aesthetic verdict (美不美) with the specific ugly defect and beautiful form, or `no material defect found`, for each candidate materially weighed; stating the verified-premise or `ASSUMED-UNVERIFIED` status needed for the verdict; and naming any depth-bound stop that settled a judgment. This does not override `GoalArtifact`, assigned bias or review focus, truth tables, or allowed verdict sets, and it is not mandatory citation work, not a literature search, not a parsed schema field, not marker data, not lifecycle authority, and not a blocker for valid `abstain`, `reject`, or `comment` outcomes.
+Each thinking, review, or termination worker must surface one compact free-form reasoning-discipline note in `SshxResultEnvelope.conclusion` naming the reference frame, stating the known-good shape and alignment, deviation, or revision status; stating the aesthetic verdict (美不美) with the specific ugly defect and beautiful form, or `no material defect found`, for each candidate materially weighed; stating the verified-premise or `ASSUMED-UNVERIFIED` status needed for the verdict; and naming any depth-bound stop that settled a judgment. This does not override `GoalArtifact`, assigned bias or review focus, truth tables, or allowed verdict sets.
 
 ## Thinking Panel
 
-Run six whole-picture philosopher seats before choosing a plan — the same universal judgment lenses the consensus engine debates with. Each seat is one independent, context-isolated perspective that attacks from its own objective; the seats can and do disagree, and the meta-judge converges them:
+Protocol policy, not a mathematical consequence: run six whole-picture philosopher seats before choosing a plan — the same universal judgment lenses the consensus engine debates with. Each seat is one independent, context-isolated perspective that attacks from its own objective; the seats can and do disagree, and the meta-judge converges them:
 
 - `teleology`: purpose and inevitability. What is this for, and is the form forced by that purpose? Attacks skipped-purpose and missing-inevitability.
 - `parsimony`: economy. Delete until nothing is left to delete; every element must prove its right to exist. Attacks magic numbers, symptom branches, and machinery that has not earned its place.
@@ -285,15 +265,15 @@ An `implement` exit also requires no unresolved harness overlap or authority gap
 
 At this existing `meta_judge` implement-exit gate, reflect on whether the goal or harness changed and whether current evidence has overturned the direction. Emit exactly one concrete action with its responsible party: `continue`, `revise`, `stop`, or `escalate`.
 
-When a seat's `SshxResultEnvelope.conclusion` records both a dedicated-domain objection and its falsifiable causal prediction, and the meta-judge's proposed convergence has not refuted that causal chain, the meta-judge must run a `FocusedRound` before converging, provided the objection passes the `DecisionGrounding` prerequisite below. An objection that objectively fails `DecisionGrounding` does not trigger a `FocusedRound`; for this prerequisite, the meta-judge checks only whether the seat named any admissible basis at all and, under `AbsorbedFailure`, whether it named a residue escaping the declared recovery path, and must not assess its persuasiveness. An objection that named a basis whose correctness is disputed still triggers the round because disputed is not absent. When the meta-judge declines a round on this ground, it records that decline in the existing `finding_downgrades` record under the same own-words requirement that governs downgrades. The three conditions must all hold simultaneously: the objection recorded in that conclusion is in that seat's exclusive domain (for example, mechanism necessity for `parsimony`, purpose-forced form for `teleology`, or cost worth for `worth`); the causal prediction recorded in that conclusion is falsifiable rather than a preference; and the meta-judge's proposed convergence has not answered that causal chain, including when it answers only a secondary point. In the focused round, all seats independently answer one question: "Does this causal chain hold, and if it does, how should the plan change?" The round does not reopen design search and preserves `## No Context Pollution`. The same causal chain triggers at most one focused round; if disagreement remains afterward, escalate to the maintainer rather than continuing. A focused round consumes the existing bounded-pass budget.
+When a seat's `SshxResultEnvelope.conclusion` records both a dedicated-domain objection and its falsifiable causal prediction, and the meta-judge's proposed convergence has not refuted that causal chain, the meta-judge must run a `FocusedRound` before converging, provided the objection passes the `DecisionGrounding` prerequisite below. An objection that objectively fails `DecisionGrounding` does not trigger a `FocusedRound`; for this prerequisite, the meta-judge checks only whether the seat named any admissible basis at all and, under `AbsorbedFailure`, whether it named a residue escaping the declared recovery path, and must not assess its persuasiveness. An objection that named a basis whose correctness is disputed still triggers the round because disputed is not absent. When the meta-judge declines a round on this ground, it records that decline in the existing `finding_downgrades` record under the same own-words requirement that governs downgrades. The three conditions must all hold simultaneously: the objection recorded in that conclusion is in that seat's exclusive domain (for example, mechanism necessity for `parsimony`, purpose-forced form for `teleology`, or cost worth for `worth`); the causal prediction recorded in that conclusion is falsifiable rather than a preference; and the meta-judge's proposed convergence has not answered that causal chain, including when it answers only a secondary point. In the focused round, all seats independently answer one question: "Does this causal chain hold, and if it does, how should the plan change?" The round preserves `## No Context Pollution`.
+
+A causal chain triggers at most one focused round. If disagreement on that chain remains afterward, escalate to the maintainer rather than run it again. A later round is a genuine reopening only when independently changed sealed inputs — external new evidence, or an authorized `GoalArtifact` or harness correction, but never conclusions generated by the completed round itself — create a different grounded obligation. Replaying the same causal chain cannot reopen. The meta-judge records every grounded conflict and its resolution; presentation format is non-normative, and only an unresolved grounded conflict blocks `implement`.
 
 An objection that fails `DecisionGrounding` under its objective-failure rule is not an unclosed `GoalArtifact` goal gap and does not by itself hold the exit out of `implement`: the meta-judge records it as advisory in the existing `finding_downgrades` record and records there the path, consumer, or `GoalArtifact` term the objecting seat itself named, or that it named none, using the objecting seat's own words and never a paraphrase. Disputed grounding stays blocking. This is not permission to set aside a reachable defect.
 
 The convergence question must be "what still differs from `GoalArtifact`?" expressed against the fixed normalized goal, constraints, and success criteria. Do not generalize the convergence pass beyond that goal gap.
 
-When the meta-judge compares materially weighed candidates, it keeps their material comparison coordinates separate; it may claim that one candidate dominates another only when the former is no worse on every material coordinate. The meta-judge must not replace those coordinates with a self-invented single scalar score; only a trade-off rule authorized by the decision owner (recorded in `GoalArtifact` or assigned through `harness.decision_ownership`) may aggregate them. If the same pair of compared endpoints receives inconsistent gain accounts for the same coordinate along different argument paths, that inconsistency is an unresolved accounting gap and must be reconciled before it can support convergence; it is never itself a convergence basis.
-
-Before any `implement` exit, the meta-judge must include in its `meta_judge.conclusion` a compact free-form ASCII relationship diagram built only from `GoalArtifact` and the returned `SshxResultEnvelope.conclusion` values: nodes are the goal subquestions or goal-gap items, the six philosopher-seat stances (`teleology`, `parsimony`, `fidelity`, `natural-ownership`, `proportional-containment`, `worth`), and the concrete plan; edges are labeled `agree`, `conflict`, `depends-on`, `resolved-by`, or `converges-to`. The diagram rigidly constrains convergence: every surfaced subquestion or goal-gap node must appear, the concrete plan must resolve every `conflict` edge — including the `natural-ownership` vs `proportional-containment` locus clash and any `worth` not-worth-it edge — and any unresolved `conflict` edge is an unclosed `GoalArtifact` goal gap, so the exit stays `meta-layer convergence` or `abstain/escalate with options`, never `implement`. The diagram is free-form prompt-level content synthesized from conclusions only; it must not inline worker full reasoning or same-round peer output, and it is not a parsed schema field, marker data, lifecycle authority, or a blocker for valid `abstain` or `reject fake consensus` exits.
+Material comparison coordinates form a product preorder: one candidate dominates another only when it is no worse on every declared material coordinate. Incomparable candidates remain incomparable; neither a Pareto frontier nor a linear extension is itself a stop rule. Choosing among incomparable candidates requires an owner-sourced, versioned, scoped orientation recorded in `GoalArtifact` or assigned through `harness.decision_ownership`. Path-summed gain reconciliation applies only to coordinates with declared additive structure; every other coordinate is compared by its absolute endpoints. A missing or disputed orientation is `ASSUMED-UNVERIFIED` and cannot support convergence.
 
 ## Implementation Worker
 
@@ -305,13 +285,13 @@ Implementation must be delegated to a worker using the stage's default carrier u
 
 ## Review Triplet
 
-After implementation, run three review perspectives:
+Protocol policy, not a mathematical consequence: after implementation, run three review perspectives:
 
 - `architecture`: boundaries, contracts, coupling, and maintainability.
 - `quality`: behavior, edge cases, failure modes, and user impact.
 - `tests`: coverage, determinism, and verification strength.
 
-Reviewers must check protocol text for newly added exception clauses, statements that contradict existing clauses, and semantic weakening of existing propositions.
+Reviewers must check protocol text for newly added exception clauses, statements that contradict existing clauses, semantic weakening of existing propositions, and external identifier or source coupling that lexical token shapes cannot recognize. This reviewer duty is the declared absorber for the residual classes that positional and lexical checks cannot decide: whether arbitrary English semantically entails such a weakening, and whether an unrecognized token or phrase couples the contract to an external identifier or source.
 
 Before approving, commenting, or rejecting, each reviewer must apply `## Reasoning Discipline` to every implementation interpretation, repair candidate, or approval path it weighs and surface the compact reasoning-discipline note in `SshxResultEnvelope.conclusion` before returning a verdict.
 
@@ -337,9 +317,9 @@ Every blocking finding must explain which `GoalArtifact` term it violates and wh
 
 ## Fix Or Done
 
-Before each fix or repeated review pass, use the existing gate to ask whether the goal or harness changed and whether evidence overturned the direction; emit exactly one concrete `continue`, `revise`, `stop`, or `escalate` action and name its responsible party. When that gate weighs whether evidence has overturned the direction across repeated passes on the same blocking goal gap, distinguish evidence that the gap is reachable by the current approach from evidence that it is not. Consecutive passes without improvement are, alone, evidence of neither: they do not prove the current approach is exhausted, and they do not license further identical passes as progress. Evidenced unreachability by the current approach routes through the gate's existing `revise`, `stop`, or `escalate` actions rather than respending the shared bounded-pass budget on an unchanged approach.
+Before each fix or repeated review pass, use the existing gate to ask whether the goal or harness changed and whether evidence overturned the direction; emit exactly one concrete `continue`, `revise`, `stop`, or `escalate` action and name its responsible party. When that gate weighs whether evidence has overturned the direction across repeated passes on the same blocking goal gap, distinguish evidence that the gap is reachable by the current approach from evidence that it is not. Consecutive passes without improvement are, alone, evidence of neither: they do not prove the current approach is exhausted, and they do not license further identical passes as progress. Evidenced unreachability by the current approach routes through the gate's existing `revise`, `stop`, or `escalate` actions rather than respending the evaluation budget on an unchanged approach.
 
-If review exits `fix`, ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap by delegating it to a worker using the stage's default carrier exactly as `## Implementation Worker` requires - open a new `SshxWorkerFlightRecord` for the same `work_target` and stay orchestration-only for the repair - then rerun the review triplet on the worker's returned `conclusion`. When a pass carries more than one blocking goal gap, repair them in `GoalArtifact` order — a gap that blocks `normalized_goal` before one that blocks only its periphery — so the shared bounded budget reaches the main path first. Stop after a bounded number of fix passes and report remaining blockers honestly.
+If review exits `fix`, ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap by delegating it to a worker using the stage's default carrier exactly as `## Implementation Worker` requires - open a new `SshxWorkerFlightRecord` for the same `work_target` and stay orchestration-only for the repair - then rerun the review triplet on the worker's returned `conclusion`. When a pass carries more than one blocking goal gap, repair them in `GoalArtifact` order — a gap that blocks `normalized_goal` before one that blocks only its periphery — so the main path is repaired first. Stop when the repair bound owned below prevents another repair and report remaining blockers honestly.
 
 If review exits `done with advisory surfaced`, treat that exit as a candidate for an affirmative success claim rather than the claim itself when `## Termination Gate` applies, and route the candidate through that gate before reporting success. Include any non-blocking advisory feedback without inlining logs.
 
@@ -347,7 +327,11 @@ If review exits `explicit user decision or another bounded review pass`, either 
 
 After any explicit correction, use the existing correction gate to ask whether the goal or harness changed and whether evidence overturned the direction; emit exactly one concrete `continue`, `revise`, `stop`, or `escalate` action and name its responsible party before further work.
 
-Every bounded pass in this skill - `meta-layer convergence`, a repeated review pass, fix passes, and termination-gate passes - shares one budget that defaults to at most five passes unless the user explicitly authorizes more, and the chosen bound is recorded before the first such pass.
+This section is the sole owner of the repair rank, evaluation budget, and repair-sequence admission defined here. `RepairSequenceProvenance` is the structural admission input and has exactly these fields: `sequence_ceiling`, the frozen finite blocker set; `current_blockers`, the current finite blocker set; `origin`, exactly `initial-review`, `evaluation-discovered`, or `repair-introduced`; `authorization_source`, the complete valid stage record containing the pre-dispatch evaluation record and returned `SshxResultEnvelope` that first named the blockers; `causal_repair`, the complete repair flight record when that result found the blockers were caused by the repair it evaluated, otherwise empty; and `evaluation_metadata`, an optional descriptive evaluation label with no authorization meaning. These are nested records, not caller-written names or route labels. The initial review truth-table `fix` stage record authorizes `initial-review`; a later origin is written only by the valid evaluation result that first names the blocker, and the caller copies its fields without relabelling, clearing, or rebinding them. The complete stage record is the authorization source; `evaluation_metadata` grants no admission authority. `causal_repair` is immutable once written, and any record with a nonempty `causal_repair` or `repair-introduced` origin is terminal for this run regardless of a later source label.
+
+The repair bound is fixed before the first repair sequence by freezing its initial finite set of named current blocking `GoalArtifact` gaps. Its cardinality is the initial continuation rank and bounds only successful repair transitions. This section admits a sequence exactly once from `RepairSequenceProvenance`; mandatory evaluation scheduling consumes that admission decision and must not recompute it. After each repair, compare the current blocker set with its immediate predecessor: continue only after a witnessed strict subset transition with no added member, which consumes exactly one repair-rank unit. The initial set stays frozen only as that sequence's rank ceiling and membership reference; the changing current set is never called frozen. A blocker first named by a declared evaluation result, rather than added by the repair it evaluates, may open a distinct repair sequence only when the immutable evaluation budget can reserve both its mandatory rerun review and later termination-gate evaluation. Its finite blocker set and cardinality are then frozen as that sequence's membership reference and rank; the discovering evaluation has already consumed exactly one evaluation unit, so the immutable evaluation budget bounds how many such sequences can open. Within a repair sequence, equality, increase, or a blocker added by its repair is not repair progress and is terminal for this run: `revise` may name a changed approach for a later run but cannot launch another repair in this run, while `stop` and `escalate` likewise end this run. A nondecreasing repair attempt consumes neither counter and never resets that sequence's repair rank.
+
+Protocol policy, not a mathematical consequence: before the first evaluation pass, record a separate owner-precommitted finite evaluation budget. The declared evaluation classes are `meta-layer convergence`, `focused round`, `repeated review pass`, and `termination-gate evaluation`; each occurrence of exactly one declared class consumes exactly one evaluation unit. A repeated review pass includes the mandatory rerun review triplet after a repair, while the initial review triplet is the single occurrence fixed by the stage order and is not a repeated review pass. A termination-gate evaluation includes every evaluation of the termination truth table, including a row-1 evaluation with no roster and any evaluation that exits `reject fake termination consensus`. The precommitted evaluation budget is immutable for this run: results cannot add, replenish, reset, or replace its units. The repair/evaluation partition is exhaustive and disjoint only over transitions inside the two counter loops owned here: each such transition is a witnessed strict-subset repair that consumes exactly one repair-rank unit, one occurrence of exactly one declared evaluation class that consumes exactly one evaluation unit, or terminal for this run; no owned transition consumes both counters or escapes those three classes. Carrier launch attempts, carrier fallback selection, the initial review triplet, and focused-round chain admission or re-entry are outside that partition; they need not consume either counter or be terminal for the run, and are separately bounded by the per-flight `retry_budget`, the finite eligible-untried-carrier set, the single stage-order occurrence, and the at-most-one focused round per causal chain. Evaluation passes never consume repair rank, and repair attempts never consume evaluation units. The recorded budget must leave the protocol-mandatory rerun review and termination-gate evaluations reachable for every candidate it admits; therefore a zero-gap rank does not block those evaluations, and removing the last blocker does not spend their units. Reaching either bound reports the unresolved blocker honestly, but is never mathematical evidence of method stop or goal completion.
 
 ## Termination Gate
 
@@ -357,7 +341,9 @@ The gate binds that claim wherever it appears: in a final report, in a `done wit
 
 This gate grants no authority over the host mechanism: it must not end, extend, replace, probe, discover, infer, clear, or implement that mechanism. It adds only the duty not to assert satisfaction without termination evidence; whether host continuation ends remains host-owned.
 
-Dispatch exactly three purpose-built, independent, context-isolated termination seats. Their dispatch and completion use `WorkerDelegationContract`, `## Result Envelope`, `## Worker Completion Contract`, `## No Context Pollution`, and `## Reasoning Discipline` by reference:
+Method stop, a protocol or review exit, and `GoalArtifact` completion are separate predicates. Returning a proposal, reaching a review exit, exhausting a budget, or observing a lifecycle milestone establishes none of the others. Before evaluation, seal the current affirmative candidate, the feasible termination decision set, and an owner-sourced, versioned, scoped orientation. The affirmative claim is computed only from that sealed set and orientation. A missing current candidate, an empty feasible set, or a current candidate outside the feasible set fails closed; late narrative and logs are not stop inputs.
+
+Protocol policy, not a mathematical consequence: dispatch exactly three purpose-built, independent, context-isolated termination seats. Their dispatch and completion use `WorkerDelegationContract`, `## Result Envelope`, `## Worker Completion Contract`, `## No Context Pollution`, and `## Reasoning Discipline` by reference:
 
 - `criterion-evidence`: map every `normalized_goal` clause, constraint, and `success_criteria` item to current evidence. Absence of evidence is never satisfaction.
 - `residual-gap`: adversarially falsify termination by answering the existing `iteration_question` with one concrete remaining difference from `GoalArtifact`, and name the responsible party for it. It must not broaden into a generic improvement search. The named difference must pass `DecisionGrounding`; an ungrounded worry is not a remaining difference.
@@ -388,15 +374,17 @@ Roster means the dispatch-time recorded named role identities: a named role abse
 
 The meta-judge has no termination verdict of its own and must not convert `unsatisfied`, `abstain`, or missing or invalid worker output into permission to claim success. Each termination seat applies `DecisionGrounding` itself before returning; it is never a meta-judge downgrade path here, and no valid returned `unsatisfied` that passed the seat's check may be converted into permission by calling it ungrounded. A caller judgment or review exit is never termination consensus, and only the exact distinct named termination-seat roster can be presented as such.
 
-The `withhold claim; continue against the named goal gap` exit routes that gap according to `harness.decision_ownership`. Only a work-target engineering correction assigned to the existing engineering path re-enters the review-`fix` path in `## Fix Or Done`, and its required rerun review triplet must finish before any new termination candidate. Only caller-owned orchestration remains with the authorized caller, and only new evidence from that owner may form a later candidate. A maintainer-owned product, governance, or boundary gap stops and escalates; any later routing requires a maintainer-authorized correction under `## Goal Contract`. Any gap whose declared owner does not match a route above stops and escalates to that declared owner; absent, ambiguous, or otherwise invalid ownership stops and escalates with the unresolved ownership gap.
+The `withhold claim; continue against the named goal gap` exit routes that gap according to `harness.decision_ownership`. Only a work-target engineering correction assigned to the existing engineering path re-enters the review-`fix` path in `## Fix Or Done`; because the termination-gate evaluation has already consumed an evaluation unit, its complete result supplies the `evaluation-discovered` authorization source to the sole admission owner there. A route label does not open a sequence. If admitted, the required rerun review triplet must finish before any new termination candidate. Only caller-owned orchestration remains with the authorized caller, and only new evidence from that owner may form a later candidate. A maintainer-owned product, governance, or boundary gap stops and escalates; any later routing requires a maintainer-authorized correction under `## Goal Contract`. Any gap whose declared owner does not match a route above stops and escalates to that declared owner; absent, ambiguous, or otherwise invalid ownership stops and escalates with the unresolved ownership gap.
 
 Failure withholds the affirmative claim; it is not authority to keep working indefinitely, and a carrier outage must not become an unbounded work generator. A withheld claim reports honestly under the existing `abstain` discipline, while the host retains ownership of whether its continuation ends.
 
-The gate may reach a completed result at most once per candidate affirmative termination and never gates its own exit. Every roster evaluation, including one that exits `reject fake termination consensus`, consumes exactly one unit of the shared bounded-pass budget in `## Fix Or Done` and creates no nested budget. A presentation rejected as fake termination consensus is not a completed gate run and may be corrected only while that shared budget remains. A later candidate is permitted only after new evidence or an authorized correction. At the ceiling, report the unresolved blocker and do not certify satisfaction.
+The gate may reach a completed result at most once per candidate affirmative termination and never gates its own exit. Its evaluation is charged only under the `termination-gate evaluation` class owned in `## Fix Or Done`; this gate creates no nested budget. A presentation rejected as fake termination consensus is not a completed gate run and may be corrected only while that evaluation budget remains. A later candidate is permitted only after new evidence or an authorized correction. When the evaluation bound is reached, report the unresolved blocker and do not certify satisfaction.
 
 ## Boundaries
 
 This skill is a prompt contract with a closed set of exactly four named mechanical script exceptions, governed only by `skills/sshx/CODEX_WORKER_SPEC.md` and their behavior tests:
+
+All records, contracts, gates, templates, and reasoning guidance named here are prompt-level only: none is a runtime API, daemon, CLI, parsed schema, marker family, lifecycle authority, or second transcript channel.
 
 - `skills/sshx/scripts/run-codex-worker.sh`;
 - `skills/sshx/scripts/run-codex-worker-batch.sh`;
@@ -420,218 +408,44 @@ Allowed worker carriers are limited to `codex-cli`, `nyxid-oracle`, and `isolate
 
 ## Baseline Failure Mode
 
-Without this skill, lightweight high-risk decisions tend to regress to:
+Without this skill, lightweight high-risk decisions tend to regress to these source-owned classes:
 
-- prompt-only self-application where worker reasoning lives in the caller context;
-- transcript-based pseudo-isolation presented as enough for independent workers;
-- single-threaded advice presented as enough for consensus;
-- no required worker mode declaration for peer perspectives;
-- no fixed thinking truth table;
-- no same-shape review gate before done;
-- caller self-certification that a goal is satisfied inside a declared continuation context, with no isolated termination seat behind the terminal claim;
-- asserting current-system facts without verifying actual evidence;
-- silently relying on assumed factual premises instead of marking, verifying, gap-routing, or abstaining;
-- judging only whether a plan is beautiful while never asking whether it is worth its cost, or over-building a beautiful form the goal does not need;
-- treating an imagined adversary, consumer, caller, or input path as an established premise and defending against it;
-- building defenses, validation, abstraction, or compatibility paths for a consumer no current call site or `GoalArtifact` term requires;
-- rabbit-holing into local detail that no `GoalArtifact` term reaches and letting it block done;
-- rabbit-holing into analysis depth, premise-chasing, and advisory volume that changes no `GoalArtifact`-named decision even when nothing blocks done;
-- blocking on a failure the declared retry, fallback, fail-closed, or `abstain` path already absorbs, and owing a per-case error taxonomy for a class that routes to one absorber;
-- extending an enumeration of failure cases over a class that can always be escaped by construction, instead of widening or verifying the absorber that covers it;
-- demanding a defense against a hostile or extreme condition with no named occurrence and no consumer that ordinary operation exercises;
-- spending the shared bounded budget on a peripheral blocking gap while the main-path goal gap stays open;
-- retrospective replay of already-visible evidence presented as support for a causal or future-performance claim;
-- repeating an unchanged approach across passes and presenting the repetition itself as progress, or conversely presenting a finite run of flat passes as proof the approach is exhausted;
-- collapsing heterogeneous comparison coordinates into a self-invented scalar, or letting the same change carry different gain accounts depending on the narrative path;
-- overstating carrier or model-family differences as evidence of independent priors or improved consensus quality;
-- callers improvising per-run shell for worker fan-out, terminal status collection, and artifact deletion outside any source-owned specification or behavior test;
-- pressure to use daemon, GitHub, or git orchestration for cases that only need inline consensus.
+- fake consensus: self-application, pseudo-isolation, missing worker-mode declaration, or caller self-certification in place of the fixed thinking, review, and termination rosters;
+- false grounding: unverified premises, retrospective fit, imagined relevance, or a mathematical name whose hypotheses the recorded mechanism state does not instantiate;
+- rabbit-holing: peripheral detail, repeated unchanged work, finite case registers, or per-case diagnosis after one declared absorber already determines the goal-visible route;
+- wrong convergence: beauty without worth, scalarized incomparable candidates, path-dependent gain on non-additive coordinates, or budget and lifecycle milestones presented as completion;
+- contaminated adjudication: same-round peer evidence, an out-of-prefix ledger event, or dependency-reaching evidence presented as independent;
+- boundary drift: carrier diversity over-claims, improvised worker mechanics, or daemon, GitHub, git, label, and release orchestration for an inline decision.
 
 ## Transcript Template
 
-Use this compact transcript shape when the decision is non-trivial:
+Use this compact nesting shape when the decision is non-trivial; every referenced record keeps the fields already defined by its owning section:
 
 ```text
 intake:
-  goal:
-    raw_user_input:
-    normalized_goal:
-    constraints:
-    success_criteria:
-    iteration_question:
-    harness:
-      provided_capabilities:
-      trust_boundary:
-      decision_ownership:
-    revisions:
-      - change:
-        authorization_source:
-        invalidated_completed_work:
+  goal: # GoalArtifact
   strict_peer_invisibility_required:
 worker_delegation:
   worker_mode_gate:
-    codex_cli_capability_check:
     resolved_before_any_worker_dispatch:
-    delegated_intake_context_gathering_allowed:
-    fallback_reason:
   reason:
-worker_flights:
-  - flight_id:
-    stage:
-    role:
-    worker_mode:
-    worker_carrier:
-    work_target:
-    status:
-    retry_budget:
-    attempt:
-    result_envelope_ref:
-    completion_sentinel_ref:
-thinking_panel_workers:
-  - role: teleology
-    bias:
-    visible_inputs:
-    worker_mode:
-    worker_carrier:
-    worker_flight_ref:
-    verdict:
-    conclusion:
-    log_ref:
-  - role: parsimony
-    bias:
-    visible_inputs:
-    worker_mode:
-    worker_carrier:
-    worker_flight_ref:
-    verdict:
-    conclusion:
-    log_ref:
-  - role: fidelity
-    bias:
-    visible_inputs:
-    worker_mode:
-    worker_carrier:
-    worker_flight_ref:
-    verdict:
-    conclusion:
-    log_ref:
-  - role: natural-ownership
-    bias:
-    visible_inputs:
-    worker_mode:
-    worker_carrier:
-    worker_flight_ref:
-    verdict:
-    conclusion:
-    log_ref:
-  - role: proportional-containment
-    bias:
-    visible_inputs:
-    worker_mode:
-    worker_carrier:
-    worker_flight_ref:
-    verdict:
-    conclusion:
-    log_ref:
-  - role: worth
-    bias:
-    visible_inputs:
-    worker_mode:
-    worker_carrier:
-    worker_flight_ref:
-    verdict:
-    conclusion:
-    log_ref:
-meta_judge:
-  exit:
-  concrete_plan:
-  goal_gap:
-  next_iteration_question:
-  focused_round:
-  finding_downgrades:
-  conclusion: # for an implement exit, includes the free-form ASCII relationship diagram (no separate diagram field)
-  log_ref:
-implementation_worker:
-  worker_mode:
-  worker_flight_ref:
-  conclusion:
-  log_ref:
-review_triplet_workers:
-  - role: architecture
-    bias:
-    visible_inputs:
-    worker_mode:
-    worker_carrier:
-    worker_flight_ref:
-    verdict:
-    conclusion:
-    log_ref:
-  - role: quality
-    bias:
-    visible_inputs:
-    worker_mode:
-    worker_carrier:
-    worker_flight_ref:
-    verdict:
-    conclusion:
-    log_ref:
-  - role: tests
-    bias:
-    visible_inputs:
-    worker_mode:
-    worker_carrier:
-    worker_flight_ref:
-    verdict:
-    conclusion:
-    log_ref:
+worker_flights: # ordered SshxWorkerFlightRecord entries
+thinking_panel_workers: # protocol-policy six named stage records
+meta_judge: # stage record plus concrete_plan and finding_downgrades
+implementation_worker: # stage record
+review_triplet_workers: # protocol-policy three named stage records
 fix_or_done:
-  exit:
   termination_gate:
     applies:
-    continuation_declaration_ref: # `GoalArtifact.harness.provided_capabilities`
-    seats:
-      - role: criterion-evidence
-        bias:
-        visible_inputs:
-        worker_mode:
-        worker_carrier:
-        worker_flight_ref:
-        verdict:
-        conclusion:
-        log_ref:
-      - role: residual-gap
-        bias:
-        visible_inputs:
-        worker_mode:
-        worker_carrier:
-        worker_flight_ref:
-        verdict:
-        conclusion:
-        log_ref:
-      - role: claim-integrity
-        bias:
-        visible_inputs:
-        worker_mode:
-        worker_carrier:
-        worker_flight_ref:
-        verdict:
-        conclusion:
-        log_ref:
-    meta_judge:
-      exit:
-      goal_gap:
-      next_iteration_question:
-      responsible_party:
-      conclusion:
-      log_ref:
-  conclusion:
-  log_ref:
+    continuation_declaration_ref:
+    seats: # protocol-policy exactly three named termination stage records
+    meta_judge: # termination routing record
 ```
 
 ## Verification
 
 The contract for this skill is verified by `skills/sshx/tests/test_sshx_contract.py`.
 
-Before adding or changing this skill, record the no-skill failure mode as source-owned contract or test evidence. When a new failure case appears, prefer widening or verifying the absorber that already covers its class to adding another case entry: the register cannot be completed, and every entry added must be held true by every later change. Do not track runtime artifacts as published skill source.
+Before adding or changing this skill, record the no-skill failure mode as source-owned contract or test evidence. When a new failure case appears, prefer widening or verifying the absorber that already covers its class to adding another case entry: when the same verified construction hypothesis applies, the register cannot be completed, and every entry added must be held true by every later change. Do not track runtime artifacts as published skill source.
 
 Before publishing or changing a claim about an external carrier or tool capability, verify the exact composed workflow end to end with the real tool. Fake carriers may supplement deterministic contract tests but must not be the sole evidence for a supported capability; when real verification is unavailable, mark the claim ASSUMED-UNVERIFIED and do not expose it as a supported option.

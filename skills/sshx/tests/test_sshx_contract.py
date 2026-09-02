@@ -2,23 +2,46 @@
 
 These assertions can prove the presence and location of sections, fields, enums,
 ordering, and stable anchors, and can expose obvious deletion or replacement.
-They cannot judge the semantics of free-form English. In particular, they cannot
-prevent a retained normative sentence from being weakened by a later exception.
+They cannot judge whether arbitrary free-form English semantically entails a weakening of a
+normative proposition. That semantic-entailment question is the residual blind kernel, and
+its declared absorber is the Review Triplet duty to check exception clauses, contradictions,
+semantic weakening, and external identifier or source coupling that lexical shapes miss. The
+formal-identifier check recognizes backticked alphanumeric tokens with optional dot, underscore,
+or hyphen-separated segments, unformatted dot- or underscore-separated identifiers, and
+unformatted CamelCase identifiers. A bare single lowercase token is digest-only: it is not
+recognized as an identifier by the lexical check and remains a Review Triplet duty.
 
 Known bypass evidence for that limit, each retaining the original normative text
 and appending a weakening:
 
 1. append that the single most salient condition is sufficient to trigger;
-2. append that a later pass resets the one-round limit;
+2. append that a reformatted objection may reopen the same causal chain with unchanged sealed inputs;
 3. add panel-local precedence or reclassify the same event because of delay;
 4. treat an unavailable harness as approval;
 5. append ``merely recommended and may be omitted``;
 6. allow ``No Context Pollution`` to inline full reasoning as an exception;
 7. call the seven-stage order illustrative and permit skipped stages;
-8. allow one seat to count as a complete triplet.
+8. allow one seat to count as a complete triplet;
+9. allow evaluation units to be added after a repair result consumes reserved capacity;
+10. append ``A `revise` action may launch another repair attempt within the same run.``;
+11. append ``A repair attempt that does not strictly decrease the blocker set is not terminal and consumes no counter.``;
+12. append ``A termination truth-table row-1 evaluation that involves no roster consumes no evaluation unit.``;
+13. append ``When reserved capacity is consumed, the caller may add evaluation units after seeing a repair result.``
 
-These are known source-regression limits, not defects queued for another mechanism;
-this module does not provide end-to-end behavior validation.
+Items 2 and 9 each also have one narrow lexical assertion for the demonstrated wording. Every
+byte of ``skills/sshx/SKILL.md``, from the opening frontmatter delimiter through its terminal
+newline, is one pinned canonical normative-document span. No byte of that file is positionally
+unpinned. The stored digest is a change detector, not a semantic judge or self-authorization: a
+legitimate edit requires both a synchronized digest update and Review Triplet judgment.
+
+No Python repair-sequence transition model is maintained here. Immediate-predecessor progression,
+authorization-source admission, and mandatory evaluation reservation remain contract-text anchors;
+their semantic correctness is carried by the Review Triplet absorber rather than a parallel model.
+The behavior helpers below cover fixed truth tables and other load-bearing mechanical contracts,
+but do not infer English semantics.
+Files outside ``skills/sshx/SKILL.md`` are outside this positional boundary and remain governed
+by their own behavior checks. Whether changed English preserves the contract is likewise not
+decided by the digest and is routed to the named Review Triplet absorber.
 
 The canonical default-seat-allocation span is normative wording. Rewriting it
 requires a synchronized update to ``DEFAULT_SEAT_ALLOCATION_PATTERNS``. The
@@ -37,10 +60,12 @@ contradictory prose elsewhere are not mechanically detected. It also rejects
 same-shaped non-seat prose such as ``Only one `nyxid-oracle` conversation may be
 open per flight``; rewrite that as ``one conversation per `nyxid-oracle` flight``.
 The structural single-source checks are that the exact canonical span occurs once
-and all worker-panel or gate sections remain carrier-free.
+and all worker-panel or gate sections remain carrier-free. The whole-file digest above is the
+single positional closure owner for the canonical normative document.
 """
 
 import ast
+import hashlib
 import re
 import subprocess
 import unittest
@@ -85,6 +110,184 @@ CARDINAL_CARRIER_BINDING_PATTERN = re.compile(
     rf"\b(?:\d+|one|two|three|four|five|six)\s+(?:{'|'.join(map(re.escape, CARRIER_IDENTIFIERS))})",
     flags=re.IGNORECASE,
 )
+PERMISSIVE_SNAPSHOT_COMPLETION_PATTERN = re.compile(
+    r"(?is)(?:^|[.!?]\s+)(?=[^.!?]*\bprocess snapshot\b)"
+    r"(?=[^.!?]*\b(?:may|can|allowed)\b)"
+    r"(?=[^.!?]*\b(?:terminal completion|terminally complete|treated as terminal)\b)[^.!?]*[.!?]"
+)
+EXTERNAL_SOURCE_PATH_PATTERN = re.compile(
+    r"(?i)(?<![\w./-])(?:[a-z0-9_.-]+/)+[a-z0-9_.-]+\.(?:lean|agda|thy|v)\b"
+)
+BACKTICKED_FORMAL_IDENTIFIER_PATTERN = re.compile(r"`([A-Za-z][A-Za-z0-9]*(?:[._-][A-Za-z0-9]+)*)`")
+FORMAL_IDENTIFIER_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_.-])(?:"
+    r"[A-Za-z][A-Za-z0-9]*(?:[._][A-Za-z0-9]+)+"
+    r"|[A-Z][a-z0-9]+(?:[A-Z][A-Za-z0-9]*)+"
+    r")(?![A-Za-z0-9_-])"
+)
+EXTERNAL_REPOSITORY_IDENTIFIERS = (
+    "trureturing",
+    "the-omega-institute",
+    "D5/S3",
+    "ConceptDynamics",
+)
+SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
+    {
+        "AGENTS.md",
+        "ASSUMED-UNVERIFIED",
+        "AbsorbedFailure",
+        "CLAUDE.md",
+        "CODEX_WORKER_SPEC.md",
+        "CapabilityOverlap",
+        "ChatGPT",
+        "DecisionGrounding",
+        "ENVELOPE_INVALID",
+        "FocusedRound",
+        "GitHub",
+        "GoalArtifact",
+        "GoalArtifact.success_criteria",
+        "HEAD",
+        "INT",
+        "InlineConsensusProtocol",
+        "MEMORY.md",
+        "RepairSequenceProvenance",
+        "SIGINT",
+        "SshxResultEnvelope",
+        "SshxResultEnvelope.conclusion",
+        "SshxResultEnvelope.log_ref",
+        "SshxWorkerFlightRecord",
+        "SshxWorkerFlightRecord.stage",
+        "TERM",
+        "ThreatEligibility",
+        "VERDICT_INVALID",
+        "WorkerDelegationContract",
+        "WorkerMode",
+        "WorkerModeGate",
+        "abstain",
+        "abstained",
+        "approve",
+        "architecture",
+        "attempt",
+        "authorization_source",
+        "bias",
+        "causal_repair",
+        "caller-prior-exposed",
+        "change",
+        "choose_worker_mode",
+        "claim-integrity",
+        "codex-cli",
+        "comment",
+        "completion.sentinel",
+        "completion_sentinel",
+        "completion_sentinel_ref",
+        "conclusion",
+        "conclusion.verdict",
+        "concrete_plan",
+        "constraints",
+        "continue",
+        "continuation_declaration_ref",
+        "criterion-evidence",
+        "current_blockers",
+        "danger-full-access",
+        "decision_ownership",
+        "disown",
+        "escalate",
+        "evaluation-discovered",
+        "evaluation_metadata",
+        "exit",
+        "external-prior-exposed",
+        "fidelity",
+        "finding_downgrades",
+        "fix",
+        "fix_or_done",
+        "flight_id",
+        "goal_gap",
+        "harness",
+        "harness.decision_ownership",
+        "harness.provided_capabilities",
+        "harness.trust_boundary",
+        "implement",
+        "implementation_worker",
+        "in-flight",
+        "initial-review",
+        "intake",
+        "invalidated_completed_work",
+        "isolated-token-subagent",
+        "iteration_question",
+        "last-message.txt",
+        "log_ref",
+        "meta_judge",
+        "natural-ownership",
+        "next_iteration_question",
+        "nohup",
+        "none",
+        "normalized_goal",
+        "nyxid-oracle",
+        "origin",
+        "parsimony",
+        "proportional-containment",
+        "propose",
+        "provided_capabilities",
+        "quality",
+        "raw_user_input",
+        "reason_code",
+        "repair-introduced",
+        "resolved_before_any_worker_dispatch",
+        "reject",
+        "repo-prior-exposed",
+        "residual-gap",
+        "result.json",
+        "result_envelope_ref",
+        "result_ref",
+        "retry_budget",
+        "retrying",
+        "review_triplet_workers",
+        "revise",
+        "revisions",
+        "role",
+        "satisfied",
+        "setsid",
+        "sequence_ceiling",
+        "sshx",
+        "stage",
+        "status",
+        "status.json",
+        "stop",
+        "strict_peer_invisibility_required",
+        "success_criteria",
+        "teleology",
+        "temporary",
+        "terminal",
+        "termination",
+        "termination_gate",
+        "tests",
+        "test_sshx_contract.py",
+        "thinking_panel_workers",
+        "trust_boundary",
+        "unsatisfied",
+        "verdict",
+        "visible_inputs",
+        "wait",
+        "work_target",
+        "worker_carrier",
+        "worker_delegation",
+        "worker_delegation.reason",
+        "worker_flight_ref",
+        "worker_flights",
+        "worker_mode",
+        "worker_mode_gate",
+        "worth",
+    }
+)
+DEMONSTRATED_FOCUSED_ROUND_REOPENING_EXCEPTION = (
+    "For audit reruns, a reformatted objection may be treated as a different grounded obligation "
+    "and reopen the same causal chain even when the sealed inputs are unchanged."
+)
+DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
+    "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
+    "the repair result so the mandatory rerun review and termination roster remain reachable."
+)
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "f1ba05ab6ea839d62619d9e3bf6e4da98a3392ddb391374bbc3781d800c77e38"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -95,8 +298,8 @@ TerminationSeatResults: TypeAlias = tuple[tuple[JsonValue, JsonValue], ...]
 class TerminationResolution:
     truth_table_exit: str
     gap_route: str | None
-    shared_budget_remaining: int
-    roster_evaluations_consumed: int
+    evaluation_budget_remaining: int
+    termination_evaluations_consumed: int
     fake_consensus_correction_allowed: bool
 
 
@@ -128,6 +331,36 @@ def section(text: str, start: str, end: str) -> str:
     return text[heading_index(text, start) : heading_index(text, end)]
 
 
+def has_permissive_snapshot_completion_exception(text: str) -> bool:
+    return PERMISSIVE_SNAPSHOT_COMPLETION_PATTERN.search(text) is not None
+
+
+def backticked_formal_identifiers(text: str) -> tuple[str, ...]:
+    return tuple(match.group(1) for match in BACKTICKED_FORMAL_IDENTIFIER_PATTERN.finditer(text))
+
+
+def formal_identifiers(text: str) -> tuple[str, ...]:
+    formatted = backticked_formal_identifiers(text)
+    shaped = tuple(match.group(0) for match in FORMAL_IDENTIFIER_PATTERN.finditer(text))
+    return tuple(dict.fromkeys(formatted + shaped))
+
+
+def scientific_source_couplings(text: str) -> tuple[str, ...]:
+    normalized = text.replace("\\", "/")
+    folded = normalized.casefold()
+    repository_hits = tuple(
+        identifier for identifier in EXTERNAL_REPOSITORY_IDENTIFIERS if identifier.casefold() in folded
+    )
+    formal_identifier_hits = tuple(
+        identifier
+        for identifier in formal_identifiers(text)
+        if identifier not in SSHX_CONTRACT_FORMAL_IDENTIFIERS
+        and not re.search(r"\.(?:lean|agda|thy|v)$", identifier, flags=re.IGNORECASE)
+    )
+    path_hits = tuple(match.group(0) for match in EXTERNAL_SOURCE_PATH_PATTERN.finditer(normalized))
+    return repository_hits + formal_identifier_hits + path_hits
+
+
 def default_seat_allocation_span(text: str) -> tuple[int, int]:
     section_start = heading_index(text, "## Worker Delegation")
     worker_delegation = section(text, "## Worker Delegation", "## Result Envelope")
@@ -135,7 +368,11 @@ def default_seat_allocation_span(text: str) -> tuple[int, int]:
     end_anchor = "The carrier-role pairing must be chosen and recorded before any worker"
     if worker_delegation.count(start_anchor) != 1 or worker_delegation.count(end_anchor) != 1:
         raise AssertionError("default seat allocation boundaries must be unique")
+    policy_prefix = "Protocol policy, not a mathematical consequence: "
     relative_start = worker_delegation.index(start_anchor) + len(start_anchor)
+    if not worker_delegation.startswith(policy_prefix, relative_start):
+        raise AssertionError("default seat allocation must be labelled protocol policy")
+    relative_start += len(policy_prefix)
     allocation = worker_delegation[relative_start : worker_delegation.index(end_anchor, relative_start)].rstrip()
     normalized = re.sub(r"\s+", " ", allocation)
     blocked_token = re.search(r"\b(?:not|unless|except)\b", normalized, flags=re.IGNORECASE)
@@ -147,6 +384,13 @@ def default_seat_allocation_span(text: str) -> tuple[int, int]:
         if not re.search(pattern, normalized, flags=re.IGNORECASE):
             raise AssertionError(f"default seat allocation is missing: {proposition}")
     return section_start + relative_start, section_start + relative_start + len(allocation)
+
+
+def assert_canonical_contract_closure(text: str) -> str:
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if digest != CANONICAL_NORMATIVE_DOCUMENT_SHA256:
+        raise AssertionError("canonical normative document changed")
+    return digest
 
 
 def has_cardinal_carrier_binding_outside_default(text: str) -> bool:
@@ -260,24 +504,24 @@ def resolve_termination_claim(
     *,
     consensus_source: JsonValue = "termination-seats",
     owner_assignment: GapOwnerAssignment = (None, None),
-    shared_budget_remaining: JsonValue = 1,
+    evaluation_budget_remaining: JsonValue = 1,
 ) -> TerminationResolution:
-    if type(shared_budget_remaining) is not int or shared_budget_remaining <= 0:
+    if type(evaluation_budget_remaining) is not int or evaluation_budget_remaining <= 0:
         return TerminationResolution(
-            truth_table_exit="withhold claim; shared bounded-pass ceiling reached",
+            truth_table_exit="withhold claim; evaluation budget reached",
             gap_route=None,
-            shared_budget_remaining=0,
-            roster_evaluations_consumed=0,
+            evaluation_budget_remaining=0,
+            termination_evaluations_consumed=0,
             fake_consensus_correction_allowed=False,
         )
 
-    remaining = shared_budget_remaining - 1
+    remaining = evaluation_budget_remaining - 1
     if type(consensus_source) is not str:
         return TerminationResolution(
             truth_table_exit="reject fake termination consensus",
             gap_route=None,
-            shared_budget_remaining=remaining,
-            roster_evaluations_consumed=1,
+            evaluation_budget_remaining=remaining,
+            termination_evaluations_consumed=1,
             fake_consensus_correction_allowed=remaining > 0,
         )
     roles: list[str] = []
@@ -287,8 +531,8 @@ def resolve_termination_claim(
             return TerminationResolution(
                 truth_table_exit="reject fake termination consensus",
                 gap_route=None,
-                shared_budget_remaining=remaining,
-                roster_evaluations_consumed=1,
+                evaluation_budget_remaining=remaining,
+                termination_evaluations_consumed=1,
                 fake_consensus_correction_allowed=remaining > 0,
             )
         roles.append(role)
@@ -299,8 +543,8 @@ def resolve_termination_claim(
         return TerminationResolution(
             truth_table_exit="reject fake termination consensus",
             gap_route=None,
-            shared_budget_remaining=remaining,
-            roster_evaluations_consumed=1,
+            evaluation_budget_remaining=remaining,
+            termination_evaluations_consumed=1,
             fake_consensus_correction_allowed=remaining > 0,
         )
     if all(verdict_class == "satisfied" for verdict_class in verdict_classes):
@@ -315,8 +559,8 @@ def resolve_termination_claim(
     return TerminationResolution(
         truth_table_exit=exit_name,
         gap_route=gap_route,
-        shared_budget_remaining=remaining,
-        roster_evaluations_consumed=1,
+        evaluation_budget_remaining=remaining,
+        termination_evaluations_consumed=1,
         fake_consensus_correction_allowed=False,
     )
 
@@ -334,6 +578,95 @@ def resolve_termination_gate_applicability(
     if continuation_entry in {None, "absent"}:
         return "termination gate inapplicable"
     return "stop and escalate to the maintainer"
+
+
+def mathematical_conclusion_force(hypothesis_states: tuple[str, ...]) -> str:
+    if "false" in hypothesis_states:
+        return "inapplicable"
+    if any(state != "verified" for state in hypothesis_states):
+        return "ASSUMED-UNVERIFIED"
+    return "binding"
+
+
+def finite_listing_closure_force(
+    *,
+    fixed_point_free_constructor_verified: bool,
+    finite_domain_completeness_proven: bool,
+) -> str:
+    if fixed_point_free_constructor_verified:
+        return "not-closure-evidence"
+    if finite_domain_completeness_proven:
+        return "closure-evidence-admissible"
+    return "ASSUMED-UNVERIFIED"
+
+
+def sealed_stop_permits_claim(
+    *,
+    current_candidate: str | None,
+    feasible_set: frozenset[str],
+    decisions: tuple[str, ...],
+    sourced_orientation: tuple[bool, bool, bool],
+    late_narrative: bool = False,
+) -> bool:
+    del late_narrative
+    return (
+        current_candidate is not None
+        and bool(feasible_set)
+        and current_candidate in feasible_set
+        and all(sourced_orientation)
+        and bool(decisions)
+        and all(decision == "satisfied" for decision in decisions)
+    )
+
+
+def weak_product_dominates(left: tuple[int, ...], right: tuple[int, ...]) -> bool:
+    return len(left) == len(right) and all(left_value <= right_value for left_value, right_value in zip(left, right))
+
+
+def reconcile_gain(
+    *,
+    additive: bool,
+    absolute_endpoints: tuple[int, int],
+    path_segments: tuple[int, ...],
+) -> int:
+    if additive:
+        return sum(path_segments)
+    start, end = absolute_endpoints
+    return end - start
+
+
+def focused_round_route(
+    *,
+    completed_rounds_for_chain: int,
+    independently_changed_inputs: bool,
+    different_grounded_obligation: bool,
+) -> str:
+    if completed_rounds_for_chain == 0:
+        return "run-focused-round"
+    if independently_changed_inputs and different_grounded_obligation:
+        return "different-causal-chain"
+    return "escalate-to-maintainer"
+
+
+def independent_evidence_admitted(
+    *,
+    recorded_dependencies: frozenset[str],
+    candidate_dependency_closure: frozenset[str],
+) -> bool:
+    return recorded_dependencies.isdisjoint(candidate_dependency_closure)
+
+
+def role_ledger_valid(events: tuple[tuple[int, frozenset[int]], ...]) -> bool:
+    return all(used_evidence.issubset(range(event_index)) for event_index, used_evidence in events)
+
+
+def frozen_role_prefix(events: tuple[str, ...], decision_index: int) -> tuple[str, ...]:
+    return events[:decision_index]
+
+
+def finite_listing_has_diagonal_escape(values: tuple[int, ...], twist: dict[int, int]) -> bool:
+    diagonal = tuple(twist[value] for value in values)
+    return all(escaped != listed for escaped, listed in zip(diagonal, values))
 
 
 class SshxContractTests(unittest.TestCase):
@@ -438,11 +771,13 @@ class SshxContractTests(unittest.TestCase):
             text,
         )
 
+    def test_sshx_contract_stays_within_line_budget(self) -> None:
+        self.assertLessEqual(len(read(SKILL).splitlines()), 637)
+
     def test_sshx_goal_contract_source_regression(self) -> None:
         text = read(SKILL)
         heading_index(text, "## Goal Contract")
-        self.assertIn("`GoalArtifact` is a prompt-level record, not a runtime API", text)
-        self.assertIn("It is written during `intake` before worker mode selection or any worker dispatch", text)
+        self.assertIn("`GoalArtifact` is written during `intake` before worker mode selection or any worker dispatch", text)
         goal_section = text[heading_index(text, "## Goal Contract") : heading_index(text, "## InlineConsensusProtocol")]
         field_block = goal_section.split("`GoalArtifact` has exactly these fields:\n\n", 1)[1].split("\n\n", 1)[0]
         self.assertEqual(field_block.splitlines(), [
@@ -484,7 +819,7 @@ class SshxContractTests(unittest.TestCase):
             text,
         )
         self.assertIn("stay orchestration-only for the repair", text)
-        self.assertIn("next_iteration_question:", text)
+        self.assertIn("next iteration question", text)
 
     def test_sshx_harness_and_revisions_contract(self) -> None:
         # Source-regression only: this checks fields and stable anchors, not prose semantics.
@@ -507,6 +842,34 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("non-adversarial, not infallible", goal_section)
         self.assertEqual(text.count("`harness` is a prompt-level record containing exactly these three sub-items"), 1)
         self.assertEqual(text.count("`revisions` is an append-only list whose each item contains exactly these three sub-items"), 1)
+
+    def test_sshx_role_ledger_prefix_and_settlement_behavior(self) -> None:
+        text = read(SKILL)
+        goal = section(text, "## Goal Contract", "## InlineConsensusProtocol")
+        isolation = section(text, "## No Context Pollution", "## Reasoning Discipline")
+        valid_roster = ((0, frozenset()), (1, frozenset({0})))
+        invalid_roster = ((0, frozenset()), (1, frozenset({2})))
+        old_events = ("dispatch", "decision")
+        appended_events = old_events + ("late-correction",)
+        self.assertEqual(
+            (
+                all(
+                    anchor in isolation
+                    for anchor in [
+                        "append-only role ledger",
+                        "only evidence in its recorded prefix",
+                        "out-of-prefix evidence invalidates that roster, not an unrelated earlier roster",
+                        "later appends cannot change a frozen prefix or recompute an earlier settlement",
+                    ]
+                ),
+                "never rewrite an earlier target or recompute an earlier settlement" in goal,
+                role_ledger_valid(valid_roster),
+                role_ledger_valid(invalid_roster),
+                frozen_role_prefix(old_events, 2),
+                frozen_role_prefix(appended_events, 2),
+            ),
+            (True, True, True, False, old_events, old_events),
+        )
 
     def test_sshx_termination_trigger_and_claim_scope(self) -> None:
         text = read(SKILL)
@@ -637,6 +1000,13 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("`SshxWorkerFlightRecord.stage` set to `termination`", termination)
         self.assertNotIn("surfaces its compact note", termination.lower())
 
+    def test_sshx_termination_dispatch_policy_requires_exactly_three_seats(self) -> None:
+        termination = section(read(SKILL), "## Termination Gate", "## Termination Truth Table")
+        self.assertIn(
+            "Protocol policy, not a mathematical consequence: dispatch exactly three purpose-built, independent, context-isolated termination seats",
+            termination,
+        )
+
     def test_sshx_termination_routing_is_exhaustive_and_fail_closed(self) -> None:
         possible_results: tuple[JsonValue, ...] = ("satisfied", "unsatisfied", "abstain", None, "invalid")
         permitted = 0
@@ -750,7 +1120,7 @@ class SshxContractTests(unittest.TestCase):
                     "stop and escalate with the unresolved ownership gap",
                 )
 
-    def test_sshx_termination_resolution_consumes_one_shared_budget_unit(self) -> None:
+    def test_sshx_termination_resolution_consumes_one_evaluation_budget_unit(self) -> None:
         satisfied_results = tuple((role, "satisfied") for role in TERMINATION_ROLES)
         unsatisfied_results = ((TERMINATION_ROLES[0], "unsatisfied"),) + satisfied_results[1:]
         abstained_results = ((TERMINATION_ROLES[0], "abstain"),) + satisfied_results[1:]
@@ -774,47 +1144,47 @@ class SshxContractTests(unittest.TestCase):
                     seat_results,
                     consensus_source=source,
                     owner_assignment=("engineering", "work-target-engineering-path"),
-                    shared_budget_remaining=2,
+                    evaluation_budget_remaining=2,
                 )
                 self.assertEqual(resolution.truth_table_exit, expected_exit)
-                self.assertEqual(resolution.shared_budget_remaining, 1)
-                self.assertEqual(resolution.roster_evaluations_consumed, 1)
+                self.assertEqual(resolution.evaluation_budget_remaining, 1)
+                self.assertEqual(resolution.termination_evaluations_consumed, 1)
                 self.assertEqual(resolution.fake_consensus_correction_allowed, name == "fake-consensus")
 
         last_unit = resolve_termination_claim(
             satisfied_results,
             consensus_source="caller",
-            shared_budget_remaining=1,
+            evaluation_budget_remaining=1,
         )
-        self.assertEqual(last_unit.shared_budget_remaining, 0)
+        self.assertEqual(last_unit.evaluation_budget_remaining, 0)
         self.assertFalse(last_unit.fake_consensus_correction_allowed)
         at_ceiling = resolve_termination_claim(
             satisfied_results,
-            shared_budget_remaining=last_unit.shared_budget_remaining,
+            evaluation_budget_remaining=last_unit.evaluation_budget_remaining,
         )
-        self.assertEqual(at_ceiling.truth_table_exit, "withhold claim; shared bounded-pass ceiling reached")
-        self.assertEqual(at_ceiling.shared_budget_remaining, 0)
-        self.assertEqual(at_ceiling.roster_evaluations_consumed, 0)
+        self.assertEqual(at_ceiling.truth_table_exit, "withhold claim; evaluation budget reached")
+        self.assertEqual(at_ceiling.evaluation_budget_remaining, 0)
+        self.assertEqual(at_ceiling.termination_evaluations_consumed, 0)
 
         for invalid_budget in (None, True, 1.5, [], {"remaining": 1}, EqualityRaises()):
             with self.subTest(invalid_budget=invalid_budget):
                 resolution = resolve_termination_claim(
                     satisfied_results,
-                    shared_budget_remaining=invalid_budget,
+                    evaluation_budget_remaining=invalid_budget,
                 )
                 self.assertEqual(
                     resolution.truth_table_exit,
-                    "withhold claim; shared bounded-pass ceiling reached",
+                    "withhold claim; evaluation budget reached",
                 )
-                self.assertEqual(resolution.roster_evaluations_consumed, 0)
+                self.assertEqual(resolution.termination_evaluations_consumed, 0)
 
-        first = resolve_termination_claim(satisfied_results, consensus_source="caller", shared_budget_remaining=3)
+        first = resolve_termination_claim(satisfied_results, consensus_source="caller", evaluation_budget_remaining=3)
         second = resolve_termination_claim(
             satisfied_results,
             consensus_source="caller",
-            shared_budget_remaining=first.shared_budget_remaining,
+            evaluation_budget_remaining=first.evaluation_budget_remaining,
         )
-        self.assertEqual((first.shared_budget_remaining, second.shared_budget_remaining), (2, 1))
+        self.assertEqual((first.evaluation_budget_remaining, second.evaluation_budget_remaining), (2, 1))
 
     def test_sshx_termination_routing_requires_exact_named_roster(self) -> None:
         satisfied = "satisfied"
@@ -899,16 +1269,108 @@ class SshxContractTests(unittest.TestCase):
             "carrier outage must not become an unbounded work generator",
             "existing `abstain` discipline",
             "gate may reach a completed result at most once per candidate affirmative termination",
-            "Every roster evaluation, including one that exits `reject fake termination consensus`",
-            "consumes exactly one unit of the shared bounded-pass budget in `## Fix Or Done`",
+            "evaluation is charged only under the `termination-gate evaluation` class owned in `## Fix Or Done`",
             "creates no nested budget",
             "never gates its own exit",
-            "presentation rejected as fake termination consensus is not a completed gate run and may be corrected only while that shared budget remains",
+            "presentation rejected as fake termination consensus is not a completed gate run and may be corrected only while that evaluation budget remains",
             "later candidate is permitted only after new evidence or an authorized correction",
-            "At the ceiling, report the unresolved blocker and do not certify satisfaction",
+            "When the evaluation bound is reached, report the unresolved blocker and do not certify satisfaction",
         ]:
             self.assertIn(anchor, truth_table)
         self.assertIn("This gate grants no authority over the host mechanism", text)
+
+    def test_sshx_nonachievement_routes_report_honestly(self) -> None:
+        text = read(SKILL)
+        delegation = section(text, "## Worker Delegation", "## Result Envelope")
+        fix_or_done = section(text, "## Fix Or Done", "## Termination Gate")
+        termination = section(text, "## Termination Gate", "## Boundaries")
+        self.assertIn(
+            "Only when no eligible untried carrier remains or every fallback fails to produce terminal completion is the result `abstain`",
+            delegation,
+        )
+        self.assertIn(
+            "Stop when the repair bound owned below prevents another repair and report remaining blockers honestly",
+            fix_or_done,
+        )
+        self.assertIn("Reaching either bound reports the unresolved blocker honestly", fix_or_done)
+        self.assertIn(
+            "A withheld claim reports honestly under the existing `abstain` discipline",
+            termination,
+        )
+        self.assertIn(
+            "When the evaluation bound is reached, report the unresolved blocker and do not certify satisfaction",
+            termination,
+        )
+
+    def test_sshx_termination_uses_only_sealed_stop_inputs(self) -> None:
+        termination = section(read(SKILL), "## Termination Gate", "## Termination Truth Table")
+        orientation = (True, True, True)
+        self.assertEqual(
+            (
+                all(
+                    anchor in termination
+                    for anchor in [
+                        "Method stop, a protocol or review exit, and `GoalArtifact` completion are separate predicates",
+                        "seal the current affirmative candidate, the feasible termination decision set",
+                        "affirmative claim is computed only from that sealed set and orientation",
+                        "late narrative and logs are not stop inputs",
+                    ]
+                ),
+                sealed_stop_permits_claim(
+                    current_candidate="candidate",
+                    feasible_set=frozenset({"candidate"}),
+                    decisions=("satisfied", "satisfied", "satisfied"),
+                    sourced_orientation=orientation,
+                ),
+                sealed_stop_permits_claim(
+                    current_candidate=None,
+                    feasible_set=frozenset({"candidate"}),
+                    decisions=("satisfied",) * 3,
+                    sourced_orientation=orientation,
+                ),
+                sealed_stop_permits_claim(
+                    current_candidate="candidate",
+                    feasible_set=frozenset(),
+                    decisions=("satisfied",) * 3,
+                    sourced_orientation=orientation,
+                ),
+                sealed_stop_permits_claim(
+                    current_candidate="candidate",
+                    feasible_set=frozenset({"other"}),
+                    decisions=("satisfied",) * 3,
+                    sourced_orientation=orientation,
+                ),
+                sealed_stop_permits_claim(
+                    current_candidate="candidate",
+                    feasible_set=frozenset({"candidate"}),
+                    decisions=("satisfied",) * 3,
+                    sourced_orientation=(True, False, True),
+                    late_narrative=True,
+                ),
+            ),
+            (True, True, False, False, False, False),
+        )
+
+    def test_sshx_mathematical_applicability_behavior(self) -> None:
+        reasoning = section(read(SKILL), "## Reasoning Discipline", "## Thinking Panel")
+        self.assertEqual(
+            (
+                all(
+                    anchor in reasoning
+                    for anchor in [
+                        "recorded state instantiates every hypothesis",
+                        "name applied by analogy carries no blocking, convergence, or completion force",
+                        "missing or disputed instantiation is `ASSUMED-UNVERIFIED`",
+                        "false instantiation makes the conclusion inapplicable",
+                    ]
+                ),
+                mathematical_conclusion_force(("verified", "verified")),
+                mathematical_conclusion_force(("verified", "missing")),
+                mathematical_conclusion_force(("verified", "disputed")),
+                mathematical_conclusion_force(("verified", "false")),
+            ),
+            (True, "binding", "ASSUMED-UNVERIFIED", "ASSUMED-UNVERIFIED", "inapplicable"),
+        )
 
     def test_sshx_boundary_predicates_have_single_definitions(self) -> None:
         # Source-regression only: this checks unique definitions and references, not runtime enforcement.
@@ -974,6 +1436,38 @@ class SshxContractTests(unittest.TestCase):
         )
         self.assertNotIn("Concern" + "Grounding", text)
 
+    def test_sshx_dependency_closure_admission_is_antitone(self) -> None:
+        reasoning = section(read(SKILL), "## Reasoning Discipline", "## Thinking Panel")
+        direct_dependency = frozenset({"candidate-output"})
+        small_closure = frozenset({"candidate-input"})
+        enlarged_closure = small_closure | direct_dependency
+        self.assertEqual(
+            (
+                all(
+                    anchor in reasoning
+                    for anchor in [
+                        "recorded use to generate, tune, or select reaches the candidate's dependency closure",
+                        "Enlarging that closure may only remove admission, never restore it",
+                        "shared model family, inherited repository prior, or disclosed prior alone does not prove contamination",
+                        "only a recorded dependency path does",
+                    ]
+                ),
+                independent_evidence_admitted(
+                    recorded_dependencies=direct_dependency,
+                    candidate_dependency_closure=small_closure,
+                ),
+                independent_evidence_admitted(
+                    recorded_dependencies=direct_dependency,
+                    candidate_dependency_closure=enlarged_closure,
+                ),
+                independent_evidence_admitted(
+                    recorded_dependencies=frozenset(),
+                    candidate_dependency_closure=enlarged_closure,
+                ),
+            ),
+            (True, True, False, True),
+        )
+
     def test_sshx_absorbed_failure_limb_contract(self) -> None:
         text = read(SKILL)
         reasoning = section(text, "## Reasoning Discipline", "## Thinking Panel")
@@ -995,25 +1489,52 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(anchor, reasoning)
 
-    def test_sshx_enumeration_is_not_an_absorber(self) -> None:
+    def test_sshx_enumeration_escape_requires_verified_construction(self) -> None:
         text = read(SKILL)
         reasoning = section(text, "## Reasoning Discipline", "## Thinking Panel")
-        anchor = "Enumeration is not an absorber"
-        self.assertEqual(text.count(anchor), 1)
-        for fragment in [
-            "any finite list of failure cases can be escaped by a case built from that list",
-            "the longer the list grows the likelier a fresh case escapes it",
-            "each further case entry buys less protection than the last while costing more to keep true",
-            "widen or verify the absorber instead of extending the register",
-            "extending an enumeration over an absorbed class is an ugly defect under the aesthetic verdict, not diligence",
-        ]:
-            self.assertIn(fragment, reasoning)
         verification = text[heading_index(text, "## Verification") :]
-        self.assertIn(
-            "prefer widening or verifying the absorber that already covers its class to adding another case entry",
-            verification,
+        self.assertEqual(
+            (
+                all(
+                    fragment in reasoning
+                    for fragment in [
+                        "Enumeration is not itself an absorber",
+                        "finite listing is not closure evidence when the recorded case class has a verified fixed-point-free self-application constructor",
+                        "that constructor builds an escaping case from the listing",
+                        "without that construction hypothesis, a separately proven finite-domain completeness result remains admissible",
+                        "widen or verify the absorber instead of extending the register",
+                    ]
+                ),
+                "no finite listing of cases is escape-free" not in reasoning,
+                "the longer the list grows the likelier" not in reasoning,
+                "when the same verified construction hypothesis applies, the register cannot be completed" in verification,
+                finite_listing_closure_force(
+                    fixed_point_free_constructor_verified=True,
+                    finite_domain_completeness_proven=False,
+                ),
+                finite_listing_closure_force(
+                    fixed_point_free_constructor_verified=False,
+                    finite_domain_completeness_proven=True,
+                ),
+                finite_listing_closure_force(
+                    fixed_point_free_constructor_verified=False,
+                    finite_domain_completeness_proven=False,
+                ),
+                finite_listing_has_diagonal_escape((0, 1, 0), {0: 1, 1: 0}),
+                finite_listing_has_diagonal_escape((0, 1, 0), {0: 0, 1: 1}),
+            ),
+            (
+                True,
+                True,
+                True,
+                True,
+                "not-closure-evidence",
+                "closure-evidence-admissible",
+                "ASSUMED-UNVERIFIED",
+                True,
+                False,
+            ),
         )
-        self.assertIn("the register cannot be completed", verification)
 
     def test_sshx_preventive_defense_requires_named_occurrence(self) -> None:
         text = read(SKILL)
@@ -1037,12 +1558,11 @@ class SshxContractTests(unittest.TestCase):
         anchor = (
             "When a pass carries more than one blocking goal gap, repair them in "
             "`GoalArtifact` order — a gap that blocks `normalized_goal` before one that "
-            "blocks only its periphery — so the shared bounded budget reaches the main "
-            "path first."
+            "blocks only its periphery — so the main path is repaired first."
         )
         self.assertEqual(text.count(anchor), 1)
         self.assertIn(anchor, fix_or_done)
-        self.assertIn("Stop after a bounded number of fix passes", fix_or_done)
+        self.assertIn("Stop when the repair bound owned below prevents another repair", fix_or_done)
 
     def test_sshx_depth_discipline_contract(self) -> None:
         text = read(SKILL)
@@ -1251,19 +1771,18 @@ class SshxContractTests(unittest.TestCase):
             "never silently rely",
         ]:
             self.assertIn(required, reasoning_section)
+        boundaries = section(text, "## Boundaries", "## Baseline Failure Mode")
         for boundary in [
-            "not a runtime API",
-            "not a daemon",
-            "not a CLI",
-            "not a parsed schema field",
-            "not marker data",
-            "not lifecycle authority",
-            "not a second transcript channel",
-            "not mandatory citation work",
-            "not a literature search",
-            "not a blocker for valid",
+            "prompt-level only",
+            "runtime API",
+            "daemon",
+            "CLI",
+            "parsed schema",
+            "marker family",
+            "lifecycle authority",
+            "second transcript channel",
         ]:
-            self.assertIn(boundary, reasoning_section)
+            self.assertIn(boundary, boundaries)
         self.assertIn(
             "This does not override `GoalArtifact`, assigned bias or review focus, truth tables, or allowed verdict sets",
             reasoning_section,
@@ -1331,7 +1850,7 @@ class SshxContractTests(unittest.TestCase):
         design_truth_start = text.index("## Design Truth Table")
         thinking_section = text[thinking_start:design_truth_start]
         self.assertIn(
-            "Run six whole-picture philosopher seats before choosing a plan",
+            "run six whole-picture philosopher seats before choosing a plan",
             thinking_section,
         )
         for seat in [
@@ -1371,6 +1890,18 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn(
             "A plan that only patches a surface symptom while leaving that root cause in place does not satisfy the thinking gate",
             thinking_section,
+        )
+
+    def test_sshx_cardinalities_relevance_and_evaluation_budget_are_protocol_policy(self) -> None:
+        text = read(SKILL)
+        self.assertEqual(
+            (
+                text.count("Protocol policy, not a mathematical consequence:"),
+                "Carrier heterogeneity is this protocol's policy, not a theorem premise or consequence" in text,
+                "Protocol policy, not mathematics, defines its relevance bases" in text,
+                "before the first evaluation pass, record a separate owner-precommitted finite evaluation budget" in text,
+            ),
+            (5, True, True, True),
         )
 
     def test_sshx_fixed_routing_units_and_reflection_actions(self) -> None:
@@ -1418,21 +1949,6 @@ class SshxContractTests(unittest.TestCase):
             ),
             "missing FocusedRound three-condition trigger or fixed question",
         )
-        one_round_bound_present = any(
-            anchor in design_section for anchor in ["at most one focused round", "only one focused round"]
-        )
-        self.assertTrue(
-            one_round_bound_present
-            and all(
-                anchor in design_section
-                for anchor in [
-                    "causal chain",
-                    "disagreement remains afterward",
-                    "escalate to the maintainer",
-                ]
-            ),
-            "missing FocusedRound same-chain one-round bound or maintainer escalation",
-        )
         self.assertTrue(
             all(
                 anchor in review_section
@@ -1472,6 +1988,45 @@ class SshxContractTests(unittest.TestCase):
                 self.assertIn(action, contract_section)
             self.assertIn("responsible party", contract_section)
 
+    def test_sshx_focused_round_has_one_round_per_causal_chain(self) -> None:
+        text = read(SKILL)
+        design = section(text, "## Design Truth Table", "## Implementation Worker")
+        self.assertNotIn(DEMONSTRATED_FOCUSED_ROUND_REOPENING_EXCEPTION, text)
+        self.assertEqual(
+            (
+                all(
+                    anchor in design
+                    for anchor in [
+                        "causal chain triggers at most one focused round",
+                        "disagreement on that chain remains afterward, escalate to the maintainer",
+                        "independently changed sealed inputs",
+                        "never conclusions generated by the completed round itself",
+                        "create a different grounded obligation",
+                        "Replaying the same causal chain cannot reopen",
+                        "records every grounded conflict and its resolution",
+                        "presentation format is non-normative",
+                        "only an unresolved grounded conflict blocks `implement`",
+                    ]
+                ),
+                focused_round_route(
+                    completed_rounds_for_chain=0,
+                    independently_changed_inputs=False,
+                    different_grounded_obligation=False,
+                ),
+                focused_round_route(
+                    completed_rounds_for_chain=1,
+                    independently_changed_inputs=False,
+                    different_grounded_obligation=True,
+                ),
+                focused_round_route(
+                    completed_rounds_for_chain=1,
+                    independently_changed_inputs=True,
+                    different_grounded_obligation=True,
+                ),
+            ),
+            (True, "run-focused-round", "escalate-to-maintainer", "different-causal-chain"),
+        )
+
     def test_sshx_repeated_pass_evidence_is_fix_or_done_owned(self) -> None:
         text = read(SKILL)
         fix_or_done = section(text, "## Fix Or Done", "## Termination Gate")
@@ -1483,7 +2038,7 @@ class SshxContractTests(unittest.TestCase):
             "do not prove the current approach is exhausted",
             "do not license further identical passes as progress",
             "Evidenced unreachability by the current approach routes through the gate's existing `revise`, `stop`, or `escalate` actions",
-            "rather than respending the shared bounded-pass budget on an unchanged approach",
+            "rather than respending the evaluation budget on an unchanged approach",
         ]:
             self.assertIn(anchor, fix_or_done)
             self.assertNotIn(anchor, outside_fix_or_done)
@@ -1537,8 +2092,8 @@ class SshxContractTests(unittest.TestCase):
         )
         self.assertIn("Do not self-apply the triplet inside the caller context", text)
         self.assertIn("fallible advisory worker exactly like `codex-cli`, never a privileged oracle", text)
-        self.assertIn("carrier heterogeneity improves consensus quality", text)
-        self.assertIn("statistically independent priors is `ASSUMED-UNVERIFIED`", text)
+        self.assertIn("Carrier heterogeneity is this protocol's policy, not a theorem premise or consequence", text)
+        self.assertIn("improves consensus quality or yields statistically independent priors is `ASSUMED-UNVERIFIED`", text)
         self.assertIn("carrier-role pairing must be chosen and recorded before any worker", text)
         self.assertIn("three-seat `## Termination Gate` follows that same layout", text)
         self.assertIn("`tests` review seat must be assigned to a carrier capable of executing", text)
@@ -1628,7 +2183,7 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_worker_mode_gate_blocks_delegated_dispatch_before_mode_resolution(self) -> None:
         text = read(SKILL)
-        self.assertIn("`WorkerModeGate` is a prompt-level dispatch gate, not a runtime API", text)
+        self.assertIn("`WorkerModeGate` requires resolution before dispatch", text)
         self.assertIn(
             "During `intake`, the caller may use its own read-only tools to inspect the user's input and write `GoalArtifact`; this caller-owned read-only intake is not worker dispatch",
             text,
@@ -1637,11 +2192,8 @@ class SshxContractTests(unittest.TestCase):
             "Before any worker dispatch, including delegated intake context-gathering by subagent, Agent, Task, or codex, the caller must complete the non-mutating `codex-cli` capability check and resolve `WorkerMode`",
             text,
         )
-        self.assertIn("codex_cli_capability_check:", text)
         self.assertIn("worker_mode_gate:", text)
         self.assertIn("resolved_before_any_worker_dispatch:", text)
-        self.assertIn("delegated_intake_context_gathering_allowed:", text)
-        self.assertIn("fallback_reason:", text)
         self.assertIn("  reason:", text)
         self.assertLess(
             text.index("Before any worker dispatch"),
@@ -1653,10 +2205,9 @@ class SshxContractTests(unittest.TestCase):
         )
 
     def test_sshx_isolated_subagent_completion_rule(self) -> None:
-        text = read(SKILL)
-        self.assertIn("For `isolated-token-subagent` workers, terminal completion is recognized only when", text)
-        self.assertIn("its `completion_sentinel_ref` is recorded as `n/a`", text)
-        self.assertIn("the flight becomes `abstained` and follows the origin-agnostic fallback rule", text)
+        completion = section(read(SKILL), "## Worker Completion Contract", "## No Context Pollution")
+        self.assertIn("using `n/a` only when the carrier has no independent sentinel", completion)
+        self.assertIn("otherwise returns `abstain`", completion)
 
     def test_sshx_nyxid_oracle_completion_rule(self) -> None:
         text = read(SKILL)
@@ -1671,89 +2222,37 @@ class SshxContractTests(unittest.TestCase):
             worker_delegation.lower(),
         )
         self.assertIn(
-            "governed solely by `## Worker Completion Contract` and are not restated here",
+            "Completion and verdict recognition use only `## Worker Completion Contract`",
             worker_delegation,
         )
-        self.assertNotIn("finite recovery read sequence", worker_delegation.lower())
-        self.assertIn("when an attempt's dispatch invocation reports a structured terminal status", completion_contract)
-        self.assertIn("that attempt does not enter recovery", completion_contract)
-        self.assertIn("one bounded `nyxid oracle result` read", completion_contract)
-        self.assertIn("that read is the attempt's single collection read", completion_contract)
-        normal_unparseable_route = (
-            "If that collection read's output is missing or unparseable, including empty or truncated output "
-            "or output without a parseable structured status/result wrapper, it is not terminal completion: "
-            "the matching flight becomes `abstained` and follows the origin-agnostic fallback rule"
-        )
-        self.assertIn(normal_unparseable_route, completion_contract)
-        self.assertIn("only when both of these conditions hold", completion_contract)
-        self.assertIn("structured terminal `status=completed`", completion_contract)
-        self.assertIn("the `response` payload parses as a valid `SshxResultEnvelope`", completion_contract)
-        self.assertIn("Intermediate task statuses (`queued`, `dispatched`", completion_contract)
-        self.assertIn("no worker-owned independent completion sentinel", completion_contract)
-        self.assertIn("records `result_envelope_ref` on the matching flight", completion_contract)
-        self.assertIn("records `completion_sentinel_ref` there as `n/a`", completion_contract)
-        self.assertIn("stage record's `log_ref`", completion_contract)
-        self.assertNotIn("the flight's `log_ref`", completion_contract.lower())
-        self.assertIn(
-            "response prose, stdout, echoes, and log tails are never completion or verdict evidence",
-            completion_contract,
-        )
+        self.assertIn("For every worker carrier, completion and verdict routing use one fail-closed predicate", completion_contract)
+        self.assertNotIn("For `nyxid-oracle` workers", completion_contract)
 
     def test_sshx_nyxid_oracle_recovery_trigger_and_bounds(self) -> None:
-        completion_contract = section(read(SKILL), "## Worker Completion Contract", "## No Context Pollution")
-        trigger = "enters dispatch-exit recovery only when both of these conditions hold"
-        submitted = "dispatch call successfully submitted the oracle task"
-        recorded = "caller recorded that task's oracle task reference"
-        abnormal_exit = "dispatch call then exited unexpectedly before reporting a structured terminal status"
-        self.assertIn(trigger, completion_contract)
-        self.assertIn(submitted, completion_contract)
-        self.assertIn(recorded, completion_contract)
-        self.assertIn(abnormal_exit, completion_contract)
-        self.assertIn("If the oracle task reference is unavailable, the attempt does not enter recovery", completion_contract)
-        self.assertIn("the matching flight becomes `abstained` and follows the origin-agnostic fallback rule", completion_contract)
-        self.assertIn("finite recovery read sequence against that same oracle task", completion_contract)
-        self.assertIn("read-count upper bound and delay schedule must be chosen and recorded before the first recovery read", completion_contract)
-        self.assertIn("Every scheduled delay must be positive and non-decreasing", completion_contract)
-        self.assertIn("subject to the caller harness's task deadline", completion_contract)
+        text = read(SKILL)
+        completion_contract = section(text, "## Worker Completion Contract", "## No Context Pollution")
+        self.assertNotIn("finite recovery read sequence", completion_contract.lower())
+        self.assertIn("declared finite retry and fallback path", completion_contract)
+        self.assertIn("highest-priority eligible untried carrier", section(text, "## Worker Delegation", "## Result Envelope"))
 
     def test_sshx_nyxid_oracle_recovery_read_semantics(self) -> None:
         completion_contract = section(read(SKILL), "## Worker Completion Contract", "## No Context Pollution")
-        non_terminal = "A recovery read that returns a structured non-terminal status is only a waiting recovery observation"
-        first_terminal = "The first recovery read that returns a structured terminal status becomes that attempt's one and only collection read"
-        self.assertIn(non_terminal, completion_contract)
-        self.assertIn("it is not that attempt's collection read and provides no completion or verdict evidence", completion_contract)
-        missing_or_unparseable = "A recovery read whose output is missing or unparseable is likewise only a waiting recovery observation"
-        self.assertIn(missing_or_unparseable, completion_contract)
-        self.assertIn("it consumes one predeclared recovery read slot", completion_contract)
-        self.assertIn("is not that attempt's collection read", completion_contract)
-        self.assertIn("provides no completion or verdict evidence", completion_contract)
-        self.assertIn("if a slot remains, the recovery sequence may continue", completion_contract)
-        self.assertIn(first_terminal, completion_contract)
-        self.assertIn("after that terminal read, the caller must perform no additional reads", completion_contract)
-        self.assertLess(completion_contract.index(non_terminal), completion_contract.index(first_terminal))
-        self.assertLess(completion_contract.index(missing_or_unparseable), completion_contract.index(first_terminal))
-        self.assertIn("Terminal completion is recognized only when both of these conditions hold", completion_contract)
-        self.assertIn("a unique collection read that returns any status other than the structured terminal `status=completed`", completion_contract)
-        self.assertIn("a `completed` collection read whose response envelope or required verdict is missing or invalid", completion_contract)
-        self.assertIn("exhaustion of the recovery sequence without any structured terminal status", completion_contract)
-        self.assertIn("makes the matching flight `abstained` under the origin-agnostic fallback rule", completion_contract)
-        self.assertIn("not a polling authorization", completion_contract)
-        self.assertIn("ordinary polling and busy-polling prohibition remains unchanged", completion_contract)
-        self.assertIn("server-side lifecycle is independent of the waiting client invocation", completion_contract)
-        self.assertIn("`result` reads are non-destructive state reads", completion_contract)
+        for required in [
+            "carrier has successfully exited or returned terminally",
+            "matching flight records a valid `SshxResultEnvelope`",
+            "required `conclusion.verdict` is in that stage's allowed set",
+            "required completion evidence is recorded in `completion_sentinel_ref`",
+            "do not create a carrier-specific meaning of completion",
+        ]:
+            self.assertIn(required, completion_contract)
 
     def test_sshx_nyxid_oracle_blind_redispatch_is_idempotent_and_bounded(self) -> None:
-        worker_delegation = section(read(SKILL), "## Worker Delegation", "## Result Envelope")
-        self.assertIn("When blindly redispatching the same `nyxid-oracle` attempt", worker_delegation)
-        self.assertIn("SHOULD reuse one stable submitter-scoped idempotency reference", worker_delegation)
-        self.assertIn("repeated submissions converge on the same oracle task", worker_delegation)
-        self.assertIn("carrier-supported client reference mechanism; this example is non-normative", worker_delegation)
-        self.assertIn("A new attempt must use a new idempotency reference", worker_delegation)
-        self.assertIn("This sentence does not itself authorize any redispatch", worker_delegation)
-        self.assertIn("any blind redispatch must already be authorized by the existing bounded-attempt rules", worker_delegation)
-        self.assertIn("it never replaces same-task recovery", worker_delegation)
-        self.assertNotIn("does not authorize unlimited redispatch", worker_delegation.lower())
-        self.assertNotIn("--client-ref", worker_delegation)
+        text = read(SKILL)
+        completion = section(text, "## Worker Completion Contract", "## No Context Pollution")
+        self.assertNotIn("blindly redispatching", text.lower())
+        self.assertNotIn("dispatch-exit recovery", text.lower())
+        self.assertNotIn("same-task recovery", text.lower())
+        self.assertIn("one fail-closed predicate", completion)
 
     def test_sshx_nyxid_oracle_public_github_reference_rule(self) -> None:
         skill = read(SKILL)
@@ -1846,8 +2345,8 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(contract_string, worker_delegation)
         self.assertLess(
-            worker_delegation.index("one collection read of the derived"),
-            worker_delegation.index("`codex-cli` completion is recognized only when"),
+            text.index("one collection read of the derived"),
+            text.index("## Worker Completion Contract"),
         )
 
     def test_sshx_packaging_only_retry_contract(self) -> None:
@@ -1969,16 +2468,15 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_completion_requires_envelope_and_worker_sentinel(self) -> None:
         text = read(SKILL)
-        self.assertIn("recognized only when the caller has both a terminal `SshxResultEnvelope`", text)
-        self.assertIn("worker-owned `completion_sentinel_ref` recorded on the matching flight", text)
+        completion = section(text, "## Worker Completion Contract", "## No Context Pollution")
+        self.assertIn("matching flight records a valid `SshxResultEnvelope`", completion)
+        self.assertIn("required completion evidence is recorded in `completion_sentinel_ref`", completion)
         for forbidden_evidence in [
-            "`pgrep`",
-            "process-table snapshots",
-            "log marker strings",
-            "empty `git status` output",
+            "completion markers",
+            "verdict-looking text",
+            "process snapshot",
         ]:
-            self.assertIn(forbidden_evidence, text)
-        self.assertIn("are never completion evidence", text)
+            self.assertIn(forbidden_evidence, completion)
 
         self.assertTrue(
             has_terminal_completion(
@@ -2067,7 +2565,7 @@ class SshxContractTests(unittest.TestCase):
     def test_sshx_result_envelope_contract(self) -> None:
         text = read(SKILL)
         heading_index(text, "## Result Envelope")
-        self.assertIn("`SshxResultEnvelope` is a prompt-level record, not a runtime API", text)
+        self.assertIn("All records, contracts, gates, templates, and reasoning guidance named here are prompt-level only", text)
         self.assertIn(
             "Every `SshxResultEnvelope` returned by `thinking_panel_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields",
             text,
@@ -2102,34 +2600,30 @@ class SshxContractTests(unittest.TestCase):
     def test_sshx_worker_completion_contract(self) -> None:
         text = read(SKILL)
         heading_index(text, "## Worker Completion Contract")
-        self.assertIn("worker carrier process has exited with status `0`", text)
-        self.assertIn("runner-derived, runner-owned `result_ref` artifact exists", text)
-        self.assertIn("parses as a valid `SshxResultEnvelope`", text)
-        self.assertIn(
-            "the runner-derived, runner-owned `completion_sentinel` artifact exists and is recorded as `completion_sentinel_ref` on the matching `SshxWorkerFlightRecord`",
-            text,
-        )
-        self.assertIn("`conclusion.verdict`", text)
-        self.assertIn("A worker is not done while its carrier process is still running", text)
+        completion = section(text, "## Worker Completion Contract", "## No Context Pollution")
+        self.assertIn("one fail-closed predicate", completion)
+        self.assertIn("carrier has successfully exited or returned terminally", completion)
+        self.assertIn("matching flight records a valid `SshxResultEnvelope`", completion)
+        self.assertIn("required `conclusion.verdict` is in that stage's allowed set", completion)
+        self.assertIn("required completion evidence is recorded in `completion_sentinel_ref`", completion)
+        self.assertIn("A worker is not done while its carrier is still running", completion)
         for diagnostic_surface in [
             "stdout",
             "stderr",
             "raw transcripts",
             "final text",
             "prompt echoes",
-            "`log_ref` content",
+            "`log_ref`",
             "log tails",
+            "`status.json`",
+            "batch report",
+            "process snapshot",
         ]:
-            self.assertIn(diagnostic_surface, text)
-        self.assertIn("diagnostic only", text)
-        self.assertIn("must not participate in done detection or verdict routing", text)
-        self.assertIn("placeholder verdicts", text)
-        self.assertIn("fail closed", text)
-        contract = text.split("For `codex-cli` workers, caller-side completion", 1)[1].split("\n\nA worker", 1)[0]
-        self.assertLess(contract.index("carrier process has exited"), contract.index("`result_ref` artifact exists"))
-        self.assertLess(contract.index("`result_ref` artifact exists"), contract.index("parses as a valid"))
-        self.assertLess(contract.index("parses as a valid"), contract.index("`conclusion.verdict`"))
-        self.assertLess(contract.index("`conclusion.verdict`"), contract.index("`completion_sentinel` artifact exists"))
+            self.assertIn(diagnostic_surface, completion)
+        self.assertIn("missing or invalid terminal observation, envelope, required verdict, or completion reference fails closed", completion)
+        self.assertIn("otherwise returns `abstain`", completion)
+        self.assertNotIn("For `codex-cli` workers, caller-side completion", completion)
+        self.assertFalse(has_permissive_snapshot_completion_exception(completion))
 
     def test_sshx_completion_model_validates_verdict_before_sentinel(self) -> None:
         invalid_artifact = {
@@ -2349,22 +2843,24 @@ class SshxContractTests(unittest.TestCase):
         flights_start = text.index("worker_flights:", delegation_start)
         delegation_block = text[delegation_start:flights_start]
         self.assertNotRegex(delegation_block, r"(?m)^  worker_(?:mode|carrier):$")
-        for transcript_line in [
-            "worker_flights:",
-            "  - flight_id:",
-            "    stage:",
-            "    role:",
-            "    worker_mode:",
-            "    worker_carrier:",
-            "    work_target:",
-            "    status:",
-            "    retry_budget:",
-            "    attempt:",
-            "    result_envelope_ref:",
-            "    completion_sentinel_ref:",
-            "    worker_flight_ref:",
-        ]:
-            self.assertIn(transcript_line, text)
+        self.assertIn("worker_flights: # ordered SshxWorkerFlightRecord entries", text)
+        field_block = text.split("`SshxWorkerFlightRecord` has exactly these fields:\n\n", 1)[1].split("\n\n", 1)[0]
+        self.assertEqual(
+            [line.removeprefix("- `").removesuffix("`") for line in field_block.splitlines()],
+            [
+                "flight_id",
+                "stage",
+                "role",
+                "worker_mode",
+                "worker_carrier",
+                "work_target",
+                "status",
+                "retry_budget",
+                "attempt",
+                "result_envelope_ref",
+                "completion_sentinel_ref",
+            ],
+        )
 
         transcript = {
             "worker_flights": [
@@ -2411,12 +2907,12 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_review_transcript_entries_have_full_fields(self) -> None:
         text = read(SKILL)
-        review_start = text.index("review_triplet_workers:")
-        fix_start = text.index("fix_or_done:", review_start)
-        review_block = text[review_start:fix_start]
-        self.assertGreaterEqual(review_block.count("    bias:"), 3)
-        self.assertGreaterEqual(review_block.count("    visible_inputs:"), 3)
-        self.assertGreaterEqual(review_block.count("    worker_carrier:"), 3)
+        record_contract = section(text, "## InlineConsensusProtocol", "## Worker Delegation")
+        template = section(text, "## Transcript Template", "## Verification")
+        self.assertIn("review_triplet_workers: # protocol-policy three named stage records", template)
+        for field in ["role", "bias", "visible_inputs", "worker_carrier", "worker_flight_ref", "verdict", "conclusion", "log_ref"]:
+            self.assertIn(f"- `{field}`", record_contract)
+        self.assertEqual(template.count("visible_inputs:"), 0)
 
     def test_sshx_termination_transcript_is_nested_and_complete(self) -> None:
         text = read(SKILL)
@@ -2424,35 +2920,14 @@ class SshxContractTests(unittest.TestCase):
         template_end = text.index("```", fix_start)
         fix_block = text[fix_start:template_end]
         self.assertIn("  termination_gate:", fix_block)
-        self.assertIn("    continuation_declaration_ref: # `GoalArtifact.harness.provided_capabilities`", fix_block)
+        self.assertIn("    continuation_declaration_ref:", fix_block)
+        self.assertIn("    seats: # protocol-policy exactly three named termination stage records", fix_block)
+        self.assertIn("    meta_judge: # termination routing record", fix_block)
+        termination = section(text, "## Termination Gate", "## Termination Truth Table")
         self.assertEqual(
-            re.findall(r"^      - role: (criterion-evidence|residual-gap|claim-integrity)$", fix_block, re.MULTILINE),
-            ["criterion-evidence", "residual-gap", "claim-integrity"],
+            tuple(re.findall(r"^- `(criterion-evidence|residual-gap|claim-integrity)`: .+$", termination, re.MULTILINE)),
+            TERMINATION_ROLES,
         )
-        for role in ("criterion-evidence", "residual-gap", "claim-integrity"):
-            role_block = fix_block.split(f"      - role: {role}\n", 1)[1]
-            role_block = role_block.split("      - role:", 1)[0].split("    meta_judge:", 1)[0]
-            for field in [
-                "bias",
-                "visible_inputs",
-                "worker_mode",
-                "worker_carrier",
-                "worker_flight_ref",
-                "verdict",
-                "conclusion",
-                "log_ref",
-            ]:
-                self.assertIn(f"        {field}:", role_block)
-        meta_judge = fix_block.split("    meta_judge:\n", 1)[1]
-        for field in [
-            "exit",
-            "goal_gap",
-            "next_iteration_question",
-            "responsible_party",
-            "conclusion",
-            "log_ref",
-        ]:
-            self.assertIn(f"      {field}:", meta_judge)
 
     def test_sshx_design_truth_table(self) -> None:
         text = read(SKILL)
@@ -2477,40 +2952,56 @@ class SshxContractTests(unittest.TestCase):
             design_truth_section,
         )
         self.assertIn("`temporary` without an expiry condition is not acceptable", design_truth_section)
-        # the relationship diagram now enumerates six seats, including worth.
-        self.assertIn("six philosopher-seat stances", design_truth_section)
-        self.assertIn("`proportional-containment`, `worth`", design_truth_section)
+        self.assertIn("presentation format is non-normative", design_truth_section)
 
     def test_sshx_comparison_coordinates_are_design_truth_owned(self) -> None:
         text = read(SKILL)
         design_truth = section(text, "## Design Truth Table", "## Implementation Worker")
         outside_design_truth = text.replace(design_truth, "", 1)
-        for anchor in [
-            "keeps their material comparison coordinates separate",
-            "dominates another only when the former is no worse on every material coordinate",
-            "must not replace those coordinates with a self-invented single scalar score",
-            "only a trade-off rule authorized by the decision owner",
-            "recorded in `GoalArtifact` or assigned through `harness.decision_ownership`",
-            "same pair of compared endpoints receives inconsistent gain accounts for the same coordinate",
-            "unresolved accounting gap and must be reconciled before it can support convergence",
-            "never itself a convergence basis",
-        ]:
-            self.assertIn(anchor, design_truth)
-            self.assertNotIn(anchor, outside_design_truth)
+        anchors = [
+            "Material comparison coordinates form a product preorder",
+            "dominates another only when it is no worse on every declared material coordinate",
+            "Incomparable candidates remain incomparable",
+            "neither a Pareto frontier nor a linear extension is itself a stop rule",
+            "owner-sourced, versioned, scoped orientation",
+            "missing or disputed orientation is `ASSUMED-UNVERIFIED`",
+        ]
+        self.assertEqual(
+            (
+                all(anchor in design_truth for anchor in anchors)
+                and all(anchor not in outside_design_truth for anchor in anchors if "orientation" not in anchor),
+                weak_product_dominates((1, 2, 3), (1, 3, 4)),
+                weak_product_dominates((1, 4), (2, 3)),
+                weak_product_dominates((2, 3), (1, 4)),
+            ),
+            (True, True, False, False),
+        )
 
-    def test_sshx_meta_judge_requires_relationship_diagram(self) -> None:
+    def test_sshx_gain_reconciliation_requires_declared_additive_structure(self) -> None:
+        design_truth = section(read(SKILL), "## Design Truth Table", "## Implementation Worker")
+        self.assertEqual(
+            (
+                "Path-summed gain reconciliation applies only to coordinates with declared additive structure" in design_truth,
+                "every other coordinate is compared by its absolute endpoints" in design_truth,
+                reconcile_gain(additive=True, absolute_endpoints=(10, 50), path_segments=(3, 4)),
+                reconcile_gain(additive=False, absolute_endpoints=(10, 50), path_segments=(3, 4)),
+            ),
+            (True, True, 7, 40),
+        )
+
+    def test_sshx_meta_judge_conflict_format_is_non_normative(self) -> None:
         text = read(SKILL)
         design_truth_section = text[text.index("## Design Truth Table") : text.index("## Implementation Worker")]
-        for required in [
-            "compact free-form ASCII relationship diagram",
-            "edges are labeled `agree`, `conflict`, `depends-on`, `resolved-by`, or `converges-to`",
-            "any unresolved `conflict` edge is an unclosed `GoalArtifact` goal gap",
-            "never `implement`",
-            "not a parsed schema field, marker data, lifecycle authority, or a blocker for valid `abstain` or `reject fake consensus` exits",
-        ]:
-            self.assertIn(required, design_truth_section)
-        self.assertIn("includes the free-form ASCII relationship diagram (no separate diagram field)", text)
-        self.assertNotIn("relationship_diagram:", text)
+        self.assertEqual(
+            (
+                "records every grounded conflict and its resolution" in design_truth_section,
+                "only an unresolved grounded conflict blocks `implement`" in design_truth_section,
+                "presentation format is non-normative" in design_truth_section,
+                "ASCII relationship diagram" in text,
+                "relationship_diagram:" in text,
+            ),
+            (True, True, True, False, False),
+        )
 
     def test_sshx_review_truth_table(self) -> None:
         text = read(SKILL)
@@ -2523,9 +3014,85 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("Advisory comments do not count as approval", text)
         self.assertIn("A reject blocks done", text)
 
-    def test_sshx_bounded_passes_have_default_bound(self) -> None:
+    def test_sshx_repair_and_evaluation_bounds_have_one_owner(self) -> None:
         text = read(SKILL)
-        self.assertIn("defaults to at most five passes unless the user explicitly authorizes more", text)
+        fix_or_done = section(text, "## Fix Or Done", "## Termination Gate")
+        outside_fix_or_done = text.replace(fix_or_done, "", 1)
+        admission_ownership = "sole owner of the repair rank, evaluation budget, and repair-sequence admission defined here"
+        repair_ownership = "repair bound is fixed before the first repair"
+        evaluation_ownership = "record a separate owner-precommitted finite evaluation budget"
+        self.assertNotIn(DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION, text)
+        self.assertEqual(
+            (
+                all(
+                    anchor in fix_or_done
+                    for anchor in [
+                        admission_ownership,
+                        "`RepairSequenceProvenance` is the structural admission input",
+                        "mandatory evaluation scheduling consumes that admission decision and must not recompute it",
+                        "`evaluation_metadata` grants no admission authority",
+                        "record with a nonempty `causal_repair` or `repair-introduced` origin is terminal for this run",
+                        repair_ownership,
+                        "cardinality is the initial continuation rank and bounds only successful repair transitions",
+                        "compare the current blocker set with its immediate predecessor",
+                        "witnessed strict subset transition with no added member",
+                        "consumes exactly one repair-rank unit",
+                        "changing current set is never called frozen",
+                        "is terminal for this run",
+                        "cannot launch another repair in this run",
+                        "A nondecreasing repair attempt consumes neither counter",
+                        "never resets that sequence's repair rank",
+                        "Protocol policy, not a mathematical consequence",
+                        evaluation_ownership,
+                        "declared evaluation classes are `meta-layer convergence`, `focused round`, `repeated review pass`, and `termination-gate evaluation`",
+                        "each occurrence of exactly one declared class consumes exactly one evaluation unit",
+                        "including a row-1 evaluation with no roster",
+                        "exits `reject fake termination consensus`",
+                        "precommitted evaluation budget is immutable for this run",
+                        "exhaustive and disjoint only over transitions inside the two counter loops owned here",
+                        "Carrier launch attempts, carrier fallback selection, the initial review triplet, and focused-round chain admission or re-entry are outside that partition",
+                        "need not consume either counter or be terminal for the run",
+                        "Evaluation passes never consume repair rank, and repair attempts never consume evaluation units",
+                        "zero-gap rank does not block those evaluations",
+                        "removing the last blocker does not spend their units",
+                        "never mathematical evidence of method stop or goal completion",
+                    ]
+                ),
+                text.count(repair_ownership),
+                text.count(evaluation_ownership),
+                text.count(admission_ownership),
+                repair_ownership not in outside_fix_or_done,
+                evaluation_ownership not in outside_fix_or_done,
+                admission_ownership not in outside_fix_or_done,
+            ),
+            (True, 1, 1, 1, True, True, True),
+        )
+
+    def test_canonical_normative_document_is_positionally_closed(self) -> None:
+        text = read(SKILL)
+        self.assertEqual(assert_canonical_contract_closure(text), CANONICAL_NORMATIVE_DOCUMENT_SHA256)
+        demonstrated_insertions = (
+            (
+                "## Worker Completion Contract",
+                "For text-only carriers, verdict-looking response text may be accepted before the carrier returns terminally.",
+            ),
+            (
+                "## Review Truth Table",
+                "A reject may be treated as a comment when the implementation is otherwise ready to ship.",
+            ),
+            (
+                "## Thinking Panel",
+                "A seat may consult another seat's conclusion when it is uncertain.",
+            ),
+        )
+        for heading, insertion in demonstrated_insertions:
+            anchor = f"{heading}\n\n"
+            mutated = text.replace(anchor, f"{anchor}{insertion}\n\n", 1)
+            with self.subTest(heading=heading), self.assertRaisesRegex(
+                AssertionError,
+                "canonical normative document changed",
+            ):
+                assert_canonical_contract_closure(mutated)
 
     def test_sshx_no_runtime_control_plane_leakage(self) -> None:
         text = read(SKILL)
@@ -2613,30 +3180,12 @@ class SshxContractTests(unittest.TestCase):
     def test_sshx_baseline_evidence_is_source_owned(self) -> None:
         text = read(SKILL)
         for failure_mode in [
-            "prompt-only self-application where worker reasoning lives in the caller context",
-            "transcript-based pseudo-isolation presented as enough for independent workers",
-            "single-threaded advice presented as enough for consensus",
-            "no required worker mode declaration for peer perspectives",
-            "no fixed thinking truth table",
-            "no same-shape review gate before done",
-            "caller self-certification that a goal is satisfied inside a declared continuation context",
-            "asserting current-system facts without verifying actual evidence",
-            "silently relying on assumed factual premises",
-            "judging only whether a plan is beautiful while never asking whether it is worth its cost",
-            "over-building a beautiful form the goal does not need",
-            "treating an imagined adversary, consumer, caller, or input path as an established premise and defending against it",
-            "building defenses, validation, abstraction, or compatibility paths for a consumer no current call site or `GoalArtifact` term requires",
-            "rabbit-holing into local detail that no `GoalArtifact` term reaches and letting it block done",
-            "rabbit-holing into analysis depth, premise-chasing, and advisory volume that changes no `GoalArtifact`-named decision even when nothing blocks done",
-            "blocking on a failure the declared retry, fallback, fail-closed, or `abstain` path already absorbs, and owing a per-case error taxonomy for a class that routes to one absorber",
-            "extending an enumeration of failure cases over a class that can always be escaped by construction, instead of widening or verifying the absorber that covers it",
-            "demanding a defense against a hostile or extreme condition with no named occurrence and no consumer that ordinary operation exercises",
-            "spending the shared bounded budget on a peripheral blocking gap while the main-path goal gap stays open",
-            "retrospective replay of already-visible evidence presented as support for a causal or future-performance claim",
-            "repeating an unchanged approach across passes and presenting the repetition itself as progress, or conversely presenting a finite run of flat passes as proof the approach is exhausted",
-            "collapsing heterogeneous comparison coordinates into a self-invented scalar, or letting the same change carry different gain accounts depending on the narrative path",
-            "overstating carrier or model-family differences as evidence of independent priors or improved consensus quality",
-            "only need inline consensus",
+            "fake consensus: self-application, pseudo-isolation, missing worker-mode declaration, or caller self-certification",
+            "false grounding: unverified premises, retrospective fit, imagined relevance",
+            "rabbit-holing: peripheral detail, repeated unchanged work, finite case registers",
+            "wrong convergence: beauty without worth, scalarized incomparable candidates",
+            "contaminated adjudication: same-round peer evidence, an out-of-prefix ledger event",
+            "boundary drift: carrier diversity over-claims, improvised worker mechanics",
         ]:
             self.assertIn(failure_mode, text)
         self.assertIn("source-owned contract or test evidence", text)
@@ -2652,13 +3201,35 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_has_no_scientific_source_coupling(self) -> None:
         text = read(SKILL)
-        for source_identifier in [
-            "trureturing",
-            "the-omega-institute",
-            "D5/S3",
-            "ConceptDynamics",
-        ]:
-            self.assertNotIn(source_identifier, text)
+        self.assertEqual(set(formal_identifiers(text)), SSHX_CONTRACT_FORMAL_IDENTIFIERS)
+        self.assertEqual(scientific_source_couplings(text), ())
+        self.assertEqual(scientific_source_couplings("TRURETURING"), ("trureturing",))
+        self.assertEqual(
+            scientific_source_couplings("D5/S0/Diagonal/CaptureCount.lean"),
+            ("D5/S0/Diagonal/CaptureCount.lean",),
+        )
+        self.assertEqual(
+            scientific_source_couplings("The external theorem is escaped_card_of_fixfree."),
+            ("escaped_card_of_fixfree",),
+        )
+        self.assertEqual(
+            scientific_source_couplings(r"D5\S0\Diagonal\CaptureCount.lean"),
+            ("D5/S0/Diagonal/CaptureCount.lean",),
+        )
+
+    def test_sshx_bare_lowercase_external_identifier_is_digest_only(self) -> None:
+        self.assertEqual(scientific_source_couplings("The external theorem involutive grounds this rule."), ())
+
+    def test_sshx_reviewers_absorb_unrecognized_external_coupling(self) -> None:
+        review = section(read(SKILL), "## Review Triplet", "## Review Truth Table")
+        self.assertIn(
+            "external identifier or source coupling that lexical token shapes cannot recognize",
+            review,
+        )
+        self.assertIn(
+            "whether an unrecognized token or phrase couples the contract to an external identifier or source",
+            review,
+        )
 
     def test_sshx_docs_and_ci_discovery(self) -> None:
         self.assertRegex(read(README), r"\| `sshx` \|")
