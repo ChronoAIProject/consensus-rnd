@@ -176,7 +176,6 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "claim-integrity",
         "codex-cli",
         "comment",
-        "completion_sentinel",
         "completion_sentinel_ref",
         "conclusion",
         "conclusion.verdict",
@@ -228,7 +227,6 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "repo-prior-exposed",
         "residual-gap",
         "result_envelope_ref",
-        "result_ref",
         "retry_budget",
         "retrying",
         "review_triplet_workers",
@@ -240,7 +238,6 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "sshx",
         "stage",
         "status",
-        "status.json",
         "stop",
         "strict_peer_invisibility_required",
         "success_criteria",
@@ -276,7 +273,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "6fc0cebb0cd0130d44f027e64772eb55bc6c32b585449813292ad5ecf1cd7b3c"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "bfcf8f00680d9d96d726e6ef92740578a0ed5115c3be99df0d30d1a91bbc8324"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -923,18 +920,20 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("permits only that `GoalArtifact`-scoped claim", termination)
         self.assertIn("does not certify any broader host goal condition", termination)
         for claim_surface in [
-            "in a final report",
+            "a final report",
             "`done with advisory surfaced` outcome used as success",
-            "`stop` gate action carrying the claim",
+            "`stop` action carrying the claim",
         ]:
             self.assertIn(claim_surface, termination)
-        for non_application in [
-            "`abstain` exit",
-            "`escalate`",
-            "`stop` action that reports a blocker rather than achievement",
-            "`## Goal Contract` makes the gate inapplicable",
-        ]:
-            self.assertIn(non_application, termination)
+        self.assertIn(
+            "The gate binds every exit that carries an affirmative `GoalArtifact` satisfaction claim, wherever the claim appears",
+            termination,
+        )
+        self.assertIn("and binds no exit that carries none", termination)
+        self.assertIn(
+            "non-achievement exits keep their existing routing and must never be relabelled as goal satisfaction",
+            termination,
+        )
         self.assertIn(
             "`## Goal Contract` solely owns missing or invalid trigger-entry routing",
             termination,
@@ -1273,11 +1272,10 @@ class SshxContractTests(unittest.TestCase):
         for anchor in [
             "rows are evaluated in this order and are complete and, under this evaluation order, unambiguous",
             "unanimous `satisfied` means one valid `satisfied` result from each of the exactly three distinct named termination seats",
-            "Flight exhaustion is not an additional table input",
-            "fallback-recovered result is treated like any other valid result",
+            "The table evaluates only the presenting source and the resulting seat roster and results",
+            "a fallback-recovered result is a valid result like any other",
             "Roster means the dispatch-time recorded named role identities",
-            "a named role absent from the roster reaches the first row",
-            "a named role present without a valid result remains in the roster and reaches the fourth row",
+            "a named role present without a valid result remains in the roster as a missing result",
             "meta-judge has no termination verdict of its own",
             "routes that gap according to `harness.decision_ownership`",
             "work-target engineering correction assigned to the existing engineering path re-enters the review-`fix` path in `## Fix Or Done`",
@@ -1432,7 +1430,7 @@ class SshxContractTests(unittest.TestCase):
             "keeps its full blocking force until the dispute is settled against evidence",
             "no one may call an input advisory because its named basis is unpersuasive",
             "An input that names fewer than both is advisory",
-            "in its own words and never a paraphrase",
+            "its downgrade record carries what it named, or that it named none, in its own words and never a paraphrase",
             "never the sole basis of a `revise`, `reject`, `abstain`, blocking finding, `unsatisfied`, or any element of a concrete plan",
             "The same two conjuncts admit a plan element",
             "names the `GoalArtifact` term that demands it or a current consumer (an existing call site)",
@@ -1683,10 +1681,7 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(anchor, focused_round)
         for anchor in [
-            "An objection that fails `BlockingAuthority` is not an unclosed `GoalArtifact` goal gap and does not by itself hold the exit out of `implement`: the meta-judge records it as advisory",
-            "existing `finding_downgrades` record",
-            "the objecting seat itself named, or that it named none",
-            "using the objecting seat's own words and never a paraphrase",
+            "An objection that fails `BlockingAuthority` is not an unclosed `GoalArtifact` goal gap and does not by itself hold the exit out of `implement`: the meta-judge records it as advisory in the existing `finding_downgrades` record as `BlockingAuthority` requires.",
             "Disputed grounding stays blocking",
             "not permission to set aside a reachable defect",
         ]:
@@ -1696,9 +1691,7 @@ class SshxContractTests(unittest.TestCase):
             "the `GoalArtifact` term the work as built fails and the evidence in the work that shows it",
             "fails `ThreatEligibility` or `BlockingAuthority`",
             "A `BlockingAuthority` downgrade is objective",
-            "the finder itself named, or that it named none",
-            "using the finder's own words and never a paraphrase",
-            "never assesses persuasiveness; disputed grounding stays blocking",
+            "it is recorded as `BlockingAuthority` requires and never assesses persuasiveness; disputed grounding stays blocking",
             "only for threat-model ineligibility or an advisory input",
             "never because a finding is inconvenient",
             "never sets aside a reachable defect",
@@ -1716,6 +1709,7 @@ class SshxContractTests(unittest.TestCase):
             "Each termination seat applies `BlockingAuthority` itself before returning",
             "An `unsatisfied` that names both conjuncts keeps its full force and may never be converted into permission by calling it unpersuasive",
             "An `unsatisfied` that names no `GoalArtifact` term is advisory exactly as under `## Review Truth Table`",
+            "the meta-judge records it in `finding_downgrades` as `BlockingAuthority` requires",
             "re-dispatches that seat once on the same sealed candidate with that record in its brief as part of the same evaluation",
             "treating a repeated `unsatisfied` that again names no `GoalArtifact` term as `abstain`",
         ]:
@@ -2120,18 +2114,24 @@ class SshxContractTests(unittest.TestCase):
             text,
         )
         self.assertIn("Do not self-apply the triplet inside the caller context", text)
-        self.assertIn("fallible advisory worker exactly like `codex-cli`, never a privileged oracle", text)
+        self.assertIn("fallible advisory worker exactly like `codex-cli`, with no authority of any kind", text)
+        self.assertIn(
+            "everywhere in this contract, non-mutating means it changes no file, Git state, GitHub state, label, release, host configuration, lifecycle state, or other external resource",
+            text,
+        )
+        self.assertIn("Its capability check and dispatch are non-mutating", text)
         self.assertIn("Carrier heterogeneity is this protocol's policy, not a theorem premise or consequence", text)
         self.assertIn("improves consensus quality or yields statistically independent priors is `ASSUMED-UNVERIFIED`", text)
         self.assertIn("carrier-role pairing must be chosen and recorded before any worker", text)
         self.assertIn("three-seat `## Termination Gate` follows that same layout", text)
         self.assertIn("`tests` review seat must be assigned to a carrier capable of executing", text)
         self.assertIn("repository verification commands in the `work_target`", text)
-        self.assertIn("if every completed seat ran on one model family, do not present the result as model-diverse", text)
+        self.assertIn(
+            "A stage may be presented as model-diverse only when every initially paired seat reached terminal completion on its initial carrier with no fallback, unavailability, or exhausted retry, and at least two distinct model families are recorded evidence for those completions; otherwise record that the stronger diversity claim was not achieved.",
+            text,
+        )
         self.assertIn("must not be rebalanced in response to completion outcomes", text)
         self.assertIn("a retry or fallback may replace only the failed flight for the same seat and role", text)
-        self.assertIn("If any fallback occurs or any initially paired carrier is unavailable", text)
-        self.assertIn("do not claim that stage achieved model-diverse consensus", text)
         self.assertNotIn("sealed-transcript", contract_text.lower())
         self.assertNotIn("actor-isolated", contract_text.lower())
 
@@ -2363,18 +2363,22 @@ class SshxContractTests(unittest.TestCase):
             "the runner derives and owns every artifact path",
             "the caller must not supply arbitrary result, sentinel, log, or state paths",
             "Every formal `codex-cli` flight must use this runner",
-            "the runner launches exactly one direct non-interactive worker carrier",
-            "neither layer may introduce a daemon or wrap the carrier in a repository-owned CLI",
             "owned by `CODEX_WORKER_SPEC.md`",
             "the required dispatch shape is the runner's default `danger-full-access` sandbox",
             "the caller passes no sandbox selection unless the maintainer explicitly directs a narrower one",
             "The caller must not poll worker artifact paths while the runner is active",
-            "the runner performs one collection read of the derived `result_ref` and `completion_sentinel`",
+            "The caller records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the runner reports completion and the envelope and sentinel validate.",
             "Completion and verdict recognition stay governed by the `## Worker Completion Contract`",
         ]:
             self.assertIn(contract_string, worker_delegation)
+        for deleted_mechanic in [
+            "The caller invokes the runner, and the runner launches exactly one direct non-interactive worker carrier; neither layer may introduce a daemon or wrap the carrier in a repository-owned CLI.",
+            "The runner does not propagate signals or manage carrier PIDs.",
+            "After the carrier exits, the runner performs one collection read of the derived `result_ref` and `completion_sentinel`",
+        ]:
+            self.assertNotIn(deleted_mechanic, worker_delegation)
         self.assertLess(
-            text.index("one collection read of the derived"),
+            text.index("The caller records `result_envelope_ref` and `completion_sentinel_ref`"),
             text.index("## Worker Completion Contract"),
         )
 
@@ -2462,7 +2466,7 @@ class SshxContractTests(unittest.TestCase):
         text = read(SKILL)
         self.assertIn("While any `SshxWorkerFlightRecord` for the same `work_target` is `in-flight` or `retrying`", text)
         self.assertIn("the caller is read-only for that target", text)
-        self.assertIn("must not mutate files, Git state, GitHub state", text)
+        self.assertIn("The caller is non-mutating for that target and its external resources.", text)
         self.assertIn("must not take over the same `work_target`", text)
 
         in_flight = {"work_target": "skills/sshx/SKILL.md", "status": "in-flight"}
@@ -2480,12 +2484,10 @@ class SshxContractTests(unittest.TestCase):
         completion = section(text, "## Worker Completion Contract", "## No Context Pollution")
         self.assertIn("matching flight records a valid `SshxResultEnvelope`", completion)
         self.assertIn("required completion evidence is recorded in `completion_sentinel_ref`", completion)
-        for forbidden_evidence in [
-            "completion markers",
-            "verdict-looking text",
-            "process snapshot",
-        ]:
-            self.assertIn(forbidden_evidence, completion)
+        self.assertIn(
+            "The predicate has exactly those inputs; no other observation is completion evidence, whatever text, artifact, log, projection, report, or process state it comes from, and `log_ref` remains required only as a diagnostic reference.",
+            completion,
+        )
 
         self.assertTrue(
             has_terminal_completion(
@@ -2615,20 +2617,10 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("matching flight records a valid `SshxResultEnvelope`", completion)
         self.assertIn("required `conclusion.verdict` is in that stage's allowed set", completion)
         self.assertIn("required completion evidence is recorded in `completion_sentinel_ref`", completion)
-        self.assertIn("A worker is not done while its carrier is still running", completion)
-        for diagnostic_surface in [
-            "stdout",
-            "stderr",
-            "raw transcripts",
-            "final text",
-            "prompt echoes",
-            "`log_ref`",
-            "log tails",
-            "`status.json`",
-            "batch report",
-            "process snapshot",
-        ]:
-            self.assertIn(diagnostic_surface, completion)
+        self.assertIn(
+            "The predicate has exactly those inputs; no other observation is completion evidence, whatever text, artifact, log, projection, report, or process state it comes from, and `log_ref` remains required only as a diagnostic reference.",
+            completion,
+        )
         self.assertIn("missing or invalid terminal observation, envelope, required verdict, or completion reference fails closed", completion)
         self.assertIn("otherwise returns `abstain`", completion)
         self.assertNotIn("For `codex-cli` workers, caller-side completion", completion)
@@ -3018,7 +3010,7 @@ class SshxContractTests(unittest.TestCase):
         for row in [
             "| any explicit reject | `fix` |",
             "| no reject and at least one approve | `done with advisory surfaced` |",
-            "| all comment and no approve | `explicit user decision or another bounded review pass` |",
+            "| all comment | `explicit user decision or another bounded review pass` |",
         ]:
             self.assertIn(row, text)
         self.assertIn("Advisory comments do not count as approval", text)
