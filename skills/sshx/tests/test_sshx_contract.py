@@ -44,11 +44,16 @@ Files outside ``skills/sshx/SKILL.md`` are outside this positional boundary and 
 by their own behavior checks. Whether changed English preserves the contract is likewise not
 decided by the digest and is routed to the named Review Triplet absorber.
 
-The canonical default-seat-allocation span is normative wording. Rewriting it
+The canonical default-seat-allocation span is normative wording. It fixes both
+the stage's carrier composition and the seat rotation drawn over it. Rewriting it
 requires a synchronized update to ``DEFAULT_SEAT_ALLOCATION_PATTERNS``. The
-positive anchors accept ``each`` or ``every`` and do not require the four carrier
-allocation propositions to stay in source order, but passive voice, tables, and
-cardinal mappings are intentionally not accepted. The ``not|unless|except``
+positive anchors accept ``each`` or ``every`` and do not require the composition
+and rotation propositions to stay in source order, but passive voice, tables, and
+cardinal mappings are intentionally not accepted. The rotation propositions --
+uniform draw over the feasible assignments, a mechanical randomness source, the
+draw recorded before the stage's first launch, no redraw, and a different draw on
+a repeated pass -- are pinned verbatim by ``SEAT_ROTATION_SPAN_TAIL``, which the
+suite also requires to occur once in the contract. The ``not|unless|except``
 blocker catches appended weakening such as ``unless the caller prefers
 otherwise``; by design, it also rejects reinforcing negation such as ``This
 layout is not optional``.
@@ -112,6 +117,35 @@ DEFAULT_SEAT_ALLOCATION_PATTERNS = (
         "single-worker codex-cli assignment",
         r"\b(?:every|each) single-worker stage assigns its worker to `codex-cli`",
     ),
+    ("uniform random seat draw", r"\bdraws? one assignment uniformly at random\b"),
+    (
+        "feasible-draw scope",
+        r"\bfrom (?:every|each) assignment that satisfies that composition and (?:this|the) stage's per-seat carrier constraints",
+    ),
+    ("mechanical randomness source", r"\bmechanical randomness source\b"),
+    (
+        "draw recorded before first launch",
+        r"recorded in `worker_delegation\.seat_rotation` before the first worker of that stage is launched",
+    ),
+    ("redraw forbidden", r"\bredrawing it is forbidden\b"),
+    (
+        "rotation across repeated passes",
+        r"\bnext draw must differ from that stage's previously recorded assignment\b",
+    ),
+)
+SEAT_ROTATION_SPAN_TAIL = (
+    "Which named seat holds which carrier rotates: at each stage dispatch the caller draws one "
+    "assignment uniformly at random from every assignment that satisfies that composition and this "
+    "stage's per-seat carrier constraints, so a named role holds a carrier only for the stage "
+    "dispatch it was drawn for. "
+    "The draw must come from a mechanical randomness source outside the caller's own preference, "
+    "and its result is recorded in `worker_delegation.seat_rotation` before the first worker of that "
+    "stage is launched. "
+    "A recorded draw is final: redrawing it is forbidden, whatever the caller thinks of the seats it "
+    "produced, and an unavailable carrier is handled by the fallback rule below rather than by a new "
+    "draw. "
+    "When a stage runs again on the same `work_target`, its next draw must differ from that stage's "
+    "previously recorded assignment whenever two or more assignments satisfy the constraints."
 )
 CARDINAL_CARRIER_BINDING_PATTERN = re.compile(
     rf"\b(?:\d+|one|two|three|four|five|six)\s+(?:{'|'.join(map(re.escape, CARRIER_IDENTIFIERS))})",
@@ -234,6 +268,7 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "revisions",
         "role",
         "satisfied",
+        "seat_rotation",
         "setsid",
         "sshx",
         "stage",
@@ -258,6 +293,7 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "worker_carrier",
         "worker_delegation",
         "worker_delegation.reason",
+        "worker_delegation.seat_rotation",
         "worker_flight_ref",
         "worker_flights",
         "worker_mode",
@@ -273,7 +309,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "bfcf8f00680d9d96d726e6ef92740578a0ed5115c3be99df0d30d1a91bbc8324"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "8e56f6b4c5978e61f42cd3fd2e897174b45b8e69923c4e96c784a7e9e54e636b"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -2123,15 +2159,22 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("Carrier heterogeneity is this protocol's policy, not a theorem premise or consequence", text)
         self.assertIn("improves consensus quality or yields statistically independent priors is `ASSUMED-UNVERIFIED`", text)
         self.assertIn("carrier-role pairing must be chosen and recorded before any worker", text)
-        self.assertIn("three-seat `## Termination Gate` follows that same layout", text)
+        self.assertIn("three-seat `## Termination Gate` follows that same composition", text)
+        self.assertIn(SEAT_ROTATION_SPAN_TAIL, text)
+        self.assertEqual(text.count(SEAT_ROTATION_SPAN_TAIL), 1)
         self.assertIn("`tests` review seat must be assigned to a carrier capable of executing", text)
-        self.assertIn("repository verification commands in the `work_target`", text)
+        self.assertIn(
+            "repository verification commands in the `work_target`, which is the per-seat constraint that keeps `nyxid-oracle` out of that seat's feasible draws",
+            text,
+        )
         self.assertIn(
             "A stage may be presented as model-diverse only when every initially paired seat reached terminal completion on its initial carrier with no fallback, unavailability, or exhausted retry, and at least two distinct model families are recorded evidence for those completions; otherwise record that the stronger diversity claim was not achieved.",
             text,
         )
         self.assertIn("must not be rebalanced in response to completion outcomes", text)
         self.assertIn("a retry or fallback may replace only the failed flight for the same seat and role", text)
+        self.assertIn("neither is a mechanism for redrawing or restoring a stage's recorded assignment", text)
+        self.assertIn("This is the dispatch-time rotation rule", text)
         self.assertNotIn("sealed-transcript", contract_text.lower())
         self.assertNotIn("actor-isolated", contract_text.lower())
 
@@ -2154,13 +2197,14 @@ class SshxContractTests(unittest.TestCase):
             default_seat_allocation_span(
                 text[:start] + f"{allocation} Unless the caller prefers otherwise." + text[end:]
             )
-        rewrites = (
+        composition_rewrites = (
             "At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent` and exactly one seat to `nyxid-oracle`. Every remaining seat in that stage goes to `codex-cli`, and every single-worker stage assigns its worker to `codex-cli`.",
             "At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `codex-cli`. Every single-worker stage assigns its worker to `codex-cli`.",
             "At dispatch time:\n- Every multi-seat stage assigns exactly one seat to `isolated-token-subagent` and exactly one seat to `nyxid-oracle`.\n- Every remaining seat in that stage goes to `codex-cli`.\n- Every single-worker stage assigns its worker to `codex-cli`.",
             "At dispatch time, each multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and each remaining seat to `codex-cli`; each single-worker stage assigns its worker to `codex-cli`.",
             "At dispatch time, every multi-seat stage assigns exactly one seat to `nyxid-oracle`, exactly one seat to `isolated-token-subagent`, and every remaining seat to `codex-cli`; every single-worker stage assigns its worker to `codex-cli`.",
         )
+        rewrites = tuple(f"{rewrite} {SEAT_ROTATION_SPAN_TAIL}" for rewrite in composition_rewrites)
         for rewrite in rewrites:
             mutated = text[:start] + rewrite + text[end:]
             rewritten_start, rewritten_end = default_seat_allocation_span(mutated)
@@ -2194,6 +2238,43 @@ class SshxContractTests(unittest.TestCase):
         for prose in legal_prose:
             mutated = text.replace(insertion_anchor, f"{insertion_anchor}{prose}\n\n", 1)
             self.assertFalse(has_cardinal_carrier_binding_outside_default(mutated), f"quantity heuristic matched legal prose: {prose}")
+
+    def test_sshx_seat_rotation_is_drawn_once_and_recorded(self) -> None:
+        text = read(SKILL)
+        start, end = default_seat_allocation_span(text)
+        allocation = text[start:end]
+        self.assertIn(SEAT_ROTATION_SPAN_TAIL, allocation)
+
+        transcript = section(text, "## Transcript Template", "## Verification")
+        self.assertIn("  seat_rotation: # per multi-seat stage: the drawn seat-to-carrier assignment\n", transcript)
+        self.assertLess(transcript.index("seat_rotation:"), transcript.index("worker_flights:"))
+
+        weakenings = (
+            (
+                "uniform random seat draw",
+                "draws one assignment uniformly at random",
+                "picks one assignment it prefers",
+            ),
+            ("redraw forbidden", "redrawing it is forbidden", "redrawing it is allowed"),
+            (
+                "rotation across repeated passes",
+                "next draw must differ from that stage's previously recorded assignment",
+                "next draw may repeat that stage's previously recorded assignment",
+            ),
+            ("mechanical randomness source", "mechanical randomness source", "caller judgment"),
+            (
+                "draw recorded before first launch",
+                "recorded in `worker_delegation.seat_rotation` before the first worker of that stage is launched",
+                "recorded once the stage has returned",
+            ),
+        )
+        for proposition, original, weakened in weakenings:
+            self.assertIn(original, allocation)
+            mutated = text[:start] + allocation.replace(original, weakened, 1) + text[end:]
+            with self.assertRaisesRegex(
+                AssertionError, re.escape(f"default seat allocation is missing: {proposition}")
+            ):
+                default_seat_allocation_span(mutated)
 
     def test_sshx_worker_dispatch_sections_have_no_carrier_owners_with_mutations(self) -> None:
         text = read(SKILL)
