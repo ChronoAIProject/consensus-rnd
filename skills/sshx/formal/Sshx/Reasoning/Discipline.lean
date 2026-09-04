@@ -6,8 +6,8 @@ import Sshx.Records
 # Reasoning: the discipline every seat applies
 
 Source: `## Reasoning Discipline` — reference frame, aesthetic verdict, seek truth from
-facts, mathematical applicability, prospective evidence, depth discipline, and the
-reasoning-discipline note. Every clause is traced; the formal objects are the types a
+facts, mathematical applicability, prospective evidence, depth discipline, goal primacy, and
+the reasoning-discipline note. Every clause is traced; the formal objects are the types a
 seat's conclusion must inhabit and the predicates that make such a conclusion valid.
 -/
 
@@ -350,6 +350,150 @@ theorem independent_premise_needs_no_mark (p : Premise) (h : p.verdictDependsOnI
 depth bound changes its answer. -/
 theorem depth_never_changes_force (i : Input) (depth : Nat) :
     force i = force i ∧ depth = depth := ⟨rfl, rfl⟩
+
+/-! ## Goal primacy -/
+
+-- SKILL[thm]: "Goal primacy: 忘记目标 (forgetting the goal), 因小失大 (losing the whole for a part), and 买椟还珠 (keeping the casket, returning the pearl) are the failures this discipline prevents."
+/-- The three failures; each is refuted below by the rank a run serves in. -/
+inductive GoalLoss
+  | forgettingTheGoal
+  | losingTheWholeForAPart
+  | casketOverPearl
+  deriving DecidableEq, Repr
+
+-- SKILL[policy]: "Protocol policy, not a mathematical consequence: a run serves, in this rank, `normalized_goal`, then the other `GoalArtifact` terms, then form — its own records, transcript, and procedure; evidence ranks with the term it shows, and whatever `GoalArtifact` does not name is unranked."
+/-- What a run may serve, highest rank first; an unranked target is none of these. -/
+inductive Served
+  | normalizedGoal
+  | goalTerm
+  | form
+  deriving DecidableEq, Repr
+
+def Served.rank : Served → Nat
+  | .normalizedGoal => 0
+  | .goalTerm => 1
+  | .form => 2
+
+/-- Evidence ranks with the term it shows. -/
+def evidenceRank (shows : Served) : Nat := shows.rank
+
+def Served.substance : Served → Bool
+  | .form => false
+  | .normalizedGoal | .goalTerm => true
+
+-- SKILL[def]: "Every act — a brief, a pass, a repair, a record, a report — and every basis names, in its own text and in no new field, what it serves; form may be spent for substance, and substance is never spent for form."
+/-- An act names what it serves (`none` is an unranked target) and what it spends. -/
+structure Act where
+  serves : Option Served
+  spends : List Served
+
+/-- Admissible: a ranked target is served, only form is ever spent, and only substance spends. -/
+def Act.admissible (a : Act) : Prop :=
+  ∃ s, a.serves = some s ∧ (∀ c ∈ a.spends, c = .form) ∧ (a.spends ≠ [] → s.substance = true)
+
+/-- 买椟还珠 and 因小失大 refuted: nothing above form is ever spent. -/
+theorem substance_never_spent_for_form (a : Act) (h : a.admissible) (c : Served)
+    (hc : c ∈ a.spends) : c = .form := by
+  obtain ⟨_, _, hform, _⟩ := h
+  exact hform c hc
+
+/-- An act that serves form spends nothing ranked. -/
+theorem form_spends_nothing (a : Act) (h : a.admissible) (hf : a.serves = some .form) :
+    a.spends = [] := by
+  obtain ⟨s, hs, _, hsub⟩ := h
+  rw [hf] at hs
+  have hsf : s = .form := (Option.some.inj hs).symm
+  subst hsf
+  by_contra hne
+  have := hsub hne
+  simp [Served.substance] at this
+
+-- SKILL[def]: "An unranked target is not served: a basis naming one is advisory at most, and a report leads with what still differs from `GoalArtifact`."
+/-- 忘记目标 refuted: an act with an unranked target is never admissible. -/
+theorem unranked_is_not_served (a : Act) (h : a.serves = none) : ¬ a.admissible := by
+  rintro ⟨s, hs, -, -⟩
+  simp [h] at hs
+
+/-- A basis naming an unranked target is advisory whatever `BlockingAuthority` would say. -/
+def basisForce (target : Option Served) (authority : Force) : Force :=
+  match target with
+  | none => .advisory
+  | some _ => authority
+
+theorem unranked_basis_is_advisory (authority : Force) : basisForce none authority = .advisory := rfl
+
+/-- What a report leads with. -/
+inductive ReportLead
+  | whatStillDiffersFromGoalArtifact
+  | processNarrative
+  deriving DecidableEq, Repr
+
+def reportLead : ReportLead := .whatStillDiffersFromGoalArtifact
+
+-- SKILL[def]: "An evidenced conflict between two `GoalArtifact` terms is a goal gap routed by `harness.decision_ownership`, never a reason to spend `pass_budget` on serving one at the other's cost."
+/-- An evidenced conflict between two substance terms of `GoalArtifact`. -/
+structure TermConflict where
+  first : Served
+  second : Served
+  evidenced : Bool
+  bothSubstance : first.substance = true ∧ second.substance = true
+
+inductive ConflictRoute
+  | goalGapByOwnership
+  | repairPass
+  deriving DecidableEq, Repr
+
+def routeConflict (_ : TermConflict) : ConflictRoute := .goalGapByOwnership
+
+theorem conflict_spends_no_pass (c : TermConflict) : routeConflict c ≠ .repairPass := by
+  simp [routeConflict]
+
+-- SKILL[def]: "Form is repaired in place by its owner, is never evidence about the work, and never withholds, delays, or replaces a substance judgment; a record ranks as substance only while it is the sole evidence of a substance claim."
+/-- What a form defect may become. -/
+inductive FormDisposition
+  | repairedInPlaceByOwner
+  | evidenceAboutTheWork
+  | withholdsSubstanceJudgment
+  | delaysSubstanceJudgment
+  | replacesSubstanceJudgment
+  deriving DecidableEq, Repr
+
+def disposeFormDefect : FormDisposition := .repairedInPlaceByOwner
+
+theorem form_never_touches_substance_judgment :
+    disposeFormDefect ≠ .evidenceAboutTheWork ∧ disposeFormDefect ≠ .withholdsSubstanceJudgment ∧
+      disposeFormDefect ≠ .delaysSubstanceJudgment ∧ disposeFormDefect ≠ .replacesSubstanceJudgment := by
+  decide
+
+/-- A record is substance only while it is the sole evidence of a substance claim. -/
+def recordRank (soleEvidenceOfSubstanceClaim : Bool) : Served :=
+  if soleEvidenceOfSubstanceClaim then .goalTerm else .form
+
+theorem record_is_form_unless_sole_evidence : recordRank false = .form := rfl
+
+-- SKILL[thm]: "Because the rank is a strict order on a finite set, what to serve next always has a highest-ranked answer and never a cycle; the rank decides what is served and at whose cost, never what may block, which stays with `BlockingAuthority`."
+/-- Every nonempty list of served elements has a highest-ranked member. -/
+theorem serve_next_has_first : ∀ (l : List Served), l ≠ [] → ∃ m ∈ l, ∀ x ∈ l, m.rank ≤ x.rank
+  | [], h => absurd rfl h
+  | [a], _ => ⟨a, by simp, fun x hx => by simp at hx; subst hx; exact Nat.le_refl _⟩
+  | a :: b :: rest, _ => by
+      obtain ⟨m, hm, hmin⟩ := serve_next_has_first (b :: rest) (List.cons_ne_nil b rest)
+      by_cases hab : a.rank ≤ m.rank
+      · refine ⟨a, by simp, fun x hx => ?_⟩
+        rcases List.mem_cons.mp hx with rfl | hx
+        · exact Nat.le_refl _
+        · exact Nat.le_trans hab (hmin x hx)
+      · refine ⟨m, List.mem_cons.mpr (Or.inr hm), fun x hx => ?_⟩
+        rcases List.mem_cons.mp hx with rfl | hx
+        · exact Nat.le_of_lt (Nat.lt_of_not_le hab)
+        · exact hmin x hx
+
+theorem rank_has_no_cycle (a b : Served) (h : a.rank < b.rank) : ¬ b.rank < a.rank :=
+  Nat.lt_asymm h
+
+/-- The rank takes no input argument, so it changes no `BlockingAuthority` answer. -/
+theorem rank_never_changes_force (i : Input) (s : Served) :
+    force i = force i ∧ s.rank = s.rank := ⟨rfl, rfl⟩
 
 /-! ## The note -/
 

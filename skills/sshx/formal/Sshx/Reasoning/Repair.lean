@@ -73,7 +73,7 @@ def GapRank.order : GapRank → Nat
   | .successCriterion => 2
   | .periphery => 3
 
--- SKILL[def]: "When a pass carries more than one blocking goal gap, repair them in `GoalArtifact` order — a gap that blocks `normalized_goal` before one that blocks only its periphery — so the main path is repaired first."
+-- SKILL[ref]: "When a pass carries more than one blocking goal gap, repair them in goal-primacy rank, so the main path is repaired first."
 def repairOrder (gaps : List GapRank) : List GapRank :=
   gaps.filter (· == .normalizedGoal) ++ gaps.filter (· == .constraint) ++
     gaps.filter (· == .successCriterion) ++ gaps.filter (· == .periphery)

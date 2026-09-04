@@ -309,7 +309,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "8e56f6b4c5978e61f42cd3fd2e897174b45b8e69923c4e96c784a7e9e54e636b"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "392920e019a92b8ac4c1376958156941679022687595fa16e229065277e8e916"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -1633,11 +1633,11 @@ class SshxContractTests(unittest.TestCase):
         fix_or_done = section(text, "## Fix Or Done", "## Termination Gate")
         anchor = (
             "When a pass carries more than one blocking goal gap, repair them in "
-            "`GoalArtifact` order — a gap that blocks `normalized_goal` before one that "
-            "blocks only its periphery — so the main path is repaired first."
+            "goal-primacy rank, so the main path is repaired first."
         )
         self.assertEqual(text.count(anchor), 1)
         self.assertIn(anchor, fix_or_done)
+        self.assertNotIn("`GoalArtifact` order", fix_or_done)
         self.assertIn("Stop when `pass_budget` owned below is exhausted", fix_or_done)
 
     def test_sshx_depth_discipline_contract(self) -> None:
@@ -1667,6 +1667,52 @@ class SshxContractTests(unittest.TestCase):
             "whether to run it follows decision risk, not available budget",
             trigger,
         )
+
+    def test_sshx_goal_primacy_contract(self) -> None:
+        text = read(SKILL)
+        reasoning = section(text, "## Reasoning Discipline", "## Thinking Panel")
+        outside_reasoning = text.replace(reasoning, "", 1)
+        self.assertEqual(text.count("Goal primacy:"), 1)
+        self.assertIn("Goal primacy:", reasoning)
+        depth_index = reasoning.index("Depth discipline:")
+        primacy_index = reasoning.index("Goal primacy:")
+        self.assertLess(depth_index, primacy_index)
+        self.assertLess(primacy_index, reasoning.index("`CapabilityOverlap` is the candidate-solution boundary check"))
+        for idiom in ["忘记目标", "因小失大", "买椟还珠"]:
+            self.assertEqual(reasoning.count(idiom), 1)
+            self.assertEqual(outside_reasoning.count(idiom), 1)
+            self.assertIn(idiom, section(text, "## Baseline Failure Mode", "## Transcript Template"))
+        for anchor in [
+            "忘记目标 (forgetting the goal), 因小失大 (losing the whole for a part), and 买椟还珠 (keeping the casket, returning the pearl) are the failures this discipline prevents",
+            "Protocol policy, not a mathematical consequence: a run serves, in this rank, `normalized_goal`, then the other `GoalArtifact` terms, then form — its own records, transcript, and procedure",
+            "evidence ranks with the term it shows, and whatever `GoalArtifact` does not name is unranked",
+            "Every act — a brief, a pass, a repair, a record, a report — and every basis names, in its own text and in no new field, what it serves",
+            "form may be spent for substance, and substance is never spent for form",
+            "An unranked target is not served: a basis naming one is advisory at most, and a report leads with what still differs from `GoalArtifact`",
+            "An evidenced conflict between two `GoalArtifact` terms is a goal gap routed by `harness.decision_ownership`, never a reason to spend `pass_budget` on serving one at the other's cost",
+            "Form is repaired in place by its owner, is never evidence about the work, and never withholds, delays, or replaces a substance judgment",
+            "a record ranks as substance only while it is the sole evidence of a substance claim",
+            "Because the rank is a strict order on a finite set, what to serve next always has a highest-ranked answer and never a cycle",
+            "the rank decides what is served and at whose cost, never what may block, which stays with `BlockingAuthority`",
+        ]:
+            self.assertEqual(text.count(anchor), 1, anchor)
+            self.assertIn(anchor, reasoning)
+        for weakening in [
+            "substance may be spent for form",
+            "form is never spent for substance",
+            "is a reason to spend `pass_budget`",
+            "form ranks above",
+            "a record ranks as substance while",
+            "never a reason to spend `pass_budget` on serving one at the other's cost, unless",
+            "in a new field",
+        ]:
+            self.assertNotIn(weakening, text, weakening)
+        # the rank names no new record field: the transcript template is unchanged by goal primacy
+        transcript = section(text, "## Transcript Template", "## Verification")
+        for token in ["serves", "rank", "primacy"]:
+            self.assertNotIn(token, transcript)
+        fix_or_done = section(text, "## Fix Or Done", "## Termination Gate")
+        self.assertIn("repair them in goal-primacy rank, so the main path is repaired first", fix_or_done)
 
     def test_sshx_prospective_evidence_is_reasoning_owned(self) -> None:
         text = read(SKILL)
@@ -1960,7 +2006,7 @@ class SshxContractTests(unittest.TestCase):
                 "Protocol policy, not mathematics, defines these two conjuncts" in text,
                 "before the first pass after the initial review triplet, the caller records one owner-precommitted finite integer `pass_budget`" in text,
             ),
-            (5, True, True, True),
+            (6, True, True, True),
         )
 
     def test_sshx_fixed_routing_units_and_reflection_actions(self) -> None:
@@ -3255,6 +3301,7 @@ class SshxContractTests(unittest.TestCase):
             "fake consensus: self-application, pseudo-isolation, missing worker-mode declaration, or caller self-certification",
             "false grounding: unverified premises, retrospective fit, imagined relevance",
             "rabbit-holing: blocking by default, peripheral detail, repeated unchanged work, finite case registers, procedural findings against the run's own records",
+            "goal loss: 忘记目标 drift to an unranked target, 因小失大 a part served at the whole's cost, or 买椟还珠 form held above substance",
             "wrong convergence: beauty without worth, scalarized incomparable candidates",
             "contaminated adjudication: same-round peer evidence, an out-of-prefix ledger event",
             "boundary drift: carrier diversity over-claims, improvised worker mechanics",

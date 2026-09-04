@@ -94,6 +94,7 @@ def oracleUsedAs : OracleUse → Bool
 -- SKILL[def]: "- fake consensus: self-application, pseudo-isolation, missing worker-mode declaration, or caller self-certification in place of the fixed thinking, review, and termination rosters;"
 -- SKILL[def]: "- false grounding: unverified premises, retrospective fit, imagined relevance, or a mathematical name whose hypotheses the recorded mechanism state does not instantiate;"
 -- SKILL[def]: "- rabbit-holing: blocking by default, peripheral detail, repeated unchanged work, finite case registers, procedural findings against the run's own records, or per-case diagnosis after one declared absorber already determines the goal-visible route;"
+-- SKILL[def]: "- goal loss: 忘记目标 drift to an unranked target, 因小失大 a part served at the whole's cost, or 买椟还珠 form held above substance;"
 -- SKILL[def]: "- wrong convergence: beauty without worth, scalarized incomparable candidates, path-dependent gain on non-additive coordinates, or budget and lifecycle milestones presented as completion;"
 -- SKILL[def]: "- contaminated adjudication: same-round peer evidence, an out-of-prefix ledger event, or dependency-reaching evidence presented as independent;"
 -- SKILL[def]: "- boundary drift: carrier diversity over-claims, improvised worker mechanics, or daemon, GitHub, git, label, and release orchestration for an inline decision."
@@ -101,6 +102,7 @@ inductive BaselineFailure
   | fakeConsensus
   | falseGrounding
   | rabbitHoling
+  | goalLoss
   | wrongConvergence
   | contaminatedAdjudication
   | boundaryDrift
@@ -111,6 +113,7 @@ def guardedBy : BaselineFailure → String
   | .fakeConsensus => "Sshx.caller_never_consensus, Sshx.fake_roster_rejected"
   | .falseGrounding => "Sshx.Reasoning.analogy_has_no_force, Sshx.Reasoning.explicit_excludes_silent_reliance"
   | .rabbitHoling => "Sshx.force_blocking_iff, Sshx.Reasoning.shallowest_is_the_standard"
+  | .goalLoss => "Sshx.Reasoning.unranked_is_not_served, Sshx.Reasoning.substance_never_spent_for_form"
   | .wrongConvergence => "Sshx.no_implement_without_worth, Sshx.Semantics.candidate_dominance_is_preorder"
   | .contaminatedAdjudication => "Sshx.same_round_peer_invisible, Sshx.Semantics.enlarging_closure_only_removes_admission"
   | .boundaryDrift => "Sshx.fallback_forbids, Sshx.Behavior.never_lifecycle"
