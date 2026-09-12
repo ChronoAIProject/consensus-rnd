@@ -639,13 +639,13 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertEqual(len(runner_pids), 2)
         for runner_pid in runner_pids:
             os.kill(int(runner_pid), signal.SIGTERM)
-        for marker in flights:
-            self.release_carrier(marker)
         _, stderr = process.communicate(timeout=WATCHDOG_SECONDS)
         self.assertEqual(process.returncode, 1, stderr)
         document = json.loads(report.read_text())
         self.assertTrue(document["interrupted"])
         self.assertEqual([item["runner_exit_code"] for item in document["workers"]], [1, 1])
+        for item in document["workers"]:
+            self.assertEqual(json.loads(Path(item["status_ref"]).read_text())["reason_code"], "INTERRUPTED")
 
     def test_batch_retains_colliding_child_status_and_ignores_second_recovery_signal(self) -> None:
         bash_wrapper = self.bin_dir / "bash"

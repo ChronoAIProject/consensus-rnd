@@ -6,6 +6,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -62,6 +63,21 @@ case "${FAKE_MODE:-success}" in
   carrier_exit_write_failure) write_result; write_sentinel; mkdir "$run_dir/carrier.exit.tmp" ;;
   artifacts_then_wait) write_result; write_sentinel; printf '%s\n' ready > "$FAKE_READY"; command cat "$FAKE_RELEASE" >/dev/null; printf '%s\n' exited > "$FAKE_EXITED" ;;
   interrupt_wait) printf '%s\n' "$$" > "$FAKE_CARRIER_PID"; printf '%s\n' ready > "$FAKE_READY"; command cat "$FAKE_RELEASE" >/dev/null ;;
+  process_tree|ignore_term_tree|tree_success)
+    [ "$FAKE_MODE" != ignore_term_tree ] || trap '' TERM
+    sleep 300 &
+    leaf_pid=$!
+    sh -c '
+      sleep 300 &
+      printf "%s\n" "$$" "$!" > "$FAKE_NESTED_PIDS.tmp"
+      mv "$FAKE_NESTED_PIDS.tmp" "$FAKE_NESTED_PIDS"
+      wait
+    ' &
+    while [ ! -f "$FAKE_NESTED_PIDS" ]; do sleep 0.01; done
+    { printf '%s\n' "$$" "$leaf_pid"; command cat "$FAKE_NESTED_PIDS"; } > "$FAKE_TREE_PIDS.tmp"
+    mv "$FAKE_TREE_PIDS.tmp" "$FAKE_TREE_PIDS"
+    if [ "$FAKE_MODE" = tree_success ]; then write_result; write_sentinel; else wait; fi
+    ;;
   invalid_verdict_missing_sentinel) verdict=unexpected; write_result ;;
   exit_127) exit 127 ;;
   projection_collision)
@@ -242,12 +258,17 @@ class CodexWorkerRunnerTests(unittest.TestCase):
             self.assertIn(f"`{field}`", spec)
 
     def test_trap_contract_source_regression(self) -> None:
-        trap_lines = [line.strip() for line in RUNNER.read_text().splitlines() if line.strip().startswith("trap")]
+        source = RUNNER.read_text()
+        trap_lines = [line.strip() for line in source.splitlines() if line.strip().startswith("trap")]
         self.assertIn("trap finish EXIT", trap_lines)
         self.assertIn("trap interrupt INT TERM", trap_lines)
         self.assertIn("trap - EXIT", trap_lines)
         self.assertIn("trap '' INT TERM", trap_lines)
         self.assertNotIn("trap - EXIT INT TERM", trap_lines)
+        interrupt = source.split("interrupt() {", 1)[1].split("\n}", 1)[0]
+        self.assertLess(interrupt.index("trap '' INT TERM"), interrupt.index("teardown_carrier"))
+        self.assertLess(interrupt.index("teardown_carrier"), interrupt.index("finish"))
+        self.assertIn('carrier_pid=$!\n  wait "$carrier_pid"', source)
 
     def test_terminal_status_publish_failure_installs_no_projection(self) -> None:
         result = self.run_worker("projection_collision", extra_env={"FAKE_COLLISION_TARGET": "status.json.tmp", "FAKE_COLLISION_SHAPE": "directory", "FAKE_OUTSIDE": str(self.temp_dir / "unused")})
@@ -334,8 +355,6 @@ class CodexWorkerRunnerTests(unittest.TestCase):
             self.assertEqual(ready_signal.read().strip(), "ready")
         carrier_pid = int(carrier_pid_ref.read_text())
         os.kill(process.pid, signal_number)
-        with release.open("w") as release_signal:
-            release_signal.write("release\n")
         stdout, stderr = process.communicate(timeout=10)
         result = RunResult(subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr), self.expected_run_dir(flight))
         self.assert_terminal(result, "INTERRUPTED")
@@ -348,6 +367,119 @@ class CodexWorkerRunnerTests(unittest.TestCase):
 
     def test_sigint_to_runner_writes_interrupted_terminal_status(self) -> None:
         self.run_interrupted_runner(signal.SIGINT)
+
+    def process_is_alive(self, pid: int) -> bool:
+        snapshot = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=2)
+        self.assertIn(snapshot.returncode, (0, 1), snapshot.stderr)
+        # An orphan awaiting the system reaper is no longer executing work.
+        state = snapshot.stdout.strip()
+        return bool(state) and not state.startswith("Z")
+
+    def await_tree_pids(self, pid_ref: Path, process: subprocess.Popen[str]) -> list[int]:
+        deadline = time.monotonic() + 10
+        while not pid_ref.is_file():
+            self.assertIsNone(process.poll(), "carrier exited before recording its tree")
+            self.assertLess(time.monotonic(), deadline, "carrier tree readiness timed out")
+            time.sleep(0.02)
+        pids = [int(pid) for pid in pid_ref.read_text().splitlines()]
+        self.assertEqual(len(pids), 4, "expected carrier, leaf, nested shell, and nested leaf")
+        self.assertEqual(len(set(pids)), 4)
+        return pids
+
+    def kill_recorded_pids(self, pids: list[int]) -> None:
+        for pid in reversed(pids):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    def run_carrier_tree(self, mode: str, *, interrupt: bool, repeat_signal: bool = False) -> RunResult:
+        flight = self.next_flight(mode)
+        pid_ref = self.temp_dir / f"{flight}.pids"
+        pids: list[int] = []
+        # Shares the caller's process group; teardown must never reach it.
+        unrelated = subprocess.Popen(["sleep", "300"])
+        process = subprocess.Popen(
+            self.command(flight), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=self.environment(mode, FAKE_TREE_PIDS=str(pid_ref), FAKE_NESTED_PIDS=str(self.temp_dir / f"{flight}-nested.pids")),
+        )
+        try:
+            pids = self.await_tree_pids(pid_ref, process)
+            started = time.monotonic()
+            if interrupt:
+                self.assertTrue(all(self.process_is_alive(pid) for pid in pids))
+                process.send_signal(signal.SIGTERM)
+                if repeat_signal:
+                    time.sleep(0.2)
+                    self.assertIsNone(process.poll(), "TERM-ignoring tree must receive a grace period")
+                    self.assertFalse((self.expected_run_dir(flight) / "status.json").exists())
+                    process.send_signal(signal.SIGTERM)
+                    process.send_signal(signal.SIGINT)
+            stdout, stderr = process.communicate(timeout=10 - (time.monotonic() - started))
+            result = RunResult(subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr), self.expected_run_dir(flight))
+            self.assert_terminal(result, "INTERRUPTED" if interrupt else "COMPLETE")
+            self.assertIsNone(unrelated.poll(), "teardown signalled a process outside the carrier tree")
+            assert result.status is not None
+            if interrupt:
+                while any(self.process_is_alive(pid) for pid in pids) and time.monotonic() - started < 10:
+                    time.sleep(0.02)
+                self.assertFalse(any(self.process_is_alive(pid) for pid in pids), f"carrier tree survived: {pids}")
+                self.assertIsNone(result.status["carrier_exit"])
+                self.assertFalse((result.run_dir / "carrier.exit").exists())
+                self.assertFalse((result.run_dir / "result.json").exists())
+                self.assertFalse((result.run_dir / "completion.sentinel").exists())
+                self.assertEqual(set(result.status["teardown"]), {"descendants_signalled", "killed_after_grace"})
+                self.assertGreater(result.status["teardown"]["descendants_signalled"], 0)
+                self.assertLessEqual(result.status["teardown"]["descendants_signalled"], 3)
+                if mode == "ignore_term_tree":
+                    self.assertGreaterEqual(time.monotonic() - started, 4.5)
+                    self.assertEqual(result.status["teardown"]["killed_after_grace"], 4)
+                self.assertLess(time.monotonic() - started, 10)
+            else:
+                self.assertNotIn("teardown", result.status)
+                self.assertNotIn("teardown descendants_signalled=", stdout)
+                self.assertTrue(all(self.process_is_alive(pid) for pid in pids[1:]), "normal success tears down descendants")
+                self.assertEqual((result.run_dir / "carrier.exit").read_text(), "0\n")
+            return result
+        finally:
+            if not pids and pid_ref.is_file():
+                pids = [int(pid) for pid in pid_ref.read_text().splitlines()]
+            self.kill_recorded_pids(pids)
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
+            unrelated.terminate()
+            unrelated.wait(timeout=10)
+
+    def test_sigterm_tears_down_carrier_process_tree(self) -> None:
+        self.run_carrier_tree("process_tree", interrupt=True)
+
+    def test_sigterm_kills_term_ignoring_carrier_tree_after_grace(self) -> None:
+        self.run_carrier_tree("ignore_term_tree", interrupt=True, repeat_signal=True)
+
+    def test_success_does_not_teardown_carrier_descendants(self) -> None:
+        self.run_carrier_tree("tree_success", interrupt=False)
+
+    def test_signal_at_carrier_launch_boundaries(self) -> None:
+        bash_env = self.temp_dir / "launch-signal.bash"
+        bash_env.write_text(
+            "set -T\n"
+            "trap '\n"
+            '  if [ "$0" = "$FAKE_RUNNER" ] && [ "${carrier_active:-0}" -eq 1 ]; then\n'
+            '    case "$FAKE_LAUNCH_GATE:$BASH_COMMAND" in\n'
+            '      before:\\"\\$codex_path\\"\\ exec\\ *|after:carrier_pid=\\$!) kill -TERM "$$" ;;\n'
+            "    esac\n"
+            "  fi\n"
+            "' DEBUG\n"
+        )
+        for gate in ["before", "after"]:
+            with self.subTest(gate=gate):
+                result = self.run_worker(extra_env={"BASH_ENV": str(bash_env), "FAKE_RUNNER": str(RUNNER), "FAKE_LAUNCH_GATE": gate})
+                self.assert_terminal(result, "INTERRUPTED")
+                self.assertIsNone(result.status["carrier_exit"])
+                self.assertFalse((result.run_dir / "carrier.exit").exists())
+                self.assertIn("teardown", result.status)
+                self.assertNotIn("unbound variable", result.process.stderr)
 
     def test_time_lookup_failure_is_diagnostic_only(self) -> None:
         date = self.bin_dir / "date"

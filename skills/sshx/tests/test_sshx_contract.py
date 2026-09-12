@@ -186,8 +186,10 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "GoalArtifact",
         "GoalArtifact.success_criteria",
         "HEAD",
+        "INT",
         "InlineConsensusProtocol",
         "MEMORY.md",
+        "TERM",
         "SshxResultEnvelope",
         "SshxResultEnvelope.conclusion",
         "SshxResultEnvelope.log_ref",
@@ -309,7 +311,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "392920e019a92b8ac4c1376958156941679022687595fa16e229065277e8e916"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "8514822fbb9a98266ea9529546422bdce77828e1100fc0e5cdd497f2bfd0a8f9"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -2549,7 +2551,7 @@ class SshxContractTests(unittest.TestCase):
         for required in [
             "records every child, and joins every recorded child before publishing a report",
             "its signal handling, interruption reporting, and inherited-disposition limits are owned by `CODEX_WORKER_SPEC.md` and the script's behavior tests",
-            "whole-job-tree teardown remains the host's responsibility",
+            "signalling each runner for batch cancellation remains the host's responsibility",
             "Caller-authored `&`, `nohup`, `disown`, and `setsid` remain forbidden",
         ]:
             self.assertIn(required, worker_delegation)
@@ -2789,7 +2791,7 @@ class SshxContractTests(unittest.TestCase):
             "TOCTOU races",
             "an active `setsid` escape",
             "forged runner artifact paths",
-            "A default `TERM` sent only to the runner PID may be deferred",
+            "A `TERM` sent only to the runner PID therefore initiates carrier-tree teardown",
             "An uncatchable `SIGKILL` sent only to the runner PID",
             "Before either runner-owned projection is written",
             "temporary and final target must be absent or a non-symbolic-link regular file",

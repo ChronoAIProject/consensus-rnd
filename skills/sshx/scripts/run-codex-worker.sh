@@ -4,6 +4,7 @@ umask 077
 reason=INTERNAL_ERROR
 code=1
 carrier_exit=null
+carrier_pid=; carrier_active=0; teardown=null
 started_at=; started_epoch=; finished_at=; finished_epoch=; duration_seconds=
 run_dir=
 run_dir_owned=0
@@ -31,16 +32,16 @@ finish() {
       printf '%s\n' 'run-codex-worker: INTERNAL_ERROR: invalid status target' >&2
       status_target_valid=0
     elif [ "$result_valid" -eq 1 ]; then
-      "$jq_path" -n --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg stage "$stage" --arg status "$terminal_status" --arg reason_code "$reason" --arg carrier_exit "$carrier_exit" --arg run_dir "$run_dir" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" --arg started_at "$started_at" --arg finished_at "$finished_at" --arg duration_seconds "$duration_seconds" --arg work_target "$work_target" --arg sandbox "$sandbox" --arg brief_ref "$brief_ref" --slurpfile result "$result_ref" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,stage:$stage,status:$status,reason_code:$reason_code,carrier_exit:(if $carrier_exit=="null" then null else ($carrier_exit|tonumber) end),run_dir:$run_dir,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref},verdict:$result[0].conclusion.verdict,started_at:(if $started_at=="" then null else $started_at end),finished_at:(if $finished_at=="" then null else $finished_at end),duration_seconds:(if $duration_seconds=="" then null else ($duration_seconds|tonumber) end),work_target:$work_target,sandbox:$sandbox,brief_ref:$brief_ref}' > "$status_tmp"
+      "$jq_path" -n --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg stage "$stage" --arg status "$terminal_status" --arg reason_code "$reason" --arg carrier_exit "$carrier_exit" --arg run_dir "$run_dir" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" --arg started_at "$started_at" --arg finished_at "$finished_at" --arg duration_seconds "$duration_seconds" --arg work_target "$work_target" --arg sandbox "$sandbox" --arg brief_ref "$brief_ref" --argjson teardown "$teardown" --slurpfile result "$result_ref" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,stage:$stage,status:$status,reason_code:$reason_code,carrier_exit:(if $carrier_exit=="null" then null else ($carrier_exit|tonumber) end),run_dir:$run_dir,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref},verdict:$result[0].conclusion.verdict,started_at:(if $started_at=="" then null else $started_at end),finished_at:(if $finished_at=="" then null else $finished_at end),duration_seconds:(if $duration_seconds=="" then null else ($duration_seconds|tonumber) end),work_target:$work_target,sandbox:$sandbox,brief_ref:$brief_ref} + (if $teardown == null then {} else {teardown:$teardown} end)' > "$status_tmp"
     else
-      "$jq_path" -n --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg stage "$stage" --arg status "$terminal_status" --arg reason_code "$reason" --arg carrier_exit "$carrier_exit" --arg run_dir "$run_dir" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" --arg started_at "$started_at" --arg finished_at "$finished_at" --arg duration_seconds "$duration_seconds" --arg work_target "$work_target" --arg sandbox "$sandbox" --arg brief_ref "$brief_ref" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,stage:$stage,status:$status,reason_code:$reason_code,carrier_exit:(if $carrier_exit=="null" then null else ($carrier_exit|tonumber) end),run_dir:$run_dir,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref},started_at:(if $started_at=="" then null else $started_at end),finished_at:(if $finished_at=="" then null else $finished_at end),duration_seconds:(if $duration_seconds=="" then null else ($duration_seconds|tonumber) end),work_target:$work_target,sandbox:$sandbox,brief_ref:$brief_ref}' > "$status_tmp"
+      "$jq_path" -n --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg stage "$stage" --arg status "$terminal_status" --arg reason_code "$reason" --arg carrier_exit "$carrier_exit" --arg run_dir "$run_dir" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" --arg started_at "$started_at" --arg finished_at "$finished_at" --arg duration_seconds "$duration_seconds" --arg work_target "$work_target" --arg sandbox "$sandbox" --arg brief_ref "$brief_ref" --argjson teardown "$teardown" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,stage:$stage,status:$status,reason_code:$reason_code,carrier_exit:(if $carrier_exit=="null" then null else ($carrier_exit|tonumber) end),run_dir:$run_dir,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref},started_at:(if $started_at=="" then null else $started_at end),finished_at:(if $finished_at=="" then null else $finished_at end),duration_seconds:(if $duration_seconds=="" then null else ($duration_seconds|tonumber) end),work_target:$work_target,sandbox:$sandbox,brief_ref:$brief_ref} + (if $teardown == null then {} else {teardown:$teardown} end)' > "$status_tmp"
     fi
     render_rc=$?; render_ok=0; mv_rc=0
     [ "$render_rc" -eq 0 ] && [ -s "$status_tmp" ] && render_ok=1
     if [ "$status_target_valid" -eq 1 ] && [ "$render_ok" -eq 0 ]; then
       reason=INTERNAL_ERROR; code=1
       printf '%s\n' 'run-codex-worker: INTERNAL_ERROR: cannot render status' >&2
-      "$jq_path" -n --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg stage "$stage" --arg reason_code INTERNAL_ERROR --arg carrier_exit "$carrier_exit" --arg run_dir "$run_dir" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" --arg started_at "$started_at" --arg finished_at "$finished_at" --arg duration_seconds "$duration_seconds" --arg work_target "$work_target" --arg sandbox "$sandbox" --arg brief_ref "$brief_ref" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,stage:$stage,status:"NOT_COMPLETE",reason_code:$reason_code,carrier_exit:(if $carrier_exit=="null" then null else ($carrier_exit|tonumber) end),run_dir:$run_dir,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref},started_at:(if $started_at=="" then null else $started_at end),finished_at:(if $finished_at=="" then null else $finished_at end),duration_seconds:(if $duration_seconds=="" then null else ($duration_seconds|tonumber) end),work_target:$work_target,sandbox:$sandbox,brief_ref:$brief_ref}' > "$status_tmp"
+      "$jq_path" -n --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg stage "$stage" --arg reason_code INTERNAL_ERROR --arg carrier_exit "$carrier_exit" --arg run_dir "$run_dir" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" --arg started_at "$started_at" --arg finished_at "$finished_at" --arg duration_seconds "$duration_seconds" --arg work_target "$work_target" --arg sandbox "$sandbox" --arg brief_ref "$brief_ref" --argjson teardown "$teardown" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,stage:$stage,status:"NOT_COMPLETE",reason_code:$reason_code,carrier_exit:(if $carrier_exit=="null" then null else ($carrier_exit|tonumber) end),run_dir:$run_dir,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref},started_at:(if $started_at=="" then null else $started_at end),finished_at:(if $finished_at=="" then null else $finished_at end),duration_seconds:(if $duration_seconds=="" then null else ($duration_seconds|tonumber) end),work_target:$work_target,sandbox:$sandbox,brief_ref:$brief_ref} + (if $teardown == null then {} else {teardown:$teardown} end)' > "$status_tmp"
       fallback_rc=$?
       if [ "$fallback_rc" -eq 0 ] && [ -s "$status_tmp" ]; then render_ok=1; else
         printf '%s\n' 'run-codex-worker: INTERNAL_ERROR: cannot render failure status' >&2
@@ -65,7 +66,69 @@ finish() {
 }
 trap finish EXIT
 
-interrupt() { reason=INTERRUPTED; code=1; finish; }
+collect_carrier_descendants() {
+  local parent=$1 children child discovery_rc
+  children=$(pgrep -P "$parent"); discovery_rc=$?
+  case "$discovery_rc" in
+    0) ;;
+    1) return ;;
+    *) printf '%s\n' "run-codex-worker: teardown: cannot enumerate children of $parent (pgrep rc=$discovery_rc)" >&2; return ;;
+  esac
+  for child in $children; do
+    collect_carrier_descendants "$child"
+    teardown_pids[${#teardown_pids[@]}]=$child
+  done
+}
+
+teardown_carrier() {
+  local pid descendants_signalled=0 killed_after_grace=0 poll survivors
+  local teardown_pids=()
+  if [ "$carrier_active" -eq 1 ] && [ -n "$carrier_pid" ]; then
+    # Snapshot before signalling: parents may exit and reparent their children.
+    collect_carrier_descendants "$carrier_pid"
+    teardown_pids[${#teardown_pids[@]}]=$carrier_pid
+    for pid in "${teardown_pids[@]}"; do
+      if kill -TERM "$pid" 2>/dev/null; then
+        [ "$pid" = "$carrier_pid" ] || descendants_signalled=$((descendants_signalled + 1))
+      elif kill -0 "$pid" 2>/dev/null; then
+        printf '%s\n' "run-codex-worker: teardown: cannot send TERM to $pid" >&2
+      fi
+    done
+    for ((poll = 0; poll < 50; poll++)); do
+      survivors=0
+      for pid in "${teardown_pids[@]}"; do
+        kill -0 "$pid" 2>/dev/null && survivors=1
+      done
+      [ "$survivors" -eq 1 ] || break
+      sleep 0.1
+    done
+    for pid in "${teardown_pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        if kill -KILL "$pid" 2>/dev/null; then
+          killed_after_grace=$((killed_after_grace + 1))
+        elif kill -0 "$pid" 2>/dev/null; then
+          printf '%s\n' "run-codex-worker: teardown: cannot send KILL to $pid" >&2
+        fi
+      fi
+    done
+    # Reap our direct child without changing carrier.exit or carrier_exit.
+    wait "$carrier_pid" 2>/dev/null
+    carrier_pid=; carrier_active=0
+  fi
+  teardown="{\"descendants_signalled\":$descendants_signalled,\"killed_after_grace\":$killed_after_grace}"
+  log_event "teardown descendants_signalled=$descendants_signalled killed_after_grace=$killed_after_grace"
+}
+
+interrupt() {
+  trap '' INT TERM
+  # A signal can arrive after launch but before the PID assignment.
+  if [ "$carrier_active" -eq 1 ] && [ -z "$carrier_pid" ]; then
+    carrier_pid=$(jobs -p)
+  fi
+  reason=INTERRUPTED; code=1
+  teardown_carrier
+  finish
+}
 trap interrupt INT TERM
 usage_error() { reason=USAGE_ERROR; code=64; printf '%s\n' "run-codex-worker: USAGE_ERROR: $1" >&2; return 1; }
 require_value() { [ "$2" -ge 2 ] || usage_error "missing value for $1"; }
@@ -243,10 +306,14 @@ EOF
   log_field last_message "$last_message_ref"; log_field result "$result_ref"; log_field sentinel "$sentinel_ref"
   log_field carrier_exit "$carrier_exit_ref"; log_field status_file "$status_ref"
   if ! codex_path=$(command -v codex 2>/dev/null) || [ ! -x "$codex_path" ]; then reason=LAUNCH_FAILED; return 1; fi
+  command -v pgrep >/dev/null 2>&1 || { printf '%s\n' 'run-codex-worker: INTERNAL_ERROR: pgrep is required for carrier teardown' >&2; return 1; }
   log_event 'carrier starting'
+  carrier_active=1
   "$codex_path" exec --json -C "$work_target" --sandbox "$sandbox" --skip-git-repo-check -o "$last_message_ref" - \
-    < "$brief_ref" > "$stdout_ref" 2> "$stderr_ref"
-  carrier_exit=$?
+    < "$brief_ref" > "$stdout_ref" 2> "$stderr_ref" &
+  carrier_pid=$!
+  wait "$carrier_pid"
+  carrier_exit=$? carrier_pid= carrier_active=0
   log_event "carrier exited rc=$carrier_exit"
   regular_or_absent "$carrier_exit_ref" && regular_or_absent "$carrier_exit_ref.tmp" || return 1
   printf '%s\n' "$carrier_exit" > "$carrier_exit_ref.tmp" && mv -f "$carrier_exit_ref.tmp" "$carrier_exit_ref" && [ -f "$carrier_exit_ref" ] && [ ! -L "$carrier_exit_ref" ] || return 1

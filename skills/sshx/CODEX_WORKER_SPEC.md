@@ -178,9 +178,10 @@ when that wait's own return status equals the recorded signal status. It joins
 every recorded child before publication. It then publishes the report with
 `interrupted: true` and exits nonzero when a signal was recorded. This preserves
 ownership of recorded children but does not promise prompt cancellation or
-carrier teardown. The runner may itself defer traps during its synchronous
-carrier call and does not propagate signals, so teardown of the whole job tree
-remains the host's responsibility.
+carrier teardown from a dispatcher-only signal. The host signals each runner
+for cancellation; on a trappable `INT` or `TERM`, each runner tears down its own
+carrier tree before publishing `INTERRUPTED`. Time limits and signalling the
+runners remain the host's responsibility.
 
 The dispatcher's `INT` half has the same inherited-disposition limit as its
 children: if the host starts it with `SIGINT` ignored, Bash cannot make its
@@ -363,23 +364,35 @@ terminal status intentionally leaves its flight ineligible.
 ## Carrier
 
 After `jq`, directory, brief, log, and executable `codex` preflight checks, the
-runner performs one synchronous foreground call:
+runner launches one carrier as its own background job, records `carrier_pid=$!`,
+and joins it with the Bash `wait` builtin:
 
 ```text
 codex exec --json -C <work-target> --sandbox <sandbox> \
   --skip-git-repo-check -o <last-message.txt> -
 ```
 
-The command's stdout and stderr go to the fixed diagnostic logs. There is no
-timeout, supervisor, helper, PID state, signal propagation, process-group
-handling, or KILL escalation. The carrier wait status is written atomically to
+The command's stdout and stderr go to the fixed diagnostic logs, and stdin
+comes from the same brief. The runner remains attached to its host job while
+waiting. On normal return, the carrier wait status is written atomically to
 `carrier.exit`. A missing executable is `LAUNCH_FAILED`; once invoked, any
 nonzero carrier status is `CARRIER_EXIT_NONZERO`.
 
-`INT` and `TERM` traps set `reason_code=INTERRUPTED` and exit through the
-normal `EXIT` trap. Bash may defer these traps while the synchronous foreground
-command is running. The runner does not promise signal reachability in every
-phase and does not tear down descendants.
+`pgrep` is required before carrier launch. On a trappable `INT` or `TERM`, the
+runner ignores further `INT` and `TERM`, records `reason_code=INTERRUPTED`, and
+recursively collects the carrier's descendants with `pgrep -P`. It retains that
+snapshot before sending individual `TERM` signals to descendants, deepest
+first, and then to the carrier. It polls the recorded PIDs for up to fifty
+0.1-second grace intervals, sends individual `KILL` signals to those still
+present, and reaps its direct carrier before the existing `finish` path
+publishes terminal status. It does not signal process groups or processes
+outside the recorded carrier tree. A descendant-discovery or signal-delivery
+failure emits a diagnostic; `pgrep` exit 1 means no children.
+
+Teardown does not write `carrier.exit` or replace `carrier_exit` with its own
+wait result. The normal artifact validation and completion predicate retain
+their existing order. A signal during terminal publication remains ignored so
+publication cannot be interrupted. There is no runner-owned time limit.
 
 ## Status Projection
 
@@ -392,6 +405,15 @@ references, `started_at`, `finished_at`, `duration_seconds`, `work_target`,
 both lookups succeed. A failed time lookup writes `null` and does not fail the
 flight.
 
+An interrupted run additionally contains `teardown`, an object with integer
+`descendants_signalled` and `killed_after_grace` counts. The first counts
+successful descendant `TERM` sends, excluding the carrier; the second counts
+successful `KILL` sends after grace, including the carrier. These are signal
+send counts, not proof that every process is reaped: Bash reaps only its direct
+carrier, and an orphan zombie can remain present until the system reaper runs.
+A normal run omits `teardown`. The timestamped teardown log line carries the
+same counts.
+
 Exit code is the sole authority: `0` means complete, `1` means not complete,
 and `64` means usage error. `status.json` is a terminal, machine-readable
 projection for callers that need structured data. stdout is a human-readable
@@ -401,9 +423,9 @@ parseable, and is not byte-for-byte identical to any file.
 `status.json` and the batch report are mechanical projections only. Neither is
 a completion or verdict source under `SKILL.md`.
 
-Before the synchronous carrier call, stdout reports all then-known invocation
-identity and derived artifact paths followed by `carrier starting`. After the
-call returns, it reports the carrier exit status; terminal cleanup then reports
+Before carrier launch, stdout reports all then-known invocation identity and
+derived artifact paths followed by `carrier starting`. After the normal wait
+returns, it reports the carrier exit status; terminal cleanup then reports
 `status`, `reason_code`, `verdict`, and duration. Every stdout line begins with
 a UTC ISO-8601 timestamp. stdout write failure is diagnostic only and cannot
 change the authoritative exit decision.
@@ -433,7 +455,8 @@ contains invocation identity, `status` (`COMPLETE` or
 `NOT_COMPLETE`), `reason_code`, `carrier_exit` (or `null`), derived artifact
 references, diagnostic log references, the six fields `started_at`,
 `finished_at`, `duration_seconds`, `work_target`, `sandbox`, and `brief_ref`,
-and a verdict only when the stage has a verdict mapping. Before either
+a verdict only when the stage has a verdict mapping, and the interruption-only
+`teardown` counts described above. Before either
 runner-owned projection is written, its temporary
 and final target must be absent or a non-symbolic-link regular file. After each
 rename, the fixed `carrier.exit` or `status.json` path must be a non-symbolic-link
@@ -458,17 +481,20 @@ the POSIX text-line contract.
 
 ## Teardown Prerequisite
 
-Verified in two independent Claude Code harness experiments: `TaskStop`
-terminates the entire process tree, including a child that actively ignores
-`TERM` and `INT`; this indicates the harness uses SIGKILL or process-group
-teardown. The runner therefore does not propagate signals.
+The host owns time limits and delivery of cancellation signals to the runner
+itself, including each runner in a batch. The runner owns teardown of its own
+carrier tree on trappable `INT` and `TERM`; the background carrier and builtin
+`wait` let the handler run while the carrier is alive. A `TERM` sent only to
+the runner PID therefore initiates carrier-tree teardown without waiting for
+normal carrier exit.
 
-Codex, Cursor, and Gemini host teardown behavior is unverified. An interactive
-Ctrl-C normally sends `INT` to the foreground process group, which includes the
-synchronous carrier. A default `TERM` sent only to the runner PID may be
-deferred by Bash until the foreground carrier returns. An uncatchable `SIGKILL`
-sent only to the runner PID can leave the carrier orphaned and running. The
-runner does not attempt to compensate for any of these host behaviors.
+Bash cannot trap a signal inherited as ignored, including `INT` on a normal
+non-job-control background launch. The host uses a trappable signal for runner
+cancellation. An uncatchable `SIGKILL` sent only to the runner PID can leave the
+carrier orphaned and running; host teardown remains necessary for uncatchable
+termination. The runner contract does not assume that any particular host
+already kills descendants. Codex, Cursor, and Gemini host teardown behavior
+remains unverified.
 
 ## Threat Model
 
@@ -478,18 +504,21 @@ missing artifacts, and accidental projection-path type collisions, but it is
 not a sandbox against a hostile carrier. This design does not defend TOCTOU
 races, including caller-brief replacement after the dispatcher's readability
 probe or flight changes after cleanup's repeated eligibility check; those checks
-narrow their respective windows but do not make object identity immutable. It
-also does not defend an active `setsid` escape, forged runner artifact paths, or
-deliberate replacement of files inside the owned attempt directory. An
+narrow their respective windows but do not make object identity immutable.
+Process-tree discovery is a PID snapshot, not an atomic process-ownership
+boundary: concurrent forks, reparenting, and PID reuse are outside its
+guarantee. It also does not defend an active `setsid` escape, forged runner
+artifact paths, or deliberate replacement of files inside the owned attempt directory. An
 untrusted carrier or a requirement to cover those attacks requires a new design
 review rather than more checks in this runner.
 
 ## Boundaries
 
 The runner has no git, GitHub, label, release, host lifecycle, cleanup, or
-global-state authority. Time limits and whole-job teardown belong to the
-caller harness. Power-loss durability is not guaranteed. Deletion authority
-lives only in `clean-codex-worker-runs.sh` and is bounded to terminal-only,
+global-state authority. Time limits, signalling the runner itself, and teardown
+after uncatchable termination belong to the caller harness. The runner's
+catchable-signal teardown authority is limited to its own carrier tree.
+Power-loss durability is not guaranteed. Deletion authority lives only in `clean-codex-worker-runs.sh` and is bounded to terminal-only,
 whole-flight artifact retirement with dry-run default and no force override.
 
 No other skill may depend on these mechanisms. To reverse the exception

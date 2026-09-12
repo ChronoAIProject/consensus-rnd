@@ -311,8 +311,9 @@ inductive TeardownOwner
   | runner
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Time limits and final teardown of the whole job tree are the caller AI harness's responsibility."
-def teardownOwner : TeardownOwner := .callerHarness
+-- SKILL[def]: "Time limits, signalling the runner itself, and teardown after uncatchable termination are the caller AI harness's responsibility; the runner owns teardown of its own carrier tree on trappable `INT` and `TERM` as specified in `CODEX_WORKER_SPEC.md`."
+def teardownOwner (trappableCarrierCancellation : Bool) : TeardownOwner :=
+  if trappableCarrierCancellation then .runner else .callerHarness
 
 -- SKILL[ref]: "The caller records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the runner reports completion and the envelope and sentinel validate."
 abbrev refsOnlyOnCompletion := @Behavior.collectEffect
@@ -334,8 +335,8 @@ theorem batch_never_covers_whole_stage (seats : Nat) (h : 2 ≤ seats) :
 -- SKILL[ref]: "The dispatcher obtains every worker artifact path from the runner's pure path projection; worker artifact paths remain runner-derived and are never caller-supplied."
 abbrev batchPathsFromRunner := artifactPathOwner
 
--- SKILL[def]: "Internal shell `&` followed by `wait` is permitted inside that one named batch script because it remains the foreground process of one host-tracked job, records every child, and joins every recorded child before publishing a report; its signal handling, interruption reporting, and inherited-disposition limits are owned by `CODEX_WORKER_SPEC.md` and the script's behavior tests, and whole-job-tree teardown remains the host's responsibility."
-def batchInternalWaitPermitted : Bool := true
+-- SKILL[def]: "Internal shell `&` followed by `wait` is permitted inside `skills/sshx/scripts/run-codex-worker.sh` for its own carrier and inside the named batch script for its runners; each script remains attached to one host-tracked job, and the batch script records every child, and joins every recorded child before publishing a report; its signal handling, interruption reporting, and inherited-disposition limits are owned by `CODEX_WORKER_SPEC.md` and the script's behavior tests, and signalling each runner for batch cancellation remains the host's responsibility."
+def runnerAndBatchInternalWaitPermitted : Bool := true
 
 inductive NotificationGranularity
   | perCarrier
