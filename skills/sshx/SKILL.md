@@ -131,7 +131,7 @@ Every worker dispatch must create a prompt-level `SshxWorkerFlightRecord` before
 
 While any `SshxWorkerFlightRecord` for the same `work_target` is `in-flight` or `retrying`, the caller is read-only for that target. The caller is non-mutating for that target and its external resources. The caller must not take over the same `work_target` because a process snapshot, log text, or workspace state appears quiet.
 
-For each `codex-cli` attempt, before launch the caller must choose a unique `flight_id` and `attempt` and pass them to `skills/sshx/scripts/run-codex-worker.sh`; the runner derives and owns every artifact path, parallel attempts receive disjoint derived paths, and the caller must not supply arbitrary result, sentinel, log, or state paths. Every formal `codex-cli` flight must use this runner rather than a parallel direct-launch path. The command, sandbox, path, direct-process, and collection mechanics are owned by `CODEX_WORKER_SPEC.md`; the required dispatch shape is the runner's default `danger-full-access` sandbox, so the caller passes no sandbox selection unless the maintainer explicitly directs a narrower one. Time limits and final teardown of the whole job tree are the caller AI harness's responsibility. The caller must not poll worker artifact paths while the runner is active. The caller records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the runner reports completion and the envelope and sentinel validate. Completion and verdict recognition stay governed by the `## Worker Completion Contract`.
+For each `codex-cli` attempt, before launch the caller must mint a fresh `flight_id` with the runner's `--new-flight-id` query rather than writing one by hand, choose the `attempt`, and pass them to `skills/sshx/scripts/run-codex-worker.sh`; the runner derives and owns every artifact path, parallel attempts receive disjoint derived paths, and the caller must not supply arbitrary result, sentinel, log, or state paths. Every formal `codex-cli` flight must use this runner rather than a parallel direct-launch path. The command, sandbox, path, direct-process, and collection mechanics are owned by `CODEX_WORKER_SPEC.md`; the required dispatch shape is the runner's default `danger-full-access` sandbox, so the caller passes no sandbox selection unless the maintainer explicitly directs a narrower one. Time limits and final teardown of the whole job tree are the caller AI harness's responsibility. The caller must not poll worker artifact paths while the runner is active. The caller records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the runner reports completion and the envelope and sentinel validate. Completion and verdict recognition stay governed by the `## Worker Completion Contract`.
 
 The caller must launch the runner through a host-provided background job mechanism that notifies the caller when the carrier process exits. It must not use shell `&` to background the runner, because that detaches the process from host tracking and can leave an init-adopted carrier running without ever notifying the caller of completion. It must not monitor files or logs to poll for completion; doing so conflicts with the no-polling rule above.
 
@@ -376,14 +376,15 @@ The gate may reach a completed result at most once per candidate affirmative ter
 
 ## Boundaries
 
-This skill is a prompt contract with a closed set of exactly four named mechanical script exceptions, governed only by `skills/sshx/CODEX_WORKER_SPEC.md` and their behavior tests:
+This skill is a prompt contract with a closed set of exactly five named mechanical script exceptions, governed only by `skills/sshx/CODEX_WORKER_SPEC.md` and their behavior tests:
 
 All records, contracts, gates, templates, and reasoning guidance named here are prompt-level only: none is a runtime API, daemon, CLI, parsed schema, marker family, lifecycle authority, or second transcript channel.
 
 - `skills/sshx/scripts/run-codex-worker.sh`;
 - `skills/sshx/scripts/run-codex-worker-batch.sh`;
 - `skills/sshx/scripts/read-codex-worker-status.sh`;
-- `skills/sshx/scripts/clean-codex-worker-runs.sh`.
+- `skills/sshx/scripts/clean-codex-worker-runs.sh`;
+- `skills/sshx/scripts/prune-inactive-codex-worker-runs.sh`.
 
 It must not add or depend on:
 

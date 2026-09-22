@@ -75,15 +75,29 @@ positive_integer() {
   while [ "${integer_value#0}" != "$integer_value" ]; do integer_value=${integer_value#0}; done
   [ -n "$integer_value" ]
 }
-normalize_tmp_base() {
-  tmp_base=${TMPDIR:-/tmp}
-  while [ "$tmp_base" != / ] && [ "${tmp_base%/}" != "$tmp_base" ]; do tmp_base=${tmp_base%/}; done
-  case "$tmp_base" in /*) ;; *) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
-  case "$tmp_base" in *$'\n'*|*$'\r'*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
+strip_trailing_slashes() { stripped_path=$1; while [ "$stripped_path" != / ] && [ "${stripped_path%/}" != "$stripped_path" ]; do stripped_path=${stripped_path%/}; done; }
+normalize_run_root() {
+  if [ -n "${SSHX_HOME:-}" ]; then
+    run_root_source=SSHX_HOME; run_root=$SSHX_HOME
+  elif [ -n "${HOME:-}" ]; then
+    run_root_source=HOME; strip_trailing_slashes "$HOME"
+    case "$stripped_path" in /) run_root=/.sshx ;; *) run_root="$stripped_path/.sshx" ;; esac
+  else
+    reason=RUN_DIR_UNAVAILABLE
+    printf '%s\n' 'run-codex-worker: RUN_DIR_UNAVAILABLE: neither SSHX_HOME nor HOME is set' >&2
+    return 1
+  fi
+  strip_trailing_slashes "$run_root"; run_root=$stripped_path
+  case "$run_root" in /*) ;; *) reason=RUN_DIR_UNAVAILABLE; printf '%s\n' "run-codex-worker: RUN_DIR_UNAVAILABLE: run root from $run_root_source must be absolute" >&2; return 1 ;; esac
+  case "$run_root" in *$'\n'*|*$'\r'*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
+}
+valid_flight_id() {
+  [ "${#1}" -eq 24 ] || return 1
+  case "$1" in *[!0123456789abcdef]*) return 1 ;; esac
+  return 0
 }
 derive_project_paths() {
-  consensus_root="$tmp_base/consensus-rnd"
-  sshx_root="$consensus_root/sshx"
+  sshx_root=$run_root
   run_parent="$sshx_root/$flight_id"
   run_dir="$run_parent/attempt-$attempt"
   brief_ref="$run_dir/brief.md"; stdout_ref="$run_dir/worker.stdout.log"; stderr_ref="$run_dir/worker.stderr.log"
@@ -92,6 +106,50 @@ derive_project_paths() {
 }
 emit_project_paths() {
   if ! projection_json=$("$jq_path" --compact-output --null-input --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg run_dir "$run_dir" --arg brief_ref "$brief_ref" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg carrier_exit_ref "$carrier_exit_ref" --arg status_ref "$status_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,run_dir:$run_dir,brief_ref:$brief_ref,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,carrier_exit_ref:$carrier_exit_ref,status_ref:$status_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref}}'); then
+    reason=INTERNAL_ERROR
+    return 1
+  fi
+  [ -n "$projection_json" ] || { reason=INTERNAL_ERROR; return 1; }
+  printf '%s\n' "$projection_json" || { reason=INTERNAL_ERROR; return 1; }
+}
+emit_new_flight_id() {
+  if ! minted_seconds=$(date -u '+%s' 2>/dev/null); then reason=INTERNAL_ERROR; return 1; fi
+  case "$minted_seconds" in ''|*[!0-9]*) reason=INTERNAL_ERROR; return 1 ;; esac
+  if ! minted_random=$(set -o pipefail; od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'); then reason=INTERNAL_ERROR; return 1; fi
+  printf -v minted_time '%08x' "$minted_seconds" || { reason=INTERNAL_ERROR; return 1; }
+  minted_id="$minted_time$minted_random"
+  valid_flight_id "$minted_id" || { reason=INTERNAL_ERROR; printf '%s\n' 'run-codex-worker: INTERNAL_ERROR: minted flight id is malformed' >&2; return 1; }
+  if ! projection_json=$("$jq_path" --compact-output --null-input --argjson schema_version 1 --arg flight_id "$minted_id" '{schema_version:$schema_version,flight_id:$flight_id}'); then
+    reason=INTERNAL_ERROR
+    return 1
+  fi
+  [ -n "$projection_json" ] || { reason=INTERNAL_ERROR; return 1; }
+  printf '%s\n' "$projection_json" || { reason=INTERNAL_ERROR; return 1; }
+}
+emit_project_root() {
+  root_present=false
+  [ ! -d "$sshx_root" ] || root_present=true
+  flight_ids_text=; flight_dirs_text=; unrecognized_json='[]'
+  shopt -s nullglob dotglob
+  for root_entry in "$sshx_root"/*; do
+    entry_name=${root_entry##*/}
+    if valid_flight_id "$entry_name"; then
+      flight_id=$entry_name
+      derive_project_paths
+      flight_ids_text="$flight_ids_text$flight_id"$'\n'
+      flight_dirs_text="$flight_dirs_text$run_parent"$'\n'
+    elif ! unrecognized_json=$("$jq_path" --compact-output --null-input --argjson unrecognized "$unrecognized_json" --arg name "$entry_name" '$unrecognized + [$name]'); then
+      shopt -u nullglob dotglob
+      reason=INTERNAL_ERROR
+      return 1
+    fi
+  done
+  shopt -u nullglob dotglob
+  if ! flights_json=$("$jq_path" --compact-output --null-input --arg ids "$flight_ids_text" --arg dirs "$flight_dirs_text" '($ids | split("\n") | map(select(length > 0))) as $i | ($dirs | split("\n") | map(select(length > 0))) as $d | if ($i | length) != ($d | length) then error("flight projection mismatch") else [$i, $d] | transpose | map({flight_id: .[0], flight_dir: .[1]}) end'); then
+    reason=INTERNAL_ERROR
+    return 1
+  fi
+  if ! projection_json=$("$jq_path" --compact-output --null-input --argjson schema_version 1 --arg sshx_root "$sshx_root" --argjson root_present "$root_present" --argjson flights "$flights_json" --argjson unrecognized "$unrecognized_json" '{schema_version:$schema_version,sshx_root:$sshx_root,root_present:$root_present,flights:$flights,unrecognized:$unrecognized}'); then
     reason=INTERNAL_ERROR
     return 1
   fi
@@ -122,7 +180,7 @@ emit_project_flight() {
   printf '%s\n' "$projection_json" || { reason=INTERNAL_ERROR; return 1; }
 }
 main() {
-  flight_id= attempt= stage= work_target= sandbox=; project_paths=0; project_flight=0; seen_options='|'
+  flight_id= attempt= stage= work_target= sandbox=; project_paths=0; project_flight=0; project_root=0; new_flight_id=0; seen_options='|'
   while [ "$#" -gt 0 ]; do
     option=$1
     case "$option" in
@@ -134,6 +192,14 @@ main() {
         case "$seen_options" in *"$option"*) usage_error "duplicate option $option"; return 1 ;; esac
         project_flight=1; seen_options="$seen_options$option|"; shift; continue
         ;;
+      --project-root)
+        case "$seen_options" in *"$option"*) usage_error "duplicate option $option"; return 1 ;; esac
+        project_root=1; seen_options="$seen_options$option|"; shift; continue
+        ;;
+      --new-flight-id)
+        case "$seen_options" in *"$option"*) usage_error "duplicate option $option"; return 1 ;; esac
+        new_flight_id=1; seen_options="$seen_options$option|"; shift; continue
+        ;;
       --flight-id) target=flight_id ;; --attempt) target=attempt ;; --stage) target=stage ;;
       --work-target) target=work_target ;; --sandbox) target=sandbox ;;
       --*) usage_error "unknown option $option"; return 1 ;; *) usage_error "unexpected positional argument $option"; return 1 ;;
@@ -143,15 +209,23 @@ main() {
     printf -v "$target" '%s' "$2"; seen_options="$seen_options$option|"
     shift 2
   done
-  case "$seen_options" in *'--flight-id'*) ;; *) usage_error "missing --flight-id"; return 1 ;; esac
-  [ $((project_paths + project_flight)) -le 1 ] || { usage_error "query modes are mutually exclusive"; return 1; }
-  if [ "$project_flight" -eq 0 ]; then
-    case "$seen_options" in *'--attempt'*) ;; *) usage_error "missing --attempt"; return 1 ;; esac
-  fi
-  case "$flight_id" in ''|.|*'..'*|*[!A-Za-z0-9._-]*) usage_error "invalid --flight-id"; return 1 ;; esac
-  if [ "$project_flight" -eq 0 ]; then
-    positive_integer "$attempt" || { usage_error "--attempt must be a positive integer"; return 1; }
-    attempt=$integer_value
+  query_mode=$((project_paths + project_flight + project_root + new_flight_id))
+  [ "$query_mode" -le 1 ] || { usage_error "query modes are mutually exclusive"; return 1; }
+  if [ $((project_root + new_flight_id)) -eq 1 ]; then
+    query_name=--project-root; [ "$new_flight_id" -eq 0 ] || query_name=--new-flight-id
+    for other_option in --flight-id --attempt --stage --work-target --sandbox; do
+      case "$seen_options" in *"$other_option"*) usage_error "$query_name cannot be combined with $other_option"; return 1 ;; esac
+    done
+  else
+    case "$seen_options" in *'--flight-id'*) ;; *) usage_error "missing --flight-id"; return 1 ;; esac
+    if [ "$project_flight" -eq 0 ]; then
+      case "$seen_options" in *'--attempt'*) ;; *) usage_error "missing --attempt"; return 1 ;; esac
+    fi
+    valid_flight_id "$flight_id" || { usage_error "--flight-id must be exactly 24 lowercase hexadecimal characters"; return 1; }
+    if [ "$project_flight" -eq 0 ]; then
+      positive_integer "$attempt" || { usage_error "--attempt must be a positive integer"; return 1; }
+      attempt=$integer_value
+    fi
   fi
   if [ "$project_paths" -eq 1 ]; then
     for run_option in --stage --work-target --sandbox; do
@@ -161,21 +235,31 @@ main() {
     for other_option in --attempt --stage --work-target --sandbox; do
       case "$seen_options" in *"$other_option"*) usage_error "--project-flight cannot be combined with $other_option"; return 1 ;; esac
     done
-  else
+  elif [ "$query_mode" -eq 0 ]; then
     for required_option in --stage --work-target; do
       case "$seen_options" in *"$required_option"*) ;; *) usage_error "missing $required_option"; return 1 ;; esac
     done
   fi
   case "$seen_options" in *'--sandbox'*) ;; *) sandbox=danger-full-access ;; esac
-  if [ "$project_paths" -eq 0 ] && [ "$project_flight" -eq 0 ]; then
+  if [ "$query_mode" -eq 0 ]; then
     case "$stage" in thinking|implementation|review|termination) ;; *) usage_error "invalid --stage"; return 1 ;; esac
     case "$work_target" in /*) ;; *) usage_error "--work-target must be an absolute path"; return 1 ;; esac
     case "$work_target" in *$'\n'*|*$'\r'*) usage_error "--work-target must not contain LF or CR"; return 1 ;; esac
     case "$sandbox" in danger-full-access|workspace-write) ;; *) usage_error "invalid --sandbox"; return 1 ;; esac
   fi
   if ! jq_path=$(command -v jq 2>/dev/null) || [ ! -x "$jq_path" ]; then reason=PARSER_UNAVAILABLE; return 1; fi
-  normalize_tmp_base || return 1
+  if [ "$new_flight_id" -eq 1 ]; then
+    emit_new_flight_id || return 1
+    trap - EXIT
+    return 0
+  fi
+  normalize_run_root || return 1
   derive_project_paths
+  if [ "$project_root" -eq 1 ]; then
+    emit_project_root || return 1
+    trap - EXIT
+    return 0
+  fi
   if [ "$project_flight" -eq 1 ]; then
     emit_project_flight || return 1
     trap - EXIT
@@ -186,9 +270,15 @@ main() {
     trap - EXIT
     return 0
   fi
-  [ -d "$tmp_base" ] && [ -w "$tmp_base" ] || {
+  ensure_run_root() {
+    [ ! -L "$run_root" ] || return 1
+    if [ -e "$run_root" ]; then [ -d "$run_root" ] && [ -w "$run_root" ]; return; fi
+    mkdir "$run_root" 2>/dev/null || :
+    [ -d "$run_root" ] && [ ! -L "$run_root" ] && [ -w "$run_root" ]
+  }
+  ensure_run_root || {
     reason=RUN_DIR_UNAVAILABLE
-    printf '%s\n' 'run-codex-worker: RUN_DIR_UNAVAILABLE: TMPDIR must resolve to an existing writable directory' >&2
+    printf '%s\n' "run-codex-worker: RUN_DIR_UNAVAILABLE: run root from $run_root_source must be a non-symlink writable directory or be created inside an existing writable parent" >&2
     return 1
   }
   ensure_dir() {
@@ -196,7 +286,7 @@ main() {
     [ ! -L "$ensure_path" ] || return 1
     if [ -e "$ensure_path" ]; then [ -d "$ensure_path" ]; elif mkdir "$ensure_path" 2>/dev/null; then [ -d "$ensure_path" ] && [ ! -L "$ensure_path" ]; else [ -d "$ensure_path" ] && [ ! -L "$ensure_path" ]; fi
   }
-  ensure_dir "$consensus_root" && ensure_dir "$sshx_root" && ensure_dir "$run_parent" || { reason=RUN_DIR_UNAVAILABLE; return 1; }
+  ensure_dir "$run_parent" || { reason=RUN_DIR_UNAVAILABLE; return 1; }
   if [ -e "$run_dir" ] || [ -L "$run_dir" ]; then reason=RUN_DIR_COLLISION; return 1; fi
   if ! mkdir "$run_dir"; then
     if [ -e "$run_dir" ] || [ -L "$run_dir" ]; then reason=RUN_DIR_COLLISION; else reason=RUN_DIR_UNAVAILABLE; fi

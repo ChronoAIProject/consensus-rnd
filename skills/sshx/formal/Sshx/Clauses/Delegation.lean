@@ -300,7 +300,7 @@ inductive PathOwner
   | caller
   deriving DecidableEq, Repr
 
--- SKILL[def]: "For each `codex-cli` attempt, before launch the caller must choose a unique `flight_id` and `attempt` and pass them to `skills/sshx/scripts/run-codex-worker.sh`; the runner derives and owns every artifact path, parallel attempts receive disjoint derived paths, and the caller must not supply arbitrary result, sentinel, log, or state paths."
+-- SKILL[def]: "For each `codex-cli` attempt, before launch the caller must mint a fresh `flight_id` with the runner's `--new-flight-id` query rather than writing one by hand, choose the `attempt`, and pass them to `skills/sshx/scripts/run-codex-worker.sh`; the runner derives and owns every artifact path, parallel attempts receive disjoint derived paths, and the caller must not supply arbitrary result, sentinel, log, or state paths."
 def artifactPathOwner : PathOwner := .runner
 
 -- SKILL[def]: "The command, sandbox, path, direct-process, and collection mechanics are owned by `CODEX_WORKER_SPEC.md`; the required dispatch shape is the runner's default `danger-full-access` sandbox, so the caller passes no sandbox selection unless the maintainer explicitly directs a narrower one."

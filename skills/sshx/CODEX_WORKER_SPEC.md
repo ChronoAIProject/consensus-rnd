@@ -1,11 +1,12 @@
 # Codex Worker Mechanical Specification
 
-This is the single mechanical specification for these four closed-set scripts:
+This is the single mechanical specification for these five closed-set scripts:
 
 - `skills/sshx/scripts/run-codex-worker.sh`;
 - `skills/sshx/scripts/run-codex-worker-batch.sh`;
 - `skills/sshx/scripts/read-codex-worker-status.sh`;
-- `skills/sshx/scripts/clean-codex-worker-runs.sh`.
+- `skills/sshx/scripts/clean-codex-worker-runs.sh`;
+- `skills/sshx/scripts/prune-inactive-codex-worker-runs.sh`.
 
 The completion predicate is defined once in `SKILL.md` under
 `## Worker Completion Contract`; this file references that contract and does
@@ -23,8 +24,9 @@ bash <skill-root>/scripts/run-codex-worker.sh \
 
 The first four options are required; `--sandbox` is optional and defaults to
 `danger-full-access` when omitted. Missing required, duplicate, unknown, or positional
-arguments are `USAGE_ERROR` (exit 64). `flight-id` is non-empty
-`[A-Za-z0-9._-]+`, rejects `..` and `.`, `attempt` is a positive integer,
+arguments are `USAGE_ERROR` (exit 64). `flight-id` is exactly 24 lowercase
+hexadecimal characters as minted by `--new-flight-id` below, `attempt` is a
+positive integer,
 `stage` and `sandbox` use the enumerations above, and `work-target` is
 absolute and contains neither LF (`0x0A`) nor CR (`0x0D`). This is a
 locale-independent POSIX text-line boundary: stdout lines are LF-separated,
@@ -33,56 +35,84 @@ zero-width joiners/non-joiners, and U+2028/U+2029, are accepted in path values.
 The brief is read from stdin;
 artifact paths and extra Codex flags are never caller-supplied.
 
-The runner also has two mutually exclusive pure query invocations:
+The runner also has four mutually exclusive pure query invocations:
 
 ```text
+bash <skill-root>/scripts/run-codex-worker.sh --new-flight-id
+
 bash <skill-root>/scripts/run-codex-worker.sh \
   --project-paths --flight-id <id> --attempt <positive-integer>
 
 bash <skill-root>/scripts/run-codex-worker.sh \
   --project-flight --flight-id <id>
+
+bash <skill-root>/scripts/run-codex-worker.sh --project-root
 ```
 
-Missing required identity options, combining the query modes, or combining
-either query with `--stage`, `--work-target`, or `--sandbox` is `USAGE_ERROR`
-(exit 64). `--project-flight` also refuses `--attempt`; it takes only the flight
-identity. Identity validation and `TMPDIR` normalization are identical to run
-mode. Neither query requires `TMPDIR` or any projected directory to exist or be
-writable. They read no stdin, create no directory, launch no carrier, write no
-projection, and delete nothing. On success `--project-paths` emits one strict
-JSON object containing `schema_version`,
-`flight_id`, `attempt`, `run_dir`, `brief_ref`, `result_ref`,
+Missing required identity options, combining the query modes, or combining a
+query with an option it does not take is `USAGE_ERROR` (exit 64):
+`--project-paths` refuses `--stage`, `--work-target`, and `--sandbox`;
+`--project-flight` additionally refuses `--attempt` and takes only the flight
+identity; `--new-flight-id` and `--project-root` take no identity and refuse
+every other option. Identity validation and run-root normalization are
+identical to run mode. No query requires the run root or any projected
+directory to exist or be writable. They read no stdin, create no directory,
+launch no carrier, write no projection, and delete nothing.
+
+`--new-flight-id` mints one identity and emits `{schema_version, flight_id}`.
+The identity has the ObjectId shape: 24 lowercase hexadecimal characters whose
+first 8 encode the big-endian UNIX second of minting and whose remaining 16
+come from the operating system's random source; each mint is its own process,
+so the ObjectId per-process random and counter fields collapse into
+randomness. Identities therefore sort chronologically and do not collide in
+practice. A `date`, random-source, or self-check failure is `INTERNAL_ERROR`
+and emits nothing. The caller passes the minted value unchanged to every later
+identity option; a hand-written identity that happens to satisfy the shape is
+accepted mechanically but violates `SKILL.md`.
+
+On success `--project-paths` emits one strict JSON object containing
+`schema_version`, `flight_id`, `attempt`, `run_dir`, `brief_ref`, `result_ref`,
 `completion_sentinel_ref`, `carrier_exit_ref`, `status_ref`, and `log_refs` for
 stdout, stderr, and the last message. `--project-flight` emits `schema_version`,
 `flight_id`, the runner-owned `flight_dir` and `sshx_root`, and every namespace
 entry matching the runner's attempt naming rule. Each attempt entry contains
 its positive integer `attempt`, `run_dir`, and terminal `status_ref`; an entry
 whose suffix is not a canonical positive integer carries `attempt: null` so a
-consumer can mark it invalid without parsing the name. Directory enumeration is
-read-only. Both queries and run mode share the same single path-derivation
-function; there is no parallel formula.
+consumer can mark it invalid without parsing the name. `--project-root` emits
+`schema_version`, `sshx_root`, `root_present` (whether that root is currently
+a directory), `flights` (every direct root entry whose name satisfies the
+identity shape, as `{flight_id, flight_dir}` in name order, which is minting
+order), and `unrecognized` (the names of every other direct entry, hidden
+entries included). It classifies by name only and leaves an entry's type to
+the consumer. Directory enumeration is read-only. Every query and run mode
+share the same single path-derivation function; there is no parallel formula.
 
 ## Run Directory
 
 The runner derives exactly:
 
 ```text
-${TMPDIR:-/tmp}/consensus-rnd/sshx/<flight-id>/attempt-<attempt>
+${SSHX_HOME:-$HOME/.sshx}/<flight-id>/attempt-<attempt>
 ```
 
-Trailing slashes are removed except for `/`. Whether the default or an
-explicitly configured value is used, `TMPDIR` must be absolute, contain neither
-LF nor CR, and resolve to an existing writable directory. The top-level
-`TMPDIR` may be a symbolic link to an existing writable directory. The
-runner-created `consensus-rnd`, `sshx`, and flight directories are always
-rejected when symbolic links. Each is created or validated before one atomic
-`mkdir` of the attempt directory; an existing attempt is `RUN_DIR_COLLISION`.
+The run root is `SSHX_HOME` when that variable is non-empty, otherwise `.sshx`
+directly under `HOME`; when neither is set the invocation is
+`RUN_DIR_UNAVAILABLE`. Trailing slashes are removed except for `/`. The run
+root must be absolute and contain neither LF nor CR. In run mode it must be an
+existing writable non-symbolic-link directory or be creatable with one `mkdir`
+inside an existing writable parent; the runner creates it on first use with
+the same private mode as every other directory it owns. The run root and the
+runner-created flight directory are rejected when symbolic links; relocating
+the layout is done by setting `SSHX_HOME`, never by linking. Each is created
+or validated before one atomic `mkdir` of the attempt directory; an existing
+attempt is `RUN_DIR_COLLISION`.
 
-Every invocation projects this layout from its own effective `TMPDIR`, so
-dispatch, pure queries, batch dispatch, status read, and cleanup must run with
-the same effective `TMPDIR` as the dispatch they inspect. A different value
-projects a disjoint layout: cleanup fails closed on its consistency checks, but
-a status read there reports every artifact absent and exits zero, which is
+Every invocation projects this layout from its own effective `SSHX_HOME` and
+`HOME`, so dispatch, pure queries, batch dispatch, status read, cleanup, and
+the inactivity sweep must run with the same effective values as the dispatch
+they inspect. A different value projects a disjoint layout: cleanup fails
+closed on its consistency checks and the sweep prunes that other root, but a
+status read there reports every artifact absent and exits zero, which is
 indistinguishable from a pre-terminal flight.
 
 The runner owns `brief.md`, the three diagnostic logs, `carrier.exit`, and
@@ -94,9 +124,12 @@ acceptance conditions and includes one runner-rendered, stage-specific minimum
 valid envelope example.
 
 The pure queries are the only sanctioned path discovery mechanism for the
-batch, status-read, and cleanup scripts. Those scripts contain no run-layout
-formula, attempt naming rule, or artifact basename and do not parse the
-runner's human stdout.
+batch, status-read, cleanup, and sweep scripts. Those scripts contain no
+run-layout formula, attempt naming rule, or artifact basename and do not parse
+the runner's human stdout. The batch, status-read, and cleanup scripts check
+manifest identities against the identity shape before consulting the runner;
+the sweep contains no identity rule at all and takes the runner's
+classification.
 
 ## Batch Dispatch
 
@@ -279,8 +312,9 @@ directories returned for manifest identities by the runner's pure
 `--project-flight` query. The same projection supplies the runner-owned
 `sshx_root` and every attempt's number, `run_dir`, and terminal `status_ref`.
 Cleanup derives no ancestry, naming pattern, or artifact basename.
-There is no arbitrary-path option, whole-root option, age sweep, or retention
-rule; those choices are caller or maintainer policy.
+There is no arbitrary-path or whole-root option here; the only age-based
+retention rule is the separate `## Inactive-Flight Sweep`, and any finer
+policy is caller or maintainer choice.
 
 All named flights pass one all-or-nothing preflight before any deletion. A
 flight is eligible only when the runner-published flight directory and sshx
@@ -359,6 +393,62 @@ independent confinement claim: it never constructs a target above or below the
 runner-returned flight directory. It has
 no process-teardown or host-lifecycle authority. A runner that never publishes
 terminal status intentionally leaves its flight ineligible.
+
+## Inactive-Flight Sweep
+
+```text
+bash <skill-root>/scripts/prune-inactive-codex-worker-runs.sh \
+  [--older-than <positive-integer><m|h|d>] [--dry-run]
+```
+
+The sweep is the retention tool for the whole run root: it removes every
+flight directory whose last change is older than the window. The window
+defaults to `1d`; the value is a positive integer with a unit of minutes,
+hours, or days, and `0`, a missing unit, any other unit, or a duplicate,
+unknown, or positional option is `USAGE_ERROR` (exit 64) before anything is
+read. Unlike `## Whole-Flight Cleanup`, deletion is the default and
+`--dry-run` is the preview: the manifest cleanup names specific flights and is
+a caller retirement decision, while the sweep is a maintenance command whose
+only target selector is the window. It is not a stage of the protocol and is
+never run by a worker.
+
+The sweep discovers the root and its flights through the runner's pure
+`--project-root` query and contains no layout formula, identity rule, or
+artifact basename. For each projected flight in order it applies these checks
+and records the first that fails as `state: "skipped"` with a `reason`:
+`OWNER_PROJECTION_INCONSISTENT` when the projected directory is not under the
+projected root, `INVALID_FLIGHT_DIRECTORY` when the entry is a symbolic link or
+not a directory, and `ACTIVITY_PROBE_FAILED` when the activity probe itself
+fails. The probe is one `find` over the flight tree that does not follow
+symbolic links and asks whether any entry, the flight directory itself
+included, was modified within the window; the answer is recorded as
+`inactive`. Modification time is the whole criterion: an attempt without
+terminal status that has been silent longer than the window is treated as
+abandoned and removed, because such orphans are exactly what accumulates. The
+default window is the only safeguard for a live flight; a short window can
+retire a flight whose carrier is still running silently, so the sweep must not
+be run with a short window while a dispatch is in flight.
+
+An active flight is `kept`. An inactive flight is `would-remove` in dry-run;
+otherwise it is removed with one `rm -rf` of the projected flight directory and
+recorded as `removed`, or as `failed` with reason `REMOVE_FAILED` when `rm`
+fails or `FLIGHT_REMAINS` when the path still exists afterwards. A failed
+removal may leave a partial flight whose refreshed directory time protects the
+remainder until the window elapses again. Failures do not stop the sweep, as
+each flight is independent. `INT` and `TERM` are recorded after the current
+operation returns, the loop stops, and the report carries `interrupted: true`.
+
+The report is one strict JSON object with `schema_version`, `mode` (`delete`
+or `dry-run`), `sshx_root`, `root_present`, `older_than_minutes`,
+`interrupted`, `flights` (in projection order, each with `flight_id`,
+`flight_dir`, `inactive`, which is `null` for a skipped flight, `state`, and
+`reason`, which is `null` unless skipped or failed), `unrecognized` (the root
+entries the runner did not classify as flights, reported so a leftover is
+never silently ignored), `removed` (the exact removed paths), and `failed`
+(each failed flight with its reason). The sweep exits 0 after publishing a
+report with no failed flight and no interruption, and 1 otherwise. Usage and
+internal failures before publication emit no JSON; an internal failure after
+deletion began lists the already removed paths on stderr.
 
 ## Carrier
 
@@ -489,16 +579,20 @@ review rather than more checks in this runner.
 The runner has no git, GitHub, label, release, host lifecycle, cleanup, or
 global-state authority. Time limits and whole-job teardown belong to the
 caller harness. Power-loss durability is not guaranteed. Deletion authority
-lives only in `clean-codex-worker-runs.sh` and is bounded to terminal-only,
-whole-flight artifact retirement with dry-run default and no force override.
+lives only in `clean-codex-worker-runs.sh`, bounded to terminal-only,
+manifest-named, whole-flight artifact retirement with dry-run default and no
+force override, and in `prune-inactive-codex-worker-runs.sh`, bounded to
+whole-flight removal under one inactivity window over the runner-projected
+root.
 
 No other skill may depend on these mechanisms. To reverse the exception
 completely, use this one recipe:
 
 1. Delete `scripts/run-codex-worker.sh`,
    `scripts/run-codex-worker-batch.sh`,
-   `scripts/read-codex-worker-status.sh`, and
-   `scripts/clean-codex-worker-runs.sh`.
+   `scripts/read-codex-worker-status.sh`,
+   `scripts/clean-codex-worker-runs.sh`, and
+   `scripts/prune-inactive-codex-worker-runs.sh`.
 2. Delete this specification, `tests/test_run_codex_worker.py`, and
    `tests/test_codex_worker_tools.py`.
 3. Restore the narrow `SKILL.md` clauses to direct caller dispatch with

@@ -4,13 +4,16 @@ import re
 import select
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
+VALID_ID = "0123456789abcdef01234567"
 RUNNER = ROOT / "skills" / "sshx" / "scripts" / "run-codex-worker.sh"
 SKILL = ROOT / "skills" / "sshx" / "SKILL.md"
 SPEC = ROOT / "skills" / "sshx" / "CODEX_WORKER_SPEC.md"
@@ -107,9 +110,9 @@ class CodexWorkerRunnerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp_context.cleanup()
 
-    def next_flight(self, prefix: str = "flight") -> str:
+    def next_flight(self) -> str:
         self.counter += 1
-        return f"{prefix}-{self.counter}"
+        return f"{int(time.time()):08x}{self.counter:016x}"
 
     def command(self, flight_id: str, *, attempt: str = "1", stage: str = "thinking", work_target: str | None = None, sandbox: str = "workspace-write") -> list[str]:
         return self.command_for_runner(RUNNER, flight_id, attempt=attempt, stage=stage, work_target=work_target, sandbox=sandbox)
@@ -119,12 +122,12 @@ class CodexWorkerRunnerTests(unittest.TestCase):
 
     def environment(self, mode: str = "success", **extra: str) -> dict[str, str]:
         env = os.environ.copy()
-        env.update({"PATH": f"{self.bin_dir}:/bin:/usr/bin", "TMPDIR": str(self.temp_dir), "FAKE_MODE": mode})
+        env.update({"PATH": f"{self.bin_dir}:/bin:/usr/bin", "SSHX_HOME": str(self.temp_dir / "sshx"), "FAKE_MODE": mode})
         env.update(extra)
         return env
 
     def expected_run_dir(self, flight_id: str, attempt: str = "1", base: Path | None = None) -> Path:
-        return (base or self.temp_dir) / "consensus-rnd" / "sshx" / flight_id / f"attempt-{attempt}"
+        return (base or self.temp_dir / "sshx") / flight_id / f"attempt-{attempt}"
 
     def run_worker(self, mode: str = "success", *, flight_id: str | None = None, attempt: str = "1", stage: str = "thinking", extra_env: dict[str, str] | None = None, env: dict[str, str] | None = None) -> RunResult:
         selected = flight_id or self.next_flight()
@@ -215,14 +218,14 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assertNotIn("RUNNING", result.run_dir.joinpath("status.json").read_text())
 
     def test_sandbox_defaults_to_danger_full_access_and_accepts_explicit_values(self) -> None:
-        flight = self.next_flight("sandbox-default")
+        flight = self.next_flight()
         default_command = self.command(flight)[:-2]
         process = subprocess.run(default_command, input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
         result = RunResult(process, self.expected_run_dir(flight))
         self.assert_terminal(result, "COMPLETE")
         assert result.status is not None
         self.assertEqual(result.status["sandbox"], "danger-full-access")
-        explicit = self.next_flight("sandbox-explicit")
+        explicit = self.next_flight()
         process = subprocess.run(self.command(explicit, sandbox="danger-full-access"), input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
         result = RunResult(process, self.expected_run_dir(explicit))
         self.assert_terminal(result, "COMPLETE")
@@ -284,7 +287,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
 
     def test_signal_during_finish_cannot_interrupt_terminal_publication(self) -> None:
         self.install_jq_wrapper()
-        flight = self.next_flight("finish-signal")
+        flight = self.next_flight()
         ready = self.temp_dir / "finish-ready"
         release = self.temp_dir / "finish-release"
         state = self.temp_dir / "jq-finish-state"
@@ -316,7 +319,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         )
 
     def run_interrupted_runner(self, signal_number: int) -> RunResult:
-        flight = self.next_flight("interrupted")
+        flight = self.next_flight()
         ready = self.temp_dir / f"ready-{flight}"
         release = self.temp_dir / f"release-{flight}"
         carrier_pid_ref = self.temp_dir / f"carrier-{flight}.pid"
@@ -373,7 +376,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assertEqual(result.status["carrier_exit"], 127)
 
     def test_runner_waits_until_carrier_exits_after_artifacts_appear(self) -> None:
-        flight = self.next_flight("foreground-wait")
+        flight = self.next_flight()
         ready = self.temp_dir / "carrier-ready"
         release = self.temp_dir / "carrier-release"
         exited = self.temp_dir / "carrier-exited"
@@ -485,7 +488,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         for target in ["status.json", "status.json.tmp"]:
             for shape in ["directory", "fifo", "symlink_directory", "symlink_file", "symlink_dangling"]:
                 with self.subTest(target=target, shape=shape):
-                    outside = self.temp_dir / self.next_flight("outside-status")
+                    outside = self.temp_dir / self.next_flight()
                     if shape == "symlink_file":
                         outside.write_text("unchanged\n")
                     elif shape == "symlink_directory":
@@ -508,7 +511,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         for target in ["carrier.exit", "carrier.exit.tmp"]:
             for shape in ["directory", "fifo", "symlink_directory", "symlink_file", "symlink_dangling"]:
                 with self.subTest(target=target, shape=shape):
-                    outside = self.temp_dir / self.next_flight("outside-carrier")
+                    outside = self.temp_dir / self.next_flight()
                     if shape == "symlink_file":
                         outside.write_text("unchanged\n")
                     elif shape == "symlink_directory":
@@ -543,101 +546,114 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         log_marker = self.run_worker("log_marker")
         self.assert_terminal(log_marker, "SENTINEL_MISSING")
 
-    def test_default_tmpdir_is_usable_without_environment_override(self) -> None:
-        flight = f"default-tmp-{os.getpid()}-{self.next_flight('default-tmp')}"
-        env = self.environment(); env.pop("TMPDIR"); env["LC_ALL"] = "C.UTF-8"
-        run_dir = self.expected_run_dir(flight, base=Path("/tmp"))
-        try:
-            process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
-            self.assert_terminal(RunResult(process, self.expected_run_dir(flight, base=Path("/tmp"))), "COMPLETE")
-        finally:
-            shutil.rmtree(run_dir.parent, ignore_errors=True)
-
-    def test_explicit_symlink_tmpdir_is_accepted_and_artifacts_reach_target(self) -> None:
-        target = self.temp_dir / "target"; target.mkdir()
-        link = self.temp_dir / "tmp-link"; link.symlink_to(target, target_is_directory=True)
-        flight = self.next_flight("tmp-link")
-        env = self.environment(); env["TMPDIR"] = str(link)
+    def test_default_root_is_dot_sshx_under_home_when_sshx_home_is_unset(self) -> None:
+        flight = self.next_flight()
+        env = self.environment(); env.pop("SSHX_HOME"); env["HOME"] = str(self.temp_dir); env["LC_ALL"] = "C.UTF-8"
         process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
-        linked_run_dir = self.expected_run_dir(flight, base=link)
-        physical_run_dir = self.expected_run_dir(flight, base=target)
-        self.assert_terminal(RunResult(process, linked_run_dir), "COMPLETE")
-        self.assertEqual(linked_run_dir.resolve(), physical_run_dir.resolve())
-        for artifact in ["result.json", "completion.sentinel", "status.json"]:
-            self.assertTrue(physical_run_dir.joinpath(artifact).is_file(), artifact)
+        run_dir = self.expected_run_dir(flight, base=self.temp_dir / ".sshx")
+        self.assert_terminal(RunResult(process, run_dir), "COMPLETE")
+        self.assertEqual(stat.S_IMODE((self.temp_dir / ".sshx").stat().st_mode), 0o700)
+        self.assertEqual(json.loads(run_dir.joinpath("status.json").read_text())["run_dir"], str(run_dir))
 
-    def test_real_and_symlink_tmpdir_paths_have_same_complete_decision(self) -> None:
-        target = self.temp_dir / "symmetric-target"; target.mkdir()
-        link = self.temp_dir / "symmetric-link"; link.symlink_to(target, target_is_directory=True)
-        for label, tmp_base in [("real", target), ("symlink", link)]:
-            with self.subTest(path=label):
-                flight = self.next_flight(f"symmetric-{label}")
-                env = self.environment(); env["TMPDIR"] = str(tmp_base)
+    def test_empty_sshx_home_falls_back_to_home_and_trailing_slashes_are_stripped(self) -> None:
+        for label, env_home in [("empty SSHX_HOME", ""), ("trailing slash HOME", None)]:
+            with self.subTest(case=label):
+                flight = self.next_flight()
+                env = self.environment(); env["HOME"] = str(self.temp_dir) + ("/" if env_home is None else "")
+                if env_home is None: env.pop("SSHX_HOME")
+                else: env["SSHX_HOME"] = env_home
                 process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
-                self.assert_terminal(RunResult(process, self.expected_run_dir(flight, base=tmp_base)), "COMPLETE")
+                self.assert_terminal(RunResult(process, self.expected_run_dir(flight, base=self.temp_dir / ".sshx")), "COMPLETE")
 
-    def test_dangling_symlink_tmpdir_is_unavailable_with_diagnostic(self) -> None:
-        missing_target = self.temp_dir / "missing-target"
-        link = self.temp_dir / "dangling-tmp-link"; link.symlink_to(missing_target, target_is_directory=True)
-        flight = self.next_flight("dangling-tmp")
-        env = self.environment(); env["TMPDIR"] = str(link)
+    def test_missing_home_and_sshx_home_is_unavailable_with_diagnostic(self) -> None:
+        flight = self.next_flight()
+        env = self.environment(); env.pop("SSHX_HOME"); env.pop("HOME", None)
         process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
-        self.assertEqual(process.returncode, 1)
-        self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
-        self.assertIn("TMPDIR must resolve to an existing writable directory", process.stderr)
-        self.assertFalse(missing_target.exists())
+        self.assertEqual(process.returncode, 1); self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
+        self.assertIn("neither SSHX_HOME nor HOME is set", process.stderr)
+        self.assertNotIn("carrier starting", process.stdout)
 
-    def test_tmpdir_validation_is_fail_closed(self) -> None:
+    def test_run_root_is_created_on_first_use_with_private_mode(self) -> None:
+        fresh_root = self.temp_dir / "fresh-root"
+        flight = self.next_flight()
+        env = self.environment(); env["SSHX_HOME"] = str(fresh_root)
+        self.assertFalse(fresh_root.exists())
+        process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
+        self.assert_terminal(RunResult(process, self.expected_run_dir(flight, base=fresh_root)), "COMPLETE")
+        self.assertEqual(stat.S_IMODE(fresh_root.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE((fresh_root / flight).stat().st_mode), 0o700)
+
+    def test_symlink_run_root_is_rejected_without_writing_through_it(self) -> None:
+        target = self.temp_dir / "target"; target.mkdir()
+        link = self.temp_dir / "root-link"; link.symlink_to(target, target_is_directory=True)
+        dangling = self.temp_dir / "dangling-link"; dangling.symlink_to(self.temp_dir / "missing-target", target_is_directory=True)
+        for label, root in [("resolving", link), ("dangling", dangling)]:
+            with self.subTest(root=label):
+                flight = self.next_flight()
+                env = self.environment(); env["SSHX_HOME"] = str(root)
+                process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
+                self.assertEqual(process.returncode, 1); self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
+                self.assertIn("run root from SSHX_HOME must be a non-symlink writable directory", process.stderr)
+                self.assertNotIn("carrier starting", process.stdout)
+        self.assertEqual(list(target.iterdir()), [])
+        self.assertFalse((self.temp_dir / "missing-target").exists())
+
+    def test_run_root_validation_is_fail_closed(self) -> None:
         unwritable = self.temp_dir / "unwritable"; unwritable.mkdir(); unwritable.chmod(0o500)
         not_directory = self.temp_dir / "not-directory"; not_directory.write_text("not a directory\n")
-        values = ["relative", str(self.temp_dir / "missing"), str(unwritable), str(not_directory)]
+        values = ["relative", str(self.temp_dir / "missing-parent" / "root"), str(unwritable), str(unwritable / "child"), str(not_directory)]
         for value in values:
-            env = self.environment(); env["TMPDIR"] = value
-            process = subprocess.run(self.command(self.next_flight("bad-tmp")), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
-            self.assertEqual(process.returncode, 1); self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
+            with self.subTest(value=value):
+                env = self.environment(); env["SSHX_HOME"] = value
+                process = subprocess.run(self.command(self.next_flight()), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
+                self.assertEqual(process.returncode, 1); self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
+                self.assertNotIn("carrier starting", process.stdout)
         unwritable.chmod(0o700)
+        self.assertFalse((self.temp_dir / "missing-parent").exists())
 
-    def test_existing_attempt_directory_is_collision_without_reuse(self) -> None:
-        flight = self.next_flight("collision")
-        run_dir = self.expected_run_dir(flight); run_dir.mkdir(parents=True)
-        marker = run_dir / "owned-by-earlier-attempt"; marker.write_text("unchanged\n")
-        process = self.run_worker(flight_id=flight)
-        self.assertEqual(process.process.returncode, 1)
-        self.assertIn("RUN_DIR_COLLISION", process.process.stderr)
-        self.assertEqual(marker.read_text(), "unchanged\n")
+    def test_new_flight_id_mints_objectid_shaped_identity_purely(self) -> None:
+        env = self.environment(); env["SSHX_HOME"] = str(self.temp_dir / "never-created")
+        minted = []
+        for _ in range(2):
+            before = int(time.time())
+            process = subprocess.run(["/bin/bash", str(RUNNER), "--new-flight-id"], input="ignored", capture_output=True, text=True, env=env, timeout=10)
+            after = int(time.time())
+            self.assertEqual(process.returncode, 0, process.stderr)
+            document = json.loads(process.stdout)
+            self.assertEqual(set(document), {"schema_version", "flight_id"})
+            self.assertEqual(document["schema_version"], 1)
+            self.assertRegex(document["flight_id"], r"^[0-9a-f]{24}$")
+            self.assertLessEqual(before, int(document["flight_id"][:8], 16)); self.assertLessEqual(int(document["flight_id"][:8], 16), after)
+            minted.append(document["flight_id"])
+        self.assertNotEqual(minted[0], minted[1])
+        self.assertFalse((self.temp_dir / "never-created").exists())
+        for extra in [["--flight-id", VALID_ID], ["--attempt", "1"], ["--stage", "thinking"], ["--work-target", str(ROOT)], ["--sandbox", "workspace-write"], ["--project-paths"], ["--project-flight"], ["--project-root"], ["--new-flight-id"]]:
+            with self.subTest(extra=extra):
+                process = subprocess.run(["/bin/bash", str(RUNNER), "--new-flight-id", *extra], capture_output=True, text=True, env=env, timeout=10)
+                self.assertEqual(process.returncode, 64, process.stderr); self.assertIn("USAGE_ERROR", process.stderr)
+        no_home = self.environment(); no_home.pop("SSHX_HOME"); no_home.pop("HOME", None)
+        process = subprocess.run(["/bin/bash", str(RUNNER), "--new-flight-id"], capture_output=True, text=True, env=no_home, timeout=10)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertRegex(json.loads(process.stdout)["flight_id"], r"^[0-9a-f]{24}$")
+        minted_id = json.loads(process.stdout)["flight_id"]
+        self.assert_terminal(self.run_worker(flight_id=minted_id), "COMPLETE")
+        empty = self.temp_dir / "empty-path-mint"; empty.mkdir()
+        no_parser = self.environment(); no_parser["PATH"] = str(empty)
+        process = subprocess.run(["/bin/bash", str(RUNNER), "--new-flight-id"], capture_output=True, text=True, env=no_parser, timeout=10)
+        self.assertEqual(process.returncode, 1); self.assertIn("PARSER_UNAVAILABLE", process.stderr); self.assertEqual(process.stdout, "")
 
-    def test_dangling_symlink_attempt_path_is_collision_without_launch(self) -> None:
-        flight = self.next_flight("dangling-attempt")
-        run_dir = self.expected_run_dir(flight)
-        run_dir.parent.mkdir(parents=True)
-        missing_target = self.temp_dir / "missing-attempt-target"
-        run_dir.symlink_to(missing_target, target_is_directory=True)
-        result = self.run_worker(flight_id=flight)
-        self.assertEqual(result.process.returncode, 1)
-        self.assertIn("RUN_DIR_COLLISION", result.process.stderr)
-        self.assertTrue(run_dir.is_symlink())
-        self.assertFalse(missing_target.exists())
-
-    def test_run_hierarchy_rejects_symlinks_before_launch(self) -> None:
-        for component in ["consensus-rnd", "sshx", "flight"]:
-            with self.subTest(component=component):
-                child = Path(tempfile.mkdtemp()); outside = child / "outside"; outside.mkdir()
-                try:
-                    if component == "consensus-rnd": (child / "consensus-rnd").symlink_to(outside, target_is_directory=True)
-                    else:
-                        (child / "consensus-rnd").mkdir()
-                        if component == "sshx": (child / "consensus-rnd" / "sshx").symlink_to(outside, target_is_directory=True)
-                        else:
-                            (child / "consensus-rnd" / "sshx").mkdir(); (child / "consensus-rnd" / "sshx" / "symlink-flight").symlink_to(outside, target_is_directory=True)
-                    env = self.environment(); env["TMPDIR"] = str(child)
-                    process = subprocess.run(self.command("symlink-flight"), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
-                    self.assertEqual(process.returncode, 1, process.stderr)
-                    self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
-                    self.assertEqual(list(outside.iterdir()), [])
-                finally: shutil.rmtree(child, ignore_errors=True)
+    def test_run_hierarchy_rejects_symlinked_flight_directory_before_launch(self) -> None:
+        outside = self.temp_dir / "outside"; outside.mkdir()
+        flight = self.next_flight()
+        (self.temp_dir / "sshx").mkdir()
+        (self.temp_dir / "sshx" / flight).symlink_to(outside, target_is_directory=True)
+        process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
+        self.assertEqual(process.returncode, 1, process.stderr)
+        self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
+        self.assertEqual(list(outside.iterdir()), [])
 
     def test_concurrent_flight_paths_are_disjoint(self) -> None:
-        a, b = self.next_flight("parallel-a"), self.next_flight("parallel-b")
+        a, b = self.next_flight(), self.next_flight()
         p1 = subprocess.Popen(self.command(a), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.environment())
         p2 = subprocess.Popen(self.command(b), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.environment())
         out1, err1 = p1.communicate("brief a\n", timeout=10); out2, err2 = p2.communicate("brief b\n", timeout=10)
@@ -652,19 +668,19 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assert_terminal(self.run_worker("symlink_sentinel"), "SENTINEL_MISSING")
 
     def test_missing_jq_fails_without_parser_fallback(self) -> None:
-        flight = self.next_flight("no-parser"); empty = self.temp_dir / "empty-path"; empty.mkdir()
+        flight = self.next_flight(); empty = self.temp_dir / "empty-path"; empty.mkdir()
         env = self.environment(); env["PATH"] = str(empty)
         process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
         self.assertEqual(process.returncode, 1); self.assertIn("PARSER_UNAVAILABLE", process.stderr); self.assertFalse(self.expected_run_dir(flight).exists())
 
     def test_combined_failure_reports_parser_before_run_dir(self) -> None:
-        flight = self.next_flight("precedence"); empty = self.temp_dir / "empty-path-precedence"; empty.mkdir()
-        env = self.environment(); env["PATH"] = str(empty); env["TMPDIR"] = str(self.temp_dir / "missing-precedence-tmp")
+        flight = self.next_flight(); empty = self.temp_dir / "empty-path-precedence"; empty.mkdir()
+        env = self.environment(); env["PATH"] = str(empty); env["SSHX_HOME"] = "relative"
         process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
         self.assertEqual(process.returncode, 1); self.assertIn("PARSER_UNAVAILABLE", process.stderr); self.assertNotIn("RUN_DIR_UNAVAILABLE", process.stderr)
 
     def test_codex_preflight_reports_launch_failed(self) -> None:
-        flight = self.next_flight("launch")
+        flight = self.next_flight()
         no_codex = self.temp_dir / "no-codex"; no_codex.mkdir(); (no_codex / "jq").symlink_to((self.bin_dir / "jq").resolve())
         env = self.environment(); env["PATH"] = f"{no_codex}:/bin:/usr/bin"
         process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
@@ -672,8 +688,8 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assert_terminal(result, "LAUNCH_FAILED")
 
     def test_argument_validation_rejects_missing_duplicate_unknown_and_invalid_values(self) -> None:
-        valid = self.command("valid")
-        cases = [valid[:8] + valid[10:], valid + ["--stage", "thinking"], valid + ["--unknown", "value"], self.command("../escape"), self.command("bad/id"), self.command("valid", attempt="0"), self.command("valid", attempt="one"), self.command("valid", stage="other"), self.command("valid", sandbox="read-only"), self.command("valid", sandbox=""), self.command("valid", work_target="relative")]
+        valid = self.command(VALID_ID)
+        cases = [valid[:8] + valid[10:], valid + ["--stage", "thinking"], valid + ["--unknown", "value"], self.command("../escape"), self.command("bad/id"), self.command("csa-0909-think-worth"), self.command(VALID_ID.upper()), self.command(VALID_ID[:-1]), self.command(VALID_ID + "0"), self.command(VALID_ID[:-1] + "g"), self.command(VALID_ID, attempt="0"), self.command(VALID_ID, attempt="one"), self.command(VALID_ID, stage="other"), self.command(VALID_ID, sandbox="read-only"), self.command(VALID_ID, sandbox=""), self.command(VALID_ID, work_target="relative")]
         for command in cases:
             process = subprocess.run(command, input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
             self.assertEqual(process.returncode, 64, process.stderr); self.assertIn("USAGE_ERROR", process.stderr)
@@ -688,13 +704,13 @@ class CodexWorkerRunnerTests(unittest.TestCase):
     def test_control_characters_cannot_enter_streamed_path_fields(self) -> None:
         spec = re.sub(r"\s+", " ", SPEC.read_text())
         self.assertIn("`work-target` is absolute and contains neither LF (`0x0A`) nor CR (`0x0D`)", spec)
-        self.assertIn("`TMPDIR` must be absolute, contain neither LF nor CR, and resolve to an existing writable directory", spec)
-        self.assertIn("top-level `TMPDIR` may be a symbolic link to an existing writable directory", spec)
+        self.assertIn("The run root must be absolute and contain neither LF nor CR", spec)
+        self.assertIn("The run root and the runner-created flight directory are rejected when symbolic links", spec)
         locales = ["C", "C.UTF-8", "en_US.UTF-8"]
         for locale in locales:
             for character in ["\n", "\r"]:
                 with self.subTest(locale=locale, field="work_target", character=repr(character)):
-                    flight = self.next_flight("line-work-target")
+                    flight = self.next_flight()
                     process = subprocess.run(
                         self.command(flight, work_target=f"/tmp/a{character}b"), input="brief\n", capture_output=True,
                         text=True, env=self.environment(LC_ALL=locale), timeout=10,
@@ -702,12 +718,12 @@ class CodexWorkerRunnerTests(unittest.TestCase):
                     self.assertEqual(process.returncode, 64); self.assertIn("USAGE_ERROR", process.stderr)
                     self.assertFalse(self.expected_run_dir(flight).exists())
             for character in ["\n", "\r"]:
-                with self.subTest(locale=locale, field="TMPDIR", character=repr(character)):
+                with self.subTest(locale=locale, field="SSHX_HOME", character=repr(character)):
                     control_tmp = self.temp_dir / f"tmp-{locale.replace('.', '_')}-{ord(character):x}-{self.counter}{character}path"; control_tmp.mkdir()
-                    flight = self.next_flight("line-tmpdir")
+                    flight = self.next_flight()
                     process = subprocess.run(
                         self.command(flight), input="brief\n", capture_output=True, text=True,
-                        env=self.environment(LC_ALL=locale, TMPDIR=str(control_tmp)), timeout=10,
+                        env=self.environment(LC_ALL=locale, SSHX_HOME=str(control_tmp)), timeout=10,
                     )
                     self.assertEqual(process.returncode, 1); self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
                     self.assertFalse(self.expected_run_dir(flight, base=control_tmp).exists())
@@ -722,7 +738,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         for locale in locales:
             for label, character in legal_samples:
                 with self.subTest(locale=locale, sample=label):
-                    flight = self.next_flight("legal-path")
+                    flight = self.next_flight()
                     process = subprocess.run(
                         self.command(flight, work_target=f"/tmp/a{character}b"), input="brief\n", capture_output=True,
                         text=True, env=self.environment(LC_ALL=locale), timeout=10,
@@ -730,7 +746,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
                     self.assertEqual(process.returncode, 0, process.stderr)
                     self.assertEqual(json.loads(self.expected_run_dir(flight).joinpath("status.json").read_text())["status"], "COMPLETE")
 
-    def test_legal_samples_pass_in_tmpdir(self) -> None:
+    def test_legal_samples_pass_in_sshx_home(self) -> None:
         legal_samples = [
             ("space", "a b"), ("Chinese", "中文"), ("Japanese", "日本語"),
             ("single quote", "a'b"), ("double quote", 'a"b'), ("command syntax", "$(echo unsafe)"),
@@ -743,10 +759,10 @@ class CodexWorkerRunnerTests(unittest.TestCase):
                 with self.subTest(locale=locale, sample=label):
                     control_tmp = self.temp_dir / f"legal-{locale.replace('.', '_')}-{self.counter}-{label}-{character}"
                     control_tmp.mkdir()
-                    flight = self.next_flight("legal-tmpdir")
+                    flight = self.next_flight()
                     process = subprocess.run(
                         self.command(flight), input="brief\n", capture_output=True, text=True,
-                        env=self.environment(LC_ALL=locale, TMPDIR=str(control_tmp)), timeout=10,
+                        env=self.environment(LC_ALL=locale, SSHX_HOME=str(control_tmp)), timeout=10,
                     )
                     self.assertEqual(process.returncode, 0, process.stderr)
                     self.assertEqual(json.loads(self.expected_run_dir(flight, base=control_tmp).joinpath("status.json").read_text())["status"], "COMPLETE")
@@ -760,8 +776,8 @@ class CodexWorkerRunnerTests(unittest.TestCase):
                 'case "$work_target" in *[[:cntrl:]]*) usage_error "--work-target must not contain control characters"; return 1 ;; esac',
             ),
             (
-                'case "$tmp_base" in *$\'\\n\'*|*$\'\\r\'*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac',
-                'case "$tmp_base" in *[[:cntrl:]]*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac',
+                'case "$run_root" in *$\'\\n\'*|*$\'\\r\'*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac',
+                'case "$run_root" in *[[:cntrl:]]*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac',
             ),
         ]
         for anchor, replacement in replacements:
@@ -773,7 +789,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         mutated.write_text(mutated_source); mutated.chmod(0o755)
         outcomes = []
         for locale in ["C", "C.UTF-8"]:
-            flight = self.next_flight("mutated")
+            flight = self.next_flight()
             process = subprocess.run(
                 self.command_for_runner(mutated, flight, work_target="/tmp/a\u0085b"), input="brief\n",
                 capture_output=True, text=True, env=self.environment(LC_ALL=locale), timeout=10,
@@ -782,7 +798,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assertEqual(outcomes, [("C", 0), ("C.UTF-8", 64)])
 
     def test_closed_stdout_does_not_change_authoritative_exit_or_status(self) -> None:
-        flight = self.next_flight("stdout-failure")
+        flight = self.next_flight()
         with subprocess.Popen(self.command(flight), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.environment()) as process:
             assert process.stdin is not None and process.stdout is not None
             process.stdin.write("brief\n"); process.stdin.close(); process.stdout.close(); process.wait(timeout=10)

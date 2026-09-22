@@ -4,6 +4,7 @@ import select
 import signal
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -14,6 +15,9 @@ RUNNER = SCRIPTS / "run-codex-worker.sh"
 BATCH = SCRIPTS / "run-codex-worker-batch.sh"
 STATUS_READER = SCRIPTS / "read-codex-worker-status.sh"
 CLEANUP = SCRIPTS / "clean-codex-worker-runs.sh"
+PRUNE = SCRIPTS / "prune-inactive-codex-worker-runs.sh"
+VALID_ID = "0123456789abcdef01234567"
+DAY_SECONDS = 24 * 3600
 WATCHDOG_SECONDS = 60
 
 FAKE_CODEX = r'''#!/bin/bash
@@ -72,6 +76,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.real_jq = Path(real_jq)
         (self.bin_dir / "jq").symlink_to(self.real_jq)
         self.launch_log = self.temp_dir / "launch.log"
+        self.sshx_home = self.temp_dir / "sshx"
         self.counter = 0
         self.gate_fds: dict[Path, int] = {}
 
@@ -80,21 +85,49 @@ class CodexWorkerToolTests(unittest.TestCase):
             os.close(fd)
         self.temp_context.cleanup()
 
-    def environment(self, *, tmpdir: Path | None = None) -> dict[str, str]:
+    def environment(self, *, sshx_home: Path | None = None) -> dict[str, str]:
         env = os.environ.copy()
         env.update(
             {
                 "PATH": f"{self.bin_dir}:/bin:/usr/bin",
-                "TMPDIR": str(tmpdir or self.temp_dir),
+                "SSHX_HOME": str(sshx_home or self.sshx_home),
                 "FAKE_LAUNCH_LOG": str(self.launch_log),
                 "CARRIER_SYNC_DIR": str(self.temp_dir),
             }
         )
         return env
 
-    def next_name(self, prefix: str) -> str:
+    def next_flight_id(self) -> str:
         self.counter += 1
-        return f"{prefix}-{self.counter}"
+        return f"{int(time.time()):08x}{self.counter:016x}"
+
+    def age_tree(self, root: Path, seconds: float) -> None:
+        stamp = time.time() - seconds
+        for path in sorted(root.rglob("*"), key=lambda entry: len(entry.parts), reverse=True):
+            os.utime(path, (stamp, stamp), follow_symlinks=False)
+        os.utime(root, (stamp, stamp), follow_symlinks=False)
+
+    def project_root(self, *, env: dict[str, str] | None = None) -> dict[str, object]:
+        process = subprocess.run(
+            ["/bin/bash", str(RUNNER), "--project-root"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env or self.environment(),
+        )
+        return json.loads(process.stdout)
+
+    def prune(self, *arguments: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["/bin/bash", str(PRUNE), *arguments],
+            capture_output=True,
+            text=True,
+            env=env or self.environment(),
+            timeout=WATCHDOG_SECONDS,
+        )
+
+    def flight_states(self, report: dict[str, object]) -> dict[str, tuple[object, object, object]]:
+        return {str(item["flight_id"]): (item["inactive"], item["state"], item["reason"]) for item in report["flights"]}  # type: ignore[index]
 
     def make_gate(self, name: str) -> Path:
         gate = self.temp_dir / name
@@ -131,7 +164,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.release_gate(self.temp_dir / f"{marker}.release")
 
     def run_dir(self, flight_id: str, attempt: int = 1) -> Path:
-        return self.temp_dir / "consensus-rnd" / "sshx" / flight_id / f"attempt-{attempt}"
+        return self.sshx_home / flight_id / f"attempt-{attempt}"
 
     def project(self, flight_id: str, attempt: int = 1, *, env: dict[str, str] | None = None) -> dict[str, object]:
         process = subprocess.run(
@@ -197,8 +230,8 @@ class CodexWorkerToolTests(unittest.TestCase):
 
     def test_project_paths_is_pure_and_validates_query_shape(self) -> None:
         missing_tmp = self.temp_dir / "does-not-exist"
-        env = self.environment(tmpdir=missing_tmp)
-        projection = self.project("pure-flight", 2, env=env)
+        env = self.environment(sshx_home=missing_tmp)
+        projection = self.project(VALID_ID, 2, env=env)
         self.assertEqual(projection["attempt"], 2)
         self.assertFalse(missing_tmp.exists())
         self.assertEqual(
@@ -217,12 +250,12 @@ class CodexWorkerToolTests(unittest.TestCase):
             },
         )
         invalid_commands = [
-            ["--project-paths", "--flight-id", "valid", "--attempt", "1", "--stage", "thinking"],
-            ["--project-paths", "--flight-id", "valid", "--attempt", "1", "--work-target", str(ROOT)],
-            ["--project-paths", "--flight-id", "valid", "--attempt", "1", "--sandbox", "workspace-write"],
+            ["--project-paths", "--flight-id", VALID_ID, "--attempt", "1", "--stage", "thinking"],
+            ["--project-paths", "--flight-id", VALID_ID, "--attempt", "1", "--work-target", str(ROOT)],
+            ["--project-paths", "--flight-id", VALID_ID, "--attempt", "1", "--sandbox", "workspace-write"],
             ["--project-paths", "--flight-id", "bad/id", "--attempt", "1"],
-            ["--project-paths", "--flight-id", "valid", "--attempt", "0"],
-            ["--project-paths", "--flight-id", "valid"],
+            ["--project-paths", "--flight-id", VALID_ID, "--attempt", "0"],
+            ["--project-paths", "--flight-id", VALID_ID],
         ]
         for arguments in invalid_commands:
             with self.subTest(arguments=arguments):
@@ -236,7 +269,7 @@ class CodexWorkerToolTests(unittest.TestCase):
                 self.assertEqual(process.returncode, 64, process.stderr)
 
     def test_projected_references_are_the_run_mode_references(self) -> None:
-        flight_id = self.next_name("same-paths")
+        flight_id = self.next_flight_id()
         projection = self.project(flight_id, 3)
         process = self.run_worker(flight_id, attempt=3)
         self.assertEqual(process.returncode, 0, process.stderr)
@@ -251,7 +284,7 @@ class CodexWorkerToolTests(unittest.TestCase):
             "/bin/bash",
             str(RUNNER),
             "--flight-id",
-            "valid",
+            VALID_ID,
             "--attempt",
             "1",
             "--stage",
@@ -274,7 +307,7 @@ class CodexWorkerToolTests(unittest.TestCase):
             command[command.index(option) + 1] = invalid_value
             cases.append(command)
         env = self.environment()
-        env["TMPDIR"] = "relative"
+        env["SSHX_HOME"] = "relative"
         for command in cases:
             with self.subTest(command=command):
                 process = subprocess.run(
@@ -290,7 +323,7 @@ class CodexWorkerToolTests(unittest.TestCase):
 
     def test_project_flight_is_pure_exclusive_and_enumerates_owned_attempt_paths(self) -> None:
         missing_tmp = self.temp_dir / "missing-flight-query-root"
-        pure = self.project_flight("pure-flight-query", env=self.environment(tmpdir=missing_tmp))
+        pure = self.project_flight(VALID_ID, env=self.environment(sshx_home=missing_tmp))
         self.assertEqual(
             set(pure),
             {"schema_version", "flight_id", "flight_dir", "sshx_root", "attempts"},
@@ -299,11 +332,11 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertFalse(missing_tmp.exists())
 
         invalid_commands = [
-            ["--project-flight", "--flight-id", "valid", "--attempt", "1"],
-            ["--project-flight", "--flight-id", "valid", "--stage", "thinking"],
-            ["--project-flight", "--flight-id", "valid", "--work-target", str(ROOT)],
-            ["--project-flight", "--flight-id", "valid", "--sandbox", "workspace-write"],
-            ["--project-flight", "--project-paths", "--flight-id", "valid", "--attempt", "1"],
+            ["--project-flight", "--flight-id", VALID_ID, "--attempt", "1"],
+            ["--project-flight", "--flight-id", VALID_ID, "--stage", "thinking"],
+            ["--project-flight", "--flight-id", VALID_ID, "--work-target", str(ROOT)],
+            ["--project-flight", "--flight-id", VALID_ID, "--sandbox", "workspace-write"],
+            ["--project-flight", "--project-paths", "--flight-id", VALID_ID, "--attempt", "1"],
             ["--project-flight"],
         ]
         for arguments in invalid_commands:
@@ -317,7 +350,7 @@ class CodexWorkerToolTests(unittest.TestCase):
                 )
                 self.assertEqual(process.returncode, 64, process.stderr)
 
-        flight_id = self.next_name("flight-query")
+        flight_id = self.next_flight_id()
         for attempt in [1, 3]:
             run = self.run_worker(flight_id, attempt=attempt)
             self.assertEqual(run.returncode, 0, run.stderr)
@@ -329,7 +362,7 @@ class CodexWorkerToolTests(unittest.TestCase):
             self.assertEqual(item["status_ref"], attempt_projection["status_ref"])
 
     def test_batch_overlaps_workers_waits_for_all_and_reports_mixed_exits(self) -> None:
-        flights = [self.next_name("batch") for _ in range(3)]
+        flights = [self.next_flight_id() for _ in range(3)]
         markers = ["failing", "held-a", "held-b"]
         self.make_carrier_gates(markers)
         briefs = [
@@ -413,7 +446,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         }
         for stage, expected_verdict in expected_verdicts.items():
             with self.subTest(stage=stage):
-                flight_id = self.next_name(f"batch-{stage}")
+                flight_id = self.next_flight_id()
                 brief = self.make_brief(flight_id)
                 manifest = self.write_manifest(
                     [self.worker(flight_id, 1, brief, stage=stage)],
@@ -440,7 +473,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         launch_count = len(self.launch_log.read_text().splitlines())
         invalid_brief = self.make_brief("invalid-stage")
         invalid_manifest = self.write_manifest(
-            [self.worker(self.next_name("batch-invalid"), 1, invalid_brief, stage="other")],
+            [self.worker(self.next_flight_id(), 1, invalid_brief, stage="other")],
             "batch-invalid-stage.json",
         )
         invalid_report = self.temp_dir / "batch-invalid-stage-report.json"
@@ -457,7 +490,7 @@ class CodexWorkerToolTests(unittest.TestCase):
     def test_batch_signals_rewait_every_child_and_preserve_runner_exits(self) -> None:
         for dispatch_signal in [signal.SIGINT, signal.SIGTERM]:
             with self.subTest(signal=dispatch_signal):
-                flights = [self.next_name("interrupted") for _ in range(2)]
+                flights = [self.next_flight_id() for _ in range(2)]
                 markers = [f"interrupted-{flight_id}" for flight_id in flights]
                 self.make_carrier_gates(markers)
                 briefs = [self.make_brief(marker, "BLOCK") for marker in markers]
@@ -528,7 +561,7 @@ class CodexWorkerToolTests(unittest.TestCase):
                 self.assertTrue(all(Path(item["status_ref"]).is_file() for item in document["workers"]))
 
     def test_batch_signal_between_joins_does_not_discard_completed_wait(self) -> None:
-        flights = [self.next_name("between-joins") for _ in range(2)]
+        flights = [self.next_flight_id() for _ in range(2)]
         markers = ["between-first", "between-second"]
         self.make_carrier_gates(markers)
         briefs = [self.make_brief(marker, "BLOCK") for marker in markers]
@@ -591,7 +624,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertEqual([item["runner_exit_code"] for item in document["workers"]], [0, 0])
 
     def test_batch_signal_during_launch_gives_every_runner_the_same_term_disposition(self) -> None:
-        flights = [self.next_name("launch-signal") for _ in range(2)]
+        flights = [self.next_flight_id() for _ in range(2)]
         self.make_carrier_gates(flights)
         briefs = [self.make_brief(flight_id, "BLOCK") for flight_id in flights]
         manifest = self.write_manifest([self.worker(flights[i], 1, briefs[i]) for i in range(2)])
@@ -660,7 +693,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         )
         bash_wrapper.chmod(0o755)
         brief = self.make_brief("status-collision")
-        manifest = self.write_manifest([self.worker("status-collision", 1, brief)])
+        manifest = self.write_manifest([self.worker(self.next_flight_id(), 1, brief)])
         report = self.temp_dir / "status-collision-report.json"
         wait_one = self.make_gate("wait-one")
         allow_wait_one = self.make_gate("allow-wait-one")
@@ -728,8 +761,8 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertEqual(document["workers"][0]["runner_exit_code"], 143)
 
     def test_batch_manifest_preflight_launches_nothing(self) -> None:
-        first_flight = self.next_name("preflight")
-        second_flight = self.next_name("preflight")
+        first_flight = self.next_flight_id()
+        second_flight = self.next_flight_id()
         good_brief = self.make_brief("good")
         missing_brief = self.temp_dir / "missing.brief"
         manifest = self.write_manifest(
@@ -763,8 +796,8 @@ class CodexWorkerToolTests(unittest.TestCase):
         unreadable_brief.chmod(0o000)
         unreadable_manifest = self.write_manifest(
             [
-                self.worker(self.next_name("unreadable"), 1, unreadable_brief),
-                self.worker(self.next_name("unreadable-sibling"), 1, good_brief),
+                self.worker(self.next_flight_id(), 1, unreadable_brief),
+                self.worker(self.next_flight_id(), 1, good_brief),
             ],
             "unreadable.json",
         )
@@ -780,11 +813,11 @@ class CodexWorkerToolTests(unittest.TestCase):
 
         internal_report = self.temp_dir / "internal-preflight-report.json"
         internal_manifest = self.write_manifest(
-            [self.worker(self.next_name("internal-preflight"), 1, good_brief)],
+            [self.worker(self.next_flight_id(), 1, good_brief)],
             "internal-preflight.json",
         )
         internal_env = self.environment()
-        internal_env["TMPDIR"] = "relative"
+        internal_env["SSHX_HOME"] = "relative"
         internal_process = subprocess.run(
             [
                 "/bin/bash",
@@ -807,7 +840,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         accepted_attempts = [1, 1234567890123456789012345678901234567890]
         for attempt in accepted_attempts:
             with self.subTest(attempt=attempt, accepted=True):
-                flight_id = self.next_name("attempt-domain")
+                flight_id = self.next_flight_id()
                 brief = self.make_brief(f"attempt-{flight_id}")
                 manifest = self.write_manifest(
                     [self.worker(flight_id, attempt, brief)], f"attempt-{attempt}.json"
@@ -844,7 +877,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         rejected_attempts: list[object] = [1.0, "1", 0, -1]
         for index, attempt in enumerate(rejected_attempts):
             with self.subTest(attempt=attempt, accepted=False):
-                flight_id = self.next_name("attempt-domain-invalid")
+                flight_id = self.next_flight_id()
                 brief = self.make_brief(f"invalid-attempt-{index}")
                 manifest = self.write_manifest(
                     [self.worker(flight_id, attempt, brief)], f"invalid-attempt-{index}.json"
@@ -871,11 +904,36 @@ class CodexWorkerToolTests(unittest.TestCase):
                 self.assertFalse(report.exists())
                 self.assertEqual(len(self.launch_log.read_text().splitlines()), launch_count)
 
+    def test_manifest_identity_shape_matches_runner_for_all_consumers(self) -> None:
+        brief = self.make_brief("identity-shape")
+        report_index = 0
+        for label, flight_id in [
+            ("legacy name", "csa-0909-think-worth"),
+            ("uppercase", VALID_ID.upper()),
+            ("short", VALID_ID[:-1]),
+            ("long", VALID_ID + "0"),
+            ("non-hex", VALID_ID[:-1] + "g"),
+        ]:
+            manifest = self.write_manifest([self.worker(flight_id, 1, brief)], f"identity-{report_index}.json")
+            for script, arguments in [
+                (BATCH, ["--manifest", str(manifest), "--report", str(self.temp_dir / f"identity-{report_index}-report.json")]),
+                (STATUS_READER, ["--manifest", str(manifest)]),
+                (CLEANUP, ["--manifest", str(manifest), "--delete"]),
+            ]:
+                with self.subTest(identity=label, script=script.name):
+                    process = subprocess.run(["/bin/bash", str(script), *arguments], capture_output=True, text=True, env=self.environment())
+                    self.assertEqual(process.returncode, 64, process.stderr)
+                    self.assertIn("USAGE_ERROR", process.stderr)
+                    self.assertEqual(process.stdout, "")
+            report_index += 1
+        self.assertFalse(self.launch_log.exists())
+        self.assertFalse(self.sshx_home.exists())
+
     def test_batch_exclusively_reserves_report_target_and_temporary_before_launch(self) -> None:
         blocked_report = self.temp_dir / "blocked-report.json"
         blocked_report.write_text("existing\n")
         blocked_report.chmod(0o400)
-        blocked_flight = self.next_name("blocked-report")
+        blocked_flight = self.next_flight_id()
         blocked_brief = self.make_brief("blocked-report")
         blocked_manifest = self.write_manifest(
             [self.worker(blocked_flight, 1, blocked_brief)], "blocked-report-manifest.json"
@@ -898,7 +956,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         flights = []
         markers = []
         for index in range(2):
-            flight_id = self.next_name("shared-report")
+            flight_id = self.next_flight_id()
             flights.append(flight_id)
             marker = f"shared-report-{index}"
             markers.append(marker)
@@ -938,7 +996,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertEqual(list(self.temp_dir.glob("shared-report.json.tmp.*")), [])
 
     def test_batch_signal_in_reservation_window_cannot_leave_an_unowned_placeholder(self) -> None:
-        flight_id = self.next_name("reservation-signal")
+        flight_id = self.next_flight_id()
         brief = self.make_brief("reservation-signal")
         manifest = self.write_manifest([self.worker(flight_id, 1, brief)])
         report = self.temp_dir / "reservation-signal-report.json"
@@ -966,8 +1024,8 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertEqual(len(self.launch_log.read_text().splitlines()), 1)
 
     def test_status_reader_reemits_once_and_reports_only_file_facts(self) -> None:
-        present_flight = self.next_name("status")
-        absent_flight = self.next_name("status")
+        present_flight = self.next_flight_id()
+        absent_flight = self.next_flight_id()
         run = self.run_worker(present_flight, marker="present")
         self.assertEqual(run.returncode, 0, run.stderr)
         original_status_text = (self.run_dir(present_flight) / "status.json").read_text()
@@ -1068,8 +1126,8 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertFalse(sleep_log.exists(), "status reader invoked a delay during its one-shot pass")
 
     def test_cleanup_dry_run_and_delete_are_whole_flight_and_exact(self) -> None:
-        selected = [self.next_name("clean") for _ in range(2)]
-        unrelated = self.next_name("unrelated")
+        selected = [self.next_flight_id() for _ in range(2)]
+        unrelated = self.next_flight_id()
         for flight_id in [*selected, unrelated]:
             process = self.run_worker(flight_id)
             self.assertEqual(process.returncode, 0, process.stderr)
@@ -1101,8 +1159,8 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertTrue(Path(str(self.project_flight(unrelated)["flight_dir"])).is_dir())
 
     def test_cleanup_refuses_all_when_any_attempt_lacks_terminal_status(self) -> None:
-        eligible_flight = self.next_name("eligible")
-        blocked_flight = self.next_name("blocked")
+        eligible_flight = self.next_flight_id()
+        blocked_flight = self.next_flight_id()
         for flight_id in [eligible_flight, blocked_flight]:
             process = self.run_worker(flight_id)
             self.assertEqual(process.returncode, 0, process.stderr)
@@ -1130,7 +1188,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertTrue(Path(str(self.project_flight(blocked_flight)["flight_dir"])).is_dir())
 
     def test_cleanup_refuses_symlinked_components_and_arbitrary_targets(self) -> None:
-        flight_id = self.next_name("linked")
+        flight_id = self.next_flight_id()
         projection = self.project_flight(flight_id)
         flight_dir = Path(str(projection["flight_dir"]))
         flight_dir.parent.mkdir(parents=True)
@@ -1158,7 +1216,7 @@ class CodexWorkerToolTests(unittest.TestCase):
                 self.assertEqual(refused.returncode, 64, refused.stderr)
 
     def test_cleanup_refuses_symlinked_terminal_status(self) -> None:
-        flight_id = self.next_name("linked-status")
+        flight_id = self.next_flight_id()
         run = self.run_worker(flight_id)
         self.assertEqual(run.returncode, 0, run.stderr)
         status_ref = self.run_dir(flight_id) / "status.json"
@@ -1182,7 +1240,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertTrue(outside_status.is_file())
 
     def test_cleanup_rechecks_full_eligibility_immediately_before_each_removal(self) -> None:
-        flights = ["recheck-a", "recheck-b"]
+        flights = [self.next_flight_id() for _ in range(2)]
         for flight_id in flights:
             run = self.run_worker(flight_id)
             self.assertEqual(run.returncode, 0, run.stderr)
@@ -1218,7 +1276,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertTrue((flight_dirs[1] / "attempt-2").is_dir())
 
     def test_cleanup_distinguishes_projection_mismatch_from_comparison_failure(self) -> None:
-        mismatch_flight = self.next_name("projection-mismatch")
+        mismatch_flight = self.next_flight_id()
         run = self.run_worker(mismatch_flight)
         self.assertEqual(run.returncode, 0, run.stderr)
         placeholder = self.temp_dir / "unused-projection-mismatch.brief"
@@ -1260,7 +1318,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertEqual(mismatch_report["flights"][0]["failure_reason"], "FLIGHT_CHANGED")
         self.assertTrue(mismatch_flight_dir.is_dir())
 
-        error_flight = self.next_name("projection-error")
+        error_flight = self.next_flight_id()
         run = self.run_worker(error_flight)
         self.assertEqual(run.returncode, 0, run.stderr)
         error_manifest = self.write_manifest(
@@ -1293,7 +1351,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertTrue(error_flight_dir.is_dir())
 
     def test_cleanup_signal_during_removal_reports_exact_removed_subset(self) -> None:
-        flights = ["signal-delete-a", "signal-delete-b"]
+        flights = [self.next_flight_id() for _ in range(2)]
         for flight_id in flights:
             run = self.run_worker(flight_id)
             self.assertEqual(run.returncode, 0, run.stderr)
@@ -1354,7 +1412,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertTrue(flight_dirs[1].is_dir())
 
     def test_cleanup_reports_removed_subset_and_failed_target(self) -> None:
-        flights = ["partial-a", "partial-b"]
+        flights = [self.next_flight_id() for _ in range(2)]
         for flight_id in flights:
             run = self.run_worker(flight_id)
             self.assertEqual(run.returncode, 0, run.stderr)
@@ -1402,8 +1460,8 @@ class CodexWorkerToolTests(unittest.TestCase):
         corpus = 'quote-"-backslash-\\-tab-\t-c1-\u0085-e-\u00e9-line-\u2028'
         corpus_tmp = self.temp_dir / corpus
         corpus_tmp.mkdir()
-        env = self.environment(tmpdir=corpus_tmp)
-        flight_id = "encoder-corpus"
+        env = self.environment(sshx_home=corpus_tmp)
+        flight_id = self.next_flight_id()
         run = subprocess.run(
             [
                 "/bin/bash",
@@ -1466,7 +1524,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertEqual(fallback_document["failed"][0]["flight_dir"], str(flight_dir))
 
     def test_cleanup_reports_a_partially_removed_failed_flight(self) -> None:
-        flight_id = "partial-with-removal"
+        flight_id = self.next_flight_id()
         run = self.run_worker(flight_id)
         self.assertEqual(run.returncode, 0, run.stderr)
         placeholder = self.temp_dir / "unused-partial-removal.brief"
@@ -1496,7 +1554,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertFalse((flight_dir / "attempt-1" / "status.json").exists())
 
     def test_cleanup_persistent_final_renderer_failure_uses_non_jq_report(self) -> None:
-        flight_id = "removed-before-report-failure"
+        flight_id = self.next_flight_id()
         run = self.run_worker(flight_id)
         self.assertEqual(run.returncode, 0, run.stderr)
         placeholder = self.temp_dir / "unused-report-failure.brief"
@@ -1531,7 +1589,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertFalse(flight_dir.exists())
 
     def test_cleanup_successful_deletion_fails_closed_when_stdout_receipt_publication_fails(self) -> None:
-        flight_id = "removed-before-publication-failure"
+        flight_id = self.next_flight_id()
         run = self.run_worker(flight_id)
         self.assertEqual(run.returncode, 0, run.stderr)
         placeholder = self.temp_dir / "unused-publication-failure.brief"
@@ -1556,7 +1614,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertEqual(receipt["flights"][0]["state"], "removed")
 
     def test_cleanup_internal_recheck_and_reporter_jq_failures_use_non_jq_report(self) -> None:
-        flights = ["internal-after-delete-a", "internal-after-delete-b"]
+        flights = [self.next_flight_id() for _ in range(2)]
         for flight_id in flights:
             run = self.run_worker(flight_id)
             self.assertEqual(run.returncode, 0, run.stderr)
@@ -1613,6 +1671,223 @@ class CodexWorkerToolTests(unittest.TestCase):
         self.assertIn("cannot read flight_dir", process.stderr)
         self.assertFalse(flight_dirs[0].exists())
         self.assertTrue(flight_dirs[1].is_dir())
+
+    def test_project_root_classifies_entries_by_identity_shape_without_touching_them(self) -> None:
+        absent_root = self.temp_dir / "absent-root"
+        projection = self.project_root(env=self.environment(sshx_home=absent_root))
+        self.assertEqual(
+            projection,
+            {"schema_version": 1, "sshx_root": str(absent_root), "root_present": False, "flights": [], "unrecognized": []},
+        )
+        self.assertFalse(absent_root.exists())
+        flights = [self.next_flight_id() for _ in range(2)]
+        for flight_id in flights:
+            run = self.run_worker(flight_id)
+            self.assertEqual(run.returncode, 0, run.stderr)
+        (self.sshx_home / ".DS_Store").write_text("")
+        (self.sshx_home / "legacy-name").mkdir()
+        linked = "f" * 24
+        (self.sshx_home / linked).symlink_to(self.temp_dir, target_is_directory=True)
+        projection = self.project_root()
+        self.assertEqual(projection["schema_version"], 1)
+        self.assertEqual(projection["sshx_root"], str(self.sshx_home))
+        self.assertTrue(projection["root_present"])
+        self.assertEqual([item["flight_id"] for item in projection["flights"]], sorted([*flights, linked]))
+        for item in projection["flights"]:
+            self.assertEqual(item["flight_dir"], str(self.sshx_home / str(item["flight_id"])))
+            self.assertEqual(item["flight_dir"], self.project_flight(str(item["flight_id"]))["flight_dir"])
+        self.assertEqual(sorted(projection["unrecognized"]), [".DS_Store", "legacy-name"])
+        self.assertTrue((self.sshx_home / linked).is_symlink())
+        invalid_commands = [
+            ["--project-root", "--flight-id", flights[0]],
+            ["--project-root", "--attempt", "1"],
+            ["--project-root", "--stage", "thinking"],
+            ["--project-root", "--work-target", str(ROOT)],
+            ["--project-root", "--sandbox", "workspace-write"],
+            ["--project-root", "--project-flight", "--flight-id", flights[0]],
+            ["--project-root", "--new-flight-id"],
+            ["--project-root", "--project-root"],
+        ]
+        for arguments in invalid_commands:
+            with self.subTest(arguments=arguments):
+                process = subprocess.run(
+                    ["/bin/bash", str(RUNNER), *arguments],
+                    input="ignored",
+                    capture_output=True,
+                    text=True,
+                    env=self.environment(),
+                )
+                self.assertEqual(process.returncode, 64, process.stderr)
+
+    def test_prune_removes_only_flights_inactive_beyond_the_window(self) -> None:
+        stale, fresh, touched, recent = (self.next_flight_id() for _ in range(4))
+        for flight_id in (stale, fresh, touched, recent):
+            run = self.run_worker(flight_id)
+            self.assertEqual(run.returncode, 0, run.stderr)
+        self.age_tree(self.sshx_home / stale, 2 * DAY_SECONDS)
+        self.age_tree(self.sshx_home / touched, 2 * DAY_SECONDS)
+        (self.run_dir(touched) / "worker.stdout.log").write_text("late output\n")
+        self.age_tree(self.sshx_home / recent, 12 * 3600)
+        (self.sshx_home / "notes.txt").write_text("keep me\n")
+        wide = self.prune("--older-than", "3d", "--dry-run")
+        self.assertEqual(wide.returncode, 0, wide.stderr)
+        wide_plan = json.loads(wide.stdout)
+        self.assertEqual(wide_plan["older_than_minutes"], 4320)
+        self.assertEqual(self.flight_states(wide_plan), {flight_id: (False, "kept", None) for flight_id in (stale, fresh, touched, recent)})
+        dry_run = self.prune("--dry-run")
+        self.assertEqual(dry_run.returncode, 0, dry_run.stderr)
+        plan = json.loads(dry_run.stdout)
+        self.assertEqual(
+            {key: plan[key] for key in ("schema_version", "mode", "sshx_root", "root_present", "older_than_minutes", "interrupted")},
+            {"schema_version": 1, "mode": "dry-run", "sshx_root": str(self.sshx_home), "root_present": True, "older_than_minutes": 1440, "interrupted": False},
+        )
+        self.assertEqual(self.flight_states(plan), {stale: (True, "would-remove", None), fresh: (False, "kept", None), touched: (False, "kept", None), recent: (False, "kept", None)})
+        self.assertEqual((plan["removed"], plan["failed"], plan["unrecognized"]), ([], [], ["notes.txt"]))
+        self.assertTrue((self.sshx_home / stale).is_dir())
+        deletion = self.prune()
+        self.assertEqual(deletion.returncode, 0, deletion.stderr)
+        report = json.loads(deletion.stdout)
+        self.assertEqual(report["mode"], "delete")
+        self.assertEqual(self.flight_states(report), {stale: (True, "removed", None), fresh: (False, "kept", None), touched: (False, "kept", None), recent: (False, "kept", None)})
+        self.assertEqual(report["removed"], [str(self.sshx_home / stale)])
+        self.assertEqual(report["failed"], [])
+        self.assertFalse((self.sshx_home / stale).exists())
+        self.assertTrue((self.sshx_home / fresh).is_dir())
+        self.assertTrue((self.sshx_home / touched).is_dir())
+        self.assertTrue((self.sshx_home / "notes.txt").is_file())
+        self.age_tree(self.sshx_home / touched, 3 * 3600)
+        shorter = self.prune("--older-than", "2h")
+        self.assertEqual(shorter.returncode, 0, shorter.stderr)
+        shorter_report = json.loads(shorter.stdout)
+        self.assertEqual(shorter_report["older_than_minutes"], 120)
+        self.assertEqual(self.flight_states(shorter_report), {fresh: (False, "kept", None), touched: (True, "removed", None), recent: (True, "removed", None)})
+        self.assertEqual(shorter_report["removed"], [str(self.sshx_home / touched), str(self.sshx_home / recent)])
+        absent = self.prune(env=self.environment(sshx_home=self.temp_dir / "absent-prune-root"))
+        self.assertEqual(absent.returncode, 0, absent.stderr)
+        absent_report = json.loads(absent.stdout)
+        self.assertEqual((absent_report["root_present"], absent_report["flights"], absent_report["removed"]), (False, [], []))
+        self.assertFalse((self.temp_dir / "absent-prune-root").exists())
+
+    def test_prune_usage_errors_touch_nothing_and_windows_project_to_minutes(self) -> None:
+        stale = self.next_flight_id()
+        run = self.run_worker(stale)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.age_tree(self.sshx_home / stale, 3 * DAY_SECONDS)
+        for arguments in [
+            ["--older-than", "0d"],
+            ["--older-than", "5"],
+            ["--older-than", "1w"],
+            ["--older-than", "-1d"],
+            ["--older-than", ""],
+            ["--older-than"],
+            ["--older-than", "1d", "--older-than", "2d"],
+            ["--dry-run", "--dry-run"],
+            ["--unknown"],
+            ["extra"],
+            ["--delete"],
+            ["--manifest", str(self.temp_dir / "unused.json")],
+        ]:
+            with self.subTest(arguments=arguments):
+                process = self.prune(*arguments)
+                self.assertEqual(process.returncode, 64, process.stderr)
+                self.assertIn("USAGE_ERROR", process.stderr)
+                self.assertEqual(process.stdout, "")
+        self.assertTrue((self.sshx_home / stale).is_dir())
+        for value, minutes in [("90m", 90), ("2h", 120), ("3d", 4320), ("007d", 10080)]:
+            with self.subTest(value=value):
+                process = self.prune("--older-than", value, "--dry-run")
+                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertEqual(json.loads(process.stdout)["older_than_minutes"], minutes)
+        self.assertTrue((self.sshx_home / stale).is_dir())
+
+    def test_prune_skips_entries_that_are_not_flight_directories_and_reports_them(self) -> None:
+        outside = self.temp_dir / "outside"
+        outside.mkdir()
+        (outside / "victim").write_text("keep\n")
+        self.age_tree(outside, 3 * DAY_SECONDS)
+        self.sshx_home.mkdir()
+        linked = "a" * 24
+        (self.sshx_home / linked).symlink_to(outside, target_is_directory=True)
+        regular = "b" * 24
+        (self.sshx_home / regular).write_text("not a directory\n")
+        (self.sshx_home / "stray.txt").write_text("")
+        self.age_tree(self.sshx_home, 3 * DAY_SECONDS)
+        process = self.prune()
+        self.assertEqual(process.returncode, 0, process.stderr)
+        report = json.loads(process.stdout)
+        self.assertEqual(
+            self.flight_states(report),
+            {linked: (None, "skipped", "INVALID_FLIGHT_DIRECTORY"), regular: (None, "skipped", "INVALID_FLIGHT_DIRECTORY")},
+        )
+        self.assertEqual((report["unrecognized"], report["removed"], report["failed"]), (["stray.txt"], [], []))
+        self.assertTrue((outside / "victim").is_file())
+        self.assertTrue((self.sshx_home / linked).is_symlink())
+        self.assertTrue((self.sshx_home / regular).is_file())
+        self.assertTrue((self.sshx_home / "stray.txt").is_file())
+
+    def test_prune_reports_failed_removal_and_continues_with_the_next_flight(self) -> None:
+        first, second = self.next_flight_id(), self.next_flight_id()
+        for flight_id in (first, second):
+            run = self.run_worker(flight_id)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.age_tree(self.sshx_home / flight_id, 2 * DAY_SECONDS)
+        fake_rm = self.bin_dir / "rm"
+        fake_rm.write_text(
+            "#!/bin/bash\n"
+            'for target in "$@"; do [ "$target" != "$FAIL_TARGET" ] || exit 9; done\n'
+            'exec /bin/rm "$@"\n'
+        )
+        fake_rm.chmod(0o755)
+        env = self.environment()
+        env["FAIL_TARGET"] = str(self.sshx_home / first)
+        process = self.prune(env=env)
+        self.assertEqual(process.returncode, 1, process.stderr)
+        report = json.loads(process.stdout)
+        self.assertEqual(self.flight_states(report), {first: (True, "failed", "REMOVE_FAILED"), second: (True, "removed", None)})
+        self.assertEqual(report["failed"], [{"flight_id": first, "flight_dir": str(self.sshx_home / first), "reason": "REMOVE_FAILED"}])
+        self.assertEqual(report["removed"], [str(self.sshx_home / second)])
+        self.assertFalse(report["interrupted"])
+        self.assertTrue((self.sshx_home / first).is_dir())
+        self.assertFalse((self.sshx_home / second).exists())
+        fake_rm.write_text("#!/bin/bash\nexit 0\n")
+        remains = self.prune(env=env)
+        self.assertEqual(remains.returncode, 1, remains.stderr)
+        remains_report = json.loads(remains.stdout)
+        self.assertEqual(self.flight_states(remains_report), {first: (True, "failed", "FLIGHT_REMAINS")})
+        self.assertEqual(remains_report["removed"], [])
+        self.assertTrue((self.sshx_home / first).is_dir())
+
+    def test_prune_signal_stops_after_the_current_removal_and_reports_interrupted(self) -> None:
+        first, second = self.next_flight_id(), self.next_flight_id()
+        for flight_id in (first, second):
+            run = self.run_worker(flight_id)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.age_tree(self.sshx_home / flight_id, 2 * DAY_SECONDS)
+        ready = self.make_gate("prune-rm.ready")
+        release = self.make_gate("prune-rm.release")
+        fake_rm = self.bin_dir / "rm"
+        fake_rm.write_text(
+            "#!/bin/bash\n"
+            'printf "%s\\n" blocked > "$PRUNE_RM_READY"\n'
+            'IFS= read -r _ < "$PRUNE_RM_RELEASE"\n'
+            'exec /bin/rm "$@"\n'
+        )
+        fake_rm.chmod(0o755)
+        env = self.environment()
+        env.update({"PRUNE_RM_READY": str(ready), "PRUNE_RM_RELEASE": str(release)})
+        with subprocess.Popen(["/bin/bash", str(PRUNE)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env) as process:
+            self.await_gate(ready, "blocked")
+            process.send_signal(signal.SIGTERM)
+            self.release_gate(release)
+            stdout, stderr = process.communicate(timeout=WATCHDOG_SECONDS)
+        self.assertEqual(process.returncode, 1, stderr)
+        report = json.loads(stdout)
+        self.assertTrue(report["interrupted"])
+        self.assertEqual(self.flight_states(report), {first: (True, "removed", None)})
+        self.assertEqual(report["removed"], [str(self.sshx_home / first)])
+        self.assertEqual(report["failed"], [])
+        self.assertFalse((self.sshx_home / first).exists())
+        self.assertTrue((self.sshx_home / second).is_dir())
 
 
 if __name__ == "__main__":

@@ -44,9 +44,7 @@ if ! "$jq_path" -e -s '
     ((keys) == ["attempt", "brief_ref", "flight_id", "stage", "work_target"] or
      (keys) == ["attempt", "brief_ref", "flight_id", "sandbox", "stage", "work_target"]) and
     (.flight_id | type) == "string" and
-    (.flight_id | test("^[A-Za-z0-9._-]+$")) and
-    .flight_id != "." and
-    (.flight_id | contains("..") | not) and
+    (.flight_id | test("^[0-9a-f]{24}$")) and
     (.stage == "thinking" or .stage == "implementation" or .stage == "review" or .stage == "termination") and
     (.work_target | type) == "string" and (.work_target | startswith("/")) and (.work_target | test("[\\n\\r]") | not) and
     (.brief_ref | type) == "string" and (.brief_ref | startswith("/")) and (.brief_ref | test("[\\n\\r]") | not) and

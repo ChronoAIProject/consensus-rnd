@@ -14,17 +14,19 @@ open Sshx
 
 /-! ## Boundaries -/
 
--- SKILL[def]: "This skill is a prompt contract with a closed set of exactly four named mechanical script exceptions, governed only by `skills/sshx/CODEX_WORKER_SPEC.md` and their behavior tests:"
+-- SKILL[def]: "This skill is a prompt contract with a closed set of exactly five named mechanical script exceptions, governed only by `skills/sshx/CODEX_WORKER_SPEC.md` and their behavior tests:"
 -- SKILL[def]: "- `skills/sshx/scripts/run-codex-worker.sh`;"
 -- SKILL[def]: "- `skills/sshx/scripts/run-codex-worker-batch.sh`;"
 -- SKILL[def]: "- `skills/sshx/scripts/read-codex-worker-status.sh`;"
--- SKILL[def]: "- `skills/sshx/scripts/clean-codex-worker-runs.sh`."
+-- SKILL[def]: "- `skills/sshx/scripts/clean-codex-worker-runs.sh`;"
+-- SKILL[def]: "- `skills/sshx/scripts/prune-inactive-codex-worker-runs.sh`."
 def mechanicalScripts : List String :=
   ["skills/sshx/scripts/run-codex-worker.sh", "skills/sshx/scripts/run-codex-worker-batch.sh",
     "skills/sshx/scripts/read-codex-worker-status.sh",
-    "skills/sshx/scripts/clean-codex-worker-runs.sh"]
+    "skills/sshx/scripts/clean-codex-worker-runs.sh",
+    "skills/sshx/scripts/prune-inactive-codex-worker-runs.sh"]
 
-theorem exactly_four_scripts : mechanicalScripts.length = 4 := rfl
+theorem exactly_five_scripts : mechanicalScripts.length = 5 := rfl
 
 /-- Runtime surfaces none of the contract's named objects are. -/
 inductive RuntimeSurface

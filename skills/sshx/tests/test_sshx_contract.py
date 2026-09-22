@@ -309,7 +309,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "392920e019a92b8ac4c1376958156941679022687595fa16e229065277e8e916"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "3e47d3182fac16e0f5cbbe9968f60eedc8ffab8b879a90a72c44e3ae0b69dbf4"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -2485,7 +2485,7 @@ class SshxContractTests(unittest.TestCase):
         wd_end = text.index("## Result Envelope")
         worker_delegation = text[wd_start:wd_end]
         for contract_string in [
-            "the caller must choose a unique `flight_id` and `attempt`",
+            "the caller must mint a fresh `flight_id` with the runner's `--new-flight-id` query rather than writing one by hand",
             "pass them to `skills/sshx/scripts/run-codex-worker.sh`",
             "the runner derives and owns every artifact path",
             "the caller must not supply arbitrary result, sentinel, log, or state paths",
@@ -2777,7 +2777,7 @@ class SshxContractTests(unittest.TestCase):
         text = re.sub(r"\s+", " ", read(SPEC))
         for required in [
             "No other skill may depend on these mechanisms",
-            "Delete `scripts/run-codex-worker.sh`, `scripts/run-codex-worker-batch.sh`, `scripts/read-codex-worker-status.sh`, and `scripts/clean-codex-worker-runs.sh`",
+            "Delete `scripts/run-codex-worker.sh`, `scripts/run-codex-worker-batch.sh`, `scripts/read-codex-worker-status.sh`, `scripts/clean-codex-worker-runs.sh`, and `scripts/prune-inactive-codex-worker-runs.sh`",
             "Delete this specification, `tests/test_run_codex_worker.py`, and `tests/test_codex_worker_tools.py`",
             "Restore the narrow `SKILL.md` clauses",
             "A new design review is required",
@@ -3228,12 +3228,13 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(forbidden_boundary, text)
         self.assertIn("It must not add or depend on", text)
-        self.assertIn("closed set of exactly four named mechanical script exceptions", text)
+        self.assertIn("closed set of exactly five named mechanical script exceptions", text)
         for script in [
             "run-codex-worker.sh",
             "run-codex-worker-batch.sh",
             "read-codex-worker-status.sh",
             "clean-codex-worker-runs.sh",
+            "prune-inactive-codex-worker-runs.sh",
         ]:
             self.assertIn(f"`skills/sshx/scripts/{script}`", text)
         self.assertIn("governed only by `skills/sshx/CODEX_WORKER_SPEC.md` and their behavior tests", text)
@@ -3269,9 +3270,10 @@ class SshxContractTests(unittest.TestCase):
 
     def test_non_runner_scripts_contain_no_run_layout_literal(self) -> None:
         layout_literals = [
-            "TMPDIR",
-            "consensus-rnd",
-            "/sshx/",
+            "SSHX_HOME",
+            "$HOME",
+            "/.sshx",
+            "[0-9a-f]{24}",
             "attempt-",
             "brief.md",
             "worker.stdout.log",
@@ -3282,18 +3284,36 @@ class SshxContractTests(unittest.TestCase):
             "carrier.exit",
             "status.json",
         ]
-        for script_name in [
+        identity_consumers = [
             "run-codex-worker-batch.sh",
             "read-codex-worker-status.sh",
             "clean-codex-worker-runs.sh",
-        ]:
+        ]
+        for script_name in [*identity_consumers, "prune-inactive-codex-worker-runs.sh"]:
             source = read(ROOT / "skills" / "sshx" / "scripts" / script_name)
+            allowed = {"[0-9a-f]{24}"} if script_name in identity_consumers else set()
             with self.subTest(script=script_name):
                 self.assertEqual(
-                    [literal for literal in layout_literals if literal in source],
+                    [literal for literal in layout_literals if literal in source and literal not in allowed],
                     [],
                     "non-runner scripts must consume runner projections instead of layout literals",
                 )
+
+    def test_worker_tool_spec_states_sweep_semantics(self) -> None:
+        specification = re.sub(r"\s+", " ", read(SPEC))
+        for required in [
+            "The identity has the ObjectId shape: 24 lowercase hexadecimal characters",
+            "${SSHX_HOME:-$HOME/.sshx}/<flight-id>/attempt-<attempt>",
+            "relocating the layout is done by setting `SSHX_HOME`, never by linking",
+            "The window defaults to `1d`",
+            "deletion is the default and `--dry-run` is the preview",
+            "Modification time is the whole criterion",
+            "through the runner's pure `--project-root` query",
+            "It is not a stage of the protocol and is never run by a worker",
+            "the sweep must not be run with a short window while a dispatch is in flight",
+        ]:
+            self.assertIn(required, specification)
+        self.assertNotIn("TMPDIR", specification)
 
     def test_sshx_baseline_evidence_is_source_owned(self) -> None:
         text = read(SKILL)

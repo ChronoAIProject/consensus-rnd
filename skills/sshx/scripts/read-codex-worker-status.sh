@@ -33,9 +33,7 @@ if ! "$jq_path" -e -s '
     ((keys) == ["attempt", "brief_ref", "flight_id", "stage", "work_target"] or
      (keys) == ["attempt", "brief_ref", "flight_id", "sandbox", "stage", "work_target"]) and
     (.flight_id | type) == "string" and
-    (.flight_id | test("^[A-Za-z0-9._-]+$")) and
-    .flight_id != "." and
-    (.flight_id | contains("..") | not)
+    (.flight_id | test("^[0-9a-f]{24}$"))
   ))
 ' "$manifest" >/dev/null 2>&1; then
   usage_error "invalid manifest"
