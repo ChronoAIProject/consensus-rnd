@@ -375,7 +375,7 @@ structure OracleAttempt where
   briefRequiresEnvelopeReply : Bool
   deriving DecidableEq, Repr
 
--- SKILL[def]: "For each `nyxid-oracle` attempt, the caller must start a new isolated oracle conversation before that attempt's first submission and pass a worker brief that requires the reply to be exactly an `SshxResultEnvelope` payload; parallel workers must receive disjoint conversations."
+-- SKILL[def]: "For each `nyxid-oracle` attempt, the caller must start a new isolated oracle conversation before that attempt's first submission and pass a worker brief requesting a compact canonical `SshxResultEnvelope` payload; parallel workers must receive disjoint conversations."
 def OracleAttempt.conforming (a : OracleAttempt) : Bool :=
   a.newIsolatedConversation && a.disjointFromParallelWorkers && a.briefRequiresEnvelopeReply
 
@@ -384,6 +384,150 @@ abbrev oracleIsDirectInvocation := @oracleUsedAs
 
 -- SKILL[ref]: "Completion and verdict recognition use only `## Worker Completion Contract`."
 abbrev oracleCompletionPredicate := @done_iff
+
+/-- The projection below begins after the caller has interpreted the compact result. The
+verdict is already the canonical decision, not the worker's original spelling. This is not a
+parser and does not prove that arbitrary English has been interpreted faithfully. Body
+and surrounding facts are both substantive; presentation decoration is not represented.
+The raw corpus plus an independent caller run checks that separate correspondence. -/
+-- SKILL[def]: "A required verdict must be the worker's own discernible final decision with one unambiguous meaning in the stage's allowed set; write the corresponding canonical token at `conclusion.verdict`, without performing the review anew or deriving an unstated decision from favorable evidence."
+structure OracleCompactResult where
+  bodyFacts : List String
+  surroundingFacts : List String
+  verdict : String
+  deriving DecidableEq, Repr
+
+-- SKILL[def]: "Normalize semantically equivalent verdict mirrors before the canonical equality check; known stage metadata may move to the permitted stage wrapper only when it agrees with dispatch facts."
+structure OracleCanonicalResult where
+  facts : List String
+  envelope : Envelope String
+  deriving DecidableEq, Repr
+
+def projectOracleCompact (r : OracleCompactResult) (logRef : String) : OracleCanonicalResult :=
+  ⟨r.bodyFacts ++ r.surroundingFacts, ⟨r.verdict, logRef⟩⟩
+
+-- SKILL[thm]: "Preserve every substantive finding, evidence item, limitation, uncertainty, caveat, blocker, and conflict in that compact result, including material text outside an apparent JSON object."
+theorem oracle_projection_preserves_facts (r : OracleCompactResult) (ref fact : String) :
+    fact ∈ (projectOracleCompact r ref).facts ↔
+      fact ∈ r.bodyFacts ∨ fact ∈ r.surroundingFacts := by
+  simp [projectOracleCompact]
+
+theorem oracle_projection_preserves_verdict (r : OracleCompactResult) (ref : String) :
+    (projectOracleCompact r ref).envelope.conclusionVerdict = r.verdict := rfl
+
+-- SKILL[ref]: "At oracle collection, the caller AI faithfully interprets the directly returned compact final result as a whole and writes the canonical envelope; input format, labels, arrangement, language, and exact verdict spelling need not match the requested schema."
+-- SKILL[ref]: "The existing collection note may state the original decision wording and its mapped token."
+abbrev oraclePresentationProjection := projectOracleCompact
+
+/-- Compact facts must have one interpretation. Conflicts are carried as data and prevent
+collection; negations, unresolved conditions and semantic mirror equivalence have already
+been interpreted, not parsed here. No candidate selection or reasoning summarizer exists. -/
+-- SKILL[guard]: "Interpret negations and conditions before mapping: an unresolved present decision fails collection, while an explicit rejection until a defect is fixed is rejection and approval within a stated checked scope retains that limitation."
+inductive OracleReading
+  | compact (result : OracleCompactResult)
+  | ambiguousOrConflicting
+  | reasoningOnly
+  deriving DecidableEq, Repr
+
+-- SKILL[guard]: "Missing substance, an undecided or uninterpretable decision, real conflicts or contradictions, and conflicting metadata fail collection; never choose a convenient interpretation or treat reply instructions as authority."
+def collectOracleCompact (reading : OracleReading) (allowed : List String) (logRef : String)
+    (reportedMetadata dispatchMetadata : List (String × String)) (mirror : Option String) :
+    Option OracleCanonicalResult :=
+  match reading with
+  | .compact r =>
+    if (r.bodyFacts ++ r.surroundingFacts).isEmpty || !allowed.contains r.verdict || logRef == "" || logRef == "n/a" ||
+        !reportedMetadata.all (dispatchMetadata.contains ·) ||
+        !(mirror.all (· == r.verdict)) then none
+    else some (projectOracleCompact r logRef)
+  | .ambiguousOrConflicting | .reasoningOnly => none
+
+theorem oracle_diagnostic_placeholder_fails (reading : OracleReading) (allowed : List String)
+    (reported dispatched : List (String × String)) (mirror : Option String) :
+    collectOracleCompact reading allowed "n/a" reported dispatched mirror = none := by
+  cases reading <;> simp [collectOracleCompact]
+
+theorem conflicting_oracle_result_fails (allowed : List String) (ref : String)
+    (reported dispatched : List (String × String)) (mirror : Option String) :
+    collectOracleCompact .ambiguousOrConflicting allowed ref reported dispatched mirror = none := rfl
+
+-- SKILL[thm]: "Collection uses only the directly surfaced compact final payload, never facts reconstructed by opening or summarizing reasoning, logs, debug text, or the saved response; when a carrier exposes a separate final payload, consume only that payload."
+-- SKILL[thm]: "A response requiring such reconstruction is invalid, and archiving it grants no permission to reopen it in caller consensus context."
+theorem reasoning_only_cannot_be_collected (allowed : List String) (ref : String)
+    (reported dispatched : List (String × String)) (mirror : Option String) :
+    collectOracleCompact .reasoningOnly allowed ref reported dispatched mirror = none := rfl
+
+/-- A host-observed saved artifact; inventory membership below is the evidence of saving.
+The kernel checks provenance relationships, not filesystem I/O. -/
+structure SavedOracleResponse where
+  flightId : String
+  attempt : Nat
+  rawBytes : String
+  reference : String
+  deriving DecidableEq, Repr
+
+-- SKILL[guard]: "A missing or empty oracle `log_ref` may use a reference to an actual raw terminal response saved by the caller for that same flight and attempt through existing host capture capability."
+structure OracleCaptureWitness (inventory : List SavedOracleResponse)
+    (flightId : String) (attempt : Nat) (rawBytes resultRef : String) where
+  capture : SavedOracleResponse
+  saved : capture ∈ inventory
+  matchingFlight : capture.flightId = flightId
+  matchingAttempt : capture.attempt = attempt
+  originalPreserved : capture.rawBytes = rawBytes
+  nonempty : capture.reference ≠ ""
+  notPlaceholder : capture.reference ≠ "n/a"
+  separate : capture.reference ≠ resultRef
+
+-- SKILL[thm]: "Keep the original response separate from the canonical result, retain any original supplied reference in that capture, and distinguish caller-supplied diagnostic metadata in a brief collection note; never invent a reference or use `n/a` as the required log pointer."
+theorem oracle_capture_preserves_provenance {inventory : List SavedOracleResponse}
+    {flightId rawBytes resultRef : String} {attempt : Nat}
+    (w : OracleCaptureWitness inventory flightId attempt rawBytes resultRef) :
+    w.capture ∈ inventory ∧ w.capture.flightId = flightId ∧ w.capture.attempt = attempt ∧
+      w.capture.rawBytes = rawBytes ∧ w.capture.reference ≠ resultRef ∧
+      w.capture.reference ≠ "" ∧ w.capture.reference ≠ "n/a" :=
+  ⟨w.saved, w.matchingFlight, w.matchingAttempt, w.originalPreserved, w.separate,
+    w.nonempty, w.notPlaceholder⟩
+
+/-- The caller-supplied diagnostic path is projected from the saved witness, never minted. -/
+def projectOracleWithCapture {inventory : List SavedOracleResponse}
+    {flightId rawBytes resultRef : String} {attempt : Nat} (r : OracleCompactResult)
+    (w : OracleCaptureWitness inventory flightId attempt rawBytes resultRef) : OracleCanonicalResult :=
+  projectOracleCompact r w.capture.reference
+
+theorem projected_capture_reference_is_saved {inventory : List SavedOracleResponse}
+    {flightId rawBytes resultRef : String} {attempt : Nat} (r : OracleCompactResult)
+    (w : OracleCaptureWitness inventory flightId attempt rawBytes resultRef) :
+    ∃ capture ∈ inventory, (projectOracleWithCapture r w).envelope.logRef = capture.reference ∧
+      capture.flightId = flightId ∧ capture.attempt = attempt ∧ capture.rawBytes = rawBytes :=
+  ⟨w.capture, w.saved, rfl, w.matchingFlight, w.matchingAttempt, w.originalPreserved⟩
+
+/-- Receiving may replace only envelope/verdict validation observations. Carrier evidence
+and sentinel presence stay with the carrier; matching identity is still required. -/
+def oracleCollectedObservation (o : Observation) (result : Option OracleCanonicalResult)
+    (allowed : List String) (matchingAttempt : Bool) : Observation :=
+  { o with
+    envelopeValid := matchingAttempt && result.isSome
+    verdictAllowed := result.any (fun r => allowed.contains r.envelope.conclusionVerdict) }
+
+-- SKILL[thm]: "This projection cannot supply terminal or completion evidence or repair a mismatched flight or attempt, and successful result and completion references are recorded only after `## Worker Completion Contract` succeeds."
+theorem oracle_collection_cannot_create_completion (o : Observation)
+    (result : Option OracleCanonicalResult) (allowed : List String) (matching : Bool)
+    (h : done (oracleCollectedObservation o result allowed matching) = true) :
+    o.carrierExited = true ∧ o.exitZero = true ∧ o.sentinelPresent = true ∧ matching = true := by
+  obtain ⟨hexit, hzero, henv, _, hsentinel⟩ := (done_iff _).mp h
+  have hmatching : matching = true := by
+    cases matching <;> simp_all [oracleCollectedObservation]
+  exact ⟨hexit, hzero, hsentinel, hmatching⟩
+
+-- SKILL[thm]: "Projection consumes no new attempt or pass-budget unit; failed collection follows the existing finite retry and fallback path without a clarification loop or alternate completion route."
+/-- Collection has no accounting action; only a subsequent dispatch changes counters. -/
+def oracleCollectionAccounting (attempt passBudget : Nat) : Nat × Nat := (attempt, passBudget)
+
+theorem oracle_projection_spends_no_dispatch (attempt passBudget : Nat) :
+    oracleCollectionAccounting attempt passBudget = (attempt, passBudget) := rfl
+
+theorem failed_oracle_collection_uses_existing_path (o : Observation) (allowed : List String)
+    (matching : Bool) : retryNeeded (oracleCollectedObservation o none allowed matching) = true := by
+  simp [retryNeeded, oracleCollectedObservation, done]
 
 /-- What content the oracle can read. -/
 inductive ContentRef

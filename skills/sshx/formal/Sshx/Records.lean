@@ -70,7 +70,7 @@ theorem GoalArtifact.correct_keeps_goal (g : GoalArtifact) (r : Revision) :
     (g.correct r).normalizedGoal = g.normalizedGoal ∧
       (g.correct r).successCriteria = g.successCriteria := ⟨rfl, rfl⟩
 
--- SKILL[def]: "Every `SshxResultEnvelope` returned by `thinking_panel_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields:"
+-- SKILL[def]: "Every canonical `SshxResultEnvelope` recorded from `thinking_panel_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields:"
 -- SKILL[def]: "The envelope payload itself stays exactly `conclusion` and `log_ref`."
 /-- `SshxResultEnvelope` has exactly `conclusion` and `log_ref`; the verdict lives inside
 `conclusion`. -/

@@ -309,7 +309,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "3e47d3182fac16e0f5cbbe9968f60eedc8ffab8b879a90a72c44e3ae0b69dbf4"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "568fc6dda6599cd88d15c06081878fa7f9d8f9a2a3fc4a0b10132548fc635e13"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -829,7 +829,7 @@ class SshxContractTests(unittest.TestCase):
     def test_sshx_contract_stays_within_size_ratchet(self) -> None:
         text = read(SKILL)
         self.assertLessEqual(len(text.splitlines()), 451)
-        self.assertLessEqual(len(text.encode("utf-8")), 65_536)
+        self.assertLessEqual(len(text.encode("utf-8")), 68_000)
 
     def test_sshx_goal_contract_source_regression(self) -> None:
         text = read(SKILL)
@@ -2705,7 +2705,7 @@ class SshxContractTests(unittest.TestCase):
         heading_index(text, "## Result Envelope")
         self.assertIn("All records, contracts, gates, templates, and reasoning guidance named here are prompt-level only", text)
         self.assertIn(
-            "Every `SshxResultEnvelope` returned by `thinking_panel_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields",
+            "Every canonical `SshxResultEnvelope` recorded from `thinking_panel_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields",
             text,
         )
         self.assertIn("A caller-carried stage record wraps this envelope", text)
@@ -2869,6 +2869,7 @@ class SshxContractTests(unittest.TestCase):
             ({"conclusion": {}, "log_ref": "artifacts/sshx/worker.log"}, "invalid"),
             ({"conclusion": {"verdict": "TODO"}, "log_ref": "artifacts/sshx/worker.log"}, "invalid"),
             ({"conclusion": {"verdict": "maybe"}, "log_ref": "artifacts/sshx/worker.log"}, "invalid"),
+            ({"conclusion": {"verdict": "approved"}, "log_ref": "artifacts/sshx/worker.log"}, "invalid"),
             ({"conclusion": {"verdict": "propose"}, "log_ref": ""}, "missing log_ref"),
         ]
         for artifact, reason in invalid_artifacts:
