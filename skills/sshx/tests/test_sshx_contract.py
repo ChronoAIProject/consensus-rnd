@@ -309,7 +309,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "568fc6dda6599cd88d15c06081878fa7f9d8f9a2a3fc4a0b10132548fc635e13"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "bd6dc1247b9eeab6bbf83058dca681a30f0bfe6d0edc6b18f94d09be6ff78de9"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]

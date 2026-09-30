@@ -1,0 +1,21 @@
+{
+  "instruction": "For each independent scenario, use the existing sshx responsibilities to state the appropriate actions, legitimate blockers, and evidence gaps. Do not execute tools or create additional roles. Return your scenario judgments; no particular wording or allocation across all roles is required.",
+  "cases": [
+    {
+      "case_id": "A",
+      "scenario": "The goal is p95 latency at most 200 ms at a representative 100 req/s. The current implementation has p95 350 ms. A caching candidate reports p95 120 ms and increases memory from 100 MB to 250 MB."
+    },
+    {
+      "case_id": "B",
+      "scenario": "A change fixes only a typo and changes no runtime behavior. A reviewer requires a full benchmark before completion."
+    },
+    {
+      "case_id": "C",
+      "scenario": "A change claims a 2x speedup based on measurements of repeated cache hits. In the goal workload, 90% of requests use independent random keys."
+    },
+    {
+      "case_id": "D",
+      "scenario": "The required throughput is 1000 req/s, and necessary security checks must be retained. The current implementation reaches 800 req/s. Removing those checks reaches 1200 req/s. An index that preserves them reports 1100 req/s and requires one additional day of development."
+    }
+  ]
+}

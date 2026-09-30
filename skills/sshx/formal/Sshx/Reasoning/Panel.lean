@@ -44,9 +44,9 @@ def parsimony : Charter :=
   ⟨.parsimony, "Delete until nothing is left to delete; every element must prove its right to exist.",
     ["magic numbers", "symptom branches", "machinery that has not earned its place"]⟩
 
--- SKILL[def]: "- `fidelity`: truth over proxy. Does it measure the real thing, and is every premise verified at its source? Attacks proxy-over-truth and narrative-over-verification."
+-- SKILL[def]: "- `fidelity`: truth over proxy. Are premises source-verified and metrics representative, including performance claims relevant to `GoalArtifact`? Attacks proxy-over-truth and narrative-over-verification."
 def fidelity : Charter :=
-  ⟨.fidelity, "Does it measure the real thing, and is every premise verified at its source?",
+  ⟨.fidelity, "Are premises source-verified and metrics representative, including performance claims relevant to GoalArtifact?",
     ["proxy-over-truth", "narrative-over-verification"]⟩
 
 -- SKILL[def]: "- `natural-ownership`: locus dyad, ownership pole. Which layer naturally owns this invariant, duty, or constraint — the layer with semantic responsibility and causal control? Attacks symptom patches, duplicated enforcement, and invariants forced onto consumers of what a producer should own."
@@ -87,10 +87,10 @@ structure WorthJudgment where
   fabricatedNumericRoi : Bool
   deriving DecidableEq, Repr
 
--- SKILL[def]: "- `worth` (值不值 — is it worth it?): decision value. Compare the candidate against doing nothing and against the cheapest sufficient alternative, then weigh its incremental expected benefit toward `GoalArtifact` against its total lifecycle cost — build and verification effort, recurring maintenance burden, complexity debt, failure and misuse risk, reversibility, delay, and the opportunity cost of the more valuable work it displaces. Attacks not-worth-it machinery, elegance `GoalArtifact` does not need, and cost that outruns benefit; it may reject a candidate every other seat finds beautiful and well-owned. It must not cut a capability `GoalArtifact.success_criteria` requires to save cost, and it must state its best counterfactual and the decisive cost/benefit assumption rather than fabricating a numeric ROI."
+-- SKILL[def]: "- `worth` (值不值 — is it worth it?): decision value. Compare doing nothing and the cheapest sufficient alternative; weigh incremental expected benefit toward `GoalArtifact` against total lifecycle cost — build and verification effort, recurring maintenance, complexity debt, failure and misuse risk, reversibility, delay, and opportunity cost. Include the work target's latency, throughput, and resource use when material to `GoalArtifact`. Attacks not-worth-it machinery, unneeded elegance, and cost that outruns benefit; it may reject a candidate every other seat finds beautiful and well-owned. It must not cut a capability `GoalArtifact.success_criteria` requires to save cost; state its best counterfactual and decisive cost/benefit assumption without fabricating numeric ROI."
 def worth : Charter :=
-  ⟨.worth, "Is it worth paying for this at all, at this cost, now, versus the best alternative?",
-    ["not-worth-it machinery", "elegance GoalArtifact does not need", "cost that outruns benefit"]⟩
+  ⟨.worth, "Is it worth paying for this at all, at this cost, now, versus the best alternative? Include the work target's latency, throughput, and resource use when material to GoalArtifact.",
+    ["not-worth-it machinery", "unneeded elegance", "cost that outruns benefit"]⟩
 
 /-- A `worth` judgment is well-formed when it names its counterfactual and decisive
 assumption, cuts no required capability, and fabricates no number. -/
