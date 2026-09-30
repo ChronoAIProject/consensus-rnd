@@ -32,13 +32,15 @@ structure ReviewCharter where
 def architecture : ReviewCharter :=
   ⟨.architecture, ["boundaries", "contracts", "coupling", "maintainability"]⟩
 
--- SKILL[def]: "- `quality`: behavior, edge cases, failure modes, and user impact."
+-- SKILL[def]: "- `quality`: behavior, edge cases, failure modes, and user impact, including performance regressions material to `GoalArtifact`."
 def quality : ReviewCharter :=
-  ⟨.quality, ["behavior", "edge cases", "failure modes", "user impact"]⟩
+  ⟨.quality, ["behavior", "edge cases", "failure modes", "user impact",
+      "performance regressions material to GoalArtifact"]⟩
 
--- SKILL[def]: "- `tests`: coverage, determinism, and verification strength."
+-- SKILL[def]: "- `tests`: coverage, determinism, and verification strength; check representative performance evidence when material to `GoalArtifact`, without requiring a benchmark for unrelated work."
 def tests : ReviewCharter :=
-  ⟨.tests, ["coverage", "determinism", "verification strength"]⟩
+  ⟨.tests, ["coverage", "determinism", "verification strength",
+      "representative performance evidence when material to GoalArtifact; no benchmark for unrelated work"]⟩
 
 def reviewTriplet : List ReviewCharter := [architecture, quality, tests]
 

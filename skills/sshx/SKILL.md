@@ -222,10 +222,10 @@ Protocol policy, not a mathematical consequence: run six whole-picture philosoph
 
 - `teleology`: purpose and inevitability. What is this for, and is the form forced by that purpose? Attacks skipped-purpose and missing-inevitability.
 - `parsimony`: economy. Delete until nothing is left to delete; every element must prove its right to exist. Attacks magic numbers, symptom branches, and machinery that has not earned its place.
-- `fidelity`: truth over proxy. Does it measure the real thing, and is every premise verified at its source? Attacks proxy-over-truth and narrative-over-verification.
+- `fidelity`: truth over proxy. Are premises source-verified and metrics representative, including performance claims relevant to `GoalArtifact`? Attacks proxy-over-truth and narrative-over-verification.
 - `natural-ownership`: locus dyad, ownership pole. Which layer naturally owns this invariant, duty, or constraint — the layer with semantic responsibility and causal control? Attacks symptom patches, duplicated enforcement, and invariants forced onto consumers of what a producer should own.
 - `proportional-containment`: locus dyad, containment pole. How far may this intervention rightfully bind, across scope, authority, and duration, given the evidence? Attacks over-hoisting, speculative abstraction, and turning a local fact into universal law.
-- `worth` (值不值 — is it worth it?): decision value. Compare the candidate against doing nothing and against the cheapest sufficient alternative, then weigh its incremental expected benefit toward `GoalArtifact` against its total lifecycle cost — build and verification effort, recurring maintenance burden, complexity debt, failure and misuse risk, reversibility, delay, and the opportunity cost of the more valuable work it displaces. Attacks not-worth-it machinery, elegance `GoalArtifact` does not need, and cost that outruns benefit; it may reject a candidate every other seat finds beautiful and well-owned. It must not cut a capability `GoalArtifact.success_criteria` requires to save cost, and it must state its best counterfactual and the decisive cost/benefit assumption rather than fabricating a numeric ROI.
+- `worth` (值不值 — is it worth it?): decision value. Compare doing nothing and the cheapest sufficient alternative; weigh incremental expected benefit toward `GoalArtifact` against total lifecycle cost — build and verification effort, recurring maintenance, complexity debt, failure and misuse risk, reversibility, delay, and opportunity cost. Include the work target's latency, throughput, and resource use when material to `GoalArtifact`. Attacks not-worth-it machinery, unneeded elegance, and cost that outruns benefit; it may reject a candidate every other seat finds beautiful and well-owned. It must not cut a capability `GoalArtifact.success_criteria` requires to save cost; state its best counterfactual and decisive cost/benefit assumption without fabricating numeric ROI.
 
 `natural-ownership` and `proportional-containment` are a coupled **must-clash locus dyad**: they run together, each must answer the other pole's claim, and they converge on the natural owner layer — not the highest layer imaginable. Ownership pulls the fix toward the layer that owns the invariant; containment resists over-reaching past it. This is the "go upstream to the root, but not past the natural owner" balance expressed as two adversarial seats the meta-judge converges, rather than a single balanced checklist.
 
@@ -288,8 +288,8 @@ Implementation must be delegated to a worker using the stage's default carrier u
 Protocol policy, not a mathematical consequence: after implementation, run three review perspectives:
 
 - `architecture`: boundaries, contracts, coupling, and maintainability.
-- `quality`: behavior, edge cases, failure modes, and user impact.
-- `tests`: coverage, determinism, and verification strength.
+- `quality`: behavior, edge cases, failure modes, and user impact, including performance regressions material to `GoalArtifact`.
+- `tests`: coverage, determinism, and verification strength; check representative performance evidence when material to `GoalArtifact`, without requiring a benchmark for unrelated work.
 
 Reviewers must check protocol text for newly added exception clauses, statements that contradict existing clauses, semantic weakening of existing propositions, and external identifier or source coupling that lexical token shapes cannot recognize. This reviewer duty is the declared absorber for the residual classes that positional and lexical checks cannot decide: whether arbitrary English semantically entails such a weakening, and whether an unrecognized token or phrase couples the contract to an external identifier or source.
 

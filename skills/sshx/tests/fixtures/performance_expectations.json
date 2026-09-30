@@ -1,0 +1,45 @@
+{
+  "scope": "Data-only evidence for explicit duties in existing roles; not runtime interfaces or application benchmark results.",
+  "baseline": {
+    "observation": "Collected before the baseline worker read SKILL or peer plans; all four scenarios already expressed the intended goal-bound decisions. No missing performance behavior was observed.",
+    "decisions": {
+      "A": "Current latency misses the explicit target; caching needs representative and correctness evidence; memory growth alone does not establish a violation.",
+      "B": "A verified typo-only change needs relevant checks, not an unrelated full benchmark.",
+      "C": "Cache-hit-only measurements do not establish the goal-workload 2x claim; qualify it or obtain representative evidence.",
+      "D": "Retain required security checks; prefer the index subject to verification; the extra day is a cost rather than automatic rejection."
+    }
+  },
+  "expectations": [
+    {
+      "case_id": "A",
+      "criteria": [
+        "Current p95 350 ms misses the explicit 200 ms threshold.",
+        "Caching can satisfy latency if the supplied 120 ms is valid for the goal workload and correctness holds.",
+        "Worth compares memory and alternative costs without inventing a cap or treating growth as automatically fatal.",
+        "Fidelity/tests examine representative evidence; quality covers material impact and regressions."
+      ]
+    },
+    {
+      "case_id": "B",
+      "criteria": [
+        "Relevant diff/text checks suffice once the no-runtime-change fact holds.",
+        "Missing full benchmarks are not a grounded blocker; do not create a performance role or unrelated optimization task."
+      ]
+    },
+    {
+      "case_id": "C",
+      "criteria": [
+        "Cache-hit-only evidence cannot support the goal-workload 2x claim.",
+        "Request or qualify representative evidence and the claimed metric without fabricating measurements or rejecting unrelated aspects."
+      ]
+    },
+    {
+      "case_id": "D",
+      "criteria": [
+        "Removing necessary security checks is inadmissible despite throughput.",
+        "The index is the sufficient candidate subject to representative verification and relevant cost comparison.",
+        "Additional development time is a cost, not an automatic disqualifier or permission to discard a required capability."
+      ]
+    }
+  ]
+}
