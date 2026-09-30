@@ -198,7 +198,7 @@ inductive LogRefUse
   | consumeItForRouting
   deriving DecidableEq, Repr
 
--- SKILL[def]: "- `log_ref`: artifact reference for the non-inline worker, meta-judge, implementation, review, or fix log, treated as an opaque diagnostic pointer. Caller-side routing, meta-judging, worker briefs, and final reports must not open, inline, summarize, or otherwise consume its content; they keep only the reference. Opening the artifact is allowed only for out-of-band debugging outside the consensus decision context."
+-- SKILL[def]: "- `log_ref`: artifact reference for the non-inline worker, meta-judge, implementation, review, or fix log (or the saved raw oracle response permitted by `## Worker Delegation`), treated as an opaque diagnostic pointer. Caller-side routing, meta-judging, worker briefs, and final reports must not open, inline, summarize, or otherwise consume its content; they keep only the reference. Opening the artifact is allowed only for out-of-band debugging outside the consensus decision context."
 def LogRefUse.permittedInDecisionContext : LogRefUse → Bool
   | .keepTheReference => true
   | .openIt | .inlineIt | .summarizeIt | .consumeItForRouting => false
