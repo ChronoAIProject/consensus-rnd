@@ -112,18 +112,22 @@ theorem advisory_never_sole_basis (i : Input) (h : force i = .advisory) (d : Sol
 /-- A plan element and what admits it. -/
 structure PlanElement where
   kind : String
-  namesGoalTermThatDemandsIt : Bool
+  basis : Finding
   namesCurrentConsumer : Bool
   onlyTestIntroducedWithIt : Bool
   deriving DecidableEq, Repr
 
 -- SKILL[def]: "The same two conjuncts admit a plan element: a defense, validation, abstraction, or compatibility path enters a plan only when it names the `GoalArtifact` term that demands it or a current consumer (an existing call site), and a test introduced together with it may corroborate that basis but never creates it."
+-- SKILL[def]: "Findings and plan elements share this contextual chain: default to non-malicious ordinary use and mistakes, tracing actor, actual input path and goal-visible residue after declared recovery."
+-- SKILL[def]: "Safety labels supply no evidence; ineligible or absorbed threats authorize no defense, validation or further repair."
 def planElementAdmitted (e : PlanElement) : Bool :=
-  e.namesGoalTermThatDemandsIt || e.namesCurrentConsumer
+  let input := { e.basis.input with
+    namesGoalTerm := e.basis.input.namesGoalTerm || e.namesCurrentConsumer }
+  downgrade { e.basis with verdict := .reject, input } == .reject
 
-theorem test_never_creates_admission (e : PlanElement) (h : e.namesGoalTermThatDemandsIt = false)
+theorem test_never_creates_admission (e : PlanElement) (h : e.basis.input.namesGoalTerm = false)
     (h' : e.namesCurrentConsumer = false) : planElementAdmitted e = false := by
-  simp [planElementAdmitted, h, h']
+  simp [planElementAdmitted, downgrade, force, h, h']
 
 -- SKILL[thm]: "Failure is objective, not semantic: the rule asks only whether both conjuncts are named, never how well they are evidenced, while the trigger check is mechanical"
 /-- An actual defect names both conjuncts, so the rule never removes it. -/
@@ -217,7 +221,28 @@ theorem shape_list_is_not_a_closure {A : Type} [Fintype A] (register : A → A �
 -- SKILL[def]: "Extending an enumeration over an absorbed class is an ugly defect under the aesthetic verdict, not diligence."
 def extendingAbsorbedEnumeration : UglyDefect := .specialCase
 
--- SKILL[thm]: "Without that construction hypothesis, a separately proven finite-domain completeness result remains admissible."
+-- SKILL[thm]: "A Lawvere-style diagonal escapes a register only under verified theorem hypotheses, including the recorded finite domain, fixed-point-free constructor and admissible-input correspondence."
+theorem verified_diagonal_escapes {A : Type} [Fintype A] (register : A → A → Force) :
+    diagonal Semantics.Force.flip register ∉ Set.range register :=
+  Semantics.register_diagonal_unlisted register
+
+-- SKILL[def]: "An open or infinite label alone proves no impossibility, and enumeration alone proves no completeness."
+structure DiagonalApplicationEvidence where
+  finiteRegisterRecorded : Bool
+  fixedPointFreeConstructor : Bool
+  theoremHypothesesVerified : Bool
+  admissibleInputCorrespondence : Bool
+  deriving DecidableEq, Repr
+
+def diagonalApplicationAdmitted (e : DiagonalApplicationEvidence) : Bool :=
+  e.finiteRegisterRecorded && e.fixedPointFreeConstructor &&
+    e.theoremHypothesesVerified && e.admissibleInputCorrespondence
+
+theorem diagonal_application_needs_correspondence (e : DiagonalApplicationEvidence)
+    (h : e.admissibleInputCorrespondence = false) :
+    diagonalApplicationAdmitted e = false := by
+  simp [diagonalApplicationAdmitted, h]
+
 /-- Without a fixed-point-free constructor the escape argument does not apply: the identity
 twist has fixed points, so a listing may contain its own diagonal. -/
 theorem no_constructor_no_escape :

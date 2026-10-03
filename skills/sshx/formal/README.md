@@ -14,7 +14,7 @@ No module contains `sorry`, `axiom`, `native_decide`, or a proposition defined a
 | Layer | Modules | What it formalizes |
 |---|---|---|
 | Mechanics | `Sshx/*.lean` | verdict alphabets, carriers and fallback, flight accounting, the completion predicate, `BlockingAuthority` and downgrade, the three truth tables (exhaustive, order-sensitive), `pass_budget`, gate applicability and binding, isolation, records, stage order |
-| Behavior | `Sshx/Behavior/*.lean` | the caller as an operational model: `ProtocolState`, one `Action` per caller act, one guard per "must" clause, `step`, `Reachable`, and safety invariants over every reachable state |
+| Behavior | `Sshx/Behavior/*.lean` | the caller as an operational model: `ProtocolState`, one `Action` per caller act, one guard per "must" clause, `step`, `Reachable`, finite implementation batches, shared whole-candidate review readiness, and safety invariants over every reachable state |
 | Reasoning | `Sshx/Reasoning/*.lean` | the reasoning logic every seat applies: reference frame, aesthetic verdict, seek truth from facts, mathematical applicability, prospective evidence, depth discipline, goal primacy, boundary checks, blocking authority in full, the six seats and the locus dyad, meta-judge convergence and the focused round, review downgrade, repair passes, termination seats and ownership routing |
 | Semantics | `Sshx/Semantics/*.lean` | the contract's concepts as instances of the kernel-frozen theorems of [trureturing](https://github.com/the-omega-institute/trureturing) (`D5`, pinned by commit in `lakefile.toml`); each instance discharges the theorem's premises with `sshx` structures |
 | Clauses | `Sshx/Clauses/*.lean` | the remaining definitional clauses: identity and trigger, goal contract records, protocol records, envelope, completion, context pollution, worker delegation mechanics, boundaries, baseline failure modes, verification |
@@ -31,7 +31,7 @@ defined elsewhere; `prose` an explanatory sentence with no norm of its own, whic
 
 | `sshx` concept | trureturing object | instance |
 |---|---|---|
-| register of advisory shapes; adversarial seat | listing `g : A → A → Force`, twist `flip` (no fixed point) | `every_register_escaped`, `register_diagonal_unlisted`, `every_register_counted` via `escape_all_of_fixfree`, `escaped_card_of_fixfree` |
+| register of advisory shapes; adversarial seat | qualified finite listing `g : A → A → Force`, twist `flip` (no fixed point), with verified theorem hypotheses and an admissible-input correspondence | `every_register_escaped`, `register_diagonal_unlisted`, `every_register_counted` via `escape_all_of_fixfree`, `escaped_card_of_fixfree`; the abstract theorem does not establish a real counterexample without that correspondence |
 | written `GoalArtifact` vs user intent; goal gap | current concept `q`, target `T`, `defectRelation q T` | `goalGap` |
 | blocking findings joined over passes; `pass_budget` | countable check language `Γ`, unit cost, `finiteBudgetEnvelope` | `goal_gap_budget_envelope` via `budget_envelope_infimum_and_limit`: antitone in budget, never below the all-finite infimum of the same language |
 | independent adjudication evidence; dependency closure | `AdmissionContext`, `AdmissibleJudge`, `AdaptiveUse` | `enlarging_closure_only_removes_admission` via `dependency_closure_admission_antitone`; `adaptive_use_is_inadmissible` |
@@ -51,6 +51,50 @@ Declared non-instances, with the reason each premise does not match `sshx`:
   clauses (a gate never gates its own exit; a stage record's verdict is a projection of
   `conclusion.verdict`; widen the absorber instead of adding a case) are modeled in the
   mechanics and reasoning layers only.
+
+## Composed routes
+
+`Sshx/Behavior/Scenarios.lean` proves each action's actual `allowed` guard along composed
+initial multi-flight, repair, included-last-unit-review, carrier recovery/exhaustion,
+tests-seat fallback, autonomous-intake, and single-flight traces. Effect assertions also
+check partial/active/failed/exhausted work. Approved-plan fixtures supply the prior thinking
+settlement; these traces do not prove the truth of worker evidence or reviewer approval.
+
+Gate applicability is derived from one current continuation source. Intake records the
+initial source; only an owner-authorized, source-supported append-only correction can
+update it afterward. The correction evidence is a formal interpretation of the existing
+revision, not a new runtime record or an English authority detector. The original target
+and revision prefix remain intact. `TerminationEvidence` pairs the supplied roster with
+its evaluated `ContinuationAuthority`, including the source's ledger position. The actual
+evaluation guard requires that association to match current authority; its effect retains
+the supplied association and applies the unchanged truth table to the roster. It does not
+stamp old results with evaluation-time authority. A relevant correction preserves the old
+verdict and snapshot, while both reevaluation and the claim guard refuse stale evidence,
+even when applicability stays positive, the source payload repeats, or an earlier source
+is restored. An unrelated note preserves usable evidence at both consumers.
+
+General guard/effect and reachable-state proofs connect each affirmative claim to an
+admitted evaluation whose supplied evidence still matches current authority. Guarded
+regressions distinguish old A1 evidence refused after an authorized A2 correction from
+separately supplied current A2 evidence accepted with the same verdicts. They also cover
+repeated/restored sources, unchanged authority, and unsupported/unowned corrections.
+The association and semantic truth of external evidence remain premises; this is no
+provenance authentication scheme or new runtime record. There is no independent declaration
+action.
+
+Fallback uses the existing
+`nextCarrier` selector against tried carriers projected from one assignment's flight history.
+The original flight id is a ghost assignment link preserved by replacements, so distinct
+approved assignments on the same target remain distinct. Every admitted fallback strictly
+reduces that assignment's untried-carrier remainder. Draws, review dispatch and fallback
+share the executable-carrier restriction for the tests seat.
+
+The model's `launchDelegated` action projects the existing direct oracle/subagent invocation;
+Codex still requires `launchViaRunner`. Both paths require launch and host completion before
+collection. This adds no runtime interface, host capability, worker-record field or budget.
+The seven stages and per-flight completion predicate are unchanged. Batch progress is a
+formal projection of existing worker conclusions, not a runtime scheduler. Trigger-aware
+downgrade and plan admission retain the existing contextual evidence chain.
 
 ## What the model cannot verify
 

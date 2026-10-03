@@ -14,6 +14,7 @@ import Sshx.Semantics.Adjudication
 import Sshx.Semantics.Stop
 import Sshx.Behavior.Model
 import Sshx.Behavior.Invariant
+import Sshx.Behavior.Scenarios
 import Sshx.Reasoning.Discipline
 import Sshx.Reasoning.Authority
 import Sshx.Reasoning.Guards

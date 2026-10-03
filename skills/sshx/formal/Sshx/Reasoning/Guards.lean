@@ -3,23 +3,14 @@ import Sshx.Blocking
 /-!
 # Reasoning boundary and planning guards
 
-These small predicates keep trigger provenance, pre-run occurrence, review-focus scope,
-repeated-family routing, and planning evidence explicit. They are prompt-level evidence, not a
-runtime schema.
+These small predicates keep review-focus scope and planning evidence explicit. They are
+prompt-level evidence, not a runtime schema. Trigger provenance and class repair routing live at
+their decision owners so the guards cannot drift away from the blocking and repair paths.
 -/
 
 namespace Sshx.Reasoning
 
 open Sshx
-
--- SKILL[def]: "During `intake`, the caller must ask the boundary owner"
-structure IntakeScopeAnswers where
-  outputConsumerConfirmed : Bool
-  localStateScopeConfirmed : Bool
-  deriving DecidableEq, Repr
-
-def intakeScopeComplete (answers : IntakeScopeAnswers) : Bool :=
-  answers.outputConsumerConfirmed && answers.localStateScopeConfirmed
 
 -- SKILL[def]: "Planning evidence must be gathered before a thinking seat settles a candidate plan: search relevant authoritative best-practice sources and inspect the current `work_target`, repository artifacts, history, and visible prior decisions for work that already covers the named `GoalArtifact` terms."
 structure PlanningEvidence where
@@ -82,51 +73,6 @@ def ordinaryOperationKeepsTrustedFailureEligible (ordinaryPath : Bool) (trustedF
 def nonstandardOmissionIsNotOrdinary (nonstandardPath : Bool) (omission : Bool) : Bool :=
   nonstandardPath && omission
 
--- SKILL[def]: "A blocking finding must also pass the structured trigger check"
-inductive TriggerPath
-  | ordinaryOperation
-  | nonstandardDeliberate
-  | malicious
-  deriving DecidableEq, Repr
-
-structure TriggerRecord where
-  trigger : String
-  triggerActor : String
-  triggerPath : TriggerPath
-  mechanismFamily : String
-  recordedOccurrence : Option String
-  deriving DecidableEq, Repr
-
-def triggerCheck (record : TriggerRecord) : Bool :=
-  match record.triggerPath with
-  | .ordinaryOperation => true
-  | .nonstandardDeliberate | .malicious => record.recordedOccurrence.isSome
-
--- SKILL[def]: "`recorded_occurrence` must have existed before this run"
-def occurrenceIsIndependent (recordedOccurrence : Option String) (createdDuringRun : Bool) : Bool :=
-  recordedOccurrence.isSome && !createdDuringRun
-
--- SKILL[thm]: "a fixture, reproduction, or state deliberately created by a seat, caller, or repair worker during this run is reachability evidence only"
-theorem run_fixture_is_not_occurrence (createdDuringRun : Bool) :
-    occurrenceIsIndependent none createdDuringRun = false := by
-  simp [occurrenceIsIndependent]
-
--- SKILL[def]: "An input that names both is blocking"
-def findingForce (input : Input) (record : TriggerRecord) : Force :=
-  if force input == .blocking && triggerCheck record then .blocking else .advisory
-
--- SKILL[thm]: "An input that names fewer than both is advisory"
-theorem missing_conjunct_is_advisory (input : Input) (record : TriggerRecord)
-    (h : input.namesGoalTerm = false ∨ input.namesWorkEvidence = false) :
-    findingForce input record = .advisory := by
-  rcases h with h | h <;> simp [findingForce, force, h]
-
--- SKILL[thm]: "Failure is objective, not semantic"
-theorem ordinary_reachable_failure_stays_blocking (input : Input) (record : TriggerRecord)
-    (hi : force input = .blocking) (hp : record.triggerPath = .ordinaryOperation) :
-    findingForce input record = .blocking := by
-  simp [findingForce, hi, triggerCheck, hp]
-
 -- SKILL[def]: "Inputs that name no second conjunct include an imagined input"
 def imaginedInputIsAdvisory : Bool := true
 
@@ -152,25 +98,9 @@ def planNeedsPlanningEvidence (hasEvidence reusesCoveredWork namesUncoveredDelta
 -- SKILL[def]: "Missing or unverified planning evidence is `ASSUMED-UNVERIFIED` and cannot by itself justify `implement`."
 def missingPlanningEvidenceBlocksImplement (evidenceVerified : Bool) : Bool := !evidenceVerified
 
--- SKILL[def]: "It must also carry the structured `trigger`, `trigger_actor`, `trigger_path`"
+-- SKILL[def]: "It must carry the fields required by `## Result Envelope`."
 def findingMetadataShapeComplete (metadata : TriggerRecord) : Bool :=
   metadata.trigger != "" && metadata.triggerActor != "" && metadata.mechanismFamily != ""
-
--- SKILL[def]: "Before dispatching a repair after two consecutive passes whose blocking findings name the same"
-inductive FamilyRoute
-  | continue
-  | escalateToBoundaryOwner
-  deriving DecidableEq, Repr
-
-def repeatedFamilyRoute (sameGoalTerm sameMechanismFamily familyDeclared : Bool) : FamilyRoute :=
-  if sameGoalTerm && sameMechanismFamily && !familyDeclared then
-    .escalateToBoundaryOwner
-  else
-    .continue
-
--- SKILL[def]: "A class-level decision may use only the recorded findings and confirmed harness"
-def classDecisionUsesRecordedInputs (recordedFindings confirmedHarness : Bool) : Bool :=
-  recordedFindings && confirmedHarness
 
 -- SKILL[def]: "On every review pass after the initial implementation, the review triplet must list each defense"
 def reviewListsNewDefenses (listed : Bool) : Bool := listed

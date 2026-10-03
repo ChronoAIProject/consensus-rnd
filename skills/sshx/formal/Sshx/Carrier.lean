@@ -27,6 +27,11 @@ def Carrier.univ : List Carrier := [.codexCli, .nyxidOracle, .isolatedTokenSubag
 theorem Carrier.mem_univ (c : Carrier) : c ∈ Carrier.univ := by
   cases c <;> decide
 
+-- SKILL[def]: "A `tests` review seat must be assigned to a carrier capable of executing repository verification commands in the `work_target`, which is the per-seat constraint that keeps `nyxid-oracle` out of that seat's feasible draws."
+def canRunRepositoryCommands : Carrier → Bool
+  | .codexCli | .isolatedTokenSubagent => true
+  | .nyxidOracle => false
+
 /-- `WorkerMode` has exactly the three carriers plus `abstain`. -/
 inductive WorkerMode
   | carrier (c : Carrier)

@@ -3,6 +3,8 @@
 
 Source: `## Fix Or Done` (sole owner) and the charging sentences of `## Termination Gate`.
 One precommitted natural number; every counted pass decrements it; nothing refunds it.
+`repairWithRerunReview` charges an entire finite repair batch, including its final review.
+Behavior.Model carries that already-paid work inside fixOrDone, even at zero units.
 -/
 
 namespace Sshx

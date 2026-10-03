@@ -60,18 +60,23 @@ theorem run_follows_risk_not_budget (t p s : Bool) (budget : Nat) :
 
 /-! ## Goal contract: harness, gate entry, goal source, iteration question -/
 
--- SKILL[ref]: "If any `harness` sub-item is missing or ambiguous, or its source has not been confirmed by the boundary owner, stop and escalate to the maintainer; neither controller nor worker may infer or expand it."
-abbrev incompleteHarnessEscalates := @applicability
+-- SKILL[ref]: "A routine record gap is repaired from the sources above and recorded as an assumption; only a true requirement, governance, or permission change uses existing owner routing."
+abbrev routineHarnessGapRouting := @Behavior.guardWriteGoal
 
--- SKILL[thm]: "When an otherwise complete, unambiguous, boundary-owner-confirmed `provided_capabilities` value contains no such entry, whether silent or explicitly negative, the gate is inapplicable without asserting that the host mechanism is absent."
+-- SKILL[ref]: "Silence or routine ambiguity never creates a startup questionnaire or pause."
+abbrev routineSilenceNoPause := @Behavior.guardWriteGoal
+
+-- SKILL[thm]: "Silence is not absence and does not trigger a confirmation question."
+abbrev silentContinuationEntry := @applicability
+
+-- SKILL[thm]: "When a complete `provided_capabilities` value contains no positive entry, the gate is inapplicable without asserting that the host mechanism is absent."
 theorem no_entry_is_inapplicable :
-    applicability true .absent = .inapplicable ∧ applicability true .silent = .inapplicable :=
+    applicability .absent = .inapplicable ∧ applicability .silent = .inapplicable :=
   ⟨rfl, rfl⟩
 
--- SKILL[thm]: "A purported continuation entry that is ambiguous or unconfirmed is governed by the existing harness rule above."
-theorem ambiguous_entry_escalates :
-    applicability true .ambiguous = .escalateToMaintainer ∧
-      applicability true .unconfirmed = .escalateToMaintainer :=
+theorem ambiguous_entry_withholds_claim :
+    applicability .ambiguous = .withholdClaim ∧
+      applicability .unconfirmed = .withholdClaim :=
   ⟨rfl, rfl⟩
 
 /-- The only goal source. -/
@@ -146,10 +151,12 @@ structure ImplementationBrief where
 def implementationAllowed (b : ImplementationBrief) : Bool := b.planApprovedByThinkingGate
 
 -- SKILL[def]: "Keep the implementation boundary narrow and state any deviation before making it."
+-- SKILL[ref]: "Scope changes retain the existing correction, direction and class gates."
 def implementationConforming (b : ImplementationBrief) : Bool :=
   b.boundaryNarrow && b.deviationStatedBeforeMade
 
 -- SKILL[ref]: "Implementation must be delegated to a worker using the stage's default carrier under `WorkerDelegationContract`."
+-- SKILL[ref]: "Delegate the smallest changes for what still differs from `GoalArtifact`; open a `SshxWorkerFlightRecord` per assignment and stay orchestration-only for the repair."
 abbrev implementationIsAFlight := @Behavior.guardOpenFlight
 
 /-- What crosses between caller and implementation worker. -/
@@ -161,6 +168,7 @@ structure ImplementationExchange where
   deriving DecidableEq, Repr
 
 -- SKILL[def]: "The caller context may pass the approved concrete plan and constraints, then receive `conclusion` and `log_ref`; changed-file and test evidence belong in `conclusion`, and process logs stay behind `log_ref`."
+-- SKILL[ref]: "Tests continue during implementation; routing never substitutes for independent review."
 def ImplementationExchange.conforming (e : ImplementationExchange) : Bool :=
   e.planAndConstraintsPassed && e.changedFileEvidenceInConclusion && e.testEvidenceInConclusion &&
     e.processLogsBehindLogRef

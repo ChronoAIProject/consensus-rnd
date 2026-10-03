@@ -26,6 +26,37 @@ inductive Force
   | advisory
   deriving DecidableEq, Repr
 
+inductive TriggerPath
+  | ordinaryOperation
+  | nonstandardDeliberate
+  | malicious
+  deriving DecidableEq, Repr
+
+structure TriggerRecord where
+  trigger : String
+  triggerActor : String
+  triggerPath : TriggerPath
+  mechanismFamily : String
+  recordedOccurrence : Option String
+  createdDuringRun : Bool
+  deriving DecidableEq, Repr
+
+-- SKILL[def]: "A blocking finding must also pass the structured trigger check"
+def occurrenceIsIndependent (recordedOccurrence : Option String) (createdDuringRun : Bool) : Bool :=
+  recordedOccurrence.isSome && !createdDuringRun
+
+-- SKILL[def]: "`recorded_occurrence` must have existed before this run"
+def triggerCheck (record : TriggerRecord) : Bool :=
+  match record.triggerPath with
+  | .ordinaryOperation => true
+  | .nonstandardDeliberate | .malicious =>
+      occurrenceIsIndependent record.recordedOccurrence record.createdDuringRun
+
+-- SKILL[thm]: "a fixture, reproduction, or state deliberately created by a seat, caller, or repair worker during this run is reachability evidence only"
+theorem run_fixture_is_not_occurrence (createdDuringRun : Bool) :
+    occurrenceIsIndependent none createdDuringRun = false := by
+  simp [occurrenceIsIndependent]
+
 -- SKILL[def]: "Advisory is the default; blocking is the exception, and the exception has exactly two conjuncts that the input itself must name"
 /-- `BlockingAuthority`: advisory is the default; blocking needs both named conjuncts. -/
 def force (i : Input) : Force :=
@@ -61,11 +92,12 @@ structure Finding where
   verdict : ReviewVerdict
   input : Input
   requiresTrustedMalice : Bool
+  trigger : TriggerRecord
   deriving DecidableEq, Repr
 
 -- SKILL[def]: "ask whether a finding would exist only if a role declared trusted by `harness.trust_boundary` deliberately acted maliciously; if so, the finding is ineligible"
 /-- `ThreatEligibility`. -/
-def eligible (f : Finding) : Bool := !f.requiresTrustedMalice
+def eligible (f : Finding) : Bool := !f.requiresTrustedMalice && triggerCheck f.trigger
 
 -- SKILL[def]: "A blocking finding that fails `ThreatEligibility` or `BlockingAuthority` is downgraded by the meta-judge to an advisory with its reason recorded, then the remaining verdicts are routed again."
 /-- `## Review Truth Table`: a blocking finding that fails either check is an advisory. -/
@@ -80,17 +112,28 @@ theorem downgrade_reject_iff (f : Finding) :
     downgrade f = .reject ↔
       f.verdict = .reject ∧ eligible f = true ∧ force f.input = .blocking := by
   cases f with
-  | mk v i m =>
-    cases v <;> cases m <;> cases hf : force i <;> simp [downgrade, eligible, hf]
+  | mk v i m tr =>
+    cases v <;> cases m <;> cases hf : force i <;> cases ht : triggerCheck tr <;>
+      simp [downgrade, eligible, hf, ht]
 
 theorem downgrade_approve_iff (f : Finding) : downgrade f = .approve ↔ f.verdict = .approve := by
   cases f with
-  | mk v i m => cases v <;> cases m <;> cases hf : force i <;> simp [downgrade, eligible, hf]
+  | mk v i m tr => cases v <;> cases m <;> cases hf : force i <;> cases ht : triggerCheck tr <;>
+      simp [downgrade, eligible, hf, ht]
 
 /-- Downgrade is idempotent: routing "again" after a downgrade changes nothing further. -/
 theorem downgrade_idempotent (f : Finding) :
     downgrade { f with verdict := downgrade f } = downgrade f := by
   cases f with
-  | mk v i m => cases v <;> cases m <;> cases hf : force i <;> simp [downgrade, eligible, hf]
+  | mk v i m tr => cases v <;> cases m <;> cases hf : force i <;> cases ht : triggerCheck tr <;>
+      simp [downgrade, eligible, hf, ht]
+
+theorem ordinary_reachable_finding_stays_blocking (f : Finding)
+    (hv : f.verdict = .reject) (hi : force f.input = .blocking)
+    (hm : f.requiresTrustedMalice = false)
+    (hp : f.trigger.triggerPath = .ordinaryOperation) :
+    downgrade f = .reject := by
+  rw [downgrade]
+  simp [hv, hi, eligible, hm, triggerCheck, hp]
 
 end Sshx

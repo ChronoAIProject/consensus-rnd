@@ -122,11 +122,6 @@ theorem fallback_keeps_seat_and_role (id : Nat) (c : Carrier) (f : Behavior.Flig
       (Behavior.reopenFlight id c f).target = f.target :=
   ⟨rfl, rfl, rfl⟩
 
--- SKILL[def]: "A `tests` review seat must be assigned to a carrier capable of executing repository verification commands in the `work_target`, which is the per-seat constraint that keeps `nyxid-oracle` out of that seat's feasible draws."
-def canRunRepositoryCommands : Carrier → Bool
-  | .codexCli | .isolatedTokenSubagent => true
-  | .nyxidOracle => false
-
 def testsSeatEligible (c : Carrier) : Bool := canRunRepositoryCommands c
 
 theorem oracle_cannot_hold_tests_seat : testsSeatEligible .nyxidOracle = false := rfl
@@ -140,15 +135,10 @@ def SeatAssignment.seats (a : SeatAssignment) : List Behavior.Role := a.map Prod
 
 def SeatAssignment.carriers (a : SeatAssignment) : List Carrier := a.map Prod.snd
 
-/-- The per-seat carrier constraint a draw must respect; only `tests` is restricted. -/
-def seatEligible : Behavior.Role → Carrier → Bool
-  | .tests, c => canRunRepositoryCommands c
-  | _, _ => true
-
 -- SKILL[def]: "Which named seat holds which carrier rotates: at each stage dispatch the caller draws one assignment uniformly at random from every assignment that satisfies that composition and this stage's per-seat carrier constraints, so a named role holds a carrier only for the stage dispatch it was drawn for."
 def drawFeasible (seats : List Behavior.Role) (a : SeatAssignment) : Prop :=
   a.seats = seats ∧ a.carriers.Perm (stageComposition seats.length) ∧
-    ∀ p ∈ a, seatEligible p.1 p.2 = true
+    ∀ p ∈ a, Behavior.seatEligible p.1 p.2 = true
 
 /-- Rotation permutes seats over a fixed composition: every feasible draw carries exactly the
 same carrier counts as the composition, so randomizing seats never trades heterogeneity away. -/
@@ -167,7 +157,7 @@ theorem oracle_never_drawn_for_tests {seats : List Behavior.Role} {a : SeatAssig
     (h : drawFeasible seats a) : (Behavior.Role.tests, Carrier.nyxidOracle) ∉ a := by
   intro hmem
   have := h.2.2 _ hmem
-  simp [seatEligible, canRunRepositoryCommands] at this
+  simp [Behavior.seatEligible, canRunRepositoryCommands] at this
 
 /-- The review stage's named seats. -/
 def reviewSeats : List Behavior.Role := [.architecture, .quality, .tests]

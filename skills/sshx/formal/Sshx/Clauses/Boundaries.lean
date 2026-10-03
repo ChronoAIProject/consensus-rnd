@@ -108,8 +108,10 @@ inductive BaselineFailure
   | wrongConvergence
   | contaminatedAdjudication
   | boundaryDrift
+  | forcedIntakeConfirmation
   deriving DecidableEq, Repr
 
+-- SKILL[def]: "- forced intake confirmation: routine harness or boundary details turned into a startup question instead of a recorded, source-backed engineering assumption."
 /-- The model object that guards each baseline class. -/
 def guardedBy : BaselineFailure → String
   | .fakeConsensus => "Sshx.caller_never_consensus, Sshx.fake_roster_rejected"
@@ -119,6 +121,7 @@ def guardedBy : BaselineFailure → String
   | .wrongConvergence => "Sshx.no_implement_without_worth, Sshx.Semantics.candidate_dominance_is_preorder"
   | .contaminatedAdjudication => "Sshx.same_round_peer_invisible, Sshx.Semantics.enlarging_closure_only_removes_admission"
   | .boundaryDrift => "Sshx.fallback_forbids, Sshx.Behavior.never_lifecycle"
+  | .forcedIntakeConfirmation => "Sshx.Behavior.guardWriteGoal"
 
 /-! ## Transcript template -/
 
@@ -144,7 +147,7 @@ def contractTestFile : String := "skills/sshx/tests/test_sshx_contract.py"
 -- SKILL[ref]: "Before adding or changing this skill, record the no-skill failure mode as source-owned contract or test evidence."
 abbrev noSkillFailureModes := BaselineFailure
 
--- SKILL[ref]: "When a new failure case appears, prefer widening or verifying the absorber that already covers its class to adding another case entry: when the same verified construction hypothesis applies, the register cannot be completed, and every entry added must be held true by every later change."
+-- SKILL[ref]: "When a new failure case appears, prefer widening or verifying the absorber that already covers its class to adding another case entry: when a verified finite construction hypothesis applies, its register cannot be completed, while an open or infinite domain still needs a class-coverage basis; every entry added must be held true by every later change."
 abbrev registerCannotBeCompleted := @Semantics.every_register_escaped
 
 /-- What may be tracked as published skill source. -/
