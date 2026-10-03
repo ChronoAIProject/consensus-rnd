@@ -21,23 +21,23 @@ inductive ContinuationEntry
 inductive Applicability
   | applies
   | inapplicable
-  | escalateToMaintainer
+  | withholdClaim
   deriving DecidableEq, Repr
 
--- SKILL[def]: "The termination gate is triggered only by a positive, boundary-owner-confirmed entry declaring such a mechanism."
-/-- The gate is triggered only by a positive, boundary-owner-confirmed entry; a silent or
+-- SKILL[def]: "The termination gate is triggered only by an existing positive authoritative entry declaring such a mechanism."
+-- SKILL[def]: "It applies only when an existing positive authoritative `harness.provided_capabilities` entry is present and the caller is about to assert that `GoalArtifact` is satisfied."
+-- SKILL[def]: "Ambiguous or unconfirmed authority withholds or escalates that claim under the existing table; it never creates a startup confirmation question."
+/-- The gate is triggered only by an existing positive authoritative entry; a silent or
 explicitly negative complete harness makes the gate inapplicable without asserting the
-mechanism is absent; anything else is the harness rule: stop and escalate. -/
-def applicability (harnessComplete : Bool) (e : ContinuationEntry) : Applicability :=
-  if !harnessComplete then .escalateToMaintainer
-  else match e with
-    | .present => .applies
-    | .absent | .silent => .inapplicable
-    | .ambiguous | .unconfirmed => .escalateToMaintainer
+mechanism is absent. Ambiguous or unconfirmed authority is handled at claim evaluation. -/
+def applicability : ContinuationEntry → Applicability
+  | .present => .applies
+  | .absent | .silent => .inapplicable
+  | .ambiguous | .unconfirmed => .withholdClaim
 
-theorem applies_iff (h : Bool) (e : ContinuationEntry) :
-    applicability h e = .applies ↔ h = true ∧ e = .present := by
-  cases h <;> cases e <;> simp [applicability]
+theorem applies_iff (e : ContinuationEntry) :
+    applicability e = .applies ↔ e = .present := by
+  cases e <;> simp [applicability]
 
 /-! ## Binding (`## Termination Gate`) -/
 

@@ -102,10 +102,10 @@ theorem safe_step {s : ProtocolState} {a : Action} (hs : Safe s) (ha : allowed s
   obtain ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩ := hs
   cases a with
   | inspectReadOnly => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
-  | writeGoal g =>
+  | writeGoal g e =>
     refine ⟨h1, ?_, h4, h5, h6, h7, h8, h9⟩
     intro _; simp [step]
-  | appendRevision r =>
+  | appendRevision r e =>
     refine ⟨h1, ?_, h4, h5, h6, h7, h8, h9⟩
     intro hm
     have := h2 hm
@@ -144,7 +144,7 @@ theorem safe_step {s : ProtocolState} {a : Action} (hs : Safe s) (ha : allowed s
       rcases hf with hf | hf
       · exact h6 f hf
       · rw [hf]; simp [newFlight]
-  | launchViaRunner id =>
+  | launchViaRunner id | launchDelegated id =>
     have hu := refs_attempt_updateFlight (s := s) (id := id)
       (g := fun f => { f with launched := true })
       (fun x _ hr => by simpa using h5 x ‹_› (by simpa using hr))
@@ -209,14 +209,15 @@ theorem safe_step {s : ProtocolState} {a : Action} (hs : Safe s) (ha : allowed s
     · rw [hi]; exact ha
     · exact h7 i hi
   | recordPassBudget units => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
-  | pass t => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
+  | beginImplementation p => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
+  | recordImplementation id completed checks => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
+  | pass t e p => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
   | advanceStage => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
-  | declareGate a => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
-  | evaluateTermination source roster =>
+  | evaluateTermination source evidence =>
     refine ⟨h1, h2, h4, h5, h6, h7, h8, ?_⟩
     intro e he
     simp only [step, Option.some.injEq] at he
-    exact ⟨source, roster, he.symm⟩
+    exact ⟨source, evidence.roster, he.symm⟩
   | claimSatisfied => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
   | lifecycle op => exact ha.elim
   | oracleReference url isPublic pinned => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
@@ -281,18 +282,19 @@ theorem termination_exit_from_table {s : ProtocolState} (h : Reachable s) (e : T
 
 -- SKILL[inv]: "The gate permits only that `GoalArtifact`-scoped claim; it does not certify any broader host goal condition."
 theorem claim_only_under_permitted_gate (s : ProtocolState) (ha : allowed s .claimSatisfied) :
-    s.gate = .applies → s.terminationExit = some .claimPermitted :=
-  ha.2.2
+    s.gate = .applies → s.terminationExit = some .claimPermitted ∧
+      s.terminationAuthority = some s.continuationAuthority :=
+  ha.2.2.1
 
 -- SKILL[inv]: "Because `pass_budget` is a strictly decreasing natural number, the run terminates: reaching zero reports every unresolved blocker honestly and is never evidence of method stop or goal completion."
 theorem budget_never_increases (s : ProtocolState) (a : Action) (ha : allowed s a) (b b' : Nat)
     (hb : s.passBudget = some b) (hb' : (step s a).passBudget = some b') : b' ≤ b := by
   cases a
   case recordPassBudget units => obtain ⟨-, hnone⟩ := ha; simp [hnone] at hb
-  case pass t =>
+  case pass t e p =>
     simp only [step, hb, Option.bind_some] at hb'
     exact Sshx.step_le b t b' hb'
-  case evaluateTermination source roster =>
+  case evaluateTermination source evidence =>
     simp only [step, hb, Option.bind_some] at hb'
     exact Sshx.step_le b _ b' hb'
   case fallbackFlight id carrier =>
@@ -321,5 +323,237 @@ theorem stage_never_regresses (s : ProtocolState) (a : Action) :
     simp only [step]
     split <;> simp
   all_goals simp [step, updateFlight]
+
+/-- Flight completion alone cannot open initial formal review. -/
+theorem initial_advance_needs_whole_candidate (s : ProtocolState)
+    (hs : s.stage = .implementation) (ha : allowed s .advanceStage) :
+    s.reviewReady = true := ha.2.2.2.1 hs
+
+/-- Both normal and included repair review consume the same readiness projection. -/
+-- SKILL[inv]: "Complete the batch before its one mandatory rerun review triplet; a chunk boundary never starts formal review."
+theorem review_dispatch_needs_whole_candidate (s : ProtocolState) (role : Role)
+    (carrier : Carrier) (target : String) (retries : Nat)
+    (ha : allowed s (.openFlight .review role carrier target retries)) :
+    s.reviewReady = true := ha.2.2.2.2.1
+
+/-- Each new assignment consumes one predeclared local slot; retries/fallback use their own bounds. -/
+-- SKILL[inv]: "The local allowance is separate from `pass_budget` and carrier retry/fallback bounds."
+theorem implementation_consumes_local_slot (s : ProtocolState) (carrier : Carrier)
+    (target : String) (retries : Nat) (b : ImplementationBatch) (hb : s.batch = some b) :
+    (step s (.openFlight .implementation .implementation carrier target retries)).batch =
+      some { b with flightsLeft := b.flightsLeft - 1, checksPassed := false } := by
+  simp [step, hb]
+
+/-- The included review never debits the pass budget again. -/
+theorem included_review_preserves_budget (s : ProtocolState) (role : Role)
+    (carrier : Carrier) (target : String) (retries : Nat) :
+    (step s (.openFlight .review role carrier target retries)).passBudget = s.passBudget := rfl
+
+/-- Unsupported member enumeration cannot enter the actual paid repair dispatch. -/
+theorem unsupported_class_cannot_start_batch (s : ProtocolState) (e : Reasoning.FamilyEvidence)
+    (p : Option ImplementationPlan) (h : e.coverageBasis = .unsupportedMemberEnumeration)
+    (ha : Reasoning.classGateActive e = true) :
+    ¬ allowed s (.pass .repairWithRerunReview e p) := by
+  simp [allowed, guardPass, Reasoning.unsupported_class_never_dispatches e h ha]
+
+/-- After intake, only an authorized, source-supported append-only correction may
+change the authority consumed by claims. This covers every source update, not one pair
+of applicability values. -/
+theorem authority_change_requires_correction (s : ProtocolState) (a : Action)
+    (hg : s.goalWritten) (ha : allowed s a)
+    (hc : (step s a).continuationAuthority ≠ s.continuationAuthority) :
+    ∃ r e source, a = .appendRevision r e ∧ e.valid r ∧ e.continuation = some source := by
+  cases a
+  case writeGoal g e =>
+    have hn : s.goal = none := ha.2.1
+    simp [ProtocolState.goalWritten, hn] at hg
+  case appendRevision r e =>
+    cases he : e.continuation with
+    | none => simp [step, ProtocolState.correctedAuthority, he] at hc
+    | some source => exact ⟨r, e, source, rfl, ha.2, he⟩
+  case fallbackFlight id carrier =>
+    simp only [step] at hc
+    split at hc <;> exact (hc rfl).elim
+  all_goals exact (hc rfl).elim
+
+/-- The source position is derived from the revision ledger, never selected by evidence. -/
+theorem authority_revision_in_ledger {s : ProtocolState} (h : Reachable s) :
+    ∀ g, s.goal = some g → s.continuationAuthority.revision ≤ g.revisions.length := by
+  induction h with
+  | initial => simp [ProtocolState.initial]
+  | @move s a _ ha ih =>
+    clear ha
+    cases a
+    case writeGoal g e => simp [step]
+    case appendRevision r e =>
+      intro g' hg'
+      cases hg : s.goal with
+      | none => simp [step, hg] at hg'
+      | some g =>
+        have heq : g.correct r = g' := by simpa [step, hg] using hg'
+        subst g'
+        have hi := ih g hg
+        cases he : e.continuation with
+        | none =>
+          simpa [step, ProtocolState.correctedAuthority, he, hg, GoalArtifact.correct]
+            using Nat.le_succ_of_le hi
+        | some source =>
+          simp [step, ProtocolState.correctedAuthority, he, hg, GoalArtifact.correct]
+    case fallbackFlight id carrier =>
+      simp only [step]
+      split <;> exact ih
+    all_goals exact ih
+
+/-- Every relevant correction advances the source position, including identical payloads. -/
+theorem correction_advances_authority {s : ProtocolState} (h : Reachable s)
+    (r : Revision) (e : RevisionEvidence) (source : ContinuationSource)
+    (ha : allowed s (.appendRevision r e)) (he : e.continuation = some source) :
+    s.continuationAuthority.revision <
+      (step s (.appendRevision r e)).continuationAuthority.revision := by
+  cases hg : s.goal with
+  | none => simp [allowed, guardAppendRevision, ProtocolState.goalWritten, hg] at ha
+  | some g =>
+    have hi := authority_revision_in_ledger h g hg
+    simp [step, ProtocolState.correctedAuthority, he, hg]
+    omega
+
+/-- The current gate always projects the current source, including all corrected entries. -/
+theorem correction_projects_current_source (s : ProtocolState) (r : Revision)
+    (e : RevisionEvidence) (source : ContinuationSource) (he : e.continuation = some source) :
+    (step s (.appendRevision r e)).gate = applicability source.entry := by
+  simp [step, ProtocolState.gate, ProtocolState.correctedAuthority, he]
+
+/-- Appending a correction keeps the recorded settlement frozen. Its authority snapshot
+is checked by the later claim guard, rather than rewriting the old verdict. -/
+theorem correction_keeps_settlement (s : ProtocolState) (r : Revision) (e : RevisionEvidence) :
+    (step s (.appendRevision r e)).terminationExit = s.terminationExit ∧
+      (step s (.appendRevision r e)).terminationAuthority = s.terminationAuthority := ⟨rfl, rfl⟩
+
+theorem correction_keeps_revision_prefix (s : ProtocolState) (g : GoalArtifact)
+    (hg : s.goal = some g) (r : Revision) (e : RevisionEvidence) :
+    ∃ g', (step s (.appendRevision r e)).goal = some g' ∧ g.revisions <+: g'.revisions := by
+  exact ⟨g.correct r, by simp [step, hg], g.correct_prefix r⟩
+
+/-- A changed authority cannot reuse a prior affirmative settlement, even if both
+sources map to `applies`. Unrelated notes retain their authority and evidence. -/
+theorem stale_authority_cannot_claim (s : ProtocolState) (hg : s.gate = .applies)
+    (hs : s.terminationAuthority ≠ some s.continuationAuthority) :
+    ¬ allowed s .claimSatisfied := by
+  intro ha
+  exact hs ((claim_only_under_permitted_gate s ha hg).2)
+
+/-- Admission consumes the incoming evidence association; the effect retains it and
+uses the unchanged truth table. No evaluation-time source stamp supplies provenance. -/
+theorem evaluation_preserves_evidence_source (s : ProtocolState) (source : ClaimSource)
+    (e : TerminationEvidence) (ha : allowed s (.evaluateTermination source e)) :
+    e.authority = s.continuationAuthority ∧
+      (step s (.evaluateTermination source e)).terminationAuthority = some e.authority ∧
+      (step s (.evaluateTermination source e)).terminationExit =
+        some (terminationRoute source e.roster) := ⟨ha.1, rfl, rfl⟩
+
+/-- This rejection is independent of verdict values, presentation and remaining budget. -/
+theorem stale_evidence_cannot_evaluate (s : ProtocolState) (source : ClaimSource)
+    (e : TerminationEvidence) (hs : e.authority ≠ s.continuationAuthority) :
+    ¬ allowed s (.evaluateTermination source e) := fun ha => hs ha.1
+
+/-- Every relevant correction rejects evidence for the earlier authority, including
+an identical source payload or restoration. The ledger, not payload inequality, proves it. -/
+theorem correction_rejects_prior_evidence {s : ProtocolState} (h : Reachable s)
+    (r : Revision) (re : RevisionEvidence) (correctedSource : ContinuationSource)
+    (ha : allowed s (.appendRevision r re)) (he : re.continuation = some correctedSource)
+    (source : ClaimSource) (e : TerminationEvidence) (hs : e.authority = s.continuationAuthority) :
+    ¬ allowed (step s (.appendRevision r re)) (.evaluateTermination source e) := by
+  apply stale_evidence_cannot_evaluate
+  intro equal
+  have advance := correction_advances_authority h r re correctedSource ha he
+  have sameRevision := congrArg ContinuationAuthority.revision (hs.symm.trans equal)
+  omega
+
+/-- An unrelated revision keeps the same admission rule, so usable evidence is not
+invalidated merely because the overall revision ledger grew. -/
+theorem unrelated_revision_preserves_evaluation (s : ProtocolState) (r : Revision)
+    (re : RevisionEvidence) (hn : re.continuation = none)
+    (source : ClaimSource) (e : TerminationEvidence) :
+    allowed (step s (.appendRevision r re)) (.evaluateTermination source e) ↔
+      allowed s (.evaluateTermination source e) := by
+  simp [allowed, guardEvaluateTermination, step, ProtocolState.correctedAuthority, hn,
+    ProtocolState.gate, ProtocolState.reviewComplete, ProtocolState.reviewReady,
+    ProtocolState.batchSettled, ProtocolState.batchFlights]
+
+/-- A recorded settlement has an actual admitted evaluation with the same supplied
+evidence/source association. Later corrections preserve that historical witness. -/
+theorem settlement_has_evidence_source {s : ProtocolState} (h : Reachable s) :
+    ∀ exit, s.terminationExit = some exit →
+      ∃ evaluated source e, Reachable evaluated ∧
+        allowed evaluated (.evaluateTermination source e) ∧
+        e.authority = evaluated.continuationAuthority ∧
+        s.terminationAuthority = some e.authority ∧ exit = terminationRoute source e.roster := by
+  induction h with
+  | initial => simp [ProtocolState.initial]
+  | @move s a hr ha ih =>
+    cases a
+    case evaluateTermination source e =>
+      intro exit he
+      have hexit : exit = terminationRoute source e.roster := by
+        simpa [step] using he.symm
+      exact ⟨s, source, e, hr, ha, ha.1, rfl, hexit⟩
+    case fallbackFlight id carrier =>
+      simp only [step]
+      split <;> exact ih
+    all_goals exact ih
+
+/-- A reachable affirmative claim under an applicable gate has evidence that was
+admitted for its own source and still corresponds to the current authority. -/
+theorem claim_has_current_evidence {s : ProtocolState} (h : Reachable s)
+    (ha : allowed s .claimSatisfied) (hg : s.gate = .applies) :
+    ∃ evaluated source e, Reachable evaluated ∧
+      allowed evaluated (.evaluateTermination source e) ∧
+      e.authority = evaluated.continuationAuthority ∧
+      e.authority = s.continuationAuthority ∧
+      terminationRoute source e.roster = .claimPermitted := by
+  obtain ⟨hexit, hcurrent⟩ := claim_only_under_permitted_gate s ha hg
+  obtain ⟨evaluated, source, e, hr, he, hs, hstored, hroute⟩ :=
+    settlement_has_evidence_source h .claimPermitted hexit
+  exact ⟨evaluated, source, e, hr, he, hs,
+    Option.some.inj (hstored.symm.trans hcurrent), hroute.symm⟩
+
+/-- The actual fallback effect updates the assignment's history, including when the caller
+reuses an earlier abstained id. New implementation assignments get their own original id. -/
+theorem fallback_records_tried (s : ProtocolState) (id : Nat) (c : Carrier) (f : FlightRec)
+    (hf : s.flight id = some f) :
+    (step s (.fallbackFlight id c)).triedCarriers f.assignment =
+      (s.triedCarriers f.assignment).insert c := by
+  cases c <;>
+    simp [step, hf, ProtocolState.triedCarriers, reopenFlight, CarrierSet.insert, List.any_append]
+
+/-- A strict bound on the actual fallback consumer, not just the isolated selector. -/
+theorem fallback_decreases_remaining (s : ProtocolState) (id : Nat) (c : Carrier)
+    (ha : allowed s (.fallbackFlight id c)) :
+    ∃ f, s.flight id = some f ∧
+      ((step s (.fallbackFlight id c)).triedCarriers f.assignment).remaining <
+        (s.triedCarriers f.assignment).remaining := by
+  obtain ⟨f, hf, _, _, hn⟩ := ha
+  refine ⟨f, hf, ?_⟩
+  rw [fallback_records_tried s id c f hf]
+  exact remaining_insert_lt _ (CarrierSet.mem_univ _) c (Carrier.mem_univ c)
+    (nextCarrier_untried _ (CarrierSet.mem_univ _) _ (CarrierSet.mem_univ _)
+      c (Carrier.mem_univ c) hn)
+
+/-- Review dispatch and fallback both apply the existing executable-carrier restriction. -/
+theorem tests_dispatch_excludes_oracle (s : ProtocolState) (target : String) (retries : Nat) :
+    ¬ allowed s (.openFlight .review .tests .nyxidOracle target retries) := by
+  simp [allowed, guardOpenFlight, guardReviewFlight, seatEligible, canRunRepositoryCommands]
+
+theorem tests_fallback_excludes_oracle (s : ProtocolState) (id : Nat) (f : FlightRec)
+    (hf : s.flight id = some f) (hs : f.stage = .review) (hr : f.role = .tests) :
+    ¬ allowed s (.fallbackFlight id .nyxidOracle) := by
+  intro ha
+  obtain ⟨g, hg, _, _, hn⟩ := ha
+  have heq : g = f := Option.some.inj (hg.symm.trans hf)
+  subst g
+  have eligible := nextCarrier_eligible _ (CarrierSet.mem_univ _) _ (CarrierSet.mem_univ _)
+    .nyxidOracle (Carrier.mem_univ _) hn
+  simp [ProtocolState.eligibleCarriers, CarrierSet.get, hs, hr, seatEligible,
+    canRunRepositoryCommands] at eligible
 
 end Sshx.Behavior

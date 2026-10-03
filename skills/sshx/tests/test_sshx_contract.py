@@ -36,8 +36,64 @@ unpinned. The stored digest is a change detector, not a semantic judge or self-a
 legitimate edit requires both a synchronized digest update and Review Triplet judgment.
 
 ``pass_budget`` is the one counter the contract keeps; ``pass_budget_after`` and
-``resolve_termination_claim`` model its decrement. No repair-rank or repair-sequence model exists
-because the contract keeps none; English semantics stay with the Review Triplet absorber.
+``resolve_termination_claim`` model its decrement. The Lean behavior model additionally projects finite implementation scope and its local flight
+allowance from existing conclusions; this is not another global pass counter. English semantics
+stay with the Review Triplet absorber.
+Continuation baseline (recorded before batching edits): without whole-plan routing,
+a completed first flight of a two-flight plan can enter review with approved work
+remaining; repair passes have no operational route for their included rerun at zero
+remaining units. Regression scenarios must exercise actual Lean allowed/step routes,
+including partial, failed, exhausted and last-unit batches, not a second Python model.
+The earlier worker reported pre-edit diagnostic evidence for forced startup questions,
+detached intake/trigger/class gates and unconditional diagonal claims, but missed the
+source-owned baseline timing requirement. This records that limitation, not a retroactive
+claim that those earlier edits had a source-owned baseline.
+
+Repair R1-R4 baseline (2026-10-03, recorded before this repair's model edits):
+without the corrections, writeGoal with silent/absent/ambiguous continuation followed
+by declareGate present is allowed and changes gate to applies (guardDeclareGate reads
+only goalWritten). An abstained flight can fallback to the same replacement carrier
+repeatedly via its original id: guardFallback has no assignment-wide tried set.
+The recovered scenario directly steps fallback/collect/recordImplementation without
+launch or host notification, and its collect guard is false. A review-ready tests
+seat accepts capability-checked nyxidOracle because guardOpenFlight has no per-seat
+carrier constraint. These are current model/consumer discrepancies, not hostile
+inputs. Repair evidence must use the production guards and effects and retain finite
+assignment separation, autonomous intake, full-batch readiness and the paid final review.
+The pre-repair Lean probe compiled these admissions and the rejected collection
+against the unchanged model (lake env lean .lake/RepairBaseline.lean, exit 0).
+This baseline belongs only to the admitted repair; the earlier timing limitation above
+remains unchanged.
+
+T-R1-CORRECTION baseline (2026-10-03, before this correction's model edits):
+the expressly surfaced tests-seat-held-out.lean probe compiled with the existing Lake
+cache (lake env lean, exit 0). Its guarded implementation/review route accepts an
+explicit boundary-owner continuation correction, but appendRevision changes only the
+revision ledger: gate stays inapplicable, terminationExit stays none, and claimSatisfied
+is allowed. gate_preserved_after_intake proves that even legitimate corrections cannot
+update this projection. Without the repair, later claims consume stale authority.
+This is an ordinary authorized source update under C5/S3/S5, not a request to infer
+English authority or defend against a malicious owner. Regression evidence must cover
+the source-update class, unsupported/unowned updates, and claims using current evidence
+while retaining earlier revision/settlement facts. This narrow pre-edit reproduction
+does not repair the historical baseline timing miss or claim pass-cap compliance.
+
+A-F2-ROSTER-SOURCE baseline (2026-10-03, before this evidence-source repair):
+an outside-source Lean probe compiled against the unchanged model with the existing
+Lake cache (stale-roster-baseline.lean, lake env lean, exit 0). From an approved-plan
+fixture it proves every implementation/review guard, obtains an all-satisfied A1
+settlement, and appends an authorized positive-to-positive scope correction to A2.
+Direct claim is refused, but resubmitting the genuine A1 roster to evaluateTermination
+is allowed and restamps terminationAuthority as A2; claimSatisfied is then allowed
+with the final budget unit consumed. The incoming interface carries no evaluated-source
+association. Regression evidence must preserve that association from supplied evidence
+through evaluation to claim: old A1 evidence must be refused while fresh A2 evidence
+with identical verdicts is admitted. Relevant repeated/restored revisions and unrelated
+notes must follow the same rule. Semantic truth of supplied evidence remains a premise.
+This baseline does not undo the historical timing advisory. The session's immutable
+pass_budget=3, remaining=0 and second explicitly recorded continuation exception remain;
+no budget reset, refund, automatic extension or compliant-cap claim is made.
+
 The behavior helpers below cover fixed truth tables and other load-bearing mechanical contracts,
 but do not infer English semantics.
 Files outside ``skills/sshx/SKILL.md`` are outside this positional boundary and remain governed
@@ -318,7 +374,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "2896a31e2ddcbf25d48562f880ec60ccb9c43927950fe4a8737b451e9a35b436"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "9b4e3ed87b774ee2b13041d7a07103cea4e58b445a5b7c5a8bae9c7ae202f0b8"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -602,13 +658,13 @@ def resolve_termination_gate_applicability(
     capability_source_confirmed: bool,
     continuation_entry: str | None,
 ) -> str:
-    if not harness_complete or not capability_source_confirmed:
-        return "stop and escalate to the maintainer"
-    if continuation_entry == "present":
+    if continuation_entry == "present" and harness_complete and capability_source_confirmed:
         return "termination gate applies"
     if continuation_entry in {None, "absent"}:
         return "termination gate inapplicable"
-    return "stop and escalate to the maintainer"
+    if continuation_entry in {"ambiguous", "unconfirmed"} or not harness_complete or not capability_source_confirmed:
+        return "termination claim withheld; unresolved authority"
+    return "termination gate inapplicable"
 
 
 def blocking_force(
@@ -634,6 +690,7 @@ def blocking_finding_force(
     trigger_path: str,
     recorded_occurrence: str | None,
     fields: frozenset[str] | None = None,
+    occurrence_pre_run: bool = True,
 ) -> str:
     required_fields = frozenset(
         {"trigger", "trigger_actor", "trigger_path", "mechanism_family", "recorded_occurrence"}
@@ -644,7 +701,7 @@ def blocking_finding_force(
         raise ContractFailure("invalid trigger path")
     if basis_shown_false or not (names_goal_term and names_work_evidence):
         return "advisory"
-    if trigger_path != "ordinary-operation" and recorded_occurrence is None:
+    if trigger_path != "ordinary-operation" and (recorded_occurrence is None or not occurrence_pre_run):
         return "advisory"
     return "blocking"
 
@@ -916,11 +973,11 @@ class SshxContractTests(unittest.TestCase):
         )
         self.assertIn("Do not generalize the convergence pass beyond that goal gap", text)
         self.assertIn(
-            "ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap",
+            "Delegate the smallest changes for what still differs from `GoalArtifact`",
             text,
         )
         self.assertIn(
-            "by delegating it to a worker using the stage's default carrier exactly as `## Implementation Worker` requires",
+            "using `## Implementation Worker` decomposition, allowance and evidence rules",
             text,
         )
         self.assertIn("stay orchestration-only for the repair", text)
@@ -943,7 +1000,9 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("append-only list", goal_section)
         self.assertIn("missing any one of these sub-items is invalid and fails closed", goal_section)
         self.assertIn("before any worker dispatch", goal_section)
-        self.assertIn("stop and escalate to the maintainer", goal_section)
+        self.assertIn("must not ask a startup boundary or harness confirmation question", goal_section)
+        self.assertIn("routine missing detail is resolved with the smallest task-relevant assumption", goal_section)
+        self.assertNotIn("must ask the boundary owner", goal_section)
         self.assertIn("non-adversarial, not infallible", goal_section)
         self.assertEqual(text.count("`harness` is a prompt-level record containing exactly these three sub-items"), 1)
         self.assertEqual(text.count("`revisions` is an append-only list whose each item contains exactly these three sub-items"), 1)
@@ -992,15 +1051,17 @@ class SshxContractTests(unittest.TestCase):
             "declare a host-provided goal-driven continuation mechanism only in `harness.provided_capabilities`",
             goal_section,
         )
-        self.assertIn("must not discover or infer whether one exists", goal_section)
+        self.assertIn("must not discover or infer an external mechanism", goal_section)
+        self.assertIn("does not trigger a confirmation question", goal_section)
         for trigger_rule in [
-            "triggered only by a positive, boundary-owner-confirmed entry",
-            "whether silent or explicitly negative, the gate is inapplicable",
+            "triggered only by an existing positive authoritative entry",
+            "When a complete `provided_capabilities` value contains no positive entry",
             "without asserting that the host mechanism is absent",
-            "purported continuation entry that is ambiguous or unconfirmed",
+            "Ambiguous or unconfirmed claim-specific authority constrains an affirmative claim",
         ]:
             self.assertIn(trigger_rule, goal_section)
-        self.assertIn("boundary-owner-confirmed `harness.provided_capabilities`", termination)
+        self.assertIn("existing positive authoritative `harness.provided_capabilities` entry", termination)
+        self.assertIn("never creates a startup confirmation question", termination)
         self.assertIn("permits only that `GoalArtifact`-scoped claim", termination)
         self.assertIn("does not certify any broader host goal condition", termination)
         for claim_surface in [
@@ -1042,9 +1103,9 @@ class SshxContractTests(unittest.TestCase):
             "affirmative-presence": (True, True, "present", "termination gate applies"),
             "explicit-absence": (True, True, "absent", "termination gate inapplicable"),
             "silence": (True, True, None, "termination gate inapplicable"),
-            "ambiguous-entry": (True, True, "ambiguous", "stop and escalate to the maintainer"),
-            "unconfirmed-source": (True, False, "present", "stop and escalate to the maintainer"),
-            "incomplete-harness": (False, True, "present", "stop and escalate to the maintainer"),
+            "ambiguous-entry": (True, True, "ambiguous", "termination claim withheld; unresolved authority"),
+            "unconfirmed-source": (True, False, "present", "termination claim withheld; unresolved authority"),
+            "incomplete-harness": (False, True, "present", "termination claim withheld; unresolved authority"),
         }
         for name, (harness_complete, source_confirmed, entry, expected) in cases.items():
             with self.subTest(case=name):
@@ -1395,7 +1456,7 @@ class SshxContractTests(unittest.TestCase):
             delegation,
         )
         self.assertIn(
-            "Stop when `pass_budget` owned below is exhausted and report remaining blockers honestly",
+            "At zero units, start no new pass and report remaining blockers honestly",
             fix_or_done,
         )
         self.assertIn("reaching zero reports every unresolved blocker honestly", fix_or_done)
@@ -1627,16 +1688,43 @@ class SshxContractTests(unittest.TestCase):
         review = section(text, "## Review Triplet", "## Review Truth Table")
         review_truth = section(text, "## Review Truth Table", "## Fix Or Done")
         fix_or_done = section(text, "## Fix Or Done", "## Termination Gate")
-        self.assertIn("who consumes outputs produced by the execution environment", goal)
-        self.assertIn("whether trusted operators' local state (configuration, indexes, and filesystem) is inside the review scope", goal)
+        self.assertIn("resolves these sub-items from the user's current input, repository rules", goal)
+        self.assertIn("records those sources and labels any minimal engineering assumptions explicitly", goal)
+        self.assertIn("must not ask a startup boundary or harness confirmation question", goal)
         for field in ["trigger", "trigger_actor", "trigger_path", "mechanism_family", "recorded_occurrence"]:
             self.assertIn(f"`{field}`", envelope)
-            self.assertIn(f"`{field}`", review_truth)
+        self.assertIn("fields required by `## Result Envelope`", review_truth)
         self.assertIn("Every review focus in a dispatch brief must name the `GoalArtifact` clause", review)
         self.assertIn("An unbounded request to find any mechanism that could make a result fail is invalid", review)
         self.assertIn("after two consecutive passes whose blocking findings name the same `GoalArtifact` term and `mechanism_family`", fix_or_done)
-        self.assertIn("stop and escalate to the boundary owner", fix_or_done)
+        self.assertIn("member-by-member enumeration leaves the property unsupported", fix_or_done)
+        self.assertIn("verified coverage basis under `## Reasoning Discipline`", fix_or_done)
+        reasoning = section(text, "## Reasoning Discipline", "## Thinking Panel")
+        for basis in ("uniform invariant", "verified complete finite treatment", "already-authorized enforced boundary"):
+            self.assertIn(basis, reasoning)
+        self.assertIn("Unknown family or coverage routes bounded investigation under the intake scope", fix_or_done)
         self.assertIn("list each defense or validation element added since the previous pass", fix_or_done)
+
+    def test_sshx_intake_and_class_gate_use_existing_owner_paths(self) -> None:
+        text = read(SKILL)
+        formal = SKILL.parent / "formal"
+        guards = read(formal / "Sshx" / "Reasoning" / "Guards.lean")
+        repair = read(formal / "Sshx" / "Reasoning" / "Repair.lean")
+        self.assertIn("must not ask a startup boundary or harness confirmation question", text)
+        self.assertNotIn("IntakeScopeAnswers", guards)
+        self.assertNotIn("intakeScopeComplete", guards)
+        self.assertNotIn("repeatedFamilyRoute", guards)
+        for owner_path in [
+            "def familyRoute",
+            "unsupported_class_never_dispatches",
+            "ClassCoverageBasis",
+        ]:
+            self.assertIn(owner_path, repair)
+        model = read(formal / "Sshx" / "Behavior" / "Model.lean")
+        self.assertIn("def guardPass", model)
+        self.assertNotIn("def repairDispatch", repair)
+        self.assertIn("member-by-member enumeration leaves the property unsupported", text)
+        self.assertIn("Do not pause for routine confirmation or ask the user to choose a method", text)
 
     def test_sshx_planning_search_reuses_existing_work_and_plans_only_delta(self) -> None:
         text = read(SKILL)
@@ -1752,17 +1840,15 @@ class SshxContractTests(unittest.TestCase):
                     fragment in reasoning
                     for fragment in [
                         "That list is illustrative, not a closure, and enumeration is not itself an absorber",
-                        "every finite listing of cases is escaped by a fixed-point-free self-application",
-                        "an adversarial seat's charter is such a constructor",
-                        "no extension of this or any register can complete it",
-                        "the defense against an unlisted case is the two-conjunct test together with the declared recovery path, never another entry",
+                        "A Lawvere-style diagonal escapes a register only under verified theorem hypotheses",
+                        "An open or infinite label alone proves no impossibility, and enumeration alone proves no completeness",
+                        "A uniform invariant, a verified complete finite treatment, or an already-authorized enforced boundary may establish class coverage",
                         "Extending an enumeration over an absorbed class is an ugly defect under the aesthetic verdict, not diligence",
-                        "Without that construction hypothesis, a separately proven finite-domain completeness result remains admissible",
                     ]
                 ),
                 "no finite listing of cases is escape-free" not in reasoning,
                 "the longer the list grows the likelier" not in reasoning,
-                "when the same verified construction hypothesis applies, the register cannot be completed" in verification,
+                "when a verified finite construction hypothesis applies, its register cannot be completed, while an open or infinite domain still needs a class-coverage basis" in verification,
                 finite_listing_closure_force(
                     fixed_point_free_constructor_verified=True,
                     finite_domain_completeness_proven=False,
@@ -1813,7 +1899,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertEqual(text.count(anchor), 1)
         self.assertIn(anchor, fix_or_done)
         self.assertNotIn("`GoalArtifact` order", fix_or_done)
-        self.assertIn("Stop when `pass_budget` owned below is exhausted", fix_or_done)
+        self.assertIn("At zero units, start no new pass", fix_or_done)
 
     def test_sshx_depth_discipline_contract(self) -> None:
         text = read(SKILL)
@@ -1945,15 +2031,13 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(anchor, design)
         for anchor in [
             "Every blocking finding must name both `BlockingAuthority` conjuncts under `## Reasoning Discipline`",
-            "the `GoalArtifact` term the work as built fails and the evidence in the work that shows it",
             "fails `ThreatEligibility` or `BlockingAuthority`",
-            "A `BlockingAuthority` downgrade is objective",
-            "it is recorded as `BlockingAuthority` requires and never assesses persuasiveness; disputed grounding stays blocking",
+            "Downgrade records and disputed grounding follow `BlockingAuthority`",
             "only for threat-model ineligibility or an advisory input",
             "never because a finding is inconvenient",
             "never sets aside a reachable defect",
-            "missing, ambiguous, or stale harness declaration",
-            "never a downgrade shield",
+            "Harness gaps and claim authority follow `## Goal Contract`",
+            "without startup confirmation",
         ]:
             self.assertIn(anchor, review)
         self.assertIn(
@@ -2245,13 +2329,12 @@ class SshxContractTests(unittest.TestCase):
             all(
                 anchor in review_section
                 for anchor in [
-                    "missing, ambiguous, or stale harness declaration",
-                    "never a downgrade shield",
-                    "pause routing",
-                    "escalate to the maintainer",
+                    "Harness gaps and claim authority follow `## Goal Contract`",
+                    "claim authority follow `## Goal Contract`",
+                    "without startup confirmation",
                 ]
             ),
-            "missing unavailable-harness pause-and-escalate guard",
+            "missing autonomous intake authority guard",
         )
         self.assertIn("`meta_judge` implement-exit gate", design_section)
         pre_fix_gate_start = fix_section.index("Before each fix or repeated review pass")
@@ -2263,7 +2346,8 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("Before each fix or repeated review pass", pre_fix_gate)
         self.assertIn("After any explicit correction", correction_gate)
         self.assertIn("`ThreatEligibility`", review_section)
-        for contract_section in [design_section, pre_fix_gate, correction_gate]:
+        self.assertIn("repeat this section's direction gate", correction_gate)
+        for contract_section in [design_section, pre_fix_gate]:
             for action in ["`continue`", "`revise`", "`stop`", "`escalate`"]:
                 self.assertIn(action, contract_section)
             self.assertIn("responsible party", contract_section)
@@ -3333,7 +3417,7 @@ class SshxContractTests(unittest.TestCase):
             ownership,
             "Protocol policy, not a mathematical consequence",
             precommit,
-            "a `meta-layer convergence`, a `focused round`, a repair flight together with its mandatory rerun review triplet, a repeated review pass without a repair, or a termination-gate evaluation including one that exits `reject fake termination consensus`",
+            "a `meta-layer convergence`, a `focused round`, a finite repair batch together with its mandatory rerun review triplet, a repeated review pass without a repair, or a termination-gate evaluation including one that exits `reject fake termination consensus`",
             "consumes exactly one unit when it is dispatched",
             "immutable for this run: no result, repair, or correction may add, replenish, reset, or replace units, and a unit is never refunded",
             "Carrier retries and fallbacks are bounded by each flight's `retry_budget` and the finite eligible-untried-carrier set and consume no unit",

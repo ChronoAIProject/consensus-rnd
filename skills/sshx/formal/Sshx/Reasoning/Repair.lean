@@ -1,7 +1,7 @@
 import Mathlib.Tactic
 import Sshx.Budget
 import Sshx.Gate
-import Sshx.Behavior.Model
+import Sshx.Records
 import Sshx.Reasoning.Convergence
 
 /-!
@@ -45,19 +45,95 @@ theorem unimproved_passes_prove_nothing (passesWithoutImprovement : Nat) :
 
 def identicalPassIsProgress : Bool := false
 
-/-- One repair step as the contract shapes it. -/
-structure RepairStep where
-  askedWhatStillDiffers : Bool
-  smallestChange : Bool
-  delegatedToWorkerFlight : Bool
-  callerStayedOrchestrationOnly : Bool
-  rerunReviewTriplet : Bool
+/-- Coverage judgments in the existing conclusion; these are review evidence, not new
+runtime fields. A verified invariant or abstraction can cover an infinite domain. -/
+inductive ClassCoverageBasis
+  | uniformInvariant (verified : Bool)
+  | soundAbstraction (verified : Bool)
+  | completeFiniteTreatment (verified : Bool)
+  | authorizedBoundary (enforced authorized : Bool)
+  | unsupportedMemberEnumeration
+  | unknown
   deriving DecidableEq, Repr
 
--- SKILL[def]: "If review exits `fix`, ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap by delegating it to a worker using the stage's default carrier exactly as `## Implementation Worker` requires - open a new `SshxWorkerFlightRecord` for the same `work_target` and stay orchestration-only for the repair - then rerun the review triplet on the worker's returned `conclusion`."
-def RepairStep.conforming (r : RepairStep) : Bool :=
-  r.askedWhatStillDiffers && r.smallestChange && r.delegatedToWorkerFlight &&
-    r.callerStayedOrchestrationOnly && r.rerunReviewTriplet
+inductive FamilyRoute
+  | continue
+  | reviseOrInvestigate
+  | honestStop
+  | ownerDecision
+  deriving DecidableEq, Repr
+
+-- SKILL[def]: "A uniform invariant, a verified complete finite treatment, or an already-authorized enforced boundary may establish class coverage; otherwise the class gate routes bounded revise or investigation, and unresolved coverage is reported honestly."
+
+-- SKILL[def]: "Record the goal/property, authorized domain, family, coverage basis, action/owner and falsifiable validation in the existing conclusion."
+structure FamilyEvidence where
+  goalTerm : String
+  property : String
+  authorizedInputDomain : String
+  mechanismFamily : String
+  actionOwner : String
+  falsifiableValidation : String
+  sameGoalTerm : Bool
+  sameMechanismFamily : Bool
+  consecutivePasses : Nat
+  earlierUnsupportedEnumeration : Bool
+  coverageBasis : ClassCoverageBasis
+  noSupportedPath : Bool
+  ownerDecisionRequired : Bool
+  changesDomainOrCriterion : Bool
+  ownerAuthorized : Bool
+  revision : Option Revision
+  deriving DecidableEq, Repr
+
+-- SKILL[ref]: "Domain or criterion changes require the existing owner authorization and append-only revision."
+def ownerAuthorizedDomainChange (e : FamilyEvidence) : Bool :=
+  !e.changesDomainOrCriterion || (e.ownerAuthorized && e.revision.isSome)
+
+def FamilyEvidence.recordComplete (e : FamilyEvidence) : Bool :=
+  e.goalTerm != "" && e.property != "" && e.authorizedInputDomain != "" &&
+    e.mechanismFamily != "" && e.actionOwner != "" && e.falsifiableValidation != ""
+
+-- SKILL[def]: "Before dispatching a repair after two consecutive passes whose blocking findings name the same `GoalArtifact` term and `mechanism_family`, or after earlier recorded evidence shows that member-by-member enumeration leaves the property unsupported, the existing gate makes one class-level decision."
+def classGateActive (e : FamilyEvidence) : Bool :=
+  (e.sameGoalTerm && e.sameMechanismFamily && decide (2 ≤ e.consecutivePasses)) ||
+    e.earlierUnsupportedEnumeration
+
+-- SKILL[def]: "Repair dispatch requires the recorded family and a verified coverage basis under `## Reasoning Discipline`."
+-- The formal basis additionally admits a verified sound abstraction over an open or infinite
+-- domain when its admissible-input correspondence and falsifier are recorded.
+-- SKILL[def]: "A sound abstraction may cover an infinite domain with recorded admissible-input correspondence and a falsifiable invariant."
+def coverageBasisVerified : ClassCoverageBasis → Bool
+  | .uniformInvariant verified | .soundAbstraction verified | .completeFiniteTreatment verified => verified
+  | .authorizedBoundary enforced authorized => enforced && authorized
+  | .unsupportedMemberEnumeration | .unknown => false
+
+-- SKILL[def]: "Unknown family or coverage routes bounded investigation under the intake scope; no supported path means honest unresolved stop, with only actual product, governance, boundary or permission decisions routed to their owner."
+def familyRoute (e : FamilyEvidence) : FamilyRoute :=
+  if e.ownerDecisionRequired || (e.changesDomainOrCriterion && !e.ownerAuthorized) then .ownerDecision
+  else if !ownerAuthorizedDomainChange e then .reviseOrInvestigate
+  else if !classGateActive e then .continue
+  else if e.noSupportedPath then .honestStop
+  else if e.recordComplete && coverageBasisVerified e.coverageBasis then .continue
+  else .reviseOrInvestigate
+
+-- SKILL[def]: "A new fixture, recurrence, zero usage, or exhausted budget cannot authorize a member patch or narrow the domain."
+/-- The actual caller pass guard consumes this route. Unsupported class coverage permits
+only a bounded investigation/convergence or review, never another member repair. -/
+def familyPassAllowed (e : FamilyEvidence) (t : Transition) : Bool :=
+  match t with
+  | .repairWithRerunReview => familyRoute e == .continue
+  | .repeatedReviewPass | .metaLayerConvergence | .focusedRound =>
+      familyRoute e == .continue || familyRoute e == .reviseOrInvestigate
+  | _ => true
+
+theorem unsupported_class_never_dispatches (e : FamilyEvidence)
+    (h : e.coverageBasis = .unsupportedMemberEnumeration)
+  (ha : classGateActive e = true) :
+    familyPassAllowed e .repairWithRerunReview = false := by
+  simp only [familyPassAllowed, familyRoute, ha, h, coverageBasisVerified]
+  unfold ownerAuthorizedDomainChange
+  cases e.ownerDecisionRequired <;> cases e.changesDomainOrCriterion <;>
+    cases e.ownerAuthorized <;> cases e.noSupportedPath <;> cases e.revision <;> simp_all
 
 /-- Where a blocking gap sits in `GoalArtifact`; lower ranks are repaired first. -/
 inductive GapRank
@@ -91,43 +167,38 @@ theorem main_path_first (gaps : List GapRank) (h : .normalizedGoal ∈ gaps) :
   have hxeq : x = .normalizedGoal := by simpa using (List.mem_filter.mp hxmem).2
   simp [hx, hxeq]
 
--- SKILL[ref]: "Stop when `pass_budget` owned below is exhausted and report remaining blockers honestly."
+-- SKILL[ref]: "At zero units, start no new pass and report remaining blockers honestly; finish the already-paid batch including its review."
 abbrev stopWhenExhausted := @Sshx.step_zero_counted
 
 inductive DoneRoute
   | claimCandidateThroughGate
   | reportDone
+  | withholdClaim
   deriving DecidableEq, Repr
 
 -- SKILL[def]: "If review exits `done with advisory surfaced`, treat that exit as a candidate for an affirmative success claim rather than the claim itself when `## Termination Gate` applies, and route the candidate through that gate before reporting success."
 def routeDoneExit : Applicability → DoneRoute
   | .applies => .claimCandidateThroughGate
   | .inapplicable => .reportDone
-  | .escalateToMaintainer => .claimCandidateThroughGate
+  | .withholdClaim => .withholdClaim
 
 theorem done_is_only_a_candidate_when_gate_applies :
     routeDoneExit .applies = .claimCandidateThroughGate := rfl
-
--- SKILL[ref]: "Include any non-blocking advisory feedback without inlining logs."
-abbrev advisoryWithoutLogs := @Behavior.ContextItem.permitted
 
 inductive BoundedPassChoice
   | oneMoreBoundedPass (nextIterationQuestion : String)
   | askTheUser
   deriving DecidableEq, Repr
 
--- SKILL[def]: "If review exits `explicit user decision or another bounded review pass`, either run one more bounded pass with a concrete next iteration question tied to `GoalArtifact`, or ask the user to decide."
-def allCommentExitChoices (question : String) : List BoundedPassChoice :=
-  [.oneMoreBoundedPass question, .askTheUser]
+-- SKILL[def]: "If review exits `explicit user decision or another bounded review pass`, run one more bounded pass with a concrete next iteration question tied to `GoalArtifact`; when no bounded pass remains, report the unresolved evidence and route it to the declared owner."
+def allCommentExitChoices (question : String) (needsOwnerDecision : Bool) : List BoundedPassChoice :=
+  [.oneMoreBoundedPass question] ++ if needsOwnerDecision then [.askTheUser] else []
 
--- SKILL[ref]: "Do not loop indefinitely."
+-- SKILL[ref]: "Do not pause for routine confirmation or ask the user to choose a method, and do not loop indefinitely."
 abbrev noIndefiniteLoop := @Sshx.counted_passes_bounded
 
--- SKILL[ref]: "After any explicit correction, use the existing correction gate to ask whether the goal or harness changed and whether evidence overturned the direction; emit exactly one concrete `continue`, `revise`, `stop`, or `escalate` action and name its responsible party before further work."
+-- SKILL[ref]: "After any explicit correction, repeat this section's direction gate before further work."
 abbrev correctionGate := @reflect
-
--- SKILL[policy]: "Protocol policy, not a mathematical consequence: before the first pass after the initial review triplet, the caller records one owner-precommitted finite integer `pass_budget`."
-abbrev passBudgetPrecommitment := @Behavior.guardRecordPassBudget
 
 -- SKILL[ref]: "Carrier retries and fallbacks are bounded by each flight's `retry_budget` and the finite eligible-untried-carrier set and consume no unit; the initial review triplet is the single occurrence fixed by the stage order and consumes none."
 abbrev uncountedTransitions := @Sshx.step_uncounted

@@ -2,6 +2,7 @@ import Mathlib.Tactic
 import Sshx.Tables
 import Sshx.Reasoning.Authority
 import Sshx.Reasoning.Discipline
+import Sshx.Behavior.Model
 
 /-!
 # Reasoning: review
@@ -101,6 +102,9 @@ theorem reject_blocks_done (a b c : ReviewVerdict) (h : a = .reject ∨ b = .rej
     reviewRoute a b c = .fix := by
   simp [reviewRoute, h]
 
+-- SKILL[def]: "Harness gaps and claim authority follow `## Goal Contract` without startup confirmation."
+abbrev routineHarnessGapRecord := @Behavior.IntakeEvidence.complete
+
 /-- The only conversion of a reject into an advisory is the downgrade. -/
 theorem conversion_is_downgrade (f : Finding) (h : f.verdict = .reject)
     (hc : downgrade f = .comment) : eligible f = false ∨ force f.input = .advisory := by
@@ -121,38 +125,16 @@ structure BlockingFinding where
   conduct : TrustedPartyConduct
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Every blocking finding must name both `BlockingAuthority` conjuncts under `## Reasoning Discipline` — the `GoalArtifact` term the work as built fails and the evidence in the work that shows it — and which class of failure, omission, or uncertainty within the declared trust boundary it addresses."
+-- SKILL[def]: "Every blocking finding must name both `BlockingAuthority` conjuncts under `## Reasoning Discipline` and its failure, omission or uncertainty class within the trust boundary."
 def BlockingFinding.wellFormed (b : BlockingFinding) : Prop :=
   force b.input = .blocking ∧ b.goalTerm ≠ "" ∧ threatEligible b.conduct = true
 
--- SKILL[ref]: "A `BlockingAuthority` downgrade is objective: it is recorded as `BlockingAuthority` requires and never assesses persuasiveness; disputed grounding stays blocking."
+-- SKILL[ref]: "Downgrade records and disputed grounding follow `BlockingAuthority`."
 abbrev objectiveDowngrade := @downgradeRecord
 
 -- SKILL[thm]: "Downgrade is allowed only for threat-model ineligibility or an advisory input, never because a finding is inconvenient, expensive, or late, and never sets aside a reachable defect."
 theorem downgrade_only_for_ineligible_or_advisory (f : Finding) (h : f.verdict = .reject)
     (hc : downgrade f = .comment) : eligible f = false ∨ force f.input = .advisory :=
   conversion_is_downgrade f h hc
-
-/-- The state of the harness declaration at review time. -/
-inductive HarnessState
-  | declared
-  | missing
-  | ambiguous
-  | stale
-  deriving DecidableEq, Repr
-
-inductive HarnessRoute
-  | routeNormally
-  | pauseAndEscalateToMaintainer
-  deriving DecidableEq, Repr
-
--- SKILL[def]: "A missing, ambiguous, or stale harness declaration is never a downgrade shield: pause routing and escalate to the maintainer instead of declaring done."
-def routeWithHarness : HarnessState → HarnessRoute
-  | .declared => .routeNormally
-  | .missing | .ambiguous | .stale => .pauseAndEscalateToMaintainer
-
-theorem defective_harness_never_shields (h : HarnessState) (hne : h ≠ .declared) :
-    routeWithHarness h = .pauseAndEscalateToMaintainer := by
-  cases h <;> simp_all [routeWithHarness]
 
 end Sshx.Reasoning
