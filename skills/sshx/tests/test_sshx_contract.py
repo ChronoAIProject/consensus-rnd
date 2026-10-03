@@ -181,6 +181,7 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "CODEX_WORKER_SPEC.md",
         "CapabilityOverlap",
         "ChatGPT",
+        "conclusion.blocking_findings",
         "FocusedRound",
         "GitHub",
         "GoalArtifact",
@@ -242,13 +243,17 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "isolated-token-subagent",
         "iteration_question",
         "log_ref",
+        "malicious",
+        "mechanism_family",
         "meta_judge",
         "natural-ownership",
         "next_iteration_question",
         "nohup",
         "none",
         "normalized_goal",
+        "nonstandard-deliberate",
         "nyxid-oracle",
+        "ordinary-operation",
         "parsimony",
         "pass_budget",
         "proportional-containment",
@@ -261,6 +266,7 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "repo-prior-exposed",
         "residual-gap",
         "result_envelope_ref",
+        "recorded_occurrence",
         "retry_budget",
         "retrying",
         "review_triplet_workers",
@@ -284,6 +290,9 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "tests",
         "test_sshx_contract.py",
         "thinking_panel_workers",
+        "trigger",
+        "trigger_actor",
+        "trigger_path",
         "trust_boundary",
         "unsatisfied",
         "verdict",
@@ -309,7 +318,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "bd6dc1247b9eeab6bbf83058dca681a30f0bfe6d0edc6b18f94d09be6ff78de9"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "2896a31e2ddcbf25d48562f880ec60ccb9c43927950fe4a8737b451e9a35b436"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -617,6 +626,45 @@ def blocking_force(
     return "advisory"
 
 
+def blocking_finding_force(
+    *,
+    names_goal_term: bool,
+    names_work_evidence: bool,
+    basis_shown_false: bool,
+    trigger_path: str,
+    recorded_occurrence: str | None,
+    fields: frozenset[str] | None = None,
+) -> str:
+    required_fields = frozenset(
+        {"trigger", "trigger_actor", "trigger_path", "mechanism_family", "recorded_occurrence"}
+    )
+    if fields is not None and fields != required_fields:
+        raise ContractFailure("blocking finding metadata is incomplete")
+    if trigger_path not in {"ordinary-operation", "nonstandard-deliberate", "malicious"}:
+        raise ContractFailure("invalid trigger path")
+    if basis_shown_false or not (names_goal_term and names_work_evidence):
+        return "advisory"
+    if trigger_path != "ordinary-operation" and recorded_occurrence is None:
+        return "advisory"
+    return "blocking"
+
+
+def planning_route(
+    *,
+    sources_searched: bool,
+    sources_verified: bool,
+    existing_work_inspected: bool,
+    overlap_exists: bool,
+    overlap_reused: bool,
+    uncovered_delta_recorded: bool,
+) -> str:
+    if not sources_searched or not sources_verified or not existing_work_inspected:
+        return "ASSUMED-UNVERIFIED"
+    if (overlap_exists and not overlap_reused) or not uncovered_delta_recorded:
+        return "reject-duplicate"
+    return "plan-uncovered-delta"
+
+
 def termination_unsatisfied_route(*, names_goal_term: bool, already_redispatched: bool) -> str:
     if names_goal_term:
         return "keep-full-force"
@@ -828,8 +876,8 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_contract_stays_within_size_ratchet(self) -> None:
         text = read(SKILL)
-        self.assertLessEqual(len(text.splitlines()), 451)
-        self.assertLessEqual(len(text.encode("utf-8")), 68_000)
+        self.assertLessEqual(len(text.splitlines()), 470)
+        self.assertLessEqual(len(text.encode("utf-8")), 75_000)
 
     def test_sshx_goal_contract_source_regression(self) -> None:
         text = read(SKILL)
@@ -1461,6 +1509,10 @@ class SshxContractTests(unittest.TestCase):
             "second, evidence in the work as built that shows the failure",
             "a current call site or input path, an observed failure, a failing verification command, a wrong result",
             "against a satisfaction claim, the absence of the evidence the named term demands",
+            "A blocking finding must also pass the structured trigger check",
+            "if its `trigger_path` is not `ordinary-operation` and its `recorded_occurrence` is `none`, the finding is advisory",
+            "recorded_occurrence` must have existed before this run and independently of the current review",
+            "a fixture, reproduction, or state deliberately created by a seat, caller, or repair worker during this run is reachability evidence only",
             "An input that names both is blocking, and stays blocking however expensive, inconvenient, or late the repair is",
             "a named basis that evidence shows to be false no longer counts as named",
             "keeps its full blocking force until the dispute is settled against evidence",
@@ -1516,6 +1568,129 @@ class SshxContractTests(unittest.TestCase):
                 ]
             ),
             ("blocking", "blocking", "advisory", "advisory", "advisory", "advisory"),
+        )
+
+    def test_sshx_trigger_metadata_mechanically_downgrades_local_fixtures(self) -> None:
+        fields = frozenset({"trigger", "trigger_actor", "trigger_path", "mechanism_family", "recorded_occurrence"})
+        self.assertEqual(
+            (
+                blocking_finding_force(
+                    names_goal_term=True,
+                    names_work_evidence=True,
+                    basis_shown_false=False,
+                    trigger_path="ordinary-operation",
+                    recorded_occurrence=None,
+                    fields=fields,
+                ),
+                blocking_finding_force(
+                    names_goal_term=True,
+                    names_work_evidence=True,
+                    basis_shown_false=False,
+                    trigger_path="nonstandard-deliberate",
+                    recorded_occurrence=None,
+                    fields=fields,
+                ),
+                blocking_finding_force(
+                    names_goal_term=True,
+                    names_work_evidence=True,
+                    basis_shown_false=False,
+                    trigger_path="nonstandard-deliberate",
+                    recorded_occurrence="issue-1058",
+                    fields=fields,
+                ),
+            ),
+            ("blocking", "advisory", "blocking"),
+        )
+        with self.assertRaises(ContractFailure):
+            blocking_finding_force(
+                names_goal_term=True,
+                names_work_evidence=True,
+                basis_shown_false=False,
+                trigger_path="invented-path",
+                recorded_occurrence=None,
+                fields=fields,
+            )
+        with self.assertRaises(ContractFailure):
+            blocking_finding_force(
+                names_goal_term=True,
+                names_work_evidence=True,
+                basis_shown_false=False,
+                trigger_path="ordinary-operation",
+                recorded_occurrence=None,
+                fields=fields - {"trigger_actor"},
+            )
+
+    def test_sshx_issue_1058_controls_are_declared_at_their_owners(self) -> None:
+        text = read(SKILL)
+        goal = section(text, "## Goal Contract", "## InlineConsensusProtocol")
+        envelope = section(text, "## Result Envelope", "## Worker Completion Contract")
+        review = section(text, "## Review Triplet", "## Review Truth Table")
+        review_truth = section(text, "## Review Truth Table", "## Fix Or Done")
+        fix_or_done = section(text, "## Fix Or Done", "## Termination Gate")
+        self.assertIn("who consumes outputs produced by the execution environment", goal)
+        self.assertIn("whether trusted operators' local state (configuration, indexes, and filesystem) is inside the review scope", goal)
+        for field in ["trigger", "trigger_actor", "trigger_path", "mechanism_family", "recorded_occurrence"]:
+            self.assertIn(f"`{field}`", envelope)
+            self.assertIn(f"`{field}`", review_truth)
+        self.assertIn("Every review focus in a dispatch brief must name the `GoalArtifact` clause", review)
+        self.assertIn("An unbounded request to find any mechanism that could make a result fail is invalid", review)
+        self.assertIn("after two consecutive passes whose blocking findings name the same `GoalArtifact` term and `mechanism_family`", fix_or_done)
+        self.assertIn("stop and escalate to the boundary owner", fix_or_done)
+        self.assertIn("list each defense or validation element added since the previous pass", fix_or_done)
+
+    def test_sshx_planning_search_reuses_existing_work_and_plans_only_delta(self) -> None:
+        text = read(SKILL)
+        reasoning = section(text, "## Reasoning Discipline", "## Thinking Panel")
+        thinking = section(text, "## Thinking Panel", "## Design Truth Table")
+        for anchor in [
+            "Planning evidence must be gathered before a thinking seat settles a candidate plan",
+            "search relevant authoritative best-practice sources",
+            "inspect the current `work_target`, repository artifacts, history, and visible prior decisions",
+            "Record the searched sources, applicable practice, inspected existing work, and overlap or uncovered delta",
+            "existing dispatch brief or `SshxResultEnvelope.conclusion`",
+            "adds no `GoalArtifact` field or envelope field",
+            "Reuse work that already covers a named `GoalArtifact` term and plan only the uncovered delta",
+            "A duplicate mechanism is not a concrete plan",
+            "Search scope is bounded by `GoalArtifact` and the assigned review focus",
+            "A source that cannot be reached or verified is `ASSUMED-UNVERIFIED` and may guide a candidate only as advisory",
+            "It cannot be called a best practice, block routing, or create a plan element by itself",
+            "Search results never create a `GoalArtifact` term or current consumer",
+        ]:
+            self.assertIn(anchor, reasoning)
+        for anchor in [
+            "Before `propose` or `revise`, each seat must carry the planning search and existing-work evidence",
+            "the meta-judge may converge only on a plan that reuses covered work and names its uncovered delta",
+            "Missing or unverified planning evidence is `ASSUMED-UNVERIFIED` and cannot by itself justify `implement`",
+        ]:
+            self.assertIn(anchor, thinking)
+        self.assertEqual(
+            (
+                planning_route(
+                    sources_searched=True,
+                    sources_verified=True,
+                    existing_work_inspected=True,
+                    overlap_exists=True,
+                    overlap_reused=True,
+                    uncovered_delta_recorded=True,
+                ),
+                planning_route(
+                    sources_searched=True,
+                    sources_verified=True,
+                    existing_work_inspected=True,
+                    overlap_exists=True,
+                    overlap_reused=False,
+                    uncovered_delta_recorded=True,
+                ),
+                planning_route(
+                    sources_searched=True,
+                    sources_verified=False,
+                    existing_work_inspected=True,
+                    overlap_exists=False,
+                    overlap_reused=False,
+                    uncovered_delta_recorded=True,
+                ),
+            ),
+            ("plan-uncovered-delta", "reject-duplicate", "ASSUMED-UNVERIFIED"),
         )
 
     def test_sshx_dependency_closure_admission_is_antitone(self) -> None:

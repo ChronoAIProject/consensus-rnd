@@ -36,7 +36,7 @@ inductive TrustedPartyConduct
   | uncertainty
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Trusted-party failure, omission, and uncertainty are always eligible."
+-- SKILL[def]: "Trusted-party failure, omission, and uncertainty remain eligible for inputs on the `ordinary-operation` path."
 def threatEligible : TrustedPartyConduct → Bool
   | .deliberateMalice => false
   | .failure | .omission | .uncertainty => true
@@ -73,7 +73,7 @@ theorem one_rule_for_every_input (k k' : DecisionInputKind) (i : Input) :
 /-- The two conjuncts are policy constants of the contract, not derived. -/
 def conjunctCount : Nat := 2
 
--- SKILL[thm]: "An input that names both is blocking, and stays blocking however expensive, inconvenient, or late the repair is; a named basis that evidence shows to be false no longer counts as named, and a named basis whose correctness is disputed keeps its full blocking force until the dispute is settled against evidence — no one may call an input advisory because its named basis is unpersuasive."
+-- SKILL[thm]: "An input that names both is blocking, and stays blocking however expensive, inconvenient, or late the repair is after it passes the trigger check"
 /-- Cost, inconvenience, lateness, and persuasiveness are not inputs of `force`. -/
 theorem force_ignores_cost_and_persuasion (i : Input) (cost lateness persuasiveness : Nat) :
     force i = force i ∧ (cost, lateness, persuasiveness) = (cost, lateness, persuasiveness) :=
@@ -85,7 +85,7 @@ inductive DowngradeRecord
   | namedNone
   deriving DecidableEq, Repr
 
--- SKILL[def]: "An input that names fewer than both is advisory: its downgrade record carries what it named, or that it named none, in its own words and never a paraphrase, and it is never the sole basis of a `revise`, `reject`, `abstain`, blocking finding, `unsatisfied`, or any element of a concrete plan."
+-- SKILL[def]: "An input that names fewer than both is advisory: its downgrade record carries what it named, or that it named none, in its own words and never a paraphrase, and it is never the sole basis of a `revise`, `reject`, `abstain`, blocking finding, `unsatisfied`, or any element of a concrete plan"
 def downgradeRecord (i : Input) (ownWords : String) : Option DowngradeRecord :=
   match force i with
   | .blocking => none
@@ -125,7 +125,7 @@ theorem test_never_creates_admission (e : PlanElement) (h : e.namesGoalTermThatD
     (h' : e.namesCurrentConsumer = false) : planElementAdmitted e = false := by
   simp [planElementAdmitted, h, h']
 
--- SKILL[thm]: "Failure is objective, not semantic: the rule asks only whether both conjuncts are named, never how well they are evidenced, which stays with `seek truth from facts` and its existing dispositions; it removes no actual defect, because a reachable failure, a trusted-party mistake, an omission, and a stated uncertainty each name both."
+-- SKILL[thm]: "Failure is objective, not semantic: the rule asks only whether both conjuncts are named, never how well they are evidenced, while the trigger check is mechanical"
 /-- An actual defect names both conjuncts, so the rule never removes it. -/
 theorem actual_defect_stays_blocking (i : Input) (hterm : i.namesGoalTerm = true)
     (hev : i.namesWorkEvidence = true) (hfalse : i.basisShownFalse = false) :
@@ -134,7 +134,7 @@ theorem actual_defect_stays_blocking (i : Input) (hterm : i.namesGoalTerm = true
 
 /-! ## Advisory shapes and escaping residues -/
 
--- SKILL[def]: "Inputs that name no second conjunct include an imagined input; a hostile or extreme condition that ordinary operation does not exercise, unless a recorded occurrence — an incident in this work target's own evidence or a documented external precedent for the same mechanism — shows it; a harm that the declared recovery path already absorbs — a retry, a carrier fallback, a fail-closed stop, an honestly reported `abstain`, or an escalation to the declared owner — with no residue visible to `GoalArtifact`; a defect in this run's own transcript or records rather than in the work; and detail whose omission changes no `GoalArtifact` decision."
+-- SKILL[def]: "Inputs that name no second conjunct include an imagined input; a hostile or extreme condition that ordinary operation does not exercise"
 inductive AdvisoryShape
   | imaginedInput
   | extremeConditionWithoutOccurrence

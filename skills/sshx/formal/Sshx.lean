@@ -16,6 +16,7 @@ import Sshx.Behavior.Model
 import Sshx.Behavior.Invariant
 import Sshx.Reasoning.Discipline
 import Sshx.Reasoning.Authority
+import Sshx.Reasoning.Guards
 import Sshx.Reasoning.Panel
 import Sshx.Reasoning.Convergence
 import Sshx.Reasoning.Review
