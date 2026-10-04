@@ -17,16 +17,29 @@ not restate it. Caller-side dispatch and collection are governed solely by
 
 ```text
 bash <skill-root>/scripts/run-codex-worker.sh \
-  --flight-id <id> --attempt <positive-integer> \
   --stage <thinking|implementation|review|termination> \
-  --work-target <absolute-path> [--sandbox <danger-full-access|workspace-write>]
+  --work-target <absolute-path> [--sandbox <danger-full-access|workspace-write>] \
+  [--flight-id <returned-id> --attempt <positive-integer>]
 ```
 
-The first four options are required; `--sandbox` is optional and defaults to
+`--stage` and `--work-target` are required; `--sandbox` is optional and defaults to
 `danger-full-access` when omitted. Missing required, duplicate, unknown, or positional
 arguments are `USAGE_ERROR` (exit 64). `flight-id` is exactly 24 lowercase
-hexadecimal characters as minted by `--new-flight-id` below, `attempt` is a
-positive integer,
+hexadecimal characters allocated by the runner, `attempt` is a
+positive integer. Identity options must appear together or both be omitted;
+omission allocates a fresh identity with attempt 1. Until a valid receipt binds
+identity, a retry of the pending record also omits both options; its first
+allocated external attempt remains 1. Once bound, a retry reuses the returned
+identity and explicitly increments its external attempt. The external attempt
+does not count pre-receipt retries: both pending and bound retries consume the
+same fixed allowance under `SKILL.md`'s Worker Delegation contract, without a
+reset on missing receipt or allocation. Each retry consumes one unit before
+relaunch, recorded in the caller's transcript independently of the external
+attempt; exhausted pending and bound records use the existing fallback path.
+Provenance and increasing bound retry
+numbers are caller obligations, not registry or directory-scan checks. A new
+task or fallback omits both options. Mechanically valid explicit values remain
+accepted, but caller minting is not authorized. The
 `stage` and `sandbox` use the enumerations above, and `work-target` is
 absolute and contains neither LF (`0x0A`) nor CR (`0x0D`). This is a
 locale-independent POSIX text-line boundary: stdout lines are LF-separated,
@@ -35,11 +48,9 @@ zero-width joiners/non-joiners, and U+2028/U+2029, are accepted in path values.
 The brief is read from stdin;
 artifact paths and extra Codex flags are never caller-supplied.
 
-The runner also has four mutually exclusive pure query invocations:
+The runner also has three mutually exclusive pure query invocations:
 
 ```text
-bash <skill-root>/scripts/run-codex-worker.sh --new-flight-id
-
 bash <skill-root>/scripts/run-codex-worker.sh \
   --project-paths --flight-id <id> --attempt <positive-integer>
 
@@ -53,22 +64,26 @@ Missing required identity options, combining the query modes, or combining a
 query with an option it does not take is `USAGE_ERROR` (exit 64):
 `--project-paths` refuses `--stage`, `--work-target`, and `--sandbox`;
 `--project-flight` additionally refuses `--attempt` and takes only the flight
-identity; `--new-flight-id` and `--project-root` take no identity and refuse
+identity; `--project-root` takes no identity and refuses
 every other option. Identity validation and run-root normalization are
 identical to run mode. No query requires the run root or any projected
 directory to exist or be writable. They read no stdin, create no directory,
 launch no carrier, write no projection, and delete nothing.
 
-`--new-flight-id` mints one identity and emits `{schema_version, flight_id}`.
-The identity has the ObjectId shape: 24 lowercase hexadecimal characters whose
+At a first launch, after syntax and dependency checks and run-root normalization,
+the runner allocates an identity with the ObjectId shape: 24 lowercase hexadecimal characters whose
 first 8 encode the big-endian UNIX second of minting and whose remaining 16
-come from the operating system's random source; each mint is its own process,
+come from the operating system's random source; each allocation is its own process,
 so the ObjectId per-process random and counter fields collapse into
 randomness. Identities therefore sort chronologically and do not collide in
 practice. A `date`, random-source, or self-check failure is `INTERNAL_ERROR`
-and emits nothing. The caller passes the minted value unchanged to every later
-identity option; a hand-written identity that happens to satisfy the shape is
-accepted mechanically but violates `SKILL.md`.
+and emits nothing. Before creating directories, reading stdin, or invoking the
+carrier, every launch emits one compact strict JSON receipt as its first and
+only stdout line, using exactly the `--project-paths` object shape below.
+Receipt delivery failure prevents carrier start. Failures before allocation
+expose no identity; handled failures after receipt delivery retain that identity
+even when a status file cannot be written. An allocation whose receipt cannot
+be rendered or delivered never starts a carrier and has no recoverable receipt.
 
 On success `--project-paths` emits one strict JSON object containing
 `schema_version`, `flight_id`, `attempt`, `run_dir`, `brief_ref`, `result_ref`,
@@ -123,10 +138,10 @@ atomic rename for those artifacts. It also states the envelope's structural
 acceptance conditions and includes one runner-rendered, stage-specific minimum
 valid envelope example.
 
-The pure queries are the only sanctioned path discovery mechanism for the
+Launch receipts and pure queries are the only sanctioned path discovery mechanisms for the
 batch, status-read, cleanup, and sweep scripts. Those scripts contain no
 run-layout formula, attempt naming rule, or artifact basename and do not parse
-the runner's human stdout. The batch, status-read, and cleanup scripts check
+human progress logs. The batch, status-read, and cleanup scripts check
 manifest identities against the identity shape before consulting the runner;
 the sweep contains no identity rule at all and takes the runner's
 classification.
@@ -139,8 +154,10 @@ bash <skill-root>/scripts/run-codex-worker-batch.sh \
 ```
 
 The manifest is exactly one strict JSON object with `schema_version: 1` and a
-non-empty `workers` array. Each worker has exactly `flight_id`, `attempt`,
-`stage`, `work_target`, and `brief_ref`, plus optional `sandbox`. Identity,
+non-empty `workers` array. Each worker has exactly `stage`, `work_target`, and
+`brief_ref`, plus optional `sandbox` and a paired `flight_id`/`attempt` for bound retries.
+Fresh rows and retries whose records still lack a valid receipt omit both identity
+fields under the same pending/bound rule as a single launch. Identity,
 stage, target, and sandbox values obey the runner's run-mode rules. For the
 batch dispatcher, status reader, and cleanup tool alike, `attempt` must be a
 JSON number whose `jq` text projection matches `[1-9][0-9]*`; that projected
@@ -149,14 +166,19 @@ digit-only integer values are accepted subject to parser and filesystem
 resource limits, while `1.0`, `"1"`, `0`, and `-1` are rejected as
 `USAGE_ERROR` (exit 64) with an attempt-specific diagnostic. Every
 `brief_ref` is an absolute path to a regular non-symbolic-link file that the
-dispatcher can open for reading. Duplicate identity pairs are invalid. The
+dispatcher can open for reading. Duplicate explicit identity pairs are invalid. The
 report parent must be writable and the report target must be absent; an existing
 file, symbolic link, or other entry is rejected rather than overwritten. The
 dispatcher validates the entire document, probes every brief for readability,
-invokes the runner's pure path projection for every worker and stores each
-returned document, checks the report target, atomically reserves that final path
+invokes the runner's shared-root query and pure path projection for explicit
+retry identities, checks the report target, atomically reserves that final path
 as an empty regular file, and exclusively creates one unique same-directory
-report temporary file before launching any worker.
+report temporary file before launching any worker. Fresh paths are projected
+only after joined receipt collection; the dispatcher never pre-mints identities.
+It also reserves private per-row stdout captures named `<report>.receipt.<index>.*`
+and emits one compact stdout recovery object with `schema_version: 1` and
+`receipt_refs: [{worker_index, receipt_ref}]` before any child launch. Preserve
+that output with the host job. A recovery-output delivery failure launches no child.
 
 Caller-input, option, manifest, brief, and report-target failures are
 `USAGE_ERROR` (exit 64): no worker launches, and this invocation creates no JSON
@@ -236,11 +258,19 @@ reservation at `<report>`. The temporary file is unique to the invocation and
 was created in the report directory during preflight; the reserved final target
 is revalidated before publication, and the published report must be a regular
 non-symbolic-link file. Failure is closed.
+After all joins, each capture must contain exactly one structured receipt that
+equals the runner's pure path projection for its identity. Retry receipts must
+match the requested pair; fresh receipts must have attempt 1. No human log is
+parsed. Missing, invalid, or mismatched receipts have explicit `receipt_error`
+diagnostics and null identity/path fields; no identity is fabricated.
 The report has
 `schema_version`, `all_workers_waited: true`, and manifest-order worker records
 containing `flight_id`, `attempt`, `runner_exit_code`, `run_dir`, and
-`status_ref`, plus the batch-level `interrupted` boolean; both paths come from
-the pure runner query. It is
+`status_ref`, and `receipt_error` (null for a validated receipt), plus the
+batch-level `interrupted` boolean; both paths come from the pure runner query.
+`resolved_manifest: {schema_version: 1, workers: [...]}` contains the original
+rows enriched with validated assigned identities, including nonzero runners,
+in original order; unallocated rows remain explicit in `workers` only. It is
 dispatcher-owned orchestration evidence, not a worker artifact or a completion
 or verdict source.
 
@@ -250,7 +280,15 @@ or the dispatcher was interrupted. The two pre-launch classes are the exit 64
 caller/manifest class and exit 1 internal class described above; neither
 launches a worker or publishes a complete report. An internal failure after
 launch exits 1 after joining every recorded child, but no complete report is
-promised because rendering or publication itself failed. It has no retry, fallback,
+promised because rendering or publication itself failed. Receipt captures are
+retained on report or receipt-validation failure for recovery using the pre-launch
+references. After successful report publication with all receipts validated,
+the captures are removed. Extract collection input
+with `jq '.resolved_manifest' report.json > resolved.json`, then pass that file
+to status reading or cleanup after host completion notification; an empty
+resolved set means no reader or cleanup invocation. These consumers require
+assigned identity pairs and do not accept unresolved dispatch rows.
+It has no retry, fallback,
 identity-selection, result-reading,
 completion-recognition, or lifecycle authority. It covers only the Codex
 subset of a multi-seat stage, never the reserved non-Codex seats and therefore
@@ -263,7 +301,7 @@ bash <skill-root>/scripts/read-codex-worker-status.sh \
   --manifest <absolute-path>
 ```
 
-This command accepts the batch manifest shape but validates only the identity
+This command accepts the resolved batch manifest shape but validates only the identity
 fields it consumes; run-only values are not reinterpreted. For each manifest
 worker in order it obtains `status_ref` through the pure runner query and makes
 one filesystem read when that reference is a regular non-symbolic-link file.
@@ -294,7 +332,7 @@ bash <skill-root>/scripts/clean-codex-worker-runs.sh \
   --manifest <absolute-path> [--delete]
 ```
 
-Cleanup accepts the batch manifest document shape: exactly one strict JSON
+Cleanup accepts the resolved batch manifest document shape: exactly one strict JSON
 object with `schema_version: 1` and a non-empty `workers` array whose items have
 exactly `flight_id`, `attempt`, `stage`, `work_target`, and `brief_ref`, plus
 optional `sandbox`; identity pairs must be unique. Like the status reader, it
@@ -484,21 +522,21 @@ flight.
 
 Exit code is the sole authority: `0` means complete, `1` means not complete,
 and `64` means usage error. `status.json` is a terminal, machine-readable
-projection for callers that need structured data. stdout is a human-readable
-streaming log; it carries no decision authority, is not guaranteed to be
-parseable, and is not byte-for-byte identical to any file.
+projection for callers that need structured data. stdout contains only the
+structured launch receipt. stderr is a human-readable streaming log; it carries
+no decision authority and is not guaranteed to be parseable.
 
 `status.json` and the batch report are mechanical projections only. Neither is
 a completion or verdict source under `SKILL.md`.
 
-Before the synchronous carrier call, stdout reports all then-known invocation
+Before the synchronous carrier call, stderr reports all then-known invocation
 identity and derived artifact paths followed by `carrier starting`. After the
 call returns, it reports the carrier exit status; terminal cleanup then reports
-`status`, `reason_code`, `verdict`, and duration. Every stdout line begins with
-a UTC ISO-8601 timestamp. stdout write failure is diagnostic only and cannot
+`status`, `reason_code`, `verdict`, and duration. Every progress line begins with
+a UTC ISO-8601 timestamp. stderr progress write failure is diagnostic only and cannot
 change the authoritative exit decision.
 
-Each stdout write runs in a narrow subshell so a closed stream cannot override
+Each progress write runs in a narrow subshell so a closed stream cannot override
 that exit decision or change the carrier's signal disposition. Terminal
 cleanup clears only its recursive `EXIT` trap and ignores
 `INT` and `TERM` for the rest of publication, so a second signal cannot leave
@@ -512,8 +550,8 @@ exit 1; only the final successful path changes the reason to `COMPLETE` and
 exit 0. Other ordinary failures also exit 1. The first failure encountered in
 the fixed check order determines `reason_code`:
 
-`PARSER_UNAVAILABLE`, `RUN_DIR_UNAVAILABLE`, `RUN_DIR_COLLISION`,
-`LAUNCH_FAILED`, `CARRIER_EXIT_NONZERO`, `RESULT_MISSING`,
+`PARSER_UNAVAILABLE`, `LAUNCH_FAILED`, `RUN_DIR_UNAVAILABLE`, `RUN_DIR_COLLISION`,
+`CARRIER_EXIT_NONZERO`, `RESULT_MISSING`,
 `ENVELOPE_INVALID`, `VERDICT_INVALID`, `SENTINEL_MISSING`,
 `INTERRUPTED`, or `INTERNAL_ERROR`.
 
@@ -541,7 +579,8 @@ to that contract by tests; this specification does not repeat the sets.
 No diagnostic surface participates in completion or verdict recognition:
 stdout, stderr, `last-message.txt`, log tails, marker text, event streams,
 process snapshots, repository state, and hashes are diagnostic only.
-Callers that need structured output must read `status.json`; a Unicode-aware
+Callers obtain launch identity from the receipt and terminal details from
+`status.json`; a Unicode-aware
 splitter such as Python `str.splitlines()` may treat U+2028, U+2029, or U+0085
 inside a path as logical separators even though those bytes are valid under
 the POSIX text-line contract.

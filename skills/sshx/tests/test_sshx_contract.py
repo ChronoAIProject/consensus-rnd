@@ -318,6 +318,7 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "quality",
         "raw_user_input",
         "resolved_before_any_worker_dispatch",
+        "resolved_manifest",
         "reject",
         "repo-prior-exposed",
         "residual-gap",
@@ -374,7 +375,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "9b4e3ed87b774ee2b13041d7a07103cea4e58b445a5b7c5a8bae9c7ae202f0b8"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "813f8620cdfc77ff3d1e93842fdc5773eb2e0721e71fd145816b91c6e10d428b"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -547,12 +548,11 @@ def has_terminal_completion(flight: dict[str, object]) -> bool:
     )
 
 
-def resolve_failed_flight(flight: dict[str, object], fallback_available: bool) -> str:
+def resolve_failed_flight(flight: dict[str, object], fallback_available: bool, *, consumed_retries: int) -> str:
     if has_terminal_completion(flight):
         return "complete"
     retry_budget = int(flight.get("retry_budget", 0))
-    attempt = int(flight.get("attempt", 0))
-    if attempt < retry_budget:
+    if consumed_retries < retry_budget:
         return "retry-same-carrier"
     if fallback_available:
         return "fallback-highest-priority-untried-carrier"
@@ -1386,7 +1386,7 @@ class SshxContractTests(unittest.TestCase):
             "completion_sentinel_ref": "",
         }
         self.assertEqual(
-            resolve_failed_flight(exhausted_origin, fallback_available=True),
+            resolve_failed_flight(exhausted_origin, fallback_available=True, consumed_retries=1),
             "fallback-highest-priority-untried-carrier",
         )
 
@@ -1397,7 +1397,7 @@ class SshxContractTests(unittest.TestCase):
             "result_envelope_ref": "result.json",
             "completion_sentinel_ref": "completion.sentinel",
         }
-        self.assertEqual(resolve_failed_flight(recovered_fallback, fallback_available=False), "complete")
+        self.assertEqual(resolve_failed_flight(recovered_fallback, fallback_available=False, consumed_retries=0), "complete")
         recovered_results = tuple((role, "satisfied") for role in TERMINATION_ROLES)
         self.assertEqual(
             resolve_termination_claim(recovered_results).truth_table_exit,
@@ -2744,14 +2744,14 @@ class SshxContractTests(unittest.TestCase):
         wd_end = text.index("## Result Envelope")
         worker_delegation = text[wd_start:wd_end]
         for contract_string in [
-            "the caller must mint a fresh `flight_id` with the runner's `--new-flight-id` query rather than writing one by hand",
-            "pass them to `skills/sshx/scripts/run-codex-worker.sh`",
-            "the runner derives and owns every artifact path",
-            "the caller must not supply arbitrary result, sentinel, log, or state paths",
-            "Every formal `codex-cli` flight must use this runner",
+            "Use `skills/sshx/scripts/run-codex-worker.sh` for every `codex-cli` launch",
+            "Until a valid receipt binds `flight_id`, leave it empty and omit identity options; `attempt` stays 1",
+            "Bound retries reuse that ID and increment `attempt`",
+            "Only the runner mints IDs and derives disjoint attempt paths",
+            "callers cannot supply artifact paths",
             "owned by `CODEX_WORKER_SPEC.md`",
-            "the required dispatch shape is the runner's default `danger-full-access` sandbox",
-            "the caller passes no sandbox selection unless the maintainer explicitly directs a narrower one",
+            "use the runner's default `danger-full-access`",
+            "unless the maintainer explicitly requests a narrower sandbox",
             "The caller must not poll worker artifact paths while the runner is active",
             "The caller records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the runner reports completion and the envelope and sentinel validate.",
             "Completion and verdict recognition stay governed by the `## Worker Completion Contract`",
@@ -2840,7 +2840,7 @@ class SshxContractTests(unittest.TestCase):
             "no worker launches and no complete JSON report exists",
             "the supported Bash must retain an exited child's status",
             "Preflight makes no all-or-nothing claim that survives such replacement",
-            "Cleanup accepts the batch manifest document shape",
+            "Cleanup accepts the resolved batch manifest document shape",
             "invalid manifest document are `USAGE_ERROR` (exit 64)",
             "This narrows the authorization window but does not eliminate TOCTOU",
             "`state` equal to `removed`, `partially-removed`, or `untouched`",
@@ -2923,14 +2923,22 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("`worker_delegation.reason` and the gate record state", text)
 
         flight = {"status": "retrying", "retry_budget": 2, "attempt": 1}
-        self.assertEqual(resolve_failed_flight(flight, fallback_available=False), "retry-same-carrier")
+        self.assertEqual(resolve_failed_flight(flight, fallback_available=False, consumed_retries=1), "retry-same-carrier")
         for worker_mode in ("codex-cli", "nyxid-oracle", "isolated-token-subagent"):
             exhausted = {**flight, "worker_mode": worker_mode, "attempt": 2}
             self.assertEqual(
-                resolve_failed_flight(exhausted, fallback_available=True),
+                resolve_failed_flight(exhausted, fallback_available=True, consumed_retries=2),
                 "fallback-highest-priority-untried-carrier",
             )
-            self.assertEqual(resolve_failed_flight(exhausted, fallback_available=False), "abstain")
+            self.assertEqual(resolve_failed_flight(exhausted, fallback_available=False, consumed_retries=2), "abstain")
+
+        # Public attempt 1 does not refund retries consumed before receipt binding.
+        for identity in ("", "0123456789abcdef01234567"):
+            pending_or_bound = {**flight, "flight_id": identity, "attempt": 1}
+            self.assertEqual(
+                resolve_failed_flight(pending_or_bound, fallback_available=False, consumed_retries=2),
+                "abstain",
+            )
 
     def test_sshx_no_context_pollution_contract(self) -> None:
         text = read(SKILL)
@@ -3058,7 +3066,7 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_runner_ownership_wording_has_no_legacy_assignment(self) -> None:
         text = read(SKILL)
-        self.assertIn("the runner derives and owns every artifact path", text)
+        self.assertIn("Only the runner mints IDs and derives disjoint attempt paths", text)
         self.assertNotIn("caller-assigned `result_ref`", text.lower())
         self.assertNotIn("caller-assigned `completion_sentinel`", text.lower())
 
@@ -3562,7 +3570,7 @@ class SshxContractTests(unittest.TestCase):
     def test_worker_tool_spec_states_sweep_semantics(self) -> None:
         specification = re.sub(r"\s+", " ", read(SPEC))
         for required in [
-            "The identity has the ObjectId shape: 24 lowercase hexadecimal characters",
+            "the runner allocates an identity with the ObjectId shape: 24 lowercase hexadecimal characters",
             "${SSHX_HOME:-$HOME/.sshx}/<flight-id>/attempt-<attempt>",
             "relocating the layout is done by setting `SSHX_HOME`, never by linking",
             "The window defaults to `1d`",

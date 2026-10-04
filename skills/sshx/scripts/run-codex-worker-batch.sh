@@ -41,10 +41,12 @@ if ! "$jq_path" -e -s '
   (.[0].workers | length) > 0 and
   (.[0].workers | all(
     type == "object" and
-    ((keys) == ["attempt", "brief_ref", "flight_id", "stage", "work_target"] or
+    ((keys) == ["brief_ref", "stage", "work_target"] or
+     (keys) == ["brief_ref", "sandbox", "stage", "work_target"] or
+     (keys) == ["attempt", "brief_ref", "flight_id", "stage", "work_target"] or
      (keys) == ["attempt", "brief_ref", "flight_id", "sandbox", "stage", "work_target"]) and
-    (.flight_id | type) == "string" and
-    (.flight_id | test("^[0-9a-f]{24}$")) and
+    ((has("flight_id") | not) or
+     ((.flight_id | type) == "string" and (.flight_id | test("^[0-9a-f]{24}$")))) and
     (.stage == "thinking" or .stage == "implementation" or .stage == "review" or .stage == "termination") and
     (.work_target | type) == "string" and (.work_target | startswith("/")) and (.work_target | test("[\\n\\r]") | not) and
     (.brief_ref | type) == "string" and (.brief_ref | startswith("/")) and (.brief_ref | test("[\\n\\r]") | not) and
@@ -54,14 +56,14 @@ if ! "$jq_path" -e -s '
   usage_error "invalid manifest"
 fi
 if ! "$jq_path" -e -s '
-  .[0].workers | all(
+  .[0].workers | map(select(has("attempt"))) | all(
     (.attempt | type) == "number" and
     (.attempt | tostring | test("^[1-9][0-9]*$"))
   )
 ' "$manifest" >/dev/null 2>&1; then
   usage_error "manifest attempt must project as a positive decimal integer"
 fi
-if ! "$jq_path" -e -s '.[0].workers | group_by([.flight_id, .attempt]) | all(length == 1)' "$manifest" >/dev/null 2>&1; then
+if ! "$jq_path" -e -s '.[0].workers | map(select(has("flight_id"))) | group_by([.flight_id, .attempt]) | all(length == 1)' "$manifest" >/dev/null 2>&1; then
   usage_error "invalid manifest"
 fi
 
@@ -74,11 +76,13 @@ report_parent=${report%/*}; [ -n "$report_parent" ] || report_parent=/
 [ -d "$report_parent" ] && [ -w "$report_parent" ] || usage_error "report parent is unavailable"
 
 worker_count=$("$jq_path" -r '.workers | length' "$manifest") || internal_error "cannot count workers"
-flight_ids=(); attempts=(); stages=(); work_targets=(); brief_refs=(); sandboxes=(); projections=()
+flight_ids=(); attempts=(); stages=(); work_targets=(); brief_refs=(); sandboxes=(); original_rows=()
+if ! bash "$runner" --project-root >/dev/null; then internal_error "cannot project shared run root"; fi
 i=0
 while [ "$i" -lt "$worker_count" ]; do
-  flight_ids[$i]=$("$jq_path" -r --argjson i "$i" '.workers[$i].flight_id' "$manifest") || internal_error "cannot read flight_id"
-  attempts[$i]=$("$jq_path" -r --argjson i "$i" '.workers[$i].attempt' "$manifest") || internal_error "cannot read attempt"
+  original_rows[$i]=$("$jq_path" -c --argjson i "$i" '.workers[$i]' "$manifest") || internal_error "cannot read worker"
+  flight_ids[$i]=$("$jq_path" -r --argjson i "$i" '.workers[$i].flight_id // ""' "$manifest") || internal_error "cannot read flight_id"
+  attempts[$i]=$("$jq_path" -r --argjson i "$i" '.workers[$i].attempt // ""' "$manifest") || internal_error "cannot read attempt"
   stages[$i]=$("$jq_path" -r --argjson i "$i" '.workers[$i].stage' "$manifest") || internal_error "cannot read stage"
   work_targets[$i]=$("$jq_path" -r --argjson i "$i" '.workers[$i].work_target' "$manifest") || internal_error "cannot read work_target"
   brief_refs[$i]=$("$jq_path" -r --argjson i "$i" '.workers[$i].brief_ref' "$manifest") || internal_error "cannot read brief_ref"
@@ -86,7 +90,7 @@ while [ "$i" -lt "$worker_count" ]; do
   [ -f "${brief_refs[$i]}" ] && [ ! -L "${brief_refs[$i]}" ] || usage_error "brief_ref for worker $i must name a regular non-symlink file"
   if ! exec 3< "${brief_refs[$i]}"; then usage_error "brief_ref for worker $i is not readable"; fi
   exec 3<&-
-  if ! projections[$i]=$(bash "$runner" --project-paths --flight-id "${flight_ids[$i]}" --attempt "${attempts[$i]}"); then
+  if [ -n "${flight_ids[$i]}" ] && ! bash "$runner" --project-paths --flight-id "${flight_ids[$i]}" --attempt "${attempts[$i]}" >/dev/null; then
     internal_error "cannot project paths for worker $i"
   fi
   i=$((i + 1))
@@ -121,14 +125,25 @@ if ! report_tmp=$(mktemp "$report.tmp.XXXXXX"); then
 fi
 [ -f "$report_tmp" ] && [ ! -L "$report_tmp" ] && [ -w "$report_tmp" ] || internal_error "invalid report temporary file"
 
+# Private receipt captures remain available on every unpublished exit.
+receipt_refs=(); recovery_json='[]'
+i=0
+while [ "$i" -lt "$worker_count" ]; do
+  receipt_refs[$i]=$(mktemp "$report.receipt.$i.XXXXXX") || internal_error "cannot reserve receipt for worker $i"
+  if ! recovery_json=$("$jq_path" -cn --argjson refs "$recovery_json" --argjson worker_index "$i" --arg receipt_ref "${receipt_refs[$i]}" '$refs + [{worker_index:$worker_index,receipt_ref:$receipt_ref}]'); then
+    internal_error "cannot render receipt recovery references"
+  fi
+  i=$((i + 1))
+done
+"$jq_path" -cn --argjson receipt_refs "$recovery_json" '{schema_version:1,receipt_refs:$receipt_refs}' || internal_error "cannot publish receipt recovery references"
+
 pids=(); runner_exit_codes=()
 i=0
 while [ "$i" -lt "$worker_count" ]; do
-  if [ -n "${sandboxes[$i]}" ]; then
-    bash "$runner" --flight-id "${flight_ids[$i]}" --attempt "${attempts[$i]}" --stage "${stages[$i]}" --work-target "${work_targets[$i]}" --sandbox "${sandboxes[$i]}" < "${brief_refs[$i]}" &
-  else
-    bash "$runner" --flight-id "${flight_ids[$i]}" --attempt "${attempts[$i]}" --stage "${stages[$i]}" --work-target "${work_targets[$i]}" < "${brief_refs[$i]}" &
-  fi
+  runner_args=(--stage "${stages[$i]}" --work-target "${work_targets[$i]}")
+  [ -z "${flight_ids[$i]}" ] || runner_args+=(--flight-id "${flight_ids[$i]}" --attempt "${attempts[$i]}")
+  [ -z "${sandboxes[$i]}" ] || runner_args+=(--sandbox "${sandboxes[$i]}")
+  bash "$runner" "${runner_args[@]}" > "${receipt_refs[$i]}" < "${brief_refs[$i]}" &
   pids[$i]=$!
   i=$((i + 1))
 done
@@ -153,10 +168,45 @@ while [ "$i" -lt "$worker_count" ]; do
 done
 trap '' INT TERM
 
-workers_json='[]'
+collect_receipt() {
+  receipt_error=RECEIPT_MISSING
+  projection=null
+  [ -s "${receipt_refs[$i]}" ] || return 1
+  receipt_error=RECEIPT_INVALID
+  if ! receipt_json=$("$jq_path" -ce -s '
+    if length == 1 and (.[0] | type) == "object" and
+       (.[0].flight_id | type) == "string" and (.[0].flight_id | test("^[0-9a-f]{24}$")) and
+       (.[0].attempt | type) == "number" and (.[0].attempt | tostring | test("^[1-9][0-9]*$"))
+    then .[0] else error("invalid launch receipt") end
+  ' "${receipt_refs[$i]}"); then return 1; fi
+  resolved_id=$("$jq_path" -r '.flight_id' <<< "$receipt_json") || return 1
+  resolved_attempt=$("$jq_path" -r '.attempt' <<< "$receipt_json") || return 1
+  if [ -n "${flight_ids[$i]}" ]; then
+    [ "$resolved_id" = "${flight_ids[$i]}" ] && [ "$resolved_attempt" = "${attempts[$i]}" ] || return 1
+  else
+    [ "$resolved_attempt" = 1 ] || return 1
+  fi
+  receipt_error=RECEIPT_PROJECTION_FAILED
+  if ! expected_projection=$(bash "$runner" --project-paths --flight-id "$resolved_id" --attempt "$resolved_attempt"); then return 1; fi
+  receipt_error=RECEIPT_PROJECTION_MISMATCH
+  "$jq_path" -en --argjson receipt "$receipt_json" --argjson expected "$expected_projection" '$receipt == $expected' >/dev/null || return 1
+  projection=$expected_projection
+  receipt_error=
+}
+
+workers_json='[]'; resolved_rows='[]'; receipt_collection_failed=0
 i=0
 while [ "$i" -lt "$worker_count" ]; do
-  if ! workers_json=$("$jq_path" --compact-output --null-input --argjson workers "$workers_json" --arg flight_id "${flight_ids[$i]}" --argjson attempt "${attempts[$i]}" --argjson runner_exit_code "${runner_exit_codes[$i]}" --argjson projection "${projections[$i]}" '$workers + [{flight_id:$flight_id,attempt:$attempt,runner_exit_code:$runner_exit_code,run_dir:$projection.run_dir,status_ref:$projection.status_ref}]'); then
+  if collect_receipt; then
+    if ! resolved_rows=$("$jq_path" -cn --argjson rows "$resolved_rows" --argjson original "${original_rows[$i]}" --argjson projection "$projection" '$rows + [$original + {flight_id:$projection.flight_id,attempt:$projection.attempt}]'); then
+      internal_error "cannot render resolved worker $i"
+    fi
+  else
+    any_failed=1
+    receipt_collection_failed=1
+    printf '%s\n' "run-codex-worker-batch: $receipt_error: worker $i; receipt_ref=${receipt_refs[$i]}" >&2
+  fi
+  if ! workers_json=$("$jq_path" --compact-output --null-input --argjson workers "$workers_json" --argjson runner_exit_code "${runner_exit_codes[$i]}" --argjson projection "$projection" --arg receipt_error "$receipt_error" '$workers + [{flight_id:$projection.flight_id,attempt:$projection.attempt,runner_exit_code:$runner_exit_code,run_dir:$projection.run_dir,status_ref:$projection.status_ref,receipt_error:(if $receipt_error == "" then null else $receipt_error end)}]'); then
     internal_error "cannot render report worker $i"
   fi
   i=$((i + 1))
@@ -164,7 +214,7 @@ done
 
 reserved_report_target "$report" || internal_error "invalid reserved report target at publication"
 [ -f "$report_tmp" ] && [ ! -L "$report_tmp" ] && [ -w "$report_tmp" ] || internal_error "invalid report temporary file at publication"
-if ! "$jq_path" --null-input --argjson schema_version 1 --argjson interrupted "$interrupted" --argjson workers "$workers_json" '{schema_version:$schema_version,all_workers_waited:true,interrupted:$interrupted,workers:$workers}' > "$report_tmp"; then
+if ! "$jq_path" --null-input --argjson schema_version 1 --argjson interrupted "$interrupted" --argjson workers "$workers_json" --argjson resolved_rows "$resolved_rows" '{schema_version:$schema_version,all_workers_waited:true,interrupted:$interrupted,workers:$workers,resolved_manifest:{schema_version:1,workers:$resolved_rows}}' > "$report_tmp"; then
   internal_error "cannot render report"
 fi
 [ -s "$report_tmp" ] || internal_error "rendered report is empty"
@@ -172,6 +222,9 @@ mv -f "$report_tmp" "$report" || internal_error "cannot publish report"
 [ -f "$report" ] && [ ! -L "$report" ] || internal_error "published report has invalid type"
 report_reserved=0
 trap - EXIT
+if [ "$receipt_collection_failed" -eq 0 ]; then
+  rm -f -- "${receipt_refs[@]}" || internal_error "cannot remove published receipt captures"
+fi
 
 [ "$any_failed" -eq 0 ] && [ "$interrupted" = false ] && exit 0
 exit 1

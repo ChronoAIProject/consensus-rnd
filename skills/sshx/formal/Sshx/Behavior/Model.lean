@@ -94,6 +94,8 @@ structure FlightRec where
   target : String
   status : FlightStatus
   retryBudget : Nat
+  /-- Consumed same-carrier retry allowance, starting at zero. This is a ghost
+  projection of transcript history, not the external runner's `attempt` field. -/
   attempt : Nat
   envelopeRef : Option String
   sentinelRef : Option String
@@ -356,7 +358,7 @@ def guardOpenFlight (s : ProtocolState) (stage : FlightStage) (role : Role) (car
     | .review => guardReviewFlight s role carrier
     | _ => s.stage = stage.protocolStage
 
--- SKILL[guard]: "Every formal `codex-cli` flight must use this runner rather than a parallel direct-launch path."
+-- SKILL[guard]: "Use `skills/sshx/scripts/run-codex-worker.sh` for every `codex-cli` launch."
 def guardLaunchViaRunner (s : ProtocolState) (id : Nat) : Prop :=
   ∃ f, s.flight id = some f ∧ f.launched = false ∧ f.carrier = .codexCli
 

@@ -280,6 +280,38 @@ abbrev SshxWorkerFlightRecord := Behavior.FlightRec
 -- SKILL[def]: "- `completion_sentinel_ref`"
 def flightRecordFieldCount : Nat := 11
 
+/-- Bound identity carries a zero-based external retry index, independently of
+protocol retries consumed before binding. Receipt validity is a premise of binding. -/
+inductive RunnerIdentity
+  | pending
+  | bound (id : Nat) (retryIndex : Nat)
+  deriving DecidableEq, Repr
+
+/-- Adapter state projects existing record fields and transcript history; the protocol
+`id` is a ghost record key, and its `attempt` is consumed retry allowance. -/
+structure RunnerFlight where
+  protocol : Behavior.FlightRec
+  identity : RunnerIdentity
+  deriving DecidableEq, Repr
+
+def bindRunnerIdentity (f : RunnerFlight) (receiptId : Nat) : RunnerFlight :=
+  { f with identity := match f.identity with
+    | .pending => .bound receiptId 0
+    | bound => bound }
+
+theorem first_receipt_binds (f : Behavior.FlightRec) (id : Nat) :
+    bindRunnerIdentity ⟨f, .pending⟩ id = ⟨f, .bound id 0⟩ := rfl
+
+theorem receipt_cannot_rebind (f : Behavior.FlightRec) (id index other : Nat) :
+    bindRunnerIdentity ⟨f, .bound id index⟩ other = ⟨f, .bound id index⟩ := rfl
+
+theorem receipt_preserves_protocol (f : RunnerFlight) (id : Nat) :
+    (bindRunnerIdentity f id).protocol = f.protocol := rfl
+
+-- SKILL[ref]: "Read-only target protection starts at dispatch, including pending identity."
+/-- The existing target guard depends on target/status, never receipt binding. -/
+abbrev pendingIdentityTargetProtection := @Behavior.guardMutateTarget
+
 -- SKILL[ref]: "The caller is non-mutating for that target and its external resources."
 abbrev callerNonMutating := @Behavior.guardMutateTarget
 
@@ -290,10 +322,115 @@ inductive PathOwner
   | caller
   deriving DecidableEq, Repr
 
--- SKILL[def]: "For each `codex-cli` attempt, before launch the caller must mint a fresh `flight_id` with the runner's `--new-flight-id` query rather than writing one by hand, choose the `attempt`, and pass them to `skills/sshx/scripts/run-codex-worker.sh`; the runner derives and owns every artifact path, parallel attempts receive disjoint derived paths, and the caller must not supply arbitrary result, sentinel, log, or state paths."
+-- SKILL[def]: "Only the runner mints IDs and derives disjoint attempt paths; callers cannot supply artifact paths."
 def artifactPathOwner : PathOwner := .runner
 
--- SKILL[def]: "The command, sandbox, path, direct-process, and collection mechanics are owned by `CODEX_WORKER_SPEC.md`; the required dispatch shape is the runner's default `danger-full-access` sandbox, so the caller passes no sandbox selection unless the maintainer explicitly directs a narrower one."
+-- SKILL[def]: "Receipts precede directories, stdin, and carrier execution."
+/-- Receipt ordering is checked by runner behavior tests; this adapter projects
+only the external attempt, independently of the protocol retry counter. -/
+def runnerAttempt (f : RunnerFlight) : Nat :=
+  match f.identity with
+  | .pending => 1
+  | .bound _ index => index + 1
+
+def runnerIdentityOptions (f : RunnerFlight) : Option (Nat × Nat) :=
+  match f.identity with
+  | .pending => none
+  | .bound id _ => some (id, runnerAttempt f)
+
+theorem first_runner_attempt (id : Nat) (stage : Behavior.FlightStage) (role : Behavior.Role)
+    (carrier : Carrier) (target : String) (budget : Nat) :
+    runnerAttempt ⟨Behavior.newFlight id stage role carrier target budget, .pending⟩ = 1 := rfl
+
+/-- Identity adapts the existing collection effect, never selects a different retry
+route or inspects a failure reason. Only a retry admitted there advances bound identity. -/
+def collectRunnerEffect (o : Observation) (f : RunnerFlight) : RunnerFlight :=
+  let next := Behavior.collectEffect o f.protocol
+  { protocol := next
+    identity := if next.status == .retrying then
+      match f.identity with
+      | .pending => .pending
+      | .bound id index => .bound id (index + 1)
+    else f.identity }
+
+theorem runner_collection_projects_protocol (o : Observation) (f : RunnerFlight) :
+    (collectRunnerEffect o f).protocol = Behavior.collectEffect o f.protocol := rfl
+
+-- SKILL[thm]: "Until a valid receipt binds `flight_id`, leave it empty and omit identity options;"
+-- SKILL[thm]: "`attempt` stays 1."
+theorem pending_retry_without_identity (f : Behavior.FlightRec) (o : Observation)
+    (failed : done o = false) (capacity : f.attempt < f.retryBudget) :
+    runnerIdentityOptions (collectRunnerEffect o ⟨f, .pending⟩) = none ∧
+    runnerAttempt (collectRunnerEffect o ⟨f, .pending⟩) = 1 := by
+  simp [collectRunnerEffect, Behavior.collectEffect, failed, capacity,
+    runnerIdentityOptions, runnerAttempt]
+
+-- SKILL[thm]: "Bound retries reuse that ID and increment `attempt`."
+theorem retry_identity_and_attempt (f : Behavior.FlightRec) (o : Observation) (id index : Nat)
+    (failed : done o = false) (capacity : f.attempt < f.retryBudget) :
+    (collectRunnerEffect o ⟨f, .bound id index⟩).protocol.id = f.id ∧
+    runnerIdentityOptions (collectRunnerEffect o ⟨f, .bound id index⟩) =
+      some (id, runnerAttempt ⟨f, .bound id index⟩ + 1) := by
+  simp [collectRunnerEffect, Behavior.collectEffect, failed, capacity,
+    runnerIdentityOptions, runnerAttempt]
+
+-- SKILL[thm]: "Count every retry against the fixed `retry_budget` in the transcript, separately from `attempt`; missing receipts and binding never reset it."
+theorem runner_retry_consumes_allowance (f : RunnerFlight) (o : Observation)
+    (failed : done o = false) (capacity : f.protocol.attempt < f.protocol.retryBudget) :
+    (collectRunnerEffect o f).protocol.attempt = f.protocol.attempt + 1 ∧
+    (collectRunnerEffect o f).protocol.retryBudget = f.protocol.retryBudget := by
+  simp [collectRunnerEffect, Behavior.collectEffect, failed, capacity]
+
+theorem runner_retry_strictly_decreases_remaining (f : RunnerFlight) (o : Observation)
+    (failed : done o = false) (capacity : f.protocol.attempt < f.protocol.retryBudget) :
+    (collectRunnerEffect o f).protocol.retryBudget -
+      (collectRunnerEffect o f).protocol.attempt <
+    f.protocol.retryBudget - f.protocol.attempt := by
+  obtain ⟨count, budget⟩ := runner_retry_consumes_allowance f o failed capacity
+  rw [count, budget]
+  omega
+
+theorem receipt_preserves_remaining (f : RunnerFlight) (id : Nat) :
+    (bindRunnerIdentity f id).protocol.retryBudget -
+      (bindRunnerIdentity f id).protocol.attempt =
+    f.protocol.retryBudget - f.protocol.attempt := rfl
+
+theorem runner_accounting_stays_bounded (f : RunnerFlight) (o : Observation)
+    (bounded : f.protocol.attempt ≤ f.protocol.retryBudget) :
+    (collectRunnerEffect o f).protocol.attempt ≤
+      (collectRunnerEffect o f).protocol.retryBudget := by
+  simp only [collectRunnerEffect, Behavior.collectEffect]
+  split <;> simp_all
+  split <;> simp_all
+
+-- SKILL[thm]: "Both states exhaust into fallback; new tasks and fallback start fresh flights."
+theorem runner_exhausted_abstains (f : RunnerFlight) (o : Observation)
+    (failed : done o = false) (exhausted : ¬ f.protocol.attempt < f.protocol.retryBudget) :
+    (collectRunnerEffect o f).protocol.status = .abstained ∧
+    (collectRunnerEffect o f).protocol.attempt = f.protocol.attempt ∧
+    (collectRunnerEffect o f).identity = f.identity := by
+  simp [collectRunnerEffect, Behavior.collectEffect, failed, exhausted]
+
+theorem fallback_first_runner_attempt (id : Nat) (carrier : Carrier) (f : Behavior.FlightRec) :
+    (Behavior.reopenFlight id carrier f).id = id ∧
+    runnerAttempt ⟨Behavior.reopenFlight id carrier f, .pending⟩ = 1 := by
+  simp [Behavior.reopenFlight, runnerAttempt]
+
+/-- Pre-receipt failure consumes retry 1; binding still exposes external attempt 1;
+a bound failure consumes retry 2 and exposes attempt 2; another failure exhausts. -/
+example :
+    let failed : Observation := ⟨true, false, false, false, false⟩
+    let start : RunnerFlight :=
+      ⟨Behavior.newFlight 0 .implementation .implementation .codexCli "target" 2, .pending⟩
+    let pending := collectRunnerEffect failed start
+    let bound := bindRunnerIdentity pending 42
+    let retry := collectRunnerEffect failed bound
+    pending.protocol.attempt = 1 ∧ runnerIdentityOptions pending = none ∧
+    bound.protocol.attempt = 1 ∧ runnerIdentityOptions bound = some (42, 1) ∧
+    retry.protocol.attempt = 2 ∧ runnerIdentityOptions retry = some (42, 2) ∧
+    (collectRunnerEffect failed retry).protocol.status = .abstained := by decide
+
+-- SKILL[def]: "Mechanics are owned by `CODEX_WORKER_SPEC.md`; use the runner's default `danger-full-access` unless the maintainer explicitly requests a narrower sandbox."
 def defaultSandbox : String := "danger-full-access"
 
 inductive TeardownOwner
@@ -321,7 +458,7 @@ theorem batch_never_covers_whole_stage (seats : Nat) (h : 2 ≤ seats) :
   have hgt : ¬ seats ≤ 1 := by omega
   simp [batchSeats, stageComposition, hgt, List.filter_replicate]
 
--- SKILL[ref]: "The dispatcher obtains every worker artifact path from the runner's pure path projection; worker artifact paths remain runner-derived and are never caller-supplied."
+-- SKILL[ref]: "The dispatcher validates joined receipts with the runner's pure path projection and puts assigned rows in `resolved_manifest`."
 abbrev batchPathsFromRunner := artifactPathOwner
 
 -- SKILL[def]: "Internal shell `&` followed by `wait` is permitted inside that one named batch script because it remains the foreground process of one host-tracked job, records every child, and joins every recorded child before publishing a report; its signal handling, interruption reporting, and inherited-disposition limits are owned by `CODEX_WORKER_SPEC.md` and the script's behavior tests, and whole-job-tree teardown remains the host's responsibility."

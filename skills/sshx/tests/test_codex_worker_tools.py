@@ -228,6 +228,127 @@ class CodexWorkerToolTests(unittest.TestCase):
         path.write_text(f"MARKER={marker}\n{behavior}\n")
         return path
 
+    def fresh_worker(self, brief_ref: Path, **overrides: object) -> dict[str, object]:
+        return {"stage": "implementation", "work_target": str(ROOT), "brief_ref": str(brief_ref), **overrides}
+
+    def dispatch(self, manifest: Path, report: Path, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(["/bin/bash", str(BATCH), "--manifest", str(manifest), "--report", str(report)], capture_output=True, text=True, env=env or self.environment(), timeout=WATCHDOG_SECONDS)
+
+    def test_mixed_batch_resolves_failed_fresh_and_retry_rows_for_collection_and_cleanup(self) -> None:
+        first = subprocess.run(["/bin/bash", str(RUNNER), "--stage", "implementation", "--work-target", str(ROOT)], input="MARKER=first\n", capture_output=True, text=True, env=self.environment(), check=True)
+        identity = json.loads(first.stdout)["flight_id"]
+        rows = [
+            self.fresh_worker(self.make_brief("fresh-failed", "FAIL")),
+            self.worker(identity, 2, self.make_brief("retry")),
+            self.fresh_worker(self.make_brief("fresh-success"), sandbox="workspace-write"),
+        ]
+        manifest = self.write_manifest(rows)
+        report = self.temp_dir / "resolved-report.json"
+        process = self.dispatch(manifest, report)
+        self.assertEqual(process.returncode, 1, process.stderr)
+        document = json.loads(report.read_text())
+        self.assertEqual([row["runner_exit_code"] for row in document["workers"]], [1, 0, 0])
+        resolved = document["resolved_manifest"]
+        ids = [row["flight_id"] for row in resolved["workers"]]
+        self.assertEqual(len(set(ids)), 3)
+        self.assertEqual(ids[1], identity)
+        self.assertEqual([row["attempt"] for row in resolved["workers"]], [1, 2, 1])
+        for original, assigned in zip(rows, resolved["workers"], strict=True):
+            self.assertTrue(original.items() <= assigned.items())
+        for capture in json.loads(process.stdout)["receipt_refs"]:
+            self.assertFalse(Path(capture["receipt_ref"]).exists())
+        resolved_ref = self.temp_dir / "resolved.json"
+        resolved_ref.write_text(json.dumps(resolved))
+        status = subprocess.run(["/bin/bash", str(STATUS_READER), "--manifest", str(resolved_ref)], capture_output=True, text=True, env=self.environment(), check=True)
+        self.assertEqual([row["status_document"]["reason_code"] for row in json.loads(status.stdout)["workers"]], ["CARRIER_EXIT_NONZERO", "COMPLETE", "COMPLETE"])
+        cleanup = subprocess.run(["/bin/bash", str(CLEANUP), "--manifest", str(resolved_ref), "--delete"], capture_output=True, text=True, env=self.environment(), check=True)
+        self.assertEqual(set(json.loads(cleanup.stdout)["removed"]), {str(self.sshx_home / flight_id) for flight_id in ids})
+        self.assertFalse(self.run_dir(identity, 1).exists())
+
+    def test_fresh_batch_preflight_rejects_partial_pairs_and_checks_all_briefs_and_root(self) -> None:
+        valid = self.fresh_worker(self.make_brief("fresh-preflight"))
+        cases = [
+            ({**valid, "flight_id": VALID_ID}, 64, self.environment()),
+            ({**valid, "attempt": 1}, 64, self.environment()),
+            ({**valid, "brief_ref": str(self.temp_dir / "missing")}, 64, self.environment()),
+            (valid, 1, self.environment(sshx_home=Path("relative"))),
+        ]
+        for index, (row, code, env) in enumerate(cases):
+            manifest = self.write_manifest([valid, row], f"preflight-{index}.json")
+            report = self.temp_dir / f"preflight-{index}-report.json"
+            process = self.dispatch(manifest, report, env=env)
+            self.assertEqual(process.returncode, code, process.stderr)
+            self.assertFalse(report.exists())
+            self.assertFalse(self.launch_log.exists())
+            self.assertFalse(self.sshx_home.exists())
+
+    def test_batch_preallocation_failure_has_null_fields_and_no_fabricated_resolved_row(self) -> None:
+        rejected_target = self.temp_dir / "rejected-target"
+        wrapper = self.bin_dir / "bash"
+        wrapper.write_text('#!/bin/bash\nif [ "${2:-}" = --stage ] && [ "${5:-}" = "$REJECT_TARGET" ]; then exit 17; fi\nexec /bin/bash "$@"\n')
+        wrapper.chmod(0o755)
+        env = {**self.environment(), "REJECT_TARGET": str(rejected_target)}
+        rows = [self.fresh_worker(self.make_brief("unallocated"), work_target=str(rejected_target)), self.fresh_worker(self.make_brief("allocated"))]
+        report = self.temp_dir / "partial-report.json"
+        process = self.dispatch(self.write_manifest(rows), report, env=env)
+        self.assertEqual(process.returncode, 1, process.stderr)
+        document = json.loads(report.read_text())
+        unallocated, allocated = document["workers"]
+        self.assertEqual(unallocated["runner_exit_code"], 17)
+        self.assertEqual(unallocated["receipt_error"], "RECEIPT_MISSING")
+        for field in ["flight_id", "attempt", "run_dir", "status_ref"]:
+            self.assertIsNone(unallocated[field])
+        self.assertEqual(len(document["resolved_manifest"]["workers"]), 1)
+        self.assertEqual(document["resolved_manifest"]["workers"][0]["flight_id"], allocated["flight_id"])
+        self.assertIn("RECEIPT_MISSING: worker 0", process.stderr)
+
+    def test_batch_report_publication_failure_preserves_joined_receipts(self) -> None:
+        report = self.temp_dir / "unpublished-report.json"
+        observer = self.temp_dir / "publication-failure.bash"
+        observer.write_text('mv() {\n for target in "$@"; do :; done\n if [ "$0" = "$BATCH_SCRIPT" ] && [ "$target" = "$REPORT_TARGET" ]; then return 73; fi\n command mv "$@"\n}\n')
+        env = {**self.environment(), "BASH_ENV": str(observer), "BATCH_SCRIPT": str(BATCH), "REPORT_TARGET": str(report)}
+        rows = [self.fresh_worker(self.make_brief(f"retained-{index}")) for index in range(2)]
+        process = self.dispatch(self.write_manifest(rows), report, env=env)
+        self.assertEqual(process.returncode, 1, process.stderr)
+        self.assertIn("cannot publish report", process.stderr)
+        self.assertFalse(report.exists())
+        refs = json.loads(process.stdout)["receipt_refs"]
+        self.assertEqual([entry["worker_index"] for entry in refs], [0, 1])
+        for ref in refs:
+            capture = Path(ref["receipt_ref"])
+            self.assertEqual(capture.stat().st_mode & 0o777, 0o600)
+            receipt = json.loads(capture.read_text())
+            self.assertEqual(receipt, self.project(receipt["flight_id"], receipt["attempt"]))
+            self.assertEqual(json.loads(Path(receipt["status_ref"]).read_text())["reason_code"], "COMPLETE")
+
+    def test_batch_recovery_receipt_delivery_failure_launches_nothing(self) -> None:
+        rows = [self.fresh_worker(self.make_brief("recovery-failure"))]
+        manifest = self.write_manifest(rows)
+        report = self.temp_dir / "recovery-report.json"
+        with manifest.open("rb") as output:
+            process = subprocess.run(["/bin/bash", str(BATCH), "--manifest", str(manifest), "--report", str(report)], stdout=output, stderr=subprocess.PIPE, text=True, env=self.environment(), timeout=WATCHDOG_SECONDS)
+        self.assertEqual(process.returncode, 1, process.stderr)
+        self.assertIn("cannot publish receipt recovery references", process.stderr)
+        self.assertFalse(self.launch_log.exists())
+        self.assertFalse(report.exists())
+
+    def test_batch_rejects_invalid_or_mismatched_receipts_after_join(self) -> None:
+        wrapper = self.bin_dir / "bash"
+        wrapper.write_text('#!/bin/bash\nif [ "${2:-}" = --stage ]; then\n receipt=$(/bin/bash "$@")\n if [ "$CORRUPT_RECEIPT" = invalid ]; then printf "%s\\nextra\\n" "$receipt"; else printf "%s\\n" "$receipt" | "$REAL_JQ" \'.run_dir = "/wrong"\'; fi\nelse exec /bin/bash "$@"; fi\n')
+        wrapper.chmod(0o755)
+        for mode, error in [("invalid", "RECEIPT_INVALID"), ("mismatch", "RECEIPT_PROJECTION_MISMATCH")]:
+            rows = [self.fresh_worker(self.make_brief(mode))]
+            report = self.temp_dir / f"{mode}-report.json"
+            env = {**self.environment(), "REAL_JQ": str(self.real_jq), "CORRUPT_RECEIPT": mode}
+            process = self.dispatch(self.write_manifest(rows, f"{mode}.json"), report, env=env)
+            self.assertEqual(process.returncode, 1, process.stderr)
+            document = json.loads(report.read_text())
+            self.assertEqual(document["workers"][0]["receipt_error"], error)
+            self.assertIsNone(document["workers"][0]["flight_id"])
+            self.assertEqual(document["resolved_manifest"]["workers"], [])
+            for ref in json.loads(process.stdout)["receipt_refs"]:
+                self.assertTrue(Path(ref["receipt_ref"]).is_file(), "invalid receipts must remain diagnosable")
+
     def test_project_paths_is_pure_and_validates_query_shape(self) -> None:
         missing_tmp = self.temp_dir / "does-not-exist"
         env = self.environment(sshx_home=missing_tmp)
@@ -495,7 +616,7 @@ class CodexWorkerToolTests(unittest.TestCase):
                 self.make_carrier_gates(markers)
                 briefs = [self.make_brief(marker, "BLOCK") for marker in markers]
                 manifest = self.write_manifest(
-                    [self.worker(flights[i], 1, briefs[i]) for i in range(2)],
+                    [self.fresh_worker(briefs[i]) for i in range(2)],
                     f"interrupted-{dispatch_signal}.json",
                 )
                 report = self.temp_dir / f"interrupted-report-{dispatch_signal}.json"
@@ -558,6 +679,7 @@ class CodexWorkerToolTests(unittest.TestCase):
                 self.assertTrue(document["all_workers_waited"])
                 self.assertTrue(document["interrupted"])
                 self.assertEqual([item["runner_exit_code"] for item in document["workers"]], [0, 0])
+                self.assertEqual(len(document["resolved_manifest"]["workers"]), 2)
                 self.assertTrue(all(Path(item["status_ref"]).is_file() for item in document["workers"]))
 
     def test_batch_signal_between_joins_does_not_discard_completed_wait(self) -> None:
@@ -685,7 +807,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         child_exited = self.make_gate("colliding-child-exited")
         bash_wrapper.write_text(
             "#!/bin/bash\n"
-            'if [ "${1:-}" = "$RUNNER_SCRIPT" ] && [ "${2:-}" = "--flight-id" ]; then\n'
+            'if [ "${1:-}" = "$RUNNER_SCRIPT" ] && [ "${2:-}" = "--stage" ]; then\n'
             '  printf "exited\\n" > "$CHILD_EXITED"\n'
             "  exit 143\n"
             "fi\n"

@@ -59,7 +59,8 @@ theorem not_done_of_missing_sentinel (o : Observation) (h : o.sentinelPresent = 
 
 -- SKILL[def]: "`retry_budget` is a finite integer decided before the first launch for that flight"
 /-- Same-carrier retry accounting for one flight. `retryBudget` is fixed before the first
-launch; `attempt` counts launches already made. -/
+launch; `attempt` counts consumed retries, starting at zero, independently of
+whether a runner identity has been assigned. -/
 structure Flight where
   retryBudget : Nat
   attempt : Nat
