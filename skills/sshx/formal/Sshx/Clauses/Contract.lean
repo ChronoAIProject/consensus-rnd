@@ -140,20 +140,68 @@ abbrev visibleInputsRule := @visible
 
 /-! ## Implementation worker -/
 
-/-- The implementation brief and its conduct. -/
-structure ImplementationBrief where
-  planApprovedByThinkingGate : Bool
-  boundaryNarrow : Bool
-  deviationStatedBeforeMade : Bool
+/-- Interpreted authority, not an English classifier or provenance authenticator. -/
+inductive ImplementationRequirementSource
+  | approvedOutcome
+  | user
+  | host
+  | callerMechanics
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Implement only the concrete plan approved by the thinking gate."
+structure ImplementationRequirement where
+  source : ImplementationRequirementSource
+  sourceRef : String
+  framing : String
+  deriving DecidableEq, Repr
+
+-- SKILL[def]: "No caller recipes (steps, code/pseudocode, structures or algorithms), even as consensus, acceptance or prohibitions."
+-- SKILL[def]: "Preserve user/host technical requirements with their sources."
+def ImplementationRequirement.binding (r : ImplementationRequirement) : Bool :=
+  r.source != .callerMechanics && r.sourceRef != ""
+
+/-- Semantic judgments supplied by evidence and independent review, not runtime fields. -/
+-- SKILL[def]: "Send goal, verifiable acceptance, authorized scope/prohibitions and grounded context/evidence."
+-- SKILL[def]: "Workers inspect the target and choose mechanics;"
+structure ImplementationBrief where
+  planApprovedByThinkingGate : Bool
+  goalAndAcceptancePassed : Bool
+  scopeAndProhibitionsPassed : Bool
+  groundedContextPassed : Bool
+  bindingRequirements : List ImplementationRequirement
+  workerChoosesMechanicsAfterInspection : Bool
+  boundaryNarrow : Bool
+  deriving DecidableEq, Repr
+
+-- SKILL[def]: "Thinking-gate approval binds outcomes, scope and requirements before implementation."
 def implementationAllowed (b : ImplementationBrief) : Bool := b.planApprovedByThinkingGate
 
--- SKILL[def]: "Keep the implementation boundary narrow and state any deviation before making it."
--- SKILL[ref]: "Scope changes retain the existing correction, direction and class gates."
 def implementationConforming (b : ImplementationBrief) : Bool :=
-  b.boundaryNarrow && b.deviationStatedBeforeMade
+  implementationAllowed b && b.goalAndAcceptancePassed && b.scopeAndProhibitionsPassed &&
+    b.groundedContextPassed && b.bindingRequirements.all ImplementationRequirement.binding &&
+    b.workerChoosesMechanicsAfterInspection && b.boundaryNarrow
+
+/-- A compliant internal alternative changes none of the three binding coordinates. -/
+structure ImplementationChange where
+  goalsChanged : Bool
+  authorityChanged : Bool
+  constraintsChanged : Bool
+  internalApproachChanged : Bool
+  deriving DecidableEq, Repr
+
+-- SKILL[def]: "Report goal, authority or constraint changes before acting via existing correction, direction and class gates."
+def ImplementationChange.needsExistingGates (c : ImplementationChange) : Bool :=
+  c.goalsChanged || c.authorityChanged || c.constraintsChanged
+
+-- SKILL[thm]: "compliant alternatives alone are not deviations."
+theorem compliant_alternative_needs_no_new_gate (differentMechanics : Bool) :
+    ImplementationChange.needsExistingGates ⟨false, false, false, differentMechanics⟩ = false := rfl
+
+theorem caller_recipe_cannot_gain_authority (label sourceRef : String) :
+    ImplementationRequirement.binding ⟨.callerMechanics, sourceRef, label⟩ = false := by
+  simp [ImplementationRequirement.binding]
+
+theorem relabelling_preserves_requirement_authority (r : ImplementationRequirement) (label : String) :
+    { r with framing := label }.binding = r.binding := rfl
 
 -- SKILL[ref]: "Implementation must be delegated to a worker using the stage's default carrier under `WorkerDelegationContract`."
 -- SKILL[ref]: "Delegate the smallest changes for what still differs from `GoalArtifact`; open a `SshxWorkerFlightRecord` per assignment and stay orchestration-only for the repair."
@@ -161,17 +209,47 @@ abbrev implementationIsAFlight := @Behavior.guardOpenFlight
 
 /-- What crosses between caller and implementation worker. -/
 structure ImplementationExchange where
-  planAndConstraintsPassed : Bool
+  brief : ImplementationBrief
   changedFileEvidenceInConclusion : Bool
   testEvidenceInConclusion : Bool
   processLogsBehindLogRef : Bool
   deriving DecidableEq, Repr
 
--- SKILL[def]: "The caller context may pass the approved concrete plan and constraints, then receive `conclusion` and `log_ref`; changed-file and test evidence belong in `conclusion`, and process logs stay behind `log_ref`."
--- SKILL[ref]: "Tests continue during implementation; routing never substitutes for independent review."
+-- SKILL[def]: "Exchange the brief for `conclusion` (changed files, checks) and opaque `log_ref`."
+-- SKILL[ref]: "Testing continues; routing never replaces independent review."
 def ImplementationExchange.conforming (e : ImplementationExchange) : Bool :=
-  e.planAndConstraintsPassed && e.changedFileEvidenceInConclusion && e.testEvidenceInConclusion &&
+  implementationConforming e.brief && e.changedFileEvidenceInConclusion && e.testEvidenceInConclusion &&
     e.processLogsBehindLogRef
+
+-- SKILL[ref]: "include findings and failure evidence."
+def repairHandoffConforming (e : ImplementationExchange) (admittedFailureEvidencePassed : Bool) : Bool :=
+  e.conforming && admittedFailureEvidencePassed
+
+/-- Initial and repair examples exercise the same handoff projection. Their sourced
+classifications are premises; live dispatch/worker exercises check English behavior. -/
+private def exportBrief : ImplementationBrief :=
+  ⟨true, true, true, true,
+    [⟨.approvedOutcome, "thinking settlement: NDJSON export", "outcome"⟩,
+     ⟨.user, "user request: ordered Unicode string fields", "acceptance"⟩,
+     ⟨.host, "HOST.md: standard library and stable write_events API", "prohibition"⟩],
+    true, true⟩
+
+private def exportExchange : ImplementationExchange := ⟨exportBrief, true, true, true⟩
+
+example : exportExchange.conforming = true := by decide
+example : repairHandoffConforming exportExchange true = true := by decide
+example : repairHandoffConforming exportExchange false = false := by decide
+example : implementationConforming { exportBrief with planApprovedByThinkingGate := false } = false := by decide
+example : implementationConforming { exportBrief with workerChoosesMechanicsAfterInspection := false } = false := by decide
+example : implementationConforming { exportBrief with bindingRequirements :=
+    [⟨.callerMechanics, "thinking discussion: EventRow class", "acceptance"⟩] } = false := by decide
+example : repairHandoffConforming { exportExchange with brief :=
+    { exportBrief with bindingRequirements :=
+      [⟨.callerMechanics, "review suggestion: decorator", "prohibition"⟩] } } true = false := by decide
+example : ImplementationRequirement.binding ⟨.host, "", "technical requirement"⟩ = false := by decide
+example : ImplementationChange.needsExistingGates ⟨true, false, false, true⟩ = true := by decide
+example : ImplementationChange.needsExistingGates ⟨false, true, false, false⟩ = true := by decide
+example : ImplementationChange.needsExistingGates ⟨false, false, true, true⟩ = true := by decide
 
 /-! ## Result envelope -/
 

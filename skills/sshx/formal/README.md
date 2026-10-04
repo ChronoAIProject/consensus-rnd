@@ -110,6 +110,16 @@ not claimed as consequences of the abstract model.
 
 ## What the model cannot verify
 
+The implementation/repair handoff in `Clauses/Contract.lean` projects the approved
+outcome, brief completeness, sourced requirements and worker ownership. Relabelling
+a caller recipe cannot make it binding; a compliant internal alternative alone does
+not activate the existing change gates. Both initial and repair examples use the same
+projection. Requirement provenance, compliance and brief completeness are interpreted
+premises, not classifications proved by Lean. The fixture
+`tests/fixtures/implementation_dispatch.md` (relative to the skill directory) exercises
+actual brief generation and routing; generated behavior evidence stays outside source.
+These definitions do not extend the runtime or replace the independent review gate.
+
 The trace ties each clause to a Lean object, and the Lean kernel checks the object. Whether
 the object *means* what the English says is a human correspondence judgment, kept reviewable
 by placing each quote next to its object. A clause traced as `prose` carries no norm in the

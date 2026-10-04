@@ -165,7 +165,7 @@ structure ImplementationPlan where
   flightAllowance : Nat
   deriving DecidableEq, Repr
 
--- SKILL[def]: "An approved plan may span finite flights within `implementation_worker`; predeclare assignments and their allowance in its conclusion."
+-- SKILL[def]: "Predeclare finite assignments and allowance in the approved plan's conclusion."
 def ImplementationPlan.valid (p : ImplementationPlan) : Prop :=
   p.obligations ≠ [] ∧ 0 < p.flightAllowance
 
@@ -289,7 +289,7 @@ def ProtocolState.batchSettled (s : ProtocolState) : Bool :=
       f.id < g.id && f.assignment == g.assignment &&
         g.status == .terminal)
 
--- SKILL[guard]: "Admit the initial review triplet once all approved work and checks have worker evidence, with no active or unrecovered failed flight."
+-- SKILL[guard]: "Initial review needs worker evidence for all approved work/checks and no active/unrecovered failed flight."
 /-- The sole candidate-readiness projection, shared by stage advance and review dispatch.
 It is independent of the remaining pass budget: a repair has already paid for its review. -/
 def ProtocolState.reviewReady (s : ProtocolState) : Bool :=
@@ -304,7 +304,7 @@ def ProtocolState.reviewComplete (s : ProtocolState) : Bool :=
   s.reviewReady && reviewRoles.all fun role =>
     s.batchFlights.any fun f => f.stage == .review && f.role == role && f.status == .terminal
 
--- SKILL[guard]: "Pending work or checks stay in implementation within the allowance; exhaustion or failure reports unresolved work."
+-- SKILL[guard]: "Pending work/checks stay in implementation within the allowance; exhaustion/failure reports unresolved work."
 def guardImplementationFlight (s : ProtocolState) : Prop :=
   (s.stage = .implementation ∨ s.stage = .fixOrDone) ∧
     s.reviewStarted = false ∧ s.reviewReady = false ∧ s.batchSettled = true ∧
@@ -413,7 +413,7 @@ def guardRecordPassBudget (s : ProtocolState) : Prop :=
   s.stage = .fixOrDone ∧ s.passBudget = none
 
 -- SKILL[guard]: "The budget is immutable for this run: no result, repair, or correction may add, replenish, reset, or replace units, and a unit is never refunded."
--- SKILL[guard]: "Worker conclusions accumulate completed and remaining obligations and test evidence; terminal flight completion permits handoff only."
+-- SKILL[guard]: "Accumulate completed/remaining obligations and test evidence; terminal completion permits handoff only."
 def guardRecordImplementation (s : ProtocolState) (id : Nat) : Prop :=
   s.reviewStarted = false ∧ s.batch.isSome = true ∧
     ∃ f ∈ s.batchFlights, f.id = id ∧ f.stage = .implementation ∧ f.status = .terminal ∧
@@ -423,7 +423,7 @@ def guardBeginImplementation (s : ProtocolState) (plan : ImplementationPlan) : P
   s.stage = .implementation ∧ s.batch = none ∧ plan.valid
 
 -- SKILL[guard]: "The batch debit includes all bounded assignments and final review even at zero remaining units, with no subsequent pass authority."
--- SKILL[guard]: "If review exits `fix`, freeze admitted fixes as one finite batch using `## Implementation Worker` decomposition, allowance and evidence rules."
+-- SKILL[guard]: "For `fix`, freeze admitted repairs as a finite batch under `## Implementation Worker` handoff, allowance and evidence rules;"
 def guardPass (s : ProtocolState) (t : Transition) (e : Reasoning.FamilyEvidence)
     (plan : Option ImplementationPlan) : Prop :=
   s.stage = .fixOrDone ∧ Reasoning.familyPassAllowed e t = true ∧
@@ -450,7 +450,7 @@ def guardClaimSatisfied (s : ProtocolState) : Prop :=
     (s.gate = .applies → s.terminationExit = some .claimPermitted ∧
       s.terminationAuthority = some s.continuationAuthority) ∧ s.reviewComplete = true
 
--- SKILL[guard]: "`sshx` does not grant permission to commit, push, merge, close issues, edit labels, publish releases, or mutate external lifecycle state."
+-- SKILL[guard]: "No lifecycle authority is granted."
 def guardNoLifecycle : Prop := False
 
 -- SKILL[guard]: "Such a URL is permitted only when the referenced content is already anonymously readable on the remote, which the caller confirms before the first submission; the caller must never push, publish, change repository visibility, or otherwise mutate remote state to make content linkable."
