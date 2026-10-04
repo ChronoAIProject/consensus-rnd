@@ -12,8 +12,8 @@ verdict=
 
 regular_or_absent() { [ ! -e "$1" ] && [ ! -L "$1" ] || { [ -f "$1" ] && [ ! -L "$1" ]; }; }
 log_time() { log_timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null) || log_timestamp=; case "$log_timestamp" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) printf '%s\n' "$log_timestamp" ;; *) printf '%s\n' '1970-01-01T00:00:00Z' ;; esac; }
-log_field() { log_timestamp=$(log_time); (printf '%s  %-13s %s\n' "$log_timestamp" "$1" "$2") || :; }
-log_event() { log_timestamp=$(log_time); (printf '%s  %s\n' "$log_timestamp" "$1") || :; }
+log_field() { log_timestamp=$(log_time); (printf '%s  %-13s %s\n' "$log_timestamp" "$1" "$2" >&2) || :; }
+log_event() { log_timestamp=$(log_time); (printf '%s  %s\n' "$log_timestamp" "$1" >&2) || :; }
 
 finish() {
   trap - EXIT
@@ -110,21 +110,17 @@ emit_project_paths() {
     return 1
   fi
   [ -n "$projection_json" ] || { reason=INTERNAL_ERROR; return 1; }
-  printf '%s\n' "$projection_json" || { reason=INTERNAL_ERROR; return 1; }
+  (printf '%s\n' "$projection_json") || { reason=INTERNAL_ERROR; return 1; }
 }
-emit_new_flight_id() {
+allocate_flight_id() {
   if ! minted_seconds=$(date -u '+%s' 2>/dev/null); then reason=INTERNAL_ERROR; return 1; fi
   case "$minted_seconds" in ''|*[!0-9]*) reason=INTERNAL_ERROR; return 1 ;; esac
   if ! minted_random=$(set -o pipefail; od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'); then reason=INTERNAL_ERROR; return 1; fi
   printf -v minted_time '%08x' "$minted_seconds" || { reason=INTERNAL_ERROR; return 1; }
   minted_id="$minted_time$minted_random"
   valid_flight_id "$minted_id" || { reason=INTERNAL_ERROR; printf '%s\n' 'run-codex-worker: INTERNAL_ERROR: minted flight id is malformed' >&2; return 1; }
-  if ! projection_json=$("$jq_path" --compact-output --null-input --argjson schema_version 1 --arg flight_id "$minted_id" '{schema_version:$schema_version,flight_id:$flight_id}'); then
-    reason=INTERNAL_ERROR
-    return 1
-  fi
-  [ -n "$projection_json" ] || { reason=INTERNAL_ERROR; return 1; }
-  printf '%s\n' "$projection_json" || { reason=INTERNAL_ERROR; return 1; }
+  flight_id=$minted_id
+  attempt=1
 }
 emit_project_root() {
   root_present=false
@@ -180,7 +176,7 @@ emit_project_flight() {
   printf '%s\n' "$projection_json" || { reason=INTERNAL_ERROR; return 1; }
 }
 main() {
-  flight_id= attempt= stage= work_target= sandbox=; project_paths=0; project_flight=0; project_root=0; new_flight_id=0; seen_options='|'
+  flight_id= attempt= stage= work_target= sandbox=; project_paths=0; project_flight=0; project_root=0; seen_options='|'
   while [ "$#" -gt 0 ]; do
     option=$1
     case "$option" in
@@ -196,10 +192,6 @@ main() {
         case "$seen_options" in *"$option"*) usage_error "duplicate option $option"; return 1 ;; esac
         project_root=1; seen_options="$seen_options$option|"; shift; continue
         ;;
-      --new-flight-id)
-        case "$seen_options" in *"$option"*) usage_error "duplicate option $option"; return 1 ;; esac
-        new_flight_id=1; seen_options="$seen_options$option|"; shift; continue
-        ;;
       --flight-id) target=flight_id ;; --attempt) target=attempt ;; --stage) target=stage ;;
       --work-target) target=work_target ;; --sandbox) target=sandbox ;;
       --*) usage_error "unknown option $option"; return 1 ;; *) usage_error "unexpected positional argument $option"; return 1 ;;
@@ -209,14 +201,14 @@ main() {
     printf -v "$target" '%s' "$2"; seen_options="$seen_options$option|"
     shift 2
   done
-  query_mode=$((project_paths + project_flight + project_root + new_flight_id))
+  query_mode=$((project_paths + project_flight + project_root))
   [ "$query_mode" -le 1 ] || { usage_error "query modes are mutually exclusive"; return 1; }
-  if [ $((project_root + new_flight_id)) -eq 1 ]; then
-    query_name=--project-root; [ "$new_flight_id" -eq 0 ] || query_name=--new-flight-id
+  if [ "$project_root" -eq 1 ]; then
+    query_name=--project-root
     for other_option in --flight-id --attempt --stage --work-target --sandbox; do
       case "$seen_options" in *"$other_option"*) usage_error "$query_name cannot be combined with $other_option"; return 1 ;; esac
     done
-  else
+  elif [ "$query_mode" -eq 1 ] || [[ "$seen_options" = *--flight-id* || "$seen_options" = *--attempt* ]]; then
     case "$seen_options" in *'--flight-id'*) ;; *) usage_error "missing --flight-id"; return 1 ;; esac
     if [ "$project_flight" -eq 0 ]; then
       case "$seen_options" in *'--attempt'*) ;; *) usage_error "missing --attempt"; return 1 ;; esac
@@ -248,12 +240,13 @@ main() {
     case "$sandbox" in danger-full-access|workspace-write) ;; *) usage_error "invalid --sandbox"; return 1 ;; esac
   fi
   if ! jq_path=$(command -v jq 2>/dev/null) || [ ! -x "$jq_path" ]; then reason=PARSER_UNAVAILABLE; return 1; fi
-  if [ "$new_flight_id" -eq 1 ]; then
-    emit_new_flight_id || return 1
-    trap - EXIT
-    return 0
+  if [ "$query_mode" -eq 0 ]; then
+    if ! codex_path=$(command -v codex 2>/dev/null) || [ ! -x "$codex_path" ]; then reason=LAUNCH_FAILED; return 1; fi
   fi
   normalize_run_root || return 1
+  if [ "$query_mode" -eq 0 ] && [ -z "$flight_id" ]; then
+    allocate_flight_id || return 1
+  fi
   derive_project_paths
   if [ "$project_root" -eq 1 ]; then
     emit_project_root || return 1
@@ -270,6 +263,9 @@ main() {
     trap - EXIT
     return 0
   fi
+  # The same read-only projection is the launch receipt. Delivery precedes all
+  # directory writes, stdin reads, and carrier execution.
+  emit_project_paths || return 1
   ensure_run_root() {
     [ ! -L "$run_root" ] || return 1
     if [ -e "$run_root" ]; then [ -d "$run_root" ] && [ -w "$run_root" ]; return; fi
@@ -332,7 +328,6 @@ EOF
   log_field brief "$brief_ref"; log_field stdout_log "$stdout_ref"; log_field stderr_log "$stderr_ref"
   log_field last_message "$last_message_ref"; log_field result "$result_ref"; log_field sentinel "$sentinel_ref"
   log_field carrier_exit "$carrier_exit_ref"; log_field status_file "$status_ref"
-  if ! codex_path=$(command -v codex 2>/dev/null) || [ ! -x "$codex_path" ]; then reason=LAUNCH_FAILED; return 1; fi
   log_event 'carrier starting'
   "$codex_path" exec --json -C "$work_target" --sandbox "$sandbox" --skip-git-repo-check -o "$last_message_ref" - \
     < "$brief_ref" > "$stdout_ref" 2> "$stderr_ref"

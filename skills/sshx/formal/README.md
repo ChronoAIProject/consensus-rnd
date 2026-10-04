@@ -96,6 +96,18 @@ The seven stages and per-flight completion predicate are unchanged. Batch progre
 formal projection of existing worker conclusions, not a runtime scheduler. Trigger-aware
 downgrade and plan admission retain the existing contextual evidence chain.
 
+The Codex identity adapter in `Clauses/Delegation.lean` pairs the protocol flight with
+pending or bound runner identity. The protocol's zero-based `attempt` counts consumed
+retries from transcript history; the adapter projects the public external `attempt`
+separately. Pending retries omit identity options and remain at external attempt 1;
+receipt binding leaves consumed retries and the fixed budget untouched. Bound retries
+preserve identity and increment the external attempt. Both use `Behavior.collectEffect`
+for accounting: each permitted retry strictly decreases remaining allowance, and
+exhaustion abstains with either identity state. These are formal projections, not new
+public record fields. Byte-level ID allocation, receipt
+ordering/delivery, path isolation, and batch recovery are behavior-tested in the scripts,
+not claimed as consequences of the abstract model.
+
 ## What the model cannot verify
 
 The trace ties each clause to a Lean object, and the Lean kernel checks the object. Whether

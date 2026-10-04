@@ -1,3 +1,18 @@
+"""Automatic identity no-skill baseline (2026-10-04, before runner edits):
+Invoking the existing runner with only --stage implementation and --work-target
+in a temporary SSHX_HOME returned 64, empty stdout, and USAGE_ERROR: missing
+--flight-id; no run root was created. The fresh-launch behavior tests below
+replace that observed prerequisite with runner allocation at launch.
+
+ARCH-1 no-skill baseline (2026-10-04, before this repair's edits): direct runner
+invocation with the existing fake codex fixture and SSHX_HOME=relative returned
+1 with empty stdout and RUN_DIR_UNAVAILABLE. Correcting the root but supplying
+--attempt 2 without an ID returned 64 with empty stdout. The existing formal
+runnerAttempt nevertheless projected protocol retries + 1 without a bound-ID
+premise. The composed test below exercises the pending-to-bound recovery; Lean
+checks that both retry paths consume the same finite allowance without reset.
+"""
+
 import json
 import os
 import re
@@ -174,7 +189,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         wrapper.write_text(
             "#!/bin/bash\n"
             "for arg in \"$@\"; do\n"
-            "  [ \"$arg\" != --null-input ] || exit 73\n"
+            "  case \"$arg\" in '{conclusion:'*) exit 73 ;; esac\n"
             "done\n"
             "exec \"$REAL_JQ\" \"$@\"\n"
         )
@@ -188,10 +203,14 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assertEqual(result.status["reason_code"], reason)
         self.assertEqual(result.status["status"], "COMPLETE" if reason == "COMPLETE" else "NOT_COMPLETE")
         self.assertNotEqual(result.process.stdout, result.run_dir.joinpath("status.json").read_text())
-        self.assert_timestamped_stdout(result.process.stdout)
+        receipt = json.loads(result.process.stdout)
+        self.assertEqual(receipt["flight_id"], result.status["flight_id"])
+        self.assertEqual(receipt["attempt"], result.status["attempt"])
+        self.assertEqual(receipt["run_dir"], str(result.run_dir))
+        self.assertEqual(result.process.stdout.count("\n"), 1)
 
-    def assert_timestamped_stdout(self, stdout: str) -> None:
-        lines = stdout.splitlines()
+    def assert_timestamped_progress(self, progress: str) -> None:
+        lines = progress.splitlines()
         self.assertGreater(len(lines), 1)
         for line in lines:
             self.assertRegex(line, TIMESTAMPED_LINE)
@@ -240,7 +259,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assertIn("terminal, machine-readable projection", spec)
         self.assertIn("human-readable streaming log", spec)
         self.assertIn("not guaranteed to be parseable", spec)
-        self.assertIn("not byte-for-byte identical to any file", spec)
+        self.assertIn("stdout contains only the structured launch receipt", spec)
         for field in ["started_at", "finished_at", "duration_seconds", "work_target", "sandbox", "brief_ref"]:
             self.assertIn(f"`{field}`", spec)
 
@@ -391,18 +410,10 @@ class CodexWorkerRunnerTests(unittest.TestCase):
             env=self.environment("artifacts_then_wait", FAKE_READY=str(ready), FAKE_RELEASE=str(release), FAKE_EXITED=str(exited)),
         )
         assert process.stdout is not None
-        startup_lines = []
-        while True:
-            readable, _, _ = select.select([process.stdout], [], [], 10)
-            self.assertTrue(readable, "no startup log line became readable")
-            line = process.stdout.readline()
-            self.assertNotEqual(line, "", "stdout closed before carrier start was reported")
-            startup_lines.append(line)
-            if "carrier starting" in line:
-                break
-        startup_stdout = "".join(startup_lines)
-        startup_is_timestamped = all(TIMESTAMPED_LINE.search(line) for line in startup_stdout.splitlines())
-        startup_has_status_file = any("status_file" in line for line in startup_lines)
+        readable, _, _ = select.select([process.stdout], [], [], 10)
+        self.assertTrue(readable, "no launch receipt became readable")
+        receipt_line = process.stdout.readline()
+        self.assertEqual(json.loads(receipt_line)["flight_id"], flight)
         with ready.open() as ready_signal:
             self.assertEqual(ready_signal.read().strip(), "ready")
         status_existed_while_running = self.expected_run_dir(flight).joinpath("status.json").exists()
@@ -410,19 +421,19 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         with release.open("w") as release_signal:
             release_signal.write("release\n")
         stdout_tail, stderr = process.communicate(timeout=10)
-        stdout = "".join(startup_lines) + stdout_tail
-        self.assertTrue(startup_is_timestamped)
-        self.assertTrue(startup_has_status_file)
+        stdout = receipt_line + stdout_tail
+        self.assertEqual(stdout_tail, "")
         self.assertFalse(status_existed_while_running)
         self.assertFalse(runner_returned_while_carrier_live, "runner returned before the live carrier exited")
         self.assertEqual(exited.read_text().strip(), "exited")
         result = RunResult(subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr), self.expected_run_dir(flight))
         self.assert_terminal(result, "COMPLETE")
-        self.assertIn("carrier exited rc=0", stdout_tail)
-        self.assertIn("status        COMPLETE", stdout_tail)
-        self.assertIn("reason_code   COMPLETE", stdout_tail)
-        self.assertIn("verdict       propose", stdout_tail)
-        self.assertRegex(stdout_tail, r"duration\s+\d+s")
+        self.assert_timestamped_progress(stderr)
+        self.assertIn("carrier exited rc=0", stderr)
+        self.assertIn("status        COMPLETE", stderr)
+        self.assertIn("reason_code   COMPLETE", stderr)
+        self.assertIn("verdict       propose", stderr)
+        self.assertRegex(stderr, r"duration\s+\d+s")
 
     def test_missing_result_is_not_complete(self) -> None:
         self.assert_terminal(self.run_worker("nothing"), "RESULT_MISSING")
@@ -458,7 +469,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.install_skeleton_render_failing_jq()
         result = self.run_worker(extra_env={"REAL_JQ": str(self.real_jq)})
         self.assert_terminal(result, "INTERNAL_ERROR")
-        self.assertNotIn("carrier starting", result.process.stdout)
+        self.assertNotIn("carrier starting", result.process.stderr)
         self.assertIn("INTERNAL_ERROR: cannot render minimum envelope shape", result.process.stderr)
         self.assertNotIn(
             "Minimum structurally accepted envelope shape:",
@@ -571,7 +582,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
         self.assertEqual(process.returncode, 1); self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
         self.assertIn("neither SSHX_HOME nor HOME is set", process.stderr)
-        self.assertNotIn("carrier starting", process.stdout)
+        self.assertNotIn("carrier starting", process.stderr)
 
     def test_run_root_is_created_on_first_use_with_private_mode(self) -> None:
         fresh_root = self.temp_dir / "fresh-root"
@@ -594,7 +605,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
                 process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
                 self.assertEqual(process.returncode, 1); self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
                 self.assertIn("run root from SSHX_HOME must be a non-symlink writable directory", process.stderr)
-                self.assertNotIn("carrier starting", process.stdout)
+                self.assertNotIn("carrier starting", process.stderr)
         self.assertEqual(list(target.iterdir()), [])
         self.assertFalse((self.temp_dir / "missing-target").exists())
 
@@ -607,40 +618,117 @@ class CodexWorkerRunnerTests(unittest.TestCase):
                 env = self.environment(); env["SSHX_HOME"] = value
                 process = subprocess.run(self.command(self.next_flight()), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
                 self.assertEqual(process.returncode, 1); self.assertIn("RUN_DIR_UNAVAILABLE", process.stderr)
-                self.assertNotIn("carrier starting", process.stdout)
+                self.assertNotIn("carrier starting", process.stderr)
         unwritable.chmod(0o700)
         self.assertFalse((self.temp_dir / "missing-parent").exists())
 
-    def test_new_flight_id_mints_objectid_shaped_identity_purely(self) -> None:
-        env = self.environment(); env["SSHX_HOME"] = str(self.temp_dir / "never-created")
-        minted = []
-        for _ in range(2):
-            before = int(time.time())
-            process = subprocess.run(["/bin/bash", str(RUNNER), "--new-flight-id"], input="ignored", capture_output=True, text=True, env=env, timeout=10)
-            after = int(time.time())
-            self.assertEqual(process.returncode, 0, process.stderr)
-            document = json.loads(process.stdout)
-            self.assertEqual(set(document), {"schema_version", "flight_id"})
-            self.assertEqual(document["schema_version"], 1)
-            self.assertRegex(document["flight_id"], r"^[0-9a-f]{24}$")
-            self.assertLessEqual(before, int(document["flight_id"][:8], 16)); self.assertLessEqual(int(document["flight_id"][:8], 16), after)
-            minted.append(document["flight_id"])
-        self.assertNotEqual(minted[0], minted[1])
-        self.assertFalse((self.temp_dir / "never-created").exists())
-        for extra in [["--flight-id", VALID_ID], ["--attempt", "1"], ["--stage", "thinking"], ["--work-target", str(ROOT)], ["--sandbox", "workspace-write"], ["--project-paths"], ["--project-flight"], ["--project-root"], ["--new-flight-id"]]:
-            with self.subTest(extra=extra):
-                process = subprocess.run(["/bin/bash", str(RUNNER), "--new-flight-id", *extra], capture_output=True, text=True, env=env, timeout=10)
-                self.assertEqual(process.returncode, 64, process.stderr); self.assertIn("USAGE_ERROR", process.stderr)
-        no_home = self.environment(); no_home.pop("SSHX_HOME"); no_home.pop("HOME", None)
-        process = subprocess.run(["/bin/bash", str(RUNNER), "--new-flight-id"], capture_output=True, text=True, env=no_home, timeout=10)
-        self.assertEqual(process.returncode, 0, process.stderr)
-        self.assertRegex(json.loads(process.stdout)["flight_id"], r"^[0-9a-f]{24}$")
-        minted_id = json.loads(process.stdout)["flight_id"]
-        self.assert_terminal(self.run_worker(flight_id=minted_id), "COMPLETE")
-        empty = self.temp_dir / "empty-path-mint"; empty.mkdir()
-        no_parser = self.environment(); no_parser["PATH"] = str(empty)
-        process = subprocess.run(["/bin/bash", str(RUNNER), "--new-flight-id"], capture_output=True, text=True, env=no_parser, timeout=10)
-        self.assertEqual(process.returncode, 1); self.assertIn("PARSER_UNAVAILABLE", process.stderr); self.assertEqual(process.stdout, "")
+    def fresh_command(self) -> list[str]:
+        return ["/bin/bash", str(RUNNER), "--stage", "implementation", "--work-target", str(ROOT)]
+
+    def test_first_launch_allocates_before_blocked_input_and_retries_keep_identity(self) -> None:
+        process = subprocess.Popen(self.fresh_command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.environment())
+        assert process.stdout is not None
+        readable, _, _ = select.select([process.stdout], [], [], 10)
+        self.assertTrue(readable, "receipt must precede stdin EOF")
+        receipt_line = process.stdout.readline()
+        receipt = json.loads(receipt_line)
+        self.assertRegex(receipt["flight_id"], r"^[0-9a-f]{24}$")
+        self.assertEqual(receipt["attempt"], 1)
+        self.assertIsNone(process.poll())
+        tail, stderr = process.communicate("brief\n", timeout=10)
+        self.assertEqual(tail, "")
+        self.assertEqual(process.returncode, 0, stderr)
+        first = Path(receipt["run_dir"])
+        self.assertEqual(json.loads((first / "status.json").read_text())["reason_code"], "COMPLETE")
+        retry = self.run_worker(flight_id=receipt["flight_id"], attempt="2", stage="implementation")
+        self.assert_terminal(retry, "COMPLETE")
+        self.assertNotEqual(first, retry.run_dir)
+        original_status = (retry.run_dir / "status.json").read_bytes()
+        collision = self.run_worker(flight_id=receipt["flight_id"], attempt="2", stage="implementation")
+        self.assertEqual(collision.process.returncode, 1)
+        self.assertIn("RUN_DIR_COLLISION", collision.process.stderr)
+        self.assertEqual(json.loads(collision.process.stdout), json.loads(retry.process.stdout))
+        self.assertEqual((retry.run_dir / "status.json").read_bytes(), original_status)
+
+    def test_parallel_first_launches_allocate_unique_identities(self) -> None:
+        before = int(time.time())
+        processes = [subprocess.Popen(self.fresh_command(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.environment()) for _ in range(6)]
+        receipts = []
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0, stderr)
+            receipt = json.loads(stdout)
+            receipts.append(receipt)
+            self.assertEqual(receipt["attempt"], 1)
+            self.assertLessEqual(before, int(receipt["flight_id"][:8], 16))
+            self.assertLessEqual(int(receipt["flight_id"][:8], 16), int(time.time()))
+        self.assertEqual(len({receipt["flight_id"] for receipt in receipts}), len(processes))
+        self.assertEqual(len({receipt["run_dir"] for receipt in receipts}), len(processes))
+
+    def test_pre_receipt_failure_then_pending_and_bound_retries(self) -> None:
+        failed = subprocess.run(
+            self.fresh_command(), input="brief\n", capture_output=True, text=True,
+            env=self.environment(SSHX_HOME="relative"), timeout=10,
+        )
+        self.assertEqual(failed.returncode, 1)
+        self.assertEqual(failed.stdout, "")
+        self.assertIn("RUN_DIR_UNAVAILABLE", failed.stderr)
+        self.assertFalse((self.temp_dir / "sshx").exists())
+
+        # Retry the same pending record with no identity options. Carrier launch
+        # succeeds; incomplete worker artifacts require the subsequent bound retry.
+        pending = subprocess.run(
+            self.fresh_command(), input="brief\n", capture_output=True, text=True,
+            env=self.environment("missing_sentinel"), timeout=10,
+        )
+        receipt = json.loads(pending.stdout)
+        self.assertRegex(receipt["flight_id"], r"^[0-9a-f]{24}$")
+        self.assertEqual(receipt["attempt"], 1)
+        first = RunResult(pending, Path(receipt["run_dir"]))
+        self.assert_terminal(first, "SENTINEL_MISSING")
+        assert first.status is not None
+        self.assertEqual(first.status["carrier_exit"], 0)
+        first_status = (first.run_dir / "status.json").read_bytes()
+        first_result = (first.run_dir / "result.json").read_bytes()
+
+        bound = self.run_worker(flight_id=receipt["flight_id"], attempt="2", stage="implementation")
+        self.assert_terminal(bound, "COMPLETE")
+        bound_receipt = json.loads(bound.process.stdout)
+        self.assertEqual(bound_receipt["flight_id"], receipt["flight_id"])
+        self.assertEqual(bound_receipt["attempt"], 2)
+        self.assertNotEqual(first.run_dir, bound.run_dir)
+        self.assertEqual((first.run_dir / "status.json").read_bytes(), first_status)
+        self.assertEqual((first.run_dir / "result.json").read_bytes(), first_result)
+
+    def test_fresh_receipt_survives_post_allocation_failures(self) -> None:
+        cases = [
+            self.environment(SSHX_HOME=str(self.temp_dir / "missing-parent" / "runs")),
+            self.environment("nonzero_with_artifacts"),
+            self.environment("projection_collision", FAKE_COLLISION_TARGET="status.json.tmp", FAKE_COLLISION_SHAPE="directory", FAKE_OUTSIDE=str(self.temp_dir / "unused")),
+        ]
+        for env in cases:
+            with self.subTest(env=env["FAKE_MODE"]):
+                process = subprocess.run(self.fresh_command(), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
+                self.assertEqual(process.returncode, 1, process.stderr)
+                receipt = json.loads(process.stdout)
+                self.assertEqual(receipt["attempt"], 1)
+                query = subprocess.run(["/bin/bash", str(RUNNER), "--project-paths", "--flight-id", receipt["flight_id"], "--attempt", "1"], capture_output=True, text=True, env=env, check=True)
+                self.assertEqual(receipt, json.loads(query.stdout))
+
+    def test_first_launch_preallocation_failures_have_no_receipt(self) -> None:
+        no_home = self.environment()
+        no_home.pop("HOME", None)
+        no_home.pop("SSHX_HOME")
+        no_parser = self.environment(PATH=str(self.temp_dir))
+        for env in [no_home, no_parser, self.environment(SSHX_HOME="relative")]:
+            process = subprocess.run(self.fresh_command(), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
+            self.assertEqual(process.returncode, 1)
+            self.assertEqual(process.stdout, "")
+        for arguments in [["--flight-id", VALID_ID], ["--attempt", "1"], ["--flight-id", "", "--attempt", "1"], ["--new-flight-id"]]:
+            process = subprocess.run(self.fresh_command() + arguments, input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
+            self.assertEqual(process.returncode, 64, process.stderr)
+            self.assertEqual(process.stdout, "")
+        self.assertFalse((self.temp_dir / "sshx").exists())
 
     def test_run_hierarchy_rejects_symlinked_flight_directory_before_launch(self) -> None:
         outside = self.temp_dir / "outside"; outside.mkdir()
@@ -658,7 +746,8 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         p2 = subprocess.Popen(self.command(b), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.environment())
         out1, err1 = p1.communicate("brief a\n", timeout=10); out2, err2 = p2.communicate("brief b\n", timeout=10)
         self.assertEqual(p1.returncode, 0, err1); self.assertEqual(p2.returncode, 0, err2)
-        self.assert_timestamped_stdout(out1); self.assert_timestamped_stdout(out2)
+        self.assertEqual(json.loads(out1)["flight_id"], a)
+        self.assertEqual(json.loads(out2)["flight_id"], b)
         status_a = json.loads(self.expected_run_dir(a).joinpath("status.json").read_text())
         status_b = json.loads(self.expected_run_dir(b).joinpath("status.json").read_text())
         self.assertNotEqual(status_a["run_dir"], status_b["run_dir"])
@@ -684,8 +773,10 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         no_codex = self.temp_dir / "no-codex"; no_codex.mkdir(); (no_codex / "jq").symlink_to((self.bin_dir / "jq").resolve())
         env = self.environment(); env["PATH"] = f"{no_codex}:/bin:/usr/bin"
         process = subprocess.run(self.command(flight), input="brief\n", capture_output=True, text=True, env=env, timeout=10)
-        result = RunResult(process, self.expected_run_dir(flight))
-        self.assert_terminal(result, "LAUNCH_FAILED")
+        self.assertEqual(process.returncode, 1, process.stderr)
+        self.assertEqual(process.stdout, "")
+        self.assertIn("LAUNCH_FAILED", process.stderr)
+        self.assertFalse(self.expected_run_dir(flight).exists())
 
     def test_argument_validation_rejects_missing_duplicate_unknown_and_invalid_values(self) -> None:
         valid = self.command(VALID_ID)
@@ -695,7 +786,7 @@ class CodexWorkerRunnerTests(unittest.TestCase):
             self.assertEqual(process.returncode, 64, process.stderr); self.assertIn("USAGE_ERROR", process.stderr)
             flight_id = command[command.index("--flight-id") + 1]
             self.assertFalse(self.expected_run_dir(flight_id).exists())
-            self.assertNotIn("carrier starting", process.stdout)
+            self.assertNotIn("carrier starting", process.stderr)
 
     def test_flight_id_dot_is_rejected(self) -> None:
         process = subprocess.run(self.command("."), input="brief\n", capture_output=True, text=True, env=self.environment(), timeout=10)
@@ -797,15 +888,27 @@ class CodexWorkerRunnerTests(unittest.TestCase):
             outcomes.append((locale, process.returncode))
         self.assertEqual(outcomes, [("C", 0), ("C.UTF-8", 64)])
 
-    def test_closed_stdout_does_not_change_authoritative_exit_or_status(self) -> None:
+    def test_receipt_delivery_failure_prevents_directory_and_carrier(self) -> None:
         flight = self.next_flight()
-        with subprocess.Popen(self.command(flight), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.environment()) as process:
-            assert process.stdin is not None and process.stdout is not None
-            process.stdin.write("brief\n"); process.stdin.close(); process.stdout.close(); process.wait(timeout=10)
-            self.assertEqual(process.returncode, 0)
-        status = json.loads(self.expected_run_dir(flight).joinpath("status.json").read_text())
-        self.assertEqual(status["reason_code"], "COMPLETE")
-        self.assertGreater(len(self.expected_run_dir(flight).joinpath("status.json").read_text().splitlines()), 1)
+        target = self.temp_dir / "read-only-stdout"
+        target.write_text("unchanged")
+        with target.open("rb") as stdout:
+            process = subprocess.run(self.command(flight), input="brief\n", stdout=stdout, stderr=subprocess.PIPE, text=True, env=self.environment(), timeout=10)
+        self.assertEqual(process.returncode, 1, process.stderr)
+        self.assertIn("INTERNAL_ERROR", process.stderr)
+        self.assertFalse(self.expected_run_dir(flight).exists())
+        self.assertEqual(target.read_text(), "unchanged")
+
+    def test_closed_receipt_pipe_fails_without_creating_run_root(self) -> None:
+        reader, writer = os.pipe()
+        os.close(reader)
+        try:
+            process = subprocess.run(self.fresh_command(), stdin=subprocess.DEVNULL, stdout=writer, stderr=subprocess.PIPE, text=True, env=self.environment(), timeout=10)
+        finally:
+            os.close(writer)
+        self.assertEqual(process.returncode, 1, process.stderr)
+        self.assertIn("INTERNAL_ERROR", process.stderr)
+        self.assertFalse((self.temp_dir / "sshx").exists())
 
     def test_pretty_status_rendering_source_regression(self) -> None:
         runner = RUNNER.read_text()
