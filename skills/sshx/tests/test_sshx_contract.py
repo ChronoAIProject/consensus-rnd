@@ -94,6 +94,17 @@ This baseline does not undo the historical timing advisory. The session's immuta
 pass_budget=3, remaining=0 and second explicitly recorded continuation exception remain;
 no budget reset, refund, automatic extension or compliant-cap claim is made.
 
+Implementation handoff baseline (2026-10-05, observed before tracked edits): an
+isolated evaluator without this skill produced initial and repair exporter briefs
+from a settled goal, host API/dependency requirements, and unsourced class/decorator
+prescriptions disguised as acceptance and prohibitions. It retained sourced technical
+requirements, allowed alternative mechanics, and routed actual scope changes. Recipe
+leakage was a pre-run hypothesis, NOT an observed no-skill failure. The admitted defect
+is the unchanged published instruction to implement only the approved concrete plan
+and state any deviation. The realistic scenario in fixtures/implementation_dispatch.md
+supports repeatable forward evaluation; generated responses stay outside published
+source. Phrase/digest checks and formal projections do not establish agent behavior.
+
 The behavior helpers below cover fixed truth tables and other load-bearing mechanical contracts,
 but do not infer English semantics.
 Files outside ``skills/sshx/SKILL.md`` are outside this positional boundary and remain governed
@@ -375,7 +386,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "813f8620cdfc77ff3d1e93842fdc5773eb2e0721e71fd145816b91c6e10d428b"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "ed167b00f8711ba94f7de57b5a0274996b31c9deac7dd9da4a37a0c7c0ffc21e"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -936,6 +947,16 @@ class SshxContractTests(unittest.TestCase):
         self.assertLessEqual(len(text.splitlines()), 470)
         self.assertLessEqual(len(text.encode("utf-8")), 75_000)
 
+    def test_sshx_implementation_handoff_has_one_source_owner(self) -> None:
+        # Ownership/correspondence only; the fixture evaluation judges brief semantics.
+        text = read(SKILL)
+        implementation = section(text, "## Implementation Worker", "## Review Triplet")
+        repair = section(text, "## Fix Or Done", "## Termination Gate")
+        owner = "Send goal, verifiable acceptance, authorized scope/prohibitions"
+        self.assertEqual(text.count(owner), 1)
+        self.assertIn(owner, implementation)
+        self.assertIn("under `## Implementation Worker` handoff, allowance and evidence rules", repair)
+
     def test_sshx_goal_contract_source_regression(self) -> None:
         text = read(SKILL)
         heading_index(text, "## Goal Contract")
@@ -977,7 +998,7 @@ class SshxContractTests(unittest.TestCase):
             text,
         )
         self.assertIn(
-            "using `## Implementation Worker` decomposition, allowance and evidence rules",
+            "under `## Implementation Worker` handoff, allowance and evidence rules",
             text,
         )
         self.assertIn("stay orchestration-only for the repair", text)
@@ -2999,7 +3020,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("Logs are not inline in caller context", text)
         self.assertIn("Final reports aggregate `conclusion` values only", text)
         self.assertIn("produce the final report from conclusions only while preserving `log_ref` references", text)
-        self.assertIn("process logs stay behind `log_ref`", text)
+        self.assertIn("opaque `log_ref`", text)
         self.assertIn("without inlining logs", text)
 
     def test_sshx_worker_completion_contract(self) -> None:
@@ -3506,7 +3527,7 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(f"`skills/sshx/scripts/{script}`", text)
         self.assertIn("governed only by `skills/sshx/CODEX_WORKER_SPEC.md` and their behavior tests", text)
-        self.assertIn("does not grant permission to commit, push, merge", text)
+        self.assertIn("No lifecycle authority is granted", text)
         self.assertIn(
             "Allowed worker carriers are limited to `codex-cli`, `nyxid-oracle`, and `isolated-token-subagent`",
             text,

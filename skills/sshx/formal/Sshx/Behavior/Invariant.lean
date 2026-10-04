@@ -337,7 +337,7 @@ theorem review_dispatch_needs_whole_candidate (s : ProtocolState) (role : Role)
     s.reviewReady = true := ha.2.2.2.2.1
 
 /-- Each new assignment consumes one predeclared local slot; retries/fallback use their own bounds. -/
--- SKILL[inv]: "The local allowance is separate from `pass_budget` and carrier retry/fallback bounds."
+-- SKILL[inv]: "Local allowance is separate from `pass_budget` and carrier retry/fallback bounds."
 theorem implementation_consumes_local_slot (s : ProtocolState) (carrier : Carrier)
     (target : String) (retries : Nat) (b : ImplementationBatch) (hb : s.batch = some b) :
     (step s (.openFlight .implementation .implementation carrier target retries)).batch =
