@@ -8,6 +8,10 @@ This is the single mechanical specification for these five closed-set scripts:
 - `skills/sshx/scripts/clean-codex-worker-runs.sh`;
 - `skills/sshx/scripts/prune-inactive-codex-worker-runs.sh`.
 
+The sixth closed-set script, `skills/sshx/scripts/run-oracle-worker.py`, is specified by
+`ORACLE_WORKER_SPEC.md`. It shares the run layout below through the runner's pure
+`--project-paths` query and never launches this runner.
+
 The completion predicate is defined once in `SKILL.md` under
 `## Worker Completion Contract`; this file references that contract and does
 not restate it. Caller-side dispatch and collection are governed solely by
@@ -123,9 +127,9 @@ or validated before one atomic `mkdir` of the attempt directory; an existing
 attempt is `RUN_DIR_COLLISION`.
 
 Every invocation projects this layout from its own effective `SSHX_HOME` and
-`HOME`, so dispatch, pure queries, batch dispatch, status read, cleanup, and
-the inactivity sweep must run with the same effective values as the dispatch
-they inspect. A different value projects a disjoint layout: cleanup fails
+`HOME`, so dispatch by either runner, pure queries, batch dispatch, status read,
+cleanup, and the inactivity sweep must run with the same effective values as the
+dispatch they inspect. A different value projects a disjoint layout: cleanup fails
 closed on its consistency checks and the sweep prunes that other root, but a
 status read there reports every artifact absent and exits zero, which is
 indistinguishable from a pre-terminal flight.
@@ -139,9 +143,10 @@ acceptance conditions and includes one runner-rendered, stage-specific minimum
 valid envelope example.
 
 Launch receipts and pure queries are the only sanctioned path discovery mechanisms for the
-batch, status-read, cleanup, and sweep scripts. Those scripts contain no
+batch, status-read, cleanup, and sweep scripts and for the oracle runner. Those scripts contain no
 run-layout formula, attempt naming rule, or artifact basename and do not parse
-human progress logs. The batch, status-read, and cleanup scripts check
+human progress logs; the oracle runner adds only its own request file inside the
+projected attempt directory. The batch, status-read, and cleanup scripts check
 manifest identities against the identity shape before consulting the runner;
 the sweep contains no identity rule at all and takes the runner's
 classification.
@@ -627,17 +632,19 @@ root.
 No other skill may depend on these mechanisms. To reverse the exception
 completely, use this one recipe:
 
-1. Delete `scripts/run-codex-worker.sh`,
+1. First reverse the oracle runner with the recipe in `ORACLE_WORKER_SPEC.md`,
+   because it consumes this runner's path projection.
+2. Delete `scripts/run-codex-worker.sh`,
    `scripts/run-codex-worker-batch.sh`,
    `scripts/read-codex-worker-status.sh`,
    `scripts/clean-codex-worker-runs.sh`, and
    `scripts/prune-inactive-codex-worker-runs.sh`.
-2. Delete this specification, `tests/test_run_codex_worker.py`, and
+3. Delete this specification, `tests/test_run_codex_worker.py`, and
    `tests/test_codex_worker_tools.py`.
-3. Restore the narrow `SKILL.md` clauses to direct caller dispatch with
+4. Restore the narrow `SKILL.md` clauses to direct caller dispatch with
    caller-assigned artifact paths and a prompt-only boundary that forbids every
    helper script.
-4. Remove mechanical-script assertions from `tests/test_sshx_contract.py` and
+5. Remove mechanical-script assertions from `tests/test_sshx_contract.py` and
    run the remaining sshx contract suite. No compatibility shell is retained.
 
 A new design review is required before adding daemon behavior, lifecycle

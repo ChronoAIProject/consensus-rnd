@@ -55,8 +55,36 @@ def oracleReplyIs : ReplyKind := .data
 
 theorem oracle_has_no_authority : carrierHasControllerAuthority .nyxidOracle = false := rfl
 
--- SKILL[def]: "Its capability check and dispatch are non-mutating and owned by `ORACLE_WORKER_SPEC.md`."
+/-- The routes by which an `nyxid-oracle` attempt could reach NyxID. -/
+inductive OracleRoute
+  | oracleRunner
+  | legacyCli
+  deriving DecidableEq, Repr
+
+-- SKILL[def]: "It reaches NyxID only through the oracle runner, whose capability check is non-mutating; the legacy `nyxid oracle` CLI is never invoked by any caller or worker."
+def oracleRouteAllowed : OracleRoute → Bool
+  | .oracleRunner => true
+  | .legacyCli => false
+
+/-- Only the capability check is claimed non-mutating; the dispatch opens a conversation. -/
 def capabilityCheckMutates (_ : Carrier) : Bool := false
+
+/-- The behavior model agrees: an oracle flight is launched through its own runner and never by
+the delegated launch, which admits only the in-context subagent. -/
+theorem oracle_launch_needs_its_runner (s : Behavior.ProtocolState) (id : Nat) (f : Behavior.FlightRec)
+    (hf : s.flight id = some f) (hc : f.carrier = .nyxidOracle) :
+    ¬ Behavior.allowed s (.launchDelegated id) ∧
+      Behavior.runnerFor f.carrier = some "skills/sshx/scripts/run-oracle-worker.py" := by
+  refine ⟨?_, by simp [hc]⟩
+  intro h
+  obtain ⟨g, hg, -, hnone⟩ := h
+  rw [hf] at hg
+  cases hg
+  simp [hc] at hnone
+
+theorem only_subagent_launch_is_delegated (c : Carrier) :
+    Behavior.runnerFor c = none ↔ c = .isolatedTokenSubagent := by
+  cases c <;> simp
 
 -- SKILL[ref]: "It must run with isolated token context so same-round workers cannot read one another's full reasoning or peer outputs before returning their own verdict."
 abbrev isolatedTokenContext := @same_round_peer_invisible
@@ -319,7 +347,7 @@ inductive PathOwner
   | caller
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Only the runner mints IDs and derives disjoint attempt paths; callers cannot supply artifact paths."
+-- SKILL[def]: "Only the runners mint IDs and derive disjoint attempt paths; callers cannot supply artifact paths."
 def artifactPathOwner : PathOwner := .runner
 
 -- SKILL[def]: "Receipts precede directories, stdin, and carrier execution."
@@ -427,7 +455,7 @@ example :
     retry.protocol.attempt = 2 ∧ runnerIdentityOptions retry = some (42, 2) ∧
     (collectRunnerEffect failed retry).protocol.status = .abstained := by decide
 
--- SKILL[def]: "Mechanics are owned by `CODEX_WORKER_SPEC.md`; use the runner's default `danger-full-access` unless the maintainer explicitly requests a narrower sandbox."
+-- SKILL[def]: "Mechanics are owned by `CODEX_WORKER_SPEC.md` and `ORACLE_WORKER_SPEC.md`; use the Codex runner's default `danger-full-access` unless the maintainer explicitly requests a narrower sandbox."
 def defaultSandbox : String := "danger-full-access"
 
 inductive TeardownOwner
@@ -491,127 +519,6 @@ def changesRouting : ArtifactKind → Bool
   | .dispatcherEvidence | .statusProjection => false
 
 /-! ## The oracle carrier -/
-
-/-- The two NyxID transports of the `nyxid-oracle` carrier. -/
-inductive OracleTransport
-  | broker
-  | legacyCli
-  deriving DecidableEq, Repr
-
-/-- Transports in preference order: the oracle broker precedes the legacy CLI. -/
-def OracleTransport.univ : List OracleTransport := [.broker, .legacyCli]
-
-theorem OracleTransport.mem_univ (x : OracleTransport) : x ∈ OracleTransport.univ := by
-  cases x <;> decide
-
-/-- A per-transport Boolean table; used both for "available" (its capability check
-passed) and for "already tried by this flight". -/
-structure TransportSet where
-  broker : Bool
-  legacyCli : Bool
-  deriving DecidableEq, Repr
-
-def TransportSet.get (s : TransportSet) : OracleTransport → Bool
-  | .broker => s.broker
-  | .legacyCli => s.legacyCli
-
-def TransportSet.insert (s : TransportSet) : OracleTransport → TransportSet
-  | .broker => { s with broker := true }
-  | .legacyCli => { s with legacyCli := true }
-
-def TransportSet.empty : TransportSet := ⟨false, false⟩
-
-def TransportSet.univ : List TransportSet := [⟨false, false⟩, ⟨false, true⟩, ⟨true, false⟩, ⟨true, true⟩]
-
-theorem TransportSet.mem_univ (s : TransportSet) : s ∈ TransportSet.univ := by
-  cases s with
-  | mk a b => cases a <;> cases b <;> decide
-
--- SKILL[def]: "Each `nyxid-oracle` attempt uses the first transport, oracle broker before legacy `nyxid oracle`, whose capability check passes, preferring ones its flight has not tried"
-/-- The same shape as `nextCarrier`, one level down: untried before tried, then
-preference order. It reads only availability and the tried set, so the failure kind of an
-earlier attempt cannot steer it. -/
-def nextTransport (available tried : TransportSet) : Option OracleTransport :=
-  match (OracleTransport.univ.filter (fun x => available.get x && !(tried.get x))).head? with
-  | some x => some x
-  | none => (OracleTransport.univ.filter available.get).head?
-
-/-- The broker is chosen whenever it is available and this flight has not tried it. -/
-theorem nextTransport_prefers_broker :
-    ∀ a ∈ TransportSet.univ, ∀ t ∈ TransportSet.univ,
-      a.broker = true → t.broker = false → nextTransport a t = some .broker := by
-  decide
-
-/-- The legacy transport is only a fallback: it is chosen only when the broker is
-unavailable or this flight already tried it. -/
-theorem nextTransport_legacy_only_as_fallback :
-    ∀ a ∈ TransportSet.univ, ∀ t ∈ TransportSet.univ,
-      nextTransport a t = some .legacyCli → a.broker = false ∨ t.broker = true := by
-  decide
-
-/-- The chosen transport is available. -/
-theorem nextTransport_available :
-    ∀ a ∈ TransportSet.univ, ∀ t ∈ TransportSet.univ, ∀ x ∈ OracleTransport.univ,
-      nextTransport a t = some x → a.get x = true := by
-  decide
-
--- SKILL[thm]: "if none passes, the carrier is unavailable."
-theorem oracle_unavailable_iff_no_transport :
-    ∀ a ∈ TransportSet.univ, ∀ t ∈ TransportSet.univ,
-      nextTransport a t = none ↔ (a.broker = false ∧ a.legacyCli = false) := by
-  decide
-
-/-- The transports a flight's submissions use while every attempt fails, given the number
-of submissions its fixed `retry_budget` allows: one transport per submission. -/
-def transportsOverAttempts (available : TransportSet) : TransportSet → Nat → List OracleTransport
-  | _, 0 => []
-  | tried, n + 1 =>
-    match nextTransport available tried with
-    | none => []
-    | some x => x :: transportsOverAttempts available (tried.insert x) n
-
-/-- Transport choice adds no submission: never more transports than allowed submissions. -/
-theorem transports_le_submissions (a t : TransportSet) (n : Nat) :
-    (transportsOverAttempts a t n).length ≤ n := by
-  induction n generalizing t with
-  | zero => simp [transportsOverAttempts]
-  | succ k ih =>
-    unfold transportsOverAttempts
-    split
-    · simp
-    · simpa using ih _
-
-theorem transports_with_two_submissions_start_broker_legacy (k : Nat) :
-    transportsOverAttempts ⟨true, true⟩ TransportSet.empty (k + 2) =
-      .broker :: .legacyCli :: transportsOverAttempts ⟨true, true⟩ ⟨true, true⟩ k := rfl
-
--- SKILL[thm]: "A transport switch is an ordinary counted retry, so with both passing `retry_budget` must be at least 1"
-/-- With both transports available, a flight of `retryBudget + 1` submissions reaches the
-legacy transport exactly when `retryBudget` is at least 1. -/
-theorem legacy_reachable_iff_retry_budget_pos (retryBudget : Nat) :
-    OracleTransport.legacyCli ∈ transportsOverAttempts ⟨true, true⟩ TransportSet.empty (retryBudget + 1) ↔
-      1 ≤ retryBudget := by
-  cases retryBudget with
-  | zero => decide
-  | succ k =>
-    rw [show k + 1 + 1 = k + 2 from rfl, transports_with_two_submissions_start_broker_legacy]
-    simp
-
--- SKILL[def]: "the caller records each attempt's transport in `worker_delegation.reason`."
-/-- Where the caller records each attempt's transport: an existing field, not a new one. -/
-def transportRecordedIn : String := "worker_delegation.reason"
-
-/-- The carrier an attempt belongs to, whatever its transport. The completion predicate
-`done` and `collectOracleCompact` take no transport input at all, so a transport changes
-neither completion nor collection. -/
-def transportCarrier (_ : OracleTransport) : Carrier := .nyxidOracle
-
-/-- A transport keeps the carrier, its prior-exposure label, and its seat constraint. -/
-theorem transport_keeps_carrier_label_and_seat (x : OracleTransport) :
-    transportCarrier x = .nyxidOracle ∧
-      disclosureLabel (transportCarrier x) = "external-prior-exposed" ∧
-        testsSeatEligible (transportCarrier x) = false :=
-  ⟨rfl, rfl, rfl⟩
 
 /-- One oracle attempt as the caller must set it up. -/
 structure OracleAttempt where
@@ -698,7 +605,7 @@ theorem reasoning_only_cannot_be_collected (allowed : List String) (ref : String
     (reported dispatched : List (String × String)) (mirror : Option String) :
     collectOracleCompact .reasoningOnly allowed ref reported dispatched mirror = none := rfl
 
-/-- A host-observed saved artifact; inventory membership below is the evidence of saving.
+/-- A runner-saved raw response; inventory membership below is the evidence of saving.
 The kernel checks provenance relationships, not filesystem I/O. -/
 structure SavedOracleResponse where
   flightId : String
@@ -707,7 +614,7 @@ structure SavedOracleResponse where
   reference : String
   deriving DecidableEq, Repr
 
--- SKILL[guard]: "A missing or empty oracle `log_ref` may use a reference to an actual raw terminal response saved by the caller for that same flight and attempt through existing host capture capability."
+-- SKILL[guard]: "A missing or empty oracle `log_ref` may use a reference to the actual raw terminal response the oracle runner saved for that same flight and attempt."
 structure OracleCaptureWitness (inventory : List SavedOracleResponse)
     (flightId : String) (attempt : Nat) (rawBytes resultRef : String) where
   capture : SavedOracleResponse
@@ -774,43 +681,13 @@ theorem failed_oracle_collection_uses_existing_path (o : Observation) (allowed :
 /-- What content the oracle can read. -/
 inductive ContentRef
   | callerLocalPath
-  | publicPinnedUrl
   | inlinedContent
   deriving DecidableEq, Repr
 
--- SKILL[def]: "A `nyxid-oracle` worker has no access to the caller's filesystem, so caller-local paths, including `work_target` paths, are not readable content references for it."
+-- SKILL[def]: "A `nyxid-oracle` worker has no access to the caller's filesystem, so caller-local paths, including `work_target` paths, are not readable content references for it; its brief inlines the content it needs."
 def oracleCanRead : ContentRef → Bool
   | .callerLocalPath => false
-  | .publicPinnedUrl | .inlinedContent => true
-
-/-- How a repository URL is pinned. -/
-inductive UrlPin
-  | commitSha
-  | branch
-  | tag
-  | head
-  deriving DecidableEq, Repr
-
--- SKILL[def]: "Its brief may instead reference repository content by public GitHub URL, pinned to an immutable commit SHA so every seat reads the same bytes; branch, tag, and `HEAD` URLs drift between reads and must not be used."
-def urlPinAllowed : UrlPin → Bool
-  | .commitSha => true
-  | .branch | .tag | .head => false
-
-/-- What a referenced URL is and is not. -/
-structure UrlRole where
-  workerContext : Bool
-  goalSource : Bool
-  peerOutputPointer : Bool
-  callerVerifiedEvidence : Bool
-  deriving DecidableEq, Repr
-
--- SKILL[def]: "A referenced URL is worker context only: it is never a goal source under `## Goal Contract`, never a pointer to same-round peer output or another seat's artifacts, and whatever the oracle reports from it is worker-reported data rather than caller-verified evidence."
-def referencedUrlRole : UrlRole := ⟨true, false, false, false⟩
-
--- SKILL[def]: "If the oracle cannot retrieve a referenced URL, it must record that in `SshxResultEnvelope.conclusion` and mark every premise that depended on it `ASSUMED-UNVERIFIED` under `## Reasoning Discipline`, never reconstructing the content from memory."
-def unretrievedPremiseStatus : Reasoning.PremiseStatus := .assumedUnverified
-
-def reconstructFromMemoryAllowed : Bool := false
+  | .inlinedContent => true
 
 /-! ## Fallback -/
 

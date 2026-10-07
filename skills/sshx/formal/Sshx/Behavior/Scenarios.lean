@@ -394,6 +394,19 @@ example : ¬ allowed testsExhausted .advanceStage := by
   have hr : testsExhausted.reviewComplete = false := by decide
   simp [allowed, guardAdvanceStage, hs, hr]
 
+-- An oracle review flight launches through its runner; the delegated launch refuses it.
+private def oracleReview := step testsReviewState (.openFlight .review .quality .nyxidOracle "target" 0)
+example : allowed oracleReview (.launchViaRunner 2) := by
+  simp [allowed, guardLaunchViaRunner, oracleReview, testsReviewState, review, complete, second,
+    partDone, returned, opened, begin, readyState, finish, twoParts, successful,
+    ProtocolState.initial, ProtocolState.flight, ProtocolState.freshId, step,
+    ImplementationPlan.start, newFlight, updateFlight, collectEffect, done]
+example : ¬ allowed oracleReview (.launchDelegated 2) := by
+  simp [allowed, guardLaunchDelegated, oracleReview, testsReviewState, review, complete, second,
+    partDone, returned, opened, begin, readyState, finish, twoParts, successful,
+    ProtocolState.initial, ProtocolState.flight, ProtocolState.freshId, step,
+    ImplementationPlan.start, newFlight, updateFlight, collectEffect, done]
+
 private def scopeNote : Revision :=
   ⟨"engineering scope note", "existing user authorization", "none"⟩
 private def authorizedRevision (r : Revision) (source : Option ContinuationSource) : RevisionEvidence :=

@@ -25,10 +25,6 @@ theorem never_poll (s : ProtocolState) (id : Nat) : ¬ allowed s (.pollArtifacts
 theorem never_lifecycle (s : ProtocolState) (op : LifecycleOp) : ¬ allowed s (.lifecycle op) :=
   fun h => h
 
--- SKILL[inv]: "When the needed content is not already public, the brief inlines it instead."
-theorem never_publish_to_link (s : ProtocolState) : ¬ allowed s .publishToMakeLinkable :=
-  fun h => h
-
 -- SKILL[inv]: "Logs are not inline in caller context."
 theorem never_carry_full_log (s : ProtocolState) (id : Nat) : ¬ allowed s (.carry (.fullLog id)) := by
   simp [allowed, guardCarry, ContextItem.permitted]
@@ -220,8 +216,6 @@ theorem safe_step {s : ProtocolState} {a : Action} (hs : Safe s) (ha : allowed s
     exact ⟨source, evidence.roster, he.symm⟩
   | claimSatisfied => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
   | lifecycle op => exact ha.elim
-  | oracleReference url isPublic pinned => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
-  | publishToMakeLinkable => exact ha.elim
 
 theorem safe_of_reachable {s : ProtocolState} (h : Reachable s) : Safe s := by
   induction h with

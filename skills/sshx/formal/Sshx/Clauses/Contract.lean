@@ -318,7 +318,7 @@ abbrev verdictMirror := @StageRecord.verdict_mirrors
 
 /-! ## Worker completion -/
 
--- SKILL[thm]: "Runner collection mechanics stay in `CODEX_WORKER_SPEC.md`; they do not create a carrier-specific meaning of completion."
+-- SKILL[thm]: "Runner collection mechanics stay in `CODEX_WORKER_SPEC.md` and `ORACLE_WORKER_SPEC.md`; they do not create a carrier-specific meaning of completion."
 /-- Completion has one meaning for every carrier: `done` takes no carrier argument. -/
 theorem completion_is_carrier_independent (c c' : Carrier) (o : Observation) :
     (fun _ : Carrier => done o) c = (fun _ : Carrier => done o) c' := rfl

@@ -89,9 +89,10 @@ approved assignments on the same target remain distinct. Every admitted fallback
 reduces that assignment's untried-carrier remainder. Draws, review dispatch and fallback
 share the executable-carrier restriction for the tests seat.
 
-The model's `launchDelegated` action projects the existing direct oracle/subagent invocation;
-Codex still requires `launchViaRunner`. Both paths require launch and host completion before
-collection. This adds no runtime interface, host capability, worker-record field or budget.
+The model's `launchDelegated` action projects the direct subagent invocation, the only
+launch outside a runner. Codex and oracle flights require `launchViaRunner`, each through its
+own closed-set runner (`runnerFor`), so a delegated oracle launch is refused. Both paths
+require launch and host completion before collection. This adds no runtime interface, host capability, worker-record field or budget.
 The seven stages and per-flight completion predicate are unchanged. Batch progress is a
 formal projection of existing worker conclusions, not a runtime scheduler. Trigger-aware
 downgrade and plan admission retain the existing contextual evidence chain.

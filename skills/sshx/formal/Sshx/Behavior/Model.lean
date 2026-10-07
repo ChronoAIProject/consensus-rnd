@@ -232,8 +232,6 @@ inductive Action
   | evaluateTermination (source : ClaimSource) (evidence : TerminationEvidence)
   | claimSatisfied
   | lifecycle (op : LifecycleOp)
-  | oracleReference (url : String) (isPublic : Bool) (pinned : Bool)
-  | publishToMakeLinkable
   deriving DecidableEq, Repr
 
 /-! ## State projections -/
@@ -358,22 +356,29 @@ def guardOpenFlight (s : ProtocolState) (stage : FlightStage) (role : Role) (car
     | .review => guardReviewFlight s role carrier
     | _ => s.stage = stage.protocolStage
 
--- SKILL[guard]: "Use `skills/sshx/scripts/run-codex-worker.sh` for every `codex-cli` launch."
-def guardLaunchViaRunner (s : ProtocolState) (id : Nat) : Prop :=
-  ∃ f, s.flight id = some f ∧ f.launched = false ∧ f.carrier = .codexCli
+/-- The closed-set runner each out-of-process carrier is launched through; the in-context
+subagent has none. -/
+@[simp] def runnerFor : Carrier → Option String
+  | .codexCli => some "skills/sshx/scripts/run-codex-worker.sh"
+  | .nyxidOracle => some "skills/sshx/scripts/run-oracle-worker.py"
+  | .isolatedTokenSubagent => none
 
-/-- Existing direct oracle/subagent invocation, outside the Codex runner. This models
-host dispatch only; carrier-specific isolation remains at its existing contract owner. -/
+-- SKILL[guard]: "Use `skills/sshx/scripts/run-codex-worker.sh` for every `codex-cli` launch and `skills/sshx/scripts/run-oracle-worker.py` for every `nyxid-oracle` launch."
+def guardLaunchViaRunner (s : ProtocolState) (id : Nat) : Prop :=
+  ∃ f, s.flight id = some f ∧ f.launched = false ∧ (runnerFor f.carrier).isSome = true
+
+/-- Direct subagent invocation, the only launch outside a runner. This models host dispatch
+only; carrier-specific isolation remains at its existing contract owner. -/
 def guardLaunchDelegated (s : ProtocolState) (id : Nat) : Prop :=
-  ∃ f, s.flight id = some f ∧ f.launched = false ∧ f.carrier ≠ .codexCli
+  ∃ f, s.flight id = some f ∧ f.launched = false ∧ runnerFor f.carrier = none
 
 -- SKILL[guard]: "It must not use shell `&` to background the runner, because that detaches the process from host tracking and can leave an init-adopted carrier running without ever notifying the caller of completion."
 def guardNoShellBackground : Prop := False
 
--- SKILL[guard]: "The caller must not poll worker artifact paths while the runner is active."
+-- SKILL[guard]: "The caller must not poll worker artifact paths while a runner is active."
 def guardNoPolling : Prop := False
 
--- SKILL[guard]: "The caller must launch the runner through a host-provided background job mechanism that notifies the caller when the carrier process exits."
+-- SKILL[guard]: "The caller must launch each runner through a host-provided background job mechanism that notifies the caller when the carrier process exits."
 def guardHostNotified (s : ProtocolState) (id : Nat) : Prop :=
   ∃ f, s.flight id = some f ∧ f.launched = true
 
@@ -453,11 +458,6 @@ def guardClaimSatisfied (s : ProtocolState) : Prop :=
 -- SKILL[guard]: "No lifecycle authority is granted."
 def guardNoLifecycle : Prop := False
 
--- SKILL[guard]: "Such a URL is permitted only when the referenced content is already anonymously readable on the remote, which the caller confirms before the first submission; the caller must never push, publish, change repository visibility, or otherwise mutate remote state to make content linkable."
-def guardOracleReference (isPublic pinned : Bool) : Prop := isPublic = true ∧ pinned = true
-
-def guardNoPublishToLink : Prop := False
-
 /-- The conjunction of the clause guards, per action. -/
 def allowed (s : ProtocolState) : Action → Prop
   | .inspectReadOnly => guardInspect s
@@ -483,8 +483,6 @@ def allowed (s : ProtocolState) : Action → Prop
   | .evaluateTermination _ e => guardEvaluateTermination s e
   | .claimSatisfied => guardClaimSatisfied s
   | .lifecycle _ => guardNoLifecycle
-  | .oracleReference _ isPublic pinned => guardOracleReference isPublic pinned
-  | .publishToMakeLinkable => guardNoPublishToLink
 
 -- SKILL[ref]: "Include any non-blocking advisory feedback without inlining logs."
 abbrev advisoryWithoutLogs := @ContextItem.permitted
@@ -578,8 +576,6 @@ def step (s : ProtocolState) : Action → ProtocolState
              passBudget := s.passBudget.bind fun b => Sshx.step b .terminationGateEvaluation }
   | .claimSatisfied => { s with claimed := true }
   | .lifecycle _ => s
-  | .oracleReference _ _ _ => s
-  | .publishToMakeLinkable => s
 
 /-- Reachable states: the initial state and every allowed step from a reachable state. -/
 inductive Reachable : ProtocolState → Prop
