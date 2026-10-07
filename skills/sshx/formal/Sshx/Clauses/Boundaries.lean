@@ -14,19 +14,21 @@ open Sshx
 
 /-! ## Boundaries -/
 
--- SKILL[def]: "This skill is a prompt contract with a closed set of exactly five named mechanical script exceptions, governed only by `skills/sshx/CODEX_WORKER_SPEC.md` and their behavior tests:"
+-- SKILL[def]: "This skill is a prompt contract with a closed set of exactly six named mechanical script exceptions, governed only by `skills/sshx/CODEX_WORKER_SPEC.md`, `skills/sshx/ORACLE_WORKER_SPEC.md`, and their behavior tests:"
 -- SKILL[def]: "- `skills/sshx/scripts/run-codex-worker.sh`;"
+-- SKILL[def]: "- `skills/sshx/scripts/run-oracle-worker.py`;"
 -- SKILL[def]: "- `skills/sshx/scripts/run-codex-worker-batch.sh`;"
 -- SKILL[def]: "- `skills/sshx/scripts/read-codex-worker-status.sh`;"
 -- SKILL[def]: "- `skills/sshx/scripts/clean-codex-worker-runs.sh`;"
 -- SKILL[def]: "- `skills/sshx/scripts/prune-inactive-codex-worker-runs.sh`."
 def mechanicalScripts : List String :=
-  ["skills/sshx/scripts/run-codex-worker.sh", "skills/sshx/scripts/run-codex-worker-batch.sh",
+  ["skills/sshx/scripts/run-codex-worker.sh", "skills/sshx/scripts/run-oracle-worker.py",
+    "skills/sshx/scripts/run-codex-worker-batch.sh",
     "skills/sshx/scripts/read-codex-worker-status.sh",
     "skills/sshx/scripts/clean-codex-worker-runs.sh",
     "skills/sshx/scripts/prune-inactive-codex-worker-runs.sh"]
 
-theorem exactly_five_scripts : mechanicalScripts.length = 5 := rfl
+theorem exactly_six_scripts : mechanicalScripts.length = 6 := rfl
 
 /-- Runtime surfaces none of the contract's named objects are. -/
 inductive RuntimeSurface
@@ -76,19 +78,6 @@ abbrev allowedCarriers := Carrier.univ
 
 -- SKILL[def]: "Use them only as worker delegation capability, not as controller authority."
 def carrierHasControllerAuthority (_ : Carrier) : Bool := false
-
-/-- What the oracle broker and `nyxid oracle` are used as. -/
-inductive OracleUse
-  | carrierTransport
-  | helperScriptTheSkillOwns
-  | daemon
-  | lifecycleActor
-  deriving DecidableEq, Repr
-
--- SKILL[def]: "The oracle broker and `nyxid oracle` are used only as `nyxid-oracle` transports, never as a helper script the skill owns, a daemon, or a lifecycle actor."
-def oracleUsedAs : OracleUse → Bool
-  | .carrierTransport => true
-  | .helperScriptTheSkillOwns | .daemon | .lifecycleActor => false
 
 /-! ## Baseline failure modes -/
 

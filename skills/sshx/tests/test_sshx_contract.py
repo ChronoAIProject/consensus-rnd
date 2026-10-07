@@ -149,6 +149,7 @@ from typing import TypeAlias
 
 
 ROOT = Path(__file__).resolve().parents[3]
+CONSTITUTION = ROOT / "CLAUDE.md"
 SKILL = ROOT / "skills" / "sshx" / "SKILL.md"
 SPEC = ROOT / "skills" / "sshx" / "CODEX_WORKER_SPEC.md"
 ORACLE_SPEC = ROOT / "skills" / "sshx" / "ORACLE_WORKER_SPEC.md"
@@ -254,7 +255,6 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "GitHub",
         "GoalArtifact",
         "GoalArtifact.success_criteria",
-        "HEAD",
         "InlineConsensusProtocol",
         "MEMORY.md",
         "NyxID",
@@ -389,7 +389,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "15d8f2fe34b920de039c5513d3639f8305d6c12f9df6ef7449022af54467a5f3"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "c94f8a80cfd42a63bf1faaefd5f7619181f9cfa4d85f0e4d7b146b660fe92c78"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -2484,7 +2484,12 @@ class SshxContractTests(unittest.TestCase):
             "everywhere in this contract, non-mutating means it changes no file, Git state, GitHub state, label, release, host configuration, lifecycle state, or other external resource",
             text,
         )
-        self.assertIn("Its capability check and dispatch are non-mutating", text)
+        self.assertIn(
+            "It reaches NyxID only through the oracle runner, whose capability check is non-mutating; "
+            "the legacy `nyxid oracle` CLI is never invoked by any caller or worker.",
+            text,
+        )
+        self.assertNotIn("dispatch are non-mutating", text)
         self.assertIn("Carrier heterogeneity is this protocol's policy, not a theorem premise or consequence", text)
         self.assertIn("improves consensus quality or yields statistically independent priors is `ASSUMED-UNVERIFIED`", text)
         self.assertIn("carrier-role pairing must be chosen and recorded before any worker", text)
@@ -2693,54 +2698,67 @@ class SshxContractTests(unittest.TestCase):
         self.assertNotIn("same-task recovery", text.lower())
         self.assertIn("one fail-closed predicate", completion)
 
-    def test_sshx_nyxid_oracle_transports_have_one_mechanics_owner(self) -> None:
+    def test_sshx_nyxid_oracle_reaches_nyxid_only_through_its_runner(self) -> None:
         skill = read(SKILL)
-        spec = " ".join(read(ORACLE_SPEC).split())
         worker_delegation = section(skill, "## Worker Delegation", "## Result Envelope")
-        self.assertIn("Its capability check and dispatch are non-mutating and owned by `ORACLE_WORKER_SPEC.md`", worker_delegation)
         for required in [
-            "Each `nyxid-oracle` attempt uses the first transport, oracle broker before legacy `nyxid oracle`",
-            "preferring ones its flight has not tried; if none passes, the carrier is unavailable",
-            "A transport switch is an ordinary counted retry, so with both passing `retry_budget` must be at least 1",
-            "the caller records each attempt's transport in `worker_delegation.reason`",
+            "`skills/sshx/scripts/run-oracle-worker.py` for every `nyxid-oracle` launch",
+            "It reaches NyxID only through the oracle runner",
+            "the legacy `nyxid oracle` CLI is never invoked by any caller or worker",
+            "Mechanics are owned by `CODEX_WORKER_SPEC.md` and `ORACLE_WORKER_SPEC.md`",
+            "may use a reference to the actual raw terminal response the oracle runner saved for that same flight and attempt",
         ]:
             self.assertIn(required, worker_delegation)
+        self.assertEqual(skill.count("`nyxid oracle`"), 1)
+        self.assertNotIn("transport", skill)
+        self.assertNotIn("through existing host capture capability", skill)
         self.assertIn(
-            "The oracle broker and `nyxid oracle` are used only as `nyxid-oracle` transports",
-            section(skill, "## Boundaries", "## Baseline Failure Mode"),
+            "Runner collection mechanics stay in `CODEX_WORKER_SPEC.md` and `ORACLE_WORKER_SPEC.md`",
+            section(skill, "## Worker Completion Contract", "## No Context Pollution"),
         )
-        self.assertLess(spec.index("## Broker transport"), spec.index("## Legacy transport"))
-        self.assertIn("does not restate them", spec)
-        self.assertNotIn("one fail-closed predicate", spec)
-        self.assertIn("the broker task API and its `?wait=` loop, which is status polling", spec)
-        self.assertIn("so no other skill is loaded or depended on", spec)
 
-    def test_sshx_nyxid_oracle_public_github_reference_rule(self) -> None:
+    def test_oracle_worker_spec_owns_the_runner_without_executable_or_legacy_mechanics(self) -> None:
+        raw_spec = read(ORACLE_SPEC)
+        spec = " ".join(raw_spec.split())
+        self.assertNotIn("<<", raw_spec)
+        self.assertEqual(re.findall(r"^```(\w*)$", raw_spec, re.MULTILINE), ["text", ""])
+        self.assertIn("python3 <skill-root>/scripts/run-oracle-worker.py", raw_spec)
+        for required in [
+            "does not restate them",
+            "are owned by `CODEX_WORKER_SPEC.md` (`## Invocation` and `## Run Directory`)",
+            "byte-identical to the Codex runner's `--project-paths` output for the same identity",
+            "The legacy `nyxid oracle` CLI is not a route of this carrier and the runner never invokes it",
+            "the broker task API and its `?wait=` loop, which is status polling",
+            "so no other skill is loaded or depended on",
+            "To reverse the exception completely, use this one recipe",
+        ]:
+            self.assertIn(required, spec)
+        self.assertNotIn("one fail-closed predicate", spec)
+        for legacy in ["## Legacy", "nyxid oracle ask", "legacy-task:", "--new-conversation", "pool list"]:
+            self.assertNotIn(legacy, raw_spec)
+
+    def test_constitution_oracle_channel_offers_only_the_broker(self) -> None:
+        constitution = read(CONSTITUTION)
+        channel = constitution.split("## 旁路推理通道", 1)[1].split("\n## ", 1)[0]
+        for required in ["`skills/sshx/scripts/run-oracle-worker.py`", '"metadata": {"conversation_id": "new"}', "旧 `nyxid oracle` CLI"]:
+            self.assertIn(required, channel)
+        for legacy in ["退回旧", "--new-conversation", "--conversation", "permalink", "GitHub 链接"]:
+            self.assertNotIn(legacy, channel)
+
+    def test_sshx_nyxid_oracle_briefs_inline_needed_content(self) -> None:
         skill = read(SKILL)
         worker_delegation = section(skill, "## Worker Delegation", "## Result Envelope")
         reference_rule = next(
             paragraph
             for paragraph in worker_delegation.split("\n\n")
-            if "public GitHub URL" in paragraph
+            if paragraph.startswith("A `nyxid-oracle` worker has no access to the caller's filesystem")
         )
-        for required in [
-            "A `nyxid-oracle` worker has no access to the caller's filesystem",
-            "caller-local paths, including `work_target` paths, are not readable content references for it",
-            "may instead reference repository content by public GitHub URL",
-            "pinned to an immutable commit SHA so every seat reads the same bytes",
-            "branch, tag, and `HEAD` URLs drift between reads and must not be used",
-            "permitted only when the referenced content is already anonymously readable on the remote",
-            "which the caller confirms before the first submission",
-            "must never push, publish, change repository visibility, or otherwise mutate remote state to make content linkable",
-            "When the needed content is not already public, the brief inlines it instead",
-            "never a goal source under `## Goal Contract`",
-            "never a pointer to same-round peer output or another seat's artifacts",
-            "worker-reported data rather than caller-verified evidence",
-            "If the oracle cannot retrieve a referenced URL",
-            "mark every premise that depended on it `ASSUMED-UNVERIFIED`",
-            "never reconstructing the content from memory",
-        ]:
-            self.assertIn(required, reference_rule)
+        self.assertEqual(
+            reference_rule,
+            "A `nyxid-oracle` worker has no access to the caller's filesystem, so caller-local paths, including "
+            "`work_target` paths, are not readable content references for it; its brief inlines the content it needs.",
+        )
+        self.assertNotIn("GitHub URL", skill)
         self.assertIn("- GitHub lifecycle operations;", section(skill, "## Boundaries", "## Baseline Failure Mode"))
 
     def test_sshx_external_carrier_claims_require_real_verification(self) -> None:
@@ -2793,12 +2811,14 @@ class SshxContractTests(unittest.TestCase):
             "Use `skills/sshx/scripts/run-codex-worker.sh` for every `codex-cli` launch",
             "Until a valid receipt binds `flight_id`, leave it empty and omit identity options; `attempt` stays 1",
             "Bound retries reuse that ID and increment `attempt`",
-            "Only the runner mints IDs and derives disjoint attempt paths",
+            "and `skills/sshx/scripts/run-oracle-worker.py` for every `nyxid-oracle` launch",
+            "Only the runners mint IDs and derive disjoint attempt paths",
             "callers cannot supply artifact paths",
             "owned by `CODEX_WORKER_SPEC.md`",
-            "use the runner's default `danger-full-access`",
+            "use the Codex runner's default `danger-full-access`",
             "unless the maintainer explicitly requests a narrower sandbox",
-            "The caller must not poll worker artifact paths while the runner is active",
+            "The caller must not poll worker artifact paths while a runner is active",
+            "The caller must launch each runner through a host-provided background job mechanism",
             "The caller records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the runner reports completion and the envelope and sentinel validate.",
             "Completion and verdict recognition stay governed by the `## Worker Completion Contract`",
         ]:
@@ -3112,7 +3132,7 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_runner_ownership_wording_has_no_legacy_assignment(self) -> None:
         text = read(SKILL)
-        self.assertIn("Only the runner mints IDs and derives disjoint attempt paths", text)
+        self.assertIn("Only the runners mint IDs and derive disjoint attempt paths", text)
         self.assertNotIn("caller-assigned `result_ref`", text.lower())
         self.assertNotIn("caller-assigned `completion_sentinel`", text.lower())
 
@@ -3542,16 +3562,20 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(forbidden_boundary, text)
         self.assertIn("It must not add or depend on", text)
-        self.assertIn("closed set of exactly five named mechanical script exceptions", text)
+        self.assertIn("closed set of exactly six named mechanical script exceptions", text)
         for script in [
             "run-codex-worker.sh",
+            "run-oracle-worker.py",
             "run-codex-worker-batch.sh",
             "read-codex-worker-status.sh",
             "clean-codex-worker-runs.sh",
             "prune-inactive-codex-worker-runs.sh",
         ]:
             self.assertIn(f"`skills/sshx/scripts/{script}`", text)
-        self.assertIn("governed only by `skills/sshx/CODEX_WORKER_SPEC.md` and their behavior tests", text)
+        self.assertIn(
+            "governed only by `skills/sshx/CODEX_WORKER_SPEC.md`, `skills/sshx/ORACLE_WORKER_SPEC.md`, and their behavior tests",
+            text,
+        )
         self.assertIn("No lifecycle authority is granted", text)
         self.assertIn(
             "Allowed worker carriers are limited to `codex-cli`, `nyxid-oracle`, and `isolated-token-subagent`",
@@ -3569,18 +3593,24 @@ class SshxContractTests(unittest.TestCase):
             if path.is_file()
         }
         self.assertEqual(listed, on_disk)
+        self.assertEqual(len(on_disk), 6)
         self.assertTrue(all((ROOT / path).is_file() for path in listed))
 
-        spec_text = read(SPEC)
-        reversal = spec_text.split("To reverse the exception", 1)[1].split("A new design review", 1)[0]
-        for path in on_disk:
-            self.assertIn(f"`scripts/{Path(path).name}`", reversal)
-        for behavior_test in [
-            "tests/test_run_codex_worker.py",
-            "tests/test_codex_worker_tools.py",
-            "tests/test_sshx_contract.py",
-        ]:
-            self.assertIn(behavior_test, reversal)
+        oracle_runner = "skills/sshx/scripts/run-oracle-worker.py"
+        owners = {
+            SPEC: (on_disk - {oracle_runner}, ["tests/test_run_codex_worker.py", "tests/test_codex_worker_tools.py"]),
+            ORACLE_SPEC: ({oracle_runner}, ["tests/test_run_oracle_worker.py"]),
+        }
+        for spec_path, (scripts, behavior_tests) in owners.items():
+            reversal = " ".join(read(spec_path).split()).split("To reverse the exception", 1)[1].split("A new design review", 1)[0]
+            with self.subTest(spec=spec_path.name):
+                self.assertEqual(
+                    {f"skills/sshx/scripts/{name}" for name in re.findall(r"`scripts/([^`]+)`", reversal)}, scripts
+                )
+                for behavior_test in [*behavior_tests, "tests/test_sshx_contract.py"]:
+                    self.assertIn(behavior_test, reversal)
+        codex_reversal = " ".join(read(SPEC).split()).split("To reverse the exception", 1)[1]
+        self.assertLess(codex_reversal.index("`ORACLE_WORKER_SPEC.md`"), codex_reversal.index("`scripts/run-codex-worker.sh`"))
 
     def test_non_runner_scripts_contain_no_run_layout_literal(self) -> None:
         layout_literals = [
@@ -3603,7 +3633,7 @@ class SshxContractTests(unittest.TestCase):
             "read-codex-worker-status.sh",
             "clean-codex-worker-runs.sh",
         ]
-        for script_name in [*identity_consumers, "prune-inactive-codex-worker-runs.sh"]:
+        for script_name in [*identity_consumers, "prune-inactive-codex-worker-runs.sh", "run-oracle-worker.py"]:
             source = read(ROOT / "skills" / "sshx" / "scripts" / script_name)
             allowed = {"[0-9a-f]{24}"} if script_name in identity_consumers else set()
             with self.subTest(script=script_name):
