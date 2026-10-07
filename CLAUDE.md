@@ -2,9 +2,9 @@
 
 本文件给在本仓库内维护 skill、清单和文档的 agent 使用，不是下游 host 的运行时配置。仓库定位与共识引擎设计哲学见英文 canonical [`README.md`](./README.md)，中文 companion 见 [`README.zh-CN.md`](./README.zh-CN.md)。
 
-## 旁路推理通道: nyxid oracle (ChatGPT Pro)
+## 旁路推理通道: NyxID oracle (ChatGPT Pro)
 
-`nyxid oracle` 可作为 codex / Claude 之外的独立推理通道。命令、参数和输出字段以 `nyxid oracle --help` 为准；长 prompt 可用 `--file -`，多轮可用 `--new-conversation` / `--conversation`。异步请求只在完成后读取一次结果，不 busy-loop 轮询。oracle 能自行抓取公开可访问的 GitHub 链接，所以大段仓库内容可改为附 pin 到 commit SHA 的 permalink，而不是塞进 prompt；未公开的内容不得外链，也不得为了外链而推送或改仓库可见性。
+NyxID oracle 可作为 codex / Claude 之外的独立推理通道。优先走 oracle broker(`nyxid proxy request oracle ...` 的流式 OpenAI 兼容接口)，broker 不可用或失败时退回旧的 `nyxid oracle`；单次提问的能力检查、请求构造、流式拼装和禁用路由以 [`skills/sshx/ORACLE_WORKER_SPEC.md`](./skills/sshx/ORACLE_WORKER_SPEC.md) 为唯一事实源，不另行加载 oracle-broker skill。多轮只用于旁路通道(sshx 席位不用)：broker 首轮带 `"metadata": {"conversation_id": "new"}`，后续带回返回的 `conv_...`；旧 CLI 用 `--new-conversation` / `--conversation`。异步请求只在完成后读取一次结果，不 busy-loop 轮询。旧 `nyxid oracle` 能自行抓取公开可访问的 GitHub 链接，大段仓库内容可改为附 pin 到 commit SHA 的 permalink；broker 在 2026-10-07 实测打不开这类链接，走 broker 时内容需 inline。未公开的内容不得外链，也不得为了外链而推送或改仓库可见性。
 
 ## 仓库性质
 

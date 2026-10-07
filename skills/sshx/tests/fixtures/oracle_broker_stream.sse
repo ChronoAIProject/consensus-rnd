@@ -1,0 +1,21 @@
+data: {"id":"chatcmpl_1ad0c7c5-9622-4e3e-8fc5-26752e4c501c","object":"chat.completion.chunk","created":1791384407,"model":"oracle/chrono-chatgpt-pro-pool","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}
+
+: keep-alive
+
+: keep-alive
+
+: keep-alive
+
+: keep-alive
+
+: keep-alive
+
+: keep-alive
+
+data: {"id":"chatcmpl_1ad0c7c5-9622-4e3e-8fc5-26752e4c501c","object":"chat.completion.chunk","created":1791384407,"model":"oracle/chrono-chatgpt-pro-pool","choices":[{"index":0,"delta":{"content":"{\"conclusion\":{\"verdict\":\"approve\",\"reason\":\"In ordinary integer arithmetic, adding 2 and 2 gives 4.\"},\"log_ref\":\"inline\"}"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl_1ad0c7c5-9622-4e3e-8fc5-26752e4c501c","object":"chat.completion.chunk","created":1791384407,"model":"oracle/chrono-chatgpt-pro-pool","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":66,"completion_tokens":31,"total_tokens":97},"oracle":{"task_id":"1ad0c7c5-9622-4e3e-8fc5-26752e4c501c","conversation_id":null,"pool":"chrono-chatgpt-pro-pool","model_label":"chatgpt-6-pro","observed_model_switcher":"gpt_6_pro","observed_model_effort":"pro","chatgpt_url":"https://chatgpt.com/c/fixture","usage_estimated":true}}
+
+data: [DONE]
+
+

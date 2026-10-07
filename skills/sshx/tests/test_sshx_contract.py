@@ -151,6 +151,7 @@ from typing import TypeAlias
 ROOT = Path(__file__).resolve().parents[3]
 SKILL = ROOT / "skills" / "sshx" / "SKILL.md"
 SPEC = ROOT / "skills" / "sshx" / "CODEX_WORKER_SPEC.md"
+ORACLE_SPEC = ROOT / "skills" / "sshx" / "ORACLE_WORKER_SPEC.md"
 README = ROOT / "README.md"
 GEMINI = ROOT / "GEMINI.md"
 CI = ROOT / ".github" / "workflows" / "consensus-rnd-ci.yml"
@@ -256,6 +257,8 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "HEAD",
         "InlineConsensusProtocol",
         "MEMORY.md",
+        "NyxID",
+        "ORACLE_WORKER_SPEC.md",
         "SshxResultEnvelope",
         "SshxResultEnvelope.conclusion",
         "SshxResultEnvelope.log_ref",
@@ -386,7 +389,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "ed167b00f8711ba94f7de57b5a0274996b31c9deac7dd9da4a37a0c7c0ffc21e"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "15d8f2fe34b920de039c5513d3639f8305d6c12f9df6ef7449022af54467a5f3"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -2689,6 +2692,28 @@ class SshxContractTests(unittest.TestCase):
         self.assertNotIn("dispatch-exit recovery", text.lower())
         self.assertNotIn("same-task recovery", text.lower())
         self.assertIn("one fail-closed predicate", completion)
+
+    def test_sshx_nyxid_oracle_transports_have_one_mechanics_owner(self) -> None:
+        skill = read(SKILL)
+        spec = " ".join(read(ORACLE_SPEC).split())
+        worker_delegation = section(skill, "## Worker Delegation", "## Result Envelope")
+        self.assertIn("Its capability check and dispatch are non-mutating and owned by `ORACLE_WORKER_SPEC.md`", worker_delegation)
+        for required in [
+            "Each `nyxid-oracle` attempt uses the first transport, oracle broker before legacy `nyxid oracle`",
+            "preferring ones its flight has not tried; if none passes, the carrier is unavailable",
+            "A transport switch is an ordinary counted retry, so with both passing `retry_budget` must be at least 1",
+            "the caller records each attempt's transport in `worker_delegation.reason`",
+        ]:
+            self.assertIn(required, worker_delegation)
+        self.assertIn(
+            "The oracle broker and `nyxid oracle` are used only as `nyxid-oracle` transports",
+            section(skill, "## Boundaries", "## Baseline Failure Mode"),
+        )
+        self.assertLess(spec.index("## Broker transport"), spec.index("## Legacy transport"))
+        self.assertIn("does not restate them", spec)
+        self.assertNotIn("one fail-closed predicate", spec)
+        self.assertIn("the broker task API and its `?wait=` loop, which is status polling", spec)
+        self.assertIn("so no other skill is loaded or depended on", spec)
 
     def test_sshx_nyxid_oracle_public_github_reference_rule(self) -> None:
         skill = read(SKILL)
