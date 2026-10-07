@@ -77,17 +77,17 @@ abbrev allowedCarriers := Carrier.univ
 -- SKILL[def]: "Use them only as worker delegation capability, not as controller authority."
 def carrierHasControllerAuthority (_ : Carrier) : Bool := false
 
-/-- What `nyxid oracle` is used as. -/
+/-- What the oracle broker and `nyxid oracle` are used as. -/
 inductive OracleUse
-  | workerCarrier
+  | carrierTransport
   | helperScriptTheSkillOwns
   | daemon
   | lifecycleActor
   deriving DecidableEq, Repr
 
--- SKILL[def]: "`nyxid oracle` is used only as the `nyxid-oracle` worker carrier — a reasoning channel in the same category as `codex-cli` — never as a helper script the skill owns, a daemon, or a lifecycle actor."
+-- SKILL[def]: "The oracle broker and `nyxid oracle` are used only as `nyxid-oracle` transports, never as a helper script the skill owns, a daemon, or a lifecycle actor."
 def oracleUsedAs : OracleUse → Bool
-  | .workerCarrier => true
+  | .carrierTransport => true
   | .helperScriptTheSkillOwns | .daemon | .lifecycleActor => false
 
 /-! ## Baseline failure modes -/
