@@ -167,7 +167,7 @@ theorem main_path_first (gaps : List GapRank) (h : .normalizedGoal ∈ gaps) :
   have hxeq : x = .normalizedGoal := by simpa using (List.mem_filter.mp hxmem).2
   simp [hx, hxeq]
 
--- SKILL[ref]: "At zero units, start no new pass and report remaining blockers honestly; finish the already-paid batch including its review."
+-- SKILL[ref]: "At zero units under an explicit finite cap, start no new pass and report remaining blockers honestly; finish the already-paid batch including its review."
 abbrev stopWhenExhausted := @Sshx.step_zero_counted
 
 inductive DoneRoute
@@ -190,17 +190,28 @@ inductive BoundedPassChoice
   | askTheUser
   deriving DecidableEq, Repr
 
--- SKILL[def]: "If review exits `explicit user decision or another bounded review pass`, run one more bounded pass with a concrete next iteration question tied to `GoalArtifact`; when no bounded pass remains, report the unresolved evidence and route it to the declared owner."
+-- SKILL[def]: "If review exits `explicit user decision or another bounded review pass`, run one more pass with a concrete next iteration question tied to `GoalArtifact` when the direction gate authorizes it; when no authorized continuation remains, report the unresolved evidence and route it to the declared owner."
 def allCommentExitChoices (question : String) (needsOwnerDecision : Bool) : List BoundedPassChoice :=
   [.oneMoreBoundedPass question] ++ if needsOwnerDecision then [.askTheUser] else []
 
--- SKILL[ref]: "Do not pause for routine confirmation or ask the user to choose a method, and do not loop indefinitely."
-abbrev noIndefiniteLoop := @Sshx.counted_passes_bounded
+-- SKILL[def]: "Do not pause for routine confirmation or ask the user to choose a method, and do not repeat a pass without new evidence, an authorized correction, or a changed goal gap."
+def continuationRequiresChange (newEvidence authorizedCorrection changedGoalGap : Bool) : Bool :=
+  newEvidence || authorizedCorrection || changedGoalGap
+
+theorem continuation_requires_change (newEvidence authorizedCorrection changedGoalGap : Bool)
+    (h : continuationRequiresChange newEvidence authorizedCorrection changedGoalGap = true) :
+    newEvidence = true ∨ authorizedCorrection = true ∨ changedGoalGap = true := by
+  simp [continuationRequiresChange] at h
+  rcases h with h | h
+  · rcases h with h | h
+    · exact Or.inl h
+    · exact Or.inr (Or.inl h)
+  · exact Or.inr (Or.inr h)
 
 -- SKILL[ref]: "After any explicit correction, repeat this section's direction gate before further work."
 abbrev correctionGate := @reflect
 
--- SKILL[ref]: "Carrier retries and fallbacks are bounded by each flight's `retry_budget` and the finite eligible-untried-carrier set and consume no unit; the initial review triplet is the single occurrence fixed by the stage order and consumes none."
+-- SKILL[ref]: "Carrier retries and fallbacks are bounded by each flight's `retry_budget` and the finite eligible-untried-carrier set and consume no pass-budget unit; the initial review triplet is the single occurrence fixed by the stage order and consumes none."
 abbrev uncountedTransitions := @Sshx.step_uncounted
 
 end Sshx.Reasoning

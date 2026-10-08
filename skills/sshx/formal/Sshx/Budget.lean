@@ -1,8 +1,9 @@
 /-!
-# `pass_budget`
+# optional `pass_budget`
 
 Source: `## Fix Or Done` (sole owner) and the charging sentences of `## Termination Gate`.
-One precommitted natural number; every counted pass decrements it; nothing refunds it.
+The default is no cap; an explicitly recorded natural number caps counted passes and
+decrements on each counted pass; nothing refunds it.
 `repairWithRerunReview` charges an entire finite repair batch, including its final review.
 Behavior.Model carries that already-paid work inside fixOrDone, even at zero units.
 -/
@@ -27,13 +28,13 @@ def Transition.counted : Transition → Bool
   | .repeatedReviewPass | .terminationGateEvaluation => true
   | .carrierRetry | .carrierFallback | .initialReviewTriplet => false
 
--- SKILL[def]: "consumes exactly one unit when it is dispatched"
+-- SKILL[def]: "consumes exactly one unit when a finite cap is active, while an absent cap remains unlimited"
 /-- One step: a counted pass needs a unit and consumes it at dispatch; `none` is
-"no pass authority". -/
+an exhausted finite cap. The behavior model leaves an absent cap unchanged. -/
 def step (budget : Nat) (t : Transition) : Option Nat :=
   if t.counted then (if budget = 0 then none else some (budget - 1)) else some budget
 
--- SKILL[def]: "A run with no recorded `pass_budget` has no pass authority"
+-- SKILL[def]: "A run with no recorded `pass_budget` therefore retains pass authority under that gate and does not stop merely because no cap was recorded."
 /-- A run consumes transitions in order; the first refused pass stops the run. -/
 def run : Nat → List Transition → Option Nat
   | b, [] => some b

@@ -216,20 +216,23 @@ def atMostOnce (runs : List GateRun) : Prop := ∀ c, completedRunsFor runs c �
 theorem gate_reads_roster_not_its_exit (s : ClaimSource) (r : Roster) (e : TerminationExit) :
     terminationRoute s r = terminationRoute s r ∧ e = e := ⟨rfl, rfl⟩
 
--- SKILL[ref]: "Each evaluation of the termination truth table consumes one `pass_budget` unit owned in `## Fix Or Done`; this gate creates no nested budget."
+-- SKILL[ref]: "Each evaluation of the termination truth table consumes one `pass_budget` unit owned in `## Fix Or Done` when a finite cap is active; an absent cap remains unchanged, and this gate creates no nested budget."
 abbrev evaluationConsumesOneUnit := @Sshx.step_counted
 
--- SKILL[def]: "A presentation rejected as fake termination consensus is not a completed gate run and may be corrected only while `pass_budget` remains."
+-- SKILL[def]: "A presentation rejected as fake termination consensus is not a completed gate run and may be corrected only while the direction gate authorizes another pass."
 def fakeConsensusRun (candidate : Nat) : GateRun := ⟨candidate, false⟩
 
 theorem fake_consensus_is_not_completed (c : Nat) : (fakeConsensusRun c).completed = false := rfl
 
-def correctionAllowed (budgetRemaining : Nat) : Bool := 0 < budgetRemaining
+def correctionAllowed (budgetRemaining : Option Nat) (directionGate : Bool) : Bool :=
+  match budgetRemaining with
+  | none => directionGate
+  | some remaining => directionGate && remaining > 0
 
 -- SKILL[ref]: "A later candidate is permitted only after new evidence or an authorized correction."
 abbrev laterCandidateNeedsIndependentChange := @independentChange
 
--- SKILL[ref]: "When `pass_budget` is exhausted, report the unresolved blocker and do not certify satisfaction."
+-- SKILL[ref]: "When a finite `pass_budget` is exhausted, report the unresolved blocker and do not certify satisfaction; with no cap, the same evidence and candidate still cannot authorize another evaluation."
 abbrev exhaustedBudgetCertifiesNothing := @Sshx.step_zero_counted
 
 end Sshx.Reasoning

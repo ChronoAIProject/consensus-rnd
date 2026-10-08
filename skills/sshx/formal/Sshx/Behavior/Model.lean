@@ -413,11 +413,10 @@ def guardMutateTarget (s : ProtocolState) (target : String) : Prop :=
 -- SKILL[guard]: "It may carry only:"
 def guardCarry (item : ContextItem) : Prop := item.permitted = true
 
--- SKILL[guard]: "This section is the sole owner of `pass_budget`."
+-- SKILL[guard]: "This section is the sole owner of the optional `pass_budget`."
 def guardRecordPassBudget (s : ProtocolState) : Prop :=
   s.stage = .fixOrDone ∧ s.passBudget = none
 
--- SKILL[guard]: "The budget is immutable for this run: no result, repair, or correction may add, replenish, reset, or replace units, and a unit is never refunded."
 -- SKILL[guard]: "Accumulate completed/remaining obligations and test evidence; terminal completion permits handoff only."
 def guardRecordImplementation (s : ProtocolState) (id : Nat) : Prop :=
   s.reviewStarted = false ∧ s.batch.isSome = true ∧
@@ -427,13 +426,19 @@ def guardRecordImplementation (s : ProtocolState) (id : Nat) : Prop :=
 def guardBeginImplementation (s : ProtocolState) (plan : ImplementationPlan) : Prop :=
   s.stage = .implementation ∧ s.batch = none ∧ plan.valid
 
--- SKILL[guard]: "The batch debit includes all bounded assignments and final review even at zero remaining units, with no subsequent pass authority."
+-- SKILL[policy]: "When a finite `pass_budget` reaches zero, report every unresolved blocker honestly and do not start a new pass; absence of a cap imposes no round ceiling, but the direction gate still requires new evidence, an authorized correction, or a changed goal gap for each continuation."
+def passContinuationAllowed (budget : Option Nat) (directionGate : Bool) : Bool :=
+  match budget with
+  | none => directionGate
+  | some remaining => directionGate && remaining > 0
+
+-- SKILL[guard]: "The batch debit includes all bounded assignments and final review even at zero remaining units, with no subsequent pass authority under that finite cap."
 -- SKILL[guard]: "For `fix`, freeze admitted repairs as a finite batch under `## Implementation Worker` handoff, allowance and evidence rules;"
 def guardPass (s : ProtocolState) (t : Transition) (e : Reasoning.FamilyEvidence)
     (plan : Option ImplementationPlan) : Prop :=
   s.stage = .fixOrDone ∧ Reasoning.familyPassAllowed e t = true ∧
     s.reviewComplete = true ∧ t ≠ .initialReviewTriplet ∧
-    (t.counted = true → ∃ b, s.passBudget = some b ∧ 0 < b) ∧
+    (t.counted = true → s.passBudget = none ∨ ∃ b, s.passBudget = some b ∧ 0 < b) ∧
     (if t = .repairWithRerunReview then ∃ p, plan = some p ∧ p.valid else plan = none)
 
 def guardAdvanceStage (s : ProtocolState) : Prop :=
@@ -447,7 +452,7 @@ def guardAdvanceStage (s : ProtocolState) : Prop :=
 def guardEvaluateTermination (s : ProtocolState) (e : TerminationEvidence) : Prop :=
   e.authority = s.continuationAuthority ∧
     s.stage = .fixOrDone ∧ s.reviewComplete = true ∧ s.gate = .applies ∧
-    ∃ b, s.passBudget = some b ∧ 0 < b
+    (s.passBudget = none ∨ ∃ b, s.passBudget = some b ∧ 0 < b)
 
 -- SKILL[guard]: "Ambiguous or unconfirmed claim-specific authority constrains an affirmative claim and is recorded as an assumption or limitation; it does not pause routine startup or invent a mechanism."
 def guardClaimSatisfied (s : ProtocolState) : Prop :=
@@ -487,7 +492,7 @@ def allowed (s : ProtocolState) : Action → Prop
 -- SKILL[ref]: "Include any non-blocking advisory feedback without inlining logs."
 abbrev advisoryWithoutLogs := @ContextItem.permitted
 
--- SKILL[policy]: "Protocol policy, not a mathematical consequence: before the first pass after the initial review triplet, the caller records one owner-precommitted finite integer `pass_budget`."
+-- SKILL[policy]: "Protocol policy, not a mathematical consequence: before the first pass after the initial review triplet, the caller may record one owner-precommitted finite integer `pass_budget`; by default it records no cap."
 abbrev passBudgetPrecommitment := @guardRecordPassBudget
 
 /-! ## Effects -/

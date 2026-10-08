@@ -94,6 +94,12 @@ This baseline does not undo the historical timing advisory. The session's immuta
 pass_budget=3, remaining=0 and second explicitly recorded continuation exception remain;
 no budget reset, refund, automatic extension or compliant-cap claim is made.
 
+Pass-limit baseline (2026-10-09, recorded before the default-unbounded change): the
+published contract required an owner-precommitted finite `pass_budget` before any
+post-review pass, and a missing budget denied pass authority. The requested change
+sets the default to no round ceiling while retaining an explicit finite cap as an
+opt-in control; carrier retry budgets remain finite and independent.
+
 Implementation handoff baseline (2026-10-05, observed before tracked edits): an
 isolated evaluator without this skill produced initial and repair exporter briefs
 from a settled goal, host API/dependency requirements, and unsourced class/decorator
@@ -389,7 +395,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "c94f8a80cfd42a63bf1faaefd5f7619181f9cfa4d85f0e4d7b146b660fe92c78"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "95cd70530808f96bb2e9ba248db068e465824cc0f7f98d458820dba3079675b9"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -400,7 +406,7 @@ TerminationSeatResults: TypeAlias = tuple[tuple[JsonValue, JsonValue], ...]
 class TerminationResolution:
     truth_table_exit: str
     gap_route: str | None
-    pass_budget_remaining: int
+    pass_budget_remaining: int | None
     termination_evaluations_consumed: int
     fake_consensus_correction_allowed: bool
 
@@ -605,25 +611,27 @@ def resolve_termination_claim(
     *,
     consensus_source: JsonValue = "termination-seats",
     owner_assignment: GapOwnerAssignment = (None, None),
-    pass_budget_remaining: JsonValue = 1,
+    pass_budget_remaining: JsonValue = None,
 ) -> TerminationResolution:
-    if type(pass_budget_remaining) is not int or pass_budget_remaining <= 0:
+    if pass_budget_remaining is not None and (
+        type(pass_budget_remaining) is not int or pass_budget_remaining <= 0
+    ):
         return TerminationResolution(
             truth_table_exit="withhold claim; pass budget exhausted",
             gap_route=None,
-            pass_budget_remaining=0,
+            pass_budget_remaining=pass_budget_remaining if type(pass_budget_remaining) is int else 0,
             termination_evaluations_consumed=0,
             fake_consensus_correction_allowed=False,
         )
 
-    remaining = pass_budget_remaining - 1
+    remaining = None if pass_budget_remaining is None else pass_budget_remaining - 1
     if type(consensus_source) is not str:
         return TerminationResolution(
             truth_table_exit="reject fake termination consensus",
             gap_route=None,
             pass_budget_remaining=remaining,
             termination_evaluations_consumed=1,
-            fake_consensus_correction_allowed=remaining > 0,
+            fake_consensus_correction_allowed=remaining is None or remaining > 0,
         )
     roles: list[str] = []
     verdict_classes: list[str] = []
@@ -634,7 +642,7 @@ def resolve_termination_claim(
                 gap_route=None,
                 pass_budget_remaining=remaining,
                 termination_evaluations_consumed=1,
-                fake_consensus_correction_allowed=remaining > 0,
+                fake_consensus_correction_allowed=remaining is None or remaining > 0,
             )
         roles.append(role)
         verdict_classes.append(classify_termination_verdict(verdict))
@@ -646,7 +654,7 @@ def resolve_termination_claim(
             gap_route=None,
             pass_budget_remaining=remaining,
             termination_evaluations_consumed=1,
-            fake_consensus_correction_allowed=remaining > 0,
+            fake_consensus_correction_allowed=remaining is None or remaining > 0,
         )
     if all(verdict_class == "satisfied" for verdict_class in verdict_classes):
         exit_name = "termination claim permitted"
@@ -744,11 +752,13 @@ def termination_unsatisfied_route(*, names_goal_term: bool, already_redispatched
     return "treat-as-abstain"
 
 
-def pass_budget_after(remaining: int, transition: str) -> int | str:
+def pass_budget_after(remaining: int | None, transition: str) -> int | None | str:
     if transition in UNCOUNTED_TRANSITIONS:
         return remaining
     if transition not in PASS_CLASSES:
         raise ContractFailure(f"unknown pass transition: {transition}")
+    if remaining is None:
+        return None
     if remaining <= 0:
         return "no pass authority"
     return remaining - 1
@@ -1343,6 +1353,23 @@ class SshxContractTests(unittest.TestCase):
                 self.assertEqual(resolution.termination_evaluations_consumed, 1)
                 self.assertEqual(resolution.fake_consensus_correction_allowed, name == "fake-consensus")
 
+        unbounded = resolve_termination_claim(
+            satisfied_results,
+            consensus_source="termination-seats",
+            pass_budget_remaining=None,
+        )
+        self.assertEqual(unbounded.truth_table_exit, "termination claim permitted")
+        self.assertIsNone(unbounded.pass_budget_remaining)
+        self.assertEqual(unbounded.termination_evaluations_consumed, 1)
+        unbounded_again = resolve_termination_claim(
+            satisfied_results,
+            consensus_source="caller",
+            pass_budget_remaining=unbounded.pass_budget_remaining,
+        )
+        self.assertEqual(unbounded_again.truth_table_exit, "reject fake termination consensus")
+        self.assertIsNone(unbounded_again.pass_budget_remaining)
+        self.assertTrue(unbounded_again.fake_consensus_correction_allowed)
+
         last_unit = resolve_termination_claim(
             satisfied_results,
             consensus_source="caller",
@@ -1358,7 +1385,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertEqual(at_ceiling.pass_budget_remaining, 0)
         self.assertEqual(at_ceiling.termination_evaluations_consumed, 0)
 
-        for invalid_budget in (None, True, 1.5, [], {"remaining": 1}, EqualityRaises()):
+        for invalid_budget in (True, 1.5, [], {"remaining": 1}, EqualityRaises(), 0, -1):
             with self.subTest(invalid_budget=invalid_budget):
                 resolution = resolve_termination_claim(
                     satisfied_results,
@@ -1460,12 +1487,12 @@ class SshxContractTests(unittest.TestCase):
             "carrier outage must not become an unbounded work generator",
             "existing `abstain` discipline",
             "gate may reach a completed result at most once per candidate affirmative termination",
-            "Each evaluation of the termination truth table consumes one `pass_budget` unit owned in `## Fix Or Done`",
+            "Each evaluation of the termination truth table consumes one `pass_budget` unit owned in `## Fix Or Done` when a finite cap is active",
             "creates no nested budget",
             "never gates its own exit",
-            "presentation rejected as fake termination consensus is not a completed gate run and may be corrected only while `pass_budget` remains",
+            "presentation rejected as fake termination consensus is not a completed gate run and may be corrected only while the direction gate authorizes another pass",
             "later candidate is permitted only after new evidence or an authorized correction",
-            "When `pass_budget` is exhausted, report the unresolved blocker and do not certify satisfaction",
+            "When a finite `pass_budget` is exhausted, report the unresolved blocker and do not certify satisfaction; with no cap, the same evidence and candidate still cannot authorize another evaluation",
         ]:
             self.assertIn(anchor, truth_table)
         self.assertIn("This gate grants no authority over the host mechanism", text)
@@ -1480,16 +1507,16 @@ class SshxContractTests(unittest.TestCase):
             delegation,
         )
         self.assertIn(
-            "At zero units, start no new pass and report remaining blockers honestly",
+            "When a finite `pass_budget` reaches zero, report every unresolved blocker honestly and do not start a new pass",
             fix_or_done,
         )
-        self.assertIn("reaching zero reports every unresolved blocker honestly", fix_or_done)
+        self.assertIn("absence of a cap imposes no round ceiling", fix_or_done)
         self.assertIn(
             "A withheld claim reports honestly under the existing `abstain` discipline",
             termination,
         )
         self.assertIn(
-            "When `pass_budget` is exhausted, report the unresolved blocker and do not certify satisfaction",
+            "When a finite `pass_budget` is exhausted, report the unresolved blocker and do not certify satisfaction",
             termination,
         )
 
@@ -1923,7 +1950,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertEqual(text.count(anchor), 1)
         self.assertIn(anchor, fix_or_done)
         self.assertNotIn("`GoalArtifact` order", fix_or_done)
-        self.assertIn("At zero units, start no new pass", fix_or_done)
+        self.assertIn("At zero units under an explicit finite cap, start no new pass", fix_or_done)
 
     def test_sshx_depth_discipline_contract(self) -> None:
         text = read(SKILL)
@@ -2287,7 +2314,7 @@ class SshxContractTests(unittest.TestCase):
                 text.count("Protocol policy, not a mathematical consequence:"),
                 "Carrier heterogeneity is this protocol's policy, not a theorem premise or consequence" in text,
                 "Protocol policy, not mathematics, defines these two conjuncts" in text,
-                "before the first pass after the initial review triplet, the caller records one owner-precommitted finite integer `pass_budget`" in text,
+                "before the first pass after the initial review triplet, the caller may record one owner-precommitted finite integer `pass_budget`; by default it records no cap" in text,
             ),
             (6, True, True, True),
         )
@@ -3481,10 +3508,10 @@ class SshxContractTests(unittest.TestCase):
         text = read(SKILL)
         fix_or_done = section(text, "## Fix Or Done", "## Termination Gate")
         outside_fix_or_done = text.replace(fix_or_done, "", 1)
-        ownership = "This section is the sole owner of `pass_budget`"
+        ownership = "This section is the sole owner of the optional `pass_budget`"
         precommit = (
-            "before the first pass after the initial review triplet, the caller records one "
-            "owner-precommitted finite integer `pass_budget`"
+            "before the first pass after the initial review triplet, the caller may record one "
+            "owner-precommitted finite integer `pass_budget`; by default it records no cap"
         )
         self.assertNotIn(DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION, text)
         for anchor in [
@@ -3492,13 +3519,13 @@ class SshxContractTests(unittest.TestCase):
             "Protocol policy, not a mathematical consequence",
             precommit,
             "a `meta-layer convergence`, a `focused round`, a finite repair batch together with its mandatory rerun review triplet, a repeated review pass without a repair, or a termination-gate evaluation including one that exits `reject fake termination consensus`",
-            "consumes exactly one unit when it is dispatched",
-            "immutable for this run: no result, repair, or correction may add, replenish, reset, or replace units, and a unit is never refunded",
-            "Carrier retries and fallbacks are bounded by each flight's `retry_budget` and the finite eligible-untried-carrier set and consume no unit",
+            "consumes exactly one unit when a finite cap is active, while an absent cap remains unlimited",
+            "A finite cap is immutable for this run: no result, repair, or correction may add, replenish, reset, or replace its units, and a unit is never refunded",
+            "Carrier retries and fallbacks are bounded by each flight's `retry_budget` and the finite eligible-untried-carrier set and consume no pass-budget unit",
             "the initial review triplet is the single occurrence fixed by the stage order and consumes none",
-            "Because `pass_budget` is a strictly decreasing natural number, the run terminates",
-            "reaching zero reports every unresolved blocker honestly and is never evidence of method stop or goal completion",
-            "A run with no recorded `pass_budget` has no pass authority",
+            "When a finite `pass_budget` reaches zero, report every unresolved blocker honestly and do not start a new pass",
+            "absence of a cap imposes no round ceiling, but the direction gate still requires new evidence, an authorized correction, or a changed goal gap for each continuation",
+            "A run with no recorded `pass_budget` therefore retains pass authority under that gate and does not stop merely because no cap was recorded",
         ]:
             self.assertIn(anchor, fix_or_done)
         self.assertEqual((text.count(ownership), text.count(precommit)), (1, 1))
@@ -3517,6 +3544,9 @@ class SshxContractTests(unittest.TestCase):
         for transition in sorted(PASS_CLASSES):
             self.assertEqual(pass_budget_after(3, transition), 2)
         self.assertEqual(pass_budget_after(0, "termination-gate evaluation"), "no pass authority")
+        for transition in sorted(PASS_CLASSES):
+            self.assertIsNone(pass_budget_after(None, transition))
+        self.assertIsNone(pass_budget_after(None, "carrier retry"))
         with self.assertRaises(ContractFailure):
             pass_budget_after(3, "budget top-up")
 

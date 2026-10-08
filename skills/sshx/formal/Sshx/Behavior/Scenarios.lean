@@ -86,6 +86,20 @@ example : fix.stage = .fixOrDone := by decide
 private def family : FamilyEvidence :=
   ⟨"goal", "correct output", "ordinary inputs", "shared mechanism", "worker", "behavior check",
     true, true, 2, false, .uniformInvariant true, false, false, false, false, none⟩
+
+-- The default fix state carries no cap, so a direction-gated pass remains admissible
+-- and leaves the absent cap unchanged.
+example : fix.passBudget = none := by decide
+example : allowed fix (.pass .repeatedReviewPass family none) := by
+  have hs : fix.stage = .fixOrDone := by decide
+  have hr : fix.reviewComplete = true := by decide
+  have hb : fix.passBudget = none := by decide
+  simp [allowed, guardPass, hs, hr, hb, family, familyPassAllowed, familyRoute,
+    ownerAuthorizedDomainChange, classGateActive, FamilyEvidence.recordComplete,
+    coverageBasisVerified, Transition.counted]
+private def defaultRepeated := step fix (.pass .repeatedReviewPass family none)
+example : defaultRepeated.passBudget = none := by decide
+
 private def funded := step fix (.recordPassBudget 1)
 private def repair := step funded (.pass .repairWithRerunReview family (some twoParts))
 example : allowed funded (.pass .repairWithRerunReview family (some twoParts)) := by

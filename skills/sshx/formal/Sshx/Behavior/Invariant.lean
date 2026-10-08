@@ -280,7 +280,7 @@ theorem claim_only_under_permitted_gate (s : ProtocolState) (ha : allowed s .cla
       s.terminationAuthority = some s.continuationAuthority :=
   ha.2.2.1
 
--- SKILL[inv]: "Because `pass_budget` is a strictly decreasing natural number, the run terminates: reaching zero reports every unresolved blocker honestly and is never evidence of method stop or goal completion."
+-- SKILL[inv]: "A finite cap is immutable for this run: no result, repair, or correction may add, replenish, reset, or replace its units, and a unit is never refunded."
 theorem budget_never_increases (s : ProtocolState) (a : Action) (ha : allowed s a) (b b' : Nat)
     (hb : s.passBudget = some b) (hb' : (step s a).passBudget = some b') : b' ≤ b := by
   cases a
