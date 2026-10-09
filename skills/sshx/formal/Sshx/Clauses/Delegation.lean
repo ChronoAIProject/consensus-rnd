@@ -27,11 +27,12 @@ open Sshx
 
 -- SKILL[def]: "`WorkerDelegationContract` is the source-owned contract for choosing and using worker carriers."
 -- SKILL[def]: "1. `codex-cli`"
--- SKILL[def]: "2. `nyxid-oracle`"
--- SKILL[def]: "3. `isolated-token-subagent`"
--- SKILL[def]: "4. `abstain`"
+-- SKILL[def]: "2. `heca`"
+-- SKILL[def]: "3. `nyxid-oracle`"
+-- SKILL[def]: "4. `isolated-token-subagent`"
+-- SKILL[def]: "5. `abstain`"
 def workerDelegationContract : List WorkerMode :=
-  [.carrier .codexCli, .carrier .nyxidOracle, .carrier .isolatedTokenSubagent, .abstain]
+  [.carrier .codexCli, .carrier .heca, .carrier .nyxidOracle, .carrier .isolatedTokenSubagent, .abstain]
 
 theorem contract_lists_every_mode (m : WorkerMode) : m ∈ workerDelegationContract := by
   cases m with
@@ -41,7 +42,7 @@ theorem contract_lists_every_mode (m : WorkerMode) : m ∈ workerDelegationContr
 -- SKILL[def]: "`nyxid-oracle` is an out-of-process worker carrier that routes a perspective to a browser oracle (ChatGPT Pro) through NyxID."
 -- SKILL[def]: "`isolated-token-subagent` is an in-context worker carrier."
 def outOfProcess : Carrier → Bool
-  | .codexCli | .nyxidOracle => true
+  | .codexCli | .heca | .nyxidOracle => true
   | .isolatedTokenSubagent => false
 
 /-- What an oracle reply is to the caller. -/
@@ -89,21 +90,44 @@ theorem only_subagent_launch_is_delegated (c : Carrier) :
 -- SKILL[ref]: "It must run with isolated token context so same-round workers cannot read one another's full reasoning or peer outputs before returning their own verdict."
 abbrev isolatedTokenContext := @same_round_peer_invisible
 
--- SKILL[thm]: "`abstain` is required when none of `codex-cli`, `nyxid-oracle`, or `isolated-token-subagent` is available."
+-- SKILL[thm]: "`abstain` is required when none of `codex-cli`, `heca`, `nyxid-oracle`, or `isolated-token-subagent` is available."
 theorem abstain_when_nothing_available (tried : CarrierSet) :
     resolveSeat CarrierSet.empty tried = .abstain := by
   cases tried with
-  | mk a b c => cases a <;> cases b <;> cases c <;> decide
+  | mk a b c d => cases a <;> cases b <;> cases c <;> cases d <;> decide
 
 -- SKILL[ref]: "Do not self-apply the triplet inside the caller context and present it as worker consensus."
 abbrev noSelfApplication := @fake_roster_rejected
 
 /-! ## Dispatch-time composition and seat rotation -/
 
--- SKILL[policy]: "Protocol policy, not a mathematical consequence: at dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `codex-cli`, and the three-seat `## Termination Gate` follows that same composition; every single-worker stage assigns its worker to `codex-cli`."
-def stageComposition (seats : Nat) : List Carrier :=
+def legacyStageComposition (seats : Nat) : List Carrier :=
   if seats ≤ 1 then List.replicate seats .codexCli
   else [.isolatedTokenSubagent, .nyxidOracle] ++ List.replicate (seats - 2) .codexCli
+
+-- SKILL[ref]: "The three-seat `## Termination Gate` follows that same composition; every single-worker stage assigns its worker to `codex-cli` (heca only through fallback)."
+-- SKILL[policy]: "Protocol policy, not a mathematical consequence: at dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `codex-cli`; when heca is detected, exactly one seat from that remainder goes to `heca`."
+def stageComposition (seats : Nat) (hecaDetected : Bool := false) : List Carrier :=
+  if seats ≤ 1 then List.replicate seats .codexCli
+  else if hecaDetected then
+    [.isolatedTokenSubagent, .nyxidOracle, .heca] ++ List.replicate (seats - 3) .codexCli
+  else [.isolatedTokenSubagent, .nyxidOracle] ++ List.replicate (seats - 2) .codexCli
+
+-- SKILL[thm]: "When heca is absent, that composition is unchanged."
+theorem composition_heca_absent (seats : Nat) :
+    stageComposition seats false = legacyStageComposition seats := by
+  simp [stageComposition, legacyStageComposition]
+
+theorem detected_composition (seats : Nat) (h : 3 ≤ seats) :
+    (stageComposition seats true).count .isolatedTokenSubagent = 1 ∧
+    (stageComposition seats true).count .nyxidOracle = 1 ∧
+    (stageComposition seats true).count .heca = 1 ∧
+    (stageComposition seats true).count .codexCli = seats - 3 := by
+  have hgt : ¬ seats ≤ 1 := by omega
+  simp [stageComposition, hgt, List.count_cons, List.count_replicate]
+
+theorem single_worker_unchanged (detected : Bool) :
+    stageComposition 1 detected = [.codexCli] := rfl
 
 theorem composition_one_subagent_one_oracle (seats : Nat) (h : 2 ≤ seats) :
     (stageComposition seats).count .isolatedTokenSubagent = 1 ∧
@@ -139,7 +163,7 @@ def governs : DispatchPhase → GoverningRule
   | .dispatchTime => .rotationOverComposition
   | .afterCarrierFailure => .priorityList
 
--- SKILL[thm]: "The recorded initial pairing must not be rebalanced in response to completion outcomes; a retry or fallback may replace only the failed flight for the same seat and role, and neither is a mechanism for redrawing or restoring a stage's recorded assignment."
+-- SKILL[thm]: "The recorded initial pairing must not be rebalanced in response to completion outcomes; a retry or fallback may replace only the failed flight for the same seat and role, never redraw or restore the stage's recorded assignment."
 def rebalanceAllowed : Bool := false
 
 theorem fallback_keeps_seat_and_role (id : Nat) (c : Carrier) (f : Behavior.FlightRec) :
@@ -160,9 +184,9 @@ def SeatAssignment.seats (a : SeatAssignment) : List Behavior.Role := a.map Prod
 
 def SeatAssignment.carriers (a : SeatAssignment) : List Carrier := a.map Prod.snd
 
--- SKILL[def]: "Which named seat holds which carrier rotates: at each stage dispatch the caller draws one assignment uniformly at random from every assignment that satisfies that composition and this stage's per-seat carrier constraints, so a named role holds a carrier only for the stage dispatch it was drawn for."
-def drawFeasible (seats : List Behavior.Role) (a : SeatAssignment) : Prop :=
-  a.seats = seats ∧ a.carriers.Perm (stageComposition seats.length) ∧
+-- SKILL[def]: "At each stage dispatch the caller draws one assignment uniformly at random from all assignments satisfying the composition and per-seat carrier constraints; a named role holds its drawn carrier only for that dispatch."
+def drawFeasible (seats : List Behavior.Role) (a : SeatAssignment) (hecaDetected : Bool := false) : Prop :=
+  a.seats = seats ∧ a.carriers.Perm (stageComposition seats.length hecaDetected) ∧
     ∀ p ∈ a, Behavior.seatEligible p.1 p.2 = true
 
 /-- Rotation permutes seats over a fixed composition: every feasible draw carries exactly the
@@ -203,6 +227,15 @@ theorem reviewDrawB_feasible : drawFeasible reviewSeats reviewDrawB := by
   show (List.map Prod.snd reviewDrawB).Perm (stageComposition 3)
   simp [reviewDrawB, stageComposition]
   exact List.Perm.swap _ _ _
+
+def hecaReviewDraw : SeatAssignment :=
+  [(.architecture, .isolatedTokenSubagent), (.quality, .nyxidOracle), (.tests, .heca)]
+
+theorem heca_review_draw_feasible : drawFeasible reviewSeats hecaReviewDraw true := by
+  refine ⟨rfl, ?_, by decide⟩
+  simp [SeatAssignment.carriers, hecaReviewDraw, stageComposition, reviewSeats]
+
+theorem heca_can_hold_tests : testsSeatEligible .heca = true := rfl
 
 /-- No role keeps a standing carrier: the same seat holds different carriers in two feasible
 draws of the same stage. -/
@@ -347,7 +380,7 @@ inductive PathOwner
   | caller
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Only the runners mint IDs and derive disjoint attempt paths; callers cannot supply artifact paths."
+-- SKILL[def]: "Only runners mint IDs and derive disjoint attempt paths; callers cannot supply artifact paths."
 def artifactPathOwner : PathOwner := .runner
 
 -- SKILL[def]: "Receipts precede directories, stdin, and carrier execution."
@@ -455,7 +488,7 @@ example :
     retry.protocol.attempt = 2 ∧ runnerIdentityOptions retry = some (42, 2) ∧
     (collectRunnerEffect failed retry).protocol.status = .abstained := by decide
 
--- SKILL[def]: "Mechanics are owned by `CODEX_WORKER_SPEC.md` and `ORACLE_WORKER_SPEC.md`; use the Codex runner's default `danger-full-access` unless the maintainer explicitly requests a narrower sandbox."
+-- SKILL[def]: "Mechanics are owned by `CODEX_WORKER_SPEC.md`, `HECA_WORKER_SPEC.md`, and `ORACLE_WORKER_SPEC.md`; use the Codex runner's default `danger-full-access` unless the maintainer explicitly requests a narrower sandbox."
 def defaultSandbox : String := "danger-full-access"
 
 inductive TeardownOwner
@@ -463,10 +496,10 @@ inductive TeardownOwner
   | runner
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Time limits and final teardown of the whole job tree are the caller AI harness's responsibility."
+-- SKILL[def]: "Time limits and whole-job-tree teardown belong to the caller AI harness."
 def teardownOwner : TeardownOwner := .callerHarness
 
--- SKILL[ref]: "The caller records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the runner reports completion and the envelope and sentinel validate."
+-- SKILL[ref]: "Record `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the runner reports completion and the envelope and sentinel validate."
 abbrev refsOnlyOnCompletion := @Behavior.collectEffect
 
 -- SKILL[ref]: "Completion and verdict recognition stay governed by the `## Worker Completion Contract`."
@@ -477,11 +510,11 @@ abbrev completionGovernedByPredicate := @done
 -- SKILL[def]: "`skills/sshx/scripts/run-codex-worker-batch.sh` is the permitted one-call fan-out alternative for the `codex-cli` subset of a multi-seat stage."
 def batchSeats (layout : List Carrier) : List Carrier := layout.filter (· == .codexCli)
 
--- SKILL[thm]: "It never covers a whole stage because the `nyxid-oracle` and `isolated-token-subagent` seats reserved by the dispatch-time composition above remain outside the batch."
-theorem batch_never_covers_whole_stage (seats : Nat) (h : 2 ≤ seats) :
-    (batchSeats (stageComposition seats)).length < (stageComposition seats).length := by
+-- SKILL[thm]: "The `heca` (when detected), `nyxid-oracle`, and `isolated-token-subagent` seats reserved by dispatch composition remain outside the batch, which never covers a whole stage."
+theorem batch_never_covers_whole_stage (seats : Nat) (h : 3 ≤ seats) (detected : Bool) :
+    (batchSeats (stageComposition seats detected)).length < (stageComposition seats detected).length := by
   have hgt : ¬ seats ≤ 1 := by omega
-  simp [batchSeats, stageComposition, hgt, List.filter_replicate]
+  cases detected <;> simp [batchSeats, stageComposition, hgt, List.filter_replicate] <;> omega
 
 -- SKILL[ref]: "The dispatcher validates joined receipts with the runner's pure path projection and puts assigned rows in `resolved_manifest`."
 abbrev batchPathsFromRunner := artifactPathOwner
@@ -517,6 +550,78 @@ inductive ArtifactKind
 def changesRouting : ArtifactKind → Bool
   | .workerArtifact => true
   | .dispatcherEvidence | .statusProjection => false
+
+/-! ## Heca: host transport and flight lifetime -/
+
+-- SKILL[ref]: "`heca` uses an already-running host daemon solely as out-of-process worker transport."
+abbrev hecaTransport := hostDaemonTransportAllowed
+
+/-- Capability facts are supplied by the non-mutating check, not inferred from env/PATH. -/
+-- SKILL[def]: "Its non-mutating check requires a reachable daemon and usable host provider/mode, not PATH or `HECA_*` alone; record once per run."
+structure HecaCapability where
+  daemonReachable : Bool
+  providerUsable : Bool
+  modeUnattended : Bool
+  bindingHostSupplied : Bool
+  deriving DecidableEq, Repr
+
+def HecaCapability.detected (facts : HecaCapability) : Bool :=
+  facts.daemonReachable && facts.providerUsable && facts.modeUnattended && facts.bindingHostSupplied
+
+-- SKILL[ref]: "Later outages use fallback, never re-probing or recomposing."
+abbrev hecaNoReprobe := Behavior.guardHecaCheck
+
+-- SKILL[def]: "No existing heca worktree matching `work_target` means unavailable for that flight; the route creates no placement."
+def hecaFlightEligible (detected existingMatchingPlacement : Bool) : Bool :=
+  detected && existingMatchingPlacement
+
+theorem unmatched_heca_target_unavailable (detected : Bool) :
+    hecaFlightEligible detected false = false := by simp [hecaFlightEligible]
+
+-- SKILL[thm]: "Before retry, `abstained`, or fallback on the same `work_target`, a heca flight’s agent must be confirmed not running; killing the runner does not stop it."
+/-- `carrierExited` denotes agent-not-running evidence for heca, including failed attempts.
+It is an interpreted observation premise, not a daemon authentication proof. -/
+theorem heca_collection_requires_stop (s : Behavior.ProtocolState) (id : Nat)
+    (o : Observation) (f : Behavior.FlightRec) (hf : s.flight id = some f)
+    (hc : f.carrier = .heca) (h : Behavior.guardCollect s id o) :
+    o.carrierExited = true := by
+  obtain ⟨g, hg, _, _, stopped⟩ := h
+  rw [hf] at hg
+  cases hg
+  exact stopped hc
+
+-- SKILL[thm]: "Otherwise the flight stays protected and reports the unresolved outcome."
+theorem heca_live_cannot_collect (s : Behavior.ProtocolState) (id : Nat)
+    (o : Observation) (f : Behavior.FlightRec) (hf : s.flight id = some f)
+    (hc : f.carrier = .heca) (running : o.carrierExited = false) :
+    ¬ Behavior.allowed s (.collect id o) := by
+  intro admitted
+  have stopped := heca_collection_requires_stop s id o f hf hc admitted
+  simp [running] at stopped
+
+inductive HecaOperation
+  | transport
+  | stopOwnAgent
+  | daemonLifecycle
+  | archiveDelete
+  | mcpOptIn
+  | genericForward
+  | orchestration
+  deriving DecidableEq, Repr
+
+-- SKILL[def]: "Only that agent may be stopped; every other heca lifecycle or orchestration operation is forbidden."
+def hecaOperationAllowed (sameSpawnedAgent : Bool) : HecaOperation → Bool
+  | .transport => true
+  | .stopOwnAgent => sameSpawnedAgent
+  | _ => false
+
+theorem heca_cannot_stop_other_agent : hecaOperationAllowed false .stopOwnAgent = false := rfl
+
+-- SKILL[ref]: "Provider and unattended permission mode are explicit host inputs, never Settings or orchestration preferences."
+abbrev hecaBinding := HecaCapability
+
+-- SKILL[def]: "The worker alone atomically publishes its envelope and sentinel; event text never supplies a conclusion."
+def hecaArtifactOwner : ArtifactKind := .workerArtifact
 
 /-! ## The oracle carrier -/
 

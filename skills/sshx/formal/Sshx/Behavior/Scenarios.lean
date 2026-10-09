@@ -20,7 +20,7 @@ private def intake (continuation : ContinuationEntry) : IntakeEvidence :=
 private def readyState : ProtocolState :=
   { ProtocolState.initial with
     stage := .implementation, goal := some goal, mode := some (.carrier .codexCli),
-    capabilityChecked := [.codexCli, .isolatedTokenSubagent] }
+    capabilityChecked := [.codexCli, .isolatedTokenSubagent], hecaCheckRecorded := true }
 
 private def twoParts : ImplementationPlan := ⟨["contract", "verification"], 2⟩
 private def begin := step readyState (.beginImplementation twoParts)
@@ -295,6 +295,59 @@ example : allowed recovered .advanceStage := by
   decide
 example : recovered.passBudget = none := by decide
 
+-- Carrier recovery composes with both the absent cap and explicit finite caps.
+-- The approved-plan source is the same fixture; no recovery step spends a pass unit.
+private def hecaReady (budget : Option Nat) : ProtocolState :=
+  { readyState with capabilityChecked := Carrier.univ, passBudget := budget }
+
+private def hecaRecoveryActions : List Action :=
+  [.beginImplementation ⟨["all work"], 1⟩,
+   .openFlight .implementation .implementation .codexCli "target" 0,
+   .launchViaRunner 0, .hostNotified 0, .collect 0 { successful with exitZero := false },
+   .fallbackFlight 0 .heca,
+   .launchViaRunner 1, .hostNotified 1, .collect 1 successful,
+   .recordImplementation 1 ["all work"] true, .advanceStage]
+
+private theorem heca_recovery_admitted (budget : Option Nat) :
+    admitted (hecaReady budget) hecaRecoveryActions := by
+  simp [admitted, hecaRecoveryActions, hecaReady, allowed, guardBeginImplementation,
+    ImplementationPlan.valid, guardOpenFlight, guardImplementationFlight,
+    guardLaunchViaRunner, guardHostNotified, guardCollect, guardFallback,
+    guardRecordImplementation, guardAdvanceStage, readyState, ProtocolState.initial,
+    ProtocolState.modeResolved, ProtocolState.abstained, ProtocolState.reviewStarted,
+    ProtocolState.reviewReady, ProtocolState.batchSettled, ProtocolState.batchFlights,
+    ProtocolState.flight, ProtocolState.freshId, ProtocolState.triedCarriers,
+    ProtocolState.eligibleCarriers, step, ImplementationPlan.start, newFlight, reopenFlight,
+    updateFlight, collectEffect, done, successful, FlightRec.active, nextCarrier,
+    Carrier.univ, CarrierSet.get, Stage.next]
+
+private def hecaRecovered (budget : Option Nat) := run (hecaReady budget) hecaRecoveryActions
+
+example (budget : Option Nat) : (hecaRecovered budget).passBudget = budget := rfl
+example (budget : Option Nat) : (hecaRecovered budget).stage = .reviewTriplet := rfl
+example (budget : Option Nat) : (hecaRecovered budget).reviewReady = true := by
+  simp [hecaRecovered, run, hecaRecoveryActions, hecaReady, readyState, ProtocolState.initial,
+    step, ImplementationPlan.start, newFlight, reopenFlight, updateFlight, collectEffect,
+    done, successful, ProtocolState.reviewReady, ProtocolState.batchSettled,
+    ProtocolState.batchFlights, ProtocolState.flight, ProtocolState.freshId, FlightRec.active]
+example (budget : Option Nat) :
+    ((hecaRecovered budget).flight 1).map (·.carrier) = some .heca := rfl
+example (budget : Option Nat) :
+    ((hecaRecovered budget).flight 1).map (·.status) = some .terminal := rfl
+example : admitted (hecaReady none) hecaRecoveryActions := heca_recovery_admitted none
+example : admitted (hecaReady (some 0)) hecaRecoveryActions := heca_recovery_admitted (some 0)
+
+-- An exit notification without stopped-agent evidence cannot release the heca flight,
+-- even when the protocol has no round ceiling or its finite pass allowance is exhausted.
+private def hecaWaiting (budget : Option Nat) :=
+  run (hecaReady budget) (hecaRecoveryActions.take 8)
+example (budget : Option Nat) :
+    ¬ allowed (hecaWaiting budget) (.collect 1 { successful with carrierExited := false }) := by
+  simp [allowed, guardCollect, hecaWaiting, run, hecaRecoveryActions, hecaReady,
+    readyState, ProtocolState.initial, step, ProtocolState.flight, ProtocolState.freshId,
+    ImplementationPlan.start, newFlight, reopenFlight, updateFlight, collectEffect,
+    done, successful]
+
 private def carrierExhausted := run readyState
   (recoveryActions { successful with exitZero := false })
 example : carrierExhausted.reviewReady = false := by decide
@@ -374,7 +427,7 @@ example : admitted readyState
     step, ImplementationPlan.start, newFlight, updateFlight, collectEffect, done,
     successful, FlightRec.active, Stage.next]
 
-private def testsReviewState := { review with capabilityChecked := Carrier.univ }
+private def testsReviewState := { review with capabilityChecked := [.codexCli, .nyxidOracle, .isolatedTokenSubagent] }
 private def testsRecoveryActions (observation : Observation) : List Action :=
   [.openFlight .review .tests .codexCli "target" 0,
    .launchViaRunner 2, .hostNotified 2, .collect 2 { successful with exitZero := false },
@@ -429,11 +482,29 @@ private def authorizedRevision (r : Revision) (source : Option ContinuationSourc
 private def startupActions (c : ContinuationEntry) : List Action :=
   [.writeGoal goal (intake c),
    .appendRevision scopeNote (authorizedRevision scopeNote none),
-   .advanceStage, .capabilityCheck .codexCli, .resolveMode (.carrier .codexCli), .advanceStage]
+   .advanceStage, .capabilityCheck .codexCli, .recordHecaCheck false, .resolveMode (.carrier .codexCli), .advanceStage]
+-- Heca records even an absent check once; it cannot redraw availability later.
+example (s : ProtocolState) (first second : Bool) :
+    ¬ allowed (step s (.recordHecaCheck first)) (.recordHecaCheck second) := by
+  simp [allowed, guardHecaCheck, step]
+
+example (s : ProtocolState) :
+    (step s (.recordHecaCheck false)).capabilityChecked = s.capabilityChecked := rfl
+
+example (s : ProtocolState) :
+    Carrier.heca ∈ (step s (.recordHecaCheck true)).capabilityChecked := by
+  simp [step]
+
+example : allowed { review with capabilityChecked := Carrier.univ }
+    (.openFlight .review .tests .heca "target" 0) := by
+  simp only [allowed, guardOpenFlight, guardReviewFlight, ProtocolState.modeResolved,
+    ProtocolState.abstained]
+  decide
+
 -- All authority states permit routine startup without a question, preserving revision support.
 example (c : ContinuationEntry) : admitted ProtocolState.initial (startupActions c) := by
   simp [admitted, startupActions, allowed, guardWriteGoal, guardAppendRevision,
-    guardAdvanceStage, guardCapabilityCheck, guardResolveMode, Harness.complete,
+    guardAdvanceStage, guardCapabilityCheck, guardHecaCheck, guardResolveMode, Harness.complete,
     authorizedRevision, RevisionEvidence.valid,
     IntakeEvidence.complete, goal, intake, ProtocolState.initial, ProtocolState.goalWritten,
     ProtocolState.modeResolved, ProtocolState.abstained, step, GoalArtifact.correct, Stage.next]

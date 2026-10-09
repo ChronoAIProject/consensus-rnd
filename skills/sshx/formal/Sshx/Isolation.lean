@@ -22,7 +22,7 @@ inductive Artifact
   | callerTranscript
   deriving DecidableEq, Repr
 
--- SKILL[def]: "no worker may see a same-round peer output or caller-conversation transcript content that was not explicitly included in its dispatch brief or `GoalArtifact`"
+-- SKILL[def]: "As a hard invariant, no worker may see a same-round peer output or caller-conversation transcript content outside its explicit dispatch brief or `GoalArtifact`; unavailable isolation requires `abstain`, never single-context roleplay."
 /-- What seat `w` may see: the complete `GoalArtifact`, its own brief, its own prior
 attempt for the same seat, and conclusions of strictly earlier rounds that its brief
 carries. Never a same-round peer output and never caller-conversation transcript content

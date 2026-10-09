@@ -10,7 +10,7 @@
 
 | skill | 用途 | 运行形态 |
 |---|---|---|
-| `sshx` | 通过隔离且互不可见的多角度 worker、固定思考真值表和同构 review gate 完成 inline consensus。 | Prompt-level contract；无 daemon、GitHub、git、label、release 或 lifecycle authority。 |
+| `sshx` | 通过隔离且互不可见的多角度 worker、固定思考真值表和同构 review gate 完成 inline consensus。 | Prompt-level contract；无 skill 自有 daemon、GitHub、git、label、release 或 lifecycle authority；可用已有 host heca daemon 承载 worker。 |
 
 ## 核心
 
@@ -42,6 +42,12 @@
 ### 直接拷贝
 
 把 `skills/<name>/` 拷进 agent 的个人 skills 目录，如 Claude Code 的 `~/.claude/skills/`。
+
+### 使用 Heca Worker
+
+`sshx` 支持与 `codex-cli`、`nyxid-oracle` 并列的 `heca` worker 载体。非变更能力检查检测到 heca 时，每个多席阶段从 Codex 余量中分一席给它；heca 缺席时，既有载体组成与回退不变。单 worker 阶段仍从 Codex 开始，只经回退使用 heca。
+
+在已有的 heca-owned placement 中照常运行 `sshx`，例如在 heca 中打开的主 checkout，或 heca 创建的 worktree。heca CLI 必须能连接到已运行的 daemon，host 必须显式提供经验证的无人值守绑定：`claude` / `bypassPermissions` 或 `codex` / `full-access`。目标没有匹配的已有 placement 时，不能使用该载体。机械细则与已记录的验证边界见 [`HECA_WORKER_SPEC.md`](./skills/sshx/HECA_WORKER_SPEC.md)。
 
 ## 架构
 

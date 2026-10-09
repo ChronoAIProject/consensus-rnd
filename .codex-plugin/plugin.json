@@ -1,7 +1,7 @@
 {
   "name": "consensus-rnd",
   "version": "1.0.0-beta.52",
-  "description": "worker-delegated inline consensus skills：隔离多视角、固定真值表，无 daemon、GitHub 或 git 编排",
+  "description": "worker-delegated inline consensus skills：隔离多视角、固定真值表，无自有 daemon、GitHub 或 git 编排",
   "author": {
     "name": "auric",
     "email": "loning.ma@aelf.io",
@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "Consensus R&D",
     "shortDescription": "隔离多视角的 worker-delegated inline consensus",
-    "longDescription": "为高风险决策和实现方案派发互不可见的独立 worker 视角，并用固定真值表完成 meta-judge 与 review gate；不提供 daemon、GitHub、git 或其他生命周期编排。",
+    "longDescription": "为高风险决策和实现方案派发互不可见的独立 worker 视角，并用固定真值表完成 meta-judge 与 review gate；不提供自有 daemon、GitHub、git 或其他生命周期编排。",
     "developerName": "auric",
     "category": "Coding",
     "capabilities": [

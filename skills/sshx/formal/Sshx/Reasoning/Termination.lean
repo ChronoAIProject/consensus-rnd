@@ -18,7 +18,7 @@ namespace Sshx.Reasoning
 
 open Sshx
 
--- SKILL[ref]: "The gate binds every exit that carries an affirmative `GoalArtifact` satisfaction claim, wherever the claim appears — a final report, a `done with advisory surfaced` outcome used as success, or a `stop` action carrying the claim — and binds no exit that carries none; non-achievement exits keep their existing routing and must never be relabelled as goal satisfaction."
+-- SKILL[ref]: "The gate binds every affirmative `GoalArtifact` satisfaction claim — in a final report, a `done with advisory surfaced` outcome used as success, a `stop` action, or elsewhere — and no exit without one; non-achievement exits keep their existing routing and must never be relabelled as goal satisfaction."
 abbrev gateBinding := @gateBinds_iff
 
 -- SKILL[ref]: "`## Goal Contract` solely owns missing or invalid trigger-entry routing; this gate does not restate it."
@@ -107,13 +107,13 @@ abbrev terminationFlightStage := Behavior.FlightStage.termination
 
 /-! ## The table's surrounding rules -/
 
--- SKILL[ref]: "The rows are evaluated in this order and are complete and, under this evaluation order, unambiguous:"
+-- SKILL[ref]: "Evaluate rows in this order; they are complete and unambiguous under it:"
 abbrev rowsCompleteAndOrdered := @termination_rows_exhaustive
 
 -- SKILL[ref]: "For this table, unanimous `satisfied` means one valid `satisfied` result from each of the exactly three distinct named termination seats."
 abbrev unanimousMeansEachSeat := @no_permission_from_nonsatisfied
 
--- SKILL[ref]: "The table evaluates only the presenting source and the resulting seat roster and results; a fallback-recovered result is a valid result like any other."
+-- SKILL[ref]: "The table evaluates only the presenting source, resulting seat roster and results; fallback-recovered results are equally valid."
 abbrev tableInputs := @terminationRoute
 
 -- SKILL[ref]: "Roster means the dispatch-time recorded named role identities; a named role present without a valid result remains in the roster as a missing result."

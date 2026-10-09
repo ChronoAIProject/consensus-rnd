@@ -82,6 +82,25 @@ The association and semantic truth of external evidence remain premises; this is
 provenance authentication scheme or new runtime record. There is no independent declaration
 action.
 
+The carrier universe has four entries and the fallback bound follows its length.
+`nextCarrier_heca_absent` and `fallback_heca_absent` compare the new selector/chain
+with the retained pre-heca functions for every eligibility/tried table. Composition
+is parameterized by the recorded heca detection: `composition_heca_absent` proves
+exact equality with the old layout for every seat count; detected protocol rosters
+have one heca seat taken from the Codex remainder, including the executable tests
+seat. Single-worker stages stay Codex. The once-per-run heca check records even a
+negative result before mode resolution and cannot be repeated. For heca,
+`Observation.carrierExited` means confirmed agent-not-running evidence, not CLI
+exit. Its collection guard prevents retry/abstention from releasing a live agent;
+those observations are external evidence premises, not a proof of daemon behavior.
+The heca binding/placement and operation projections add no controller lifecycle
+power. Actual placement correspondence, identity persistence and stop confirmation
+are behavior-tested and verified with the real tool under `HECA_WORKER_SPEC.md`.
+Composed Codex-to-heca recovery traces check every dispatch, launch, collection and
+review-readiness guard for an absent or explicit finite pass cap, including zero;
+recovery preserves the cap. Without stopped-agent evidence, heca collection remains
+inadmissible under either budget policy.
+
 Fallback uses the existing
 `nextCarrier` selector against tried carriers projected from one assignment's flight history.
 The original flight id is a ghost assignment link preserved by replacements, so distinct
@@ -90,7 +109,7 @@ reduces that assignment's untried-carrier remainder. Draws, review dispatch and 
 share the executable-carrier restriction for the tests seat.
 
 The model's `launchDelegated` action projects the direct subagent invocation, the only
-launch outside a runner. Codex and oracle flights require `launchViaRunner`, each through its
+launch outside a runner. Codex, heca and oracle flights require `launchViaRunner`, each through its
 own closed-set runner (`runnerFor`), so a delegated oracle launch is refused. Both paths
 require launch and host completion before collection. This adds no runtime interface, host capability, worker-record field or budget.
 The seven stages and per-flight completion predicate are unchanged. Batch progress is a

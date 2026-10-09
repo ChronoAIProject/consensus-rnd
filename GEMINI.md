@@ -4,6 +4,6 @@
 
 当前 skills：
 
-- `sshx` — 高风险决策、设计取舍或需要 worker-delegated inline consensus，但不需要 daemon/GitHub/git 编排时使用。
+- `sshx` — 高风险决策、设计取舍或需要 worker-delegated inline consensus，但不需要自有 daemon/GitHub/git 编排时使用。
 
 当任务匹配某 skill 的触发条件时，先读对应 `skills/<name>/SKILL.md` 再行动。仓库结构与维护约定见 `CLAUDE.md`。

@@ -88,7 +88,7 @@ def reviewFocusBound (focus : ReviewFocusBinding) : Bool :=
 -- SKILL[def]: "An unbounded request to find any mechanism that could make a result fail is invalid"
 def unboundedReviewFocusIsInvalid (bounded : Bool) : Bool := !bounded
 
--- SKILL[def]: "A focus that cannot be tied to a `GoalArtifact` term is an orchestration gap"
+-- SKILL[def]: "A focus unrelated to a `GoalArtifact` term is an orchestration gap; route it to the caller for correction before launching workers."
 def focusNeedsCallerCorrection (focus : ReviewFocusBinding) : Bool := !reviewFocusBound focus
 
 -- SKILL[def]: "Before `propose` or `revise`, each seat must carry the planning search and existing-work evidence in its existing `visible_inputs` or `conclusion`; the meta-judge may converge only on a plan that reuses covered work and names its uncovered delta."

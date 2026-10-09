@@ -8,9 +8,10 @@ This is the single mechanical specification for these five closed-set scripts:
 - `skills/sshx/scripts/clean-codex-worker-runs.sh`;
 - `skills/sshx/scripts/prune-inactive-codex-worker-runs.sh`.
 
-The sixth closed-set script, `skills/sshx/scripts/run-oracle-worker.py`, is specified by
-`ORACLE_WORKER_SPEC.md`. It shares the run layout below through the runner's pure
-`--project-paths` query and never launches this runner.
+The other two closed-set scripts, `skills/sshx/scripts/run-oracle-worker.py` and
+`skills/sshx/scripts/run-heca-worker.py`, are specified by `ORACLE_WORKER_SPEC.md` and
+`HECA_WORKER_SPEC.md`. Both consume the run layout through the pure `--project-paths`
+query and never launch this runner.
 
 The completion predicate is defined once in `SKILL.md` under
 `## Worker Completion Contract`; this file references that contract and does
@@ -143,7 +144,7 @@ acceptance conditions and includes one runner-rendered, stage-specific minimum
 valid envelope example.
 
 Launch receipts and pure queries are the only sanctioned path discovery mechanisms for the
-batch, status-read, cleanup, and sweep scripts and for the oracle runner. Those scripts contain no
+batch, status-read, cleanup, and sweep scripts and for the oracle and heca runners. Those scripts contain no
 run-layout formula, attempt naming rule, or artifact basename and do not parse
 human progress logs; the oracle runner adds only its own request file inside the
 projected attempt directory. The batch, status-read, and cleanup scripts check
@@ -632,8 +633,9 @@ root.
 No other skill may depend on these mechanisms. To reverse the exception
 completely, use this one recipe:
 
-1. First reverse the oracle runner with the recipe in `ORACLE_WORKER_SPEC.md`,
-   because it consumes this runner's path projection.
+1. First reverse the oracle and heca runners with their recipes in
+   `ORACLE_WORKER_SPEC.md` and `HECA_WORKER_SPEC.md`, because both consume this
+   runner's path projection.
 2. Delete `scripts/run-codex-worker.sh`,
    `scripts/run-codex-worker-batch.sh`,
    `scripts/read-codex-worker-status.sh`,

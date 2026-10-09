@@ -10,7 +10,7 @@ This repository is not an application runtime. Its deliverables are skills under
 
 | skill | What it is for | Runtime shape |
 |---|---|---|
-| `sshx` | Worker-delegated inline consensus (轻量 worker-delegated inline 共识方法论) with isolated, independent perspectives, a fixed thinking truth table, and a same-shape review gate. | Prompt-level contract; no daemon, GitHub, git, label, release, or lifecycle authority. |
+| `sshx` | Worker-delegated inline consensus (轻量 worker-delegated inline 共识方法论) with isolated, independent perspectives, a fixed thinking truth table, and a same-shape review gate. | Prompt-level contract; no skill-owned daemon, GitHub, git, label, release, or lifecycle authority; optional transport through an existing host heca daemon. |
 
 ## Core
 
@@ -44,6 +44,12 @@ Install as an extension. `gemini-extension.json` uses `GEMINI.md` as the context
 ### Direct Copy
 
 Copy `skills/<name>/` into the agent's personal skills directory, such as Claude Code's `~/.claude/skills/`.
+
+### Using Heca Workers
+
+`sshx` supports `heca` alongside `codex-cli` and `nyxid-oracle` as a worker carrier. When its non-mutating capability check detects heca, each multi-seat stage gives it one seat from the Codex remainder. When heca is absent, existing carrier composition and fallback stay unchanged; single-worker stages still start with Codex and reach heca only through fallback.
+
+Run `sshx` normally in an existing heca-owned placement, such as the main checkout opened in heca or a worktree heca created. The heca CLI must reach an already-running daemon, and the host must explicitly supply a verified unattended binding: `claude` / `bypassPermissions` or `codex` / `full-access`. A target without a matching existing placement cannot use this carrier. Its mechanics and recorded verification limits live in [`HECA_WORKER_SPEC.md`](./skills/sshx/HECA_WORKER_SPEC.md).
 
 ## Architecture
 

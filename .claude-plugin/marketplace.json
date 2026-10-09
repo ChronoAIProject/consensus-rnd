@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "consensus-rnd",
-      "description": "worker-delegated inline consensus：隔离多视角、固定真值表，无 daemon、GitHub 或 git 编排",
+      "description": "worker-delegated inline consensus：隔离多视角、固定真值表，无自有 daemon、GitHub 或 git 编排",
       "version": "1.0.0-beta.52",
       "source": "./",
       "author": {

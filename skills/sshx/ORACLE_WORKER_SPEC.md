@@ -185,8 +185,8 @@ exception completely, use this one recipe:
 
 1. Delete `scripts/run-oracle-worker.py`, this specification,
    `tests/test_run_oracle_worker.py`, and `tests/fixtures/oracle_broker_stream.sse`.
-2. In `SKILL.md`, remove the oracle runner from the closed set, which returns to five
-   scripts governed by `CODEX_WORKER_SPEC.md`, from the runner launch rule, and from the
+2. In `SKILL.md`, remove the oracle runner from the closed set, which returns to six
+   scripts governed by `CODEX_WORKER_SPEC.md` and `HECA_WORKER_SPEC.md`, from the runner launch rule, and from the
    completion-contract and `log_ref` pointers. With no route left, `nyxid-oracle` fails
    every capability check and the existing fallback rule applies; the legacy CLI stays
    excluded.

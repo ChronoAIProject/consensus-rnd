@@ -21,7 +21,7 @@ theorem never_shell_background (s : ProtocolState) (id : Nat) :
 -- SKILL[inv]: "It must not monitor files or logs to poll for completion; doing so conflicts with the no-polling rule above."
 theorem never_poll (s : ProtocolState) (id : Nat) : ¬ allowed s (.pollArtifacts id) := fun h => h
 
--- SKILL[inv]: "`sshx` must not discover or infer the goal from external lifecycle milestones, release state, runtime host configuration, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface."
+-- SKILL[inv]: "`sshx` must not discover or infer the goal from lifecycle milestones, release state, runtime host configuration, GitHub issues or pull requests, labels, branches, or other external lifecycle surfaces."
 theorem never_lifecycle (s : ProtocolState) (op : LifecycleOp) : ¬ allowed s (.lifecycle op) :=
   fun h => h
 
@@ -110,8 +110,12 @@ theorem safe_step {s : ProtocolState} {a : Action} (hs : Safe s) (ha : allowed s
   | capabilityCheck c =>
     refine ⟨h1, h2, ?_, h5, h6, h7, h8, h9⟩
     intro hm; simp only [step, List.mem_cons]; exact Or.inr (h4 hm)
+  | recordHecaCheck detected =>
+    refine ⟨h1, h2, ?_, h5, h6, h7, h8, h9⟩
+    intro hm
+    cases detected <;> simp [step, h4 hm]
   | resolveMode m =>
-    obtain ⟨hg, -, hnone, hcodex, hm⟩ := ha
+    obtain ⟨hg, -, hnone, hcodex, -, hm⟩ := ha
     have hempty : s.flights = [] := by
       by_contra hne
       obtain ⟨c, hc⟩ := h1 hne
