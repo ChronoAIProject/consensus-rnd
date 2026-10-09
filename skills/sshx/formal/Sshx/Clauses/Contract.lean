@@ -326,10 +326,10 @@ theorem completion_is_carrier_independent (c c' : Carrier) (o : Observation) :
 -- SKILL[ref]: "The predicate has exactly those inputs; no other observation is completion evidence, whatever text, artifact, log, projection, report, or process state it comes from, and `log_ref` remains required only as a diagnostic reference."
 abbrev completionInputs := @Observation
 
--- SKILL[ref]: "A missing or invalid terminal observation, envelope, required verdict, or completion reference fails closed: the flight follows the declared finite retry and fallback path and otherwise returns `abstain`."
+-- SKILL[ref]: "After an attempt ends, a missing or invalid terminal observation, envelope, required verdict, or completion reference fails closed: the flight follows the declared finite retry and fallback path and otherwise returns `abstain`."
 abbrev failClosedRetryPath := @Flight.exhausted_abstains
 
--- SKILL[thm]: "The caller does not decide which failure occurred before retrying: every outcome short of terminal completion follows this one path, and runner diagnostics stay behind the flight record as data, never as a routing input."
+-- SKILL[thm]: "The caller does not decide which failure occurred before retrying: every ended attempt short of terminal completion follows this one path, and runner diagnostics stay behind the flight record as data, never as a routing input."
 /-- The retry decision reads the completion predicate only, never a failure class. -/
 def retryNeeded (o : Observation) : Bool := !done o
 

@@ -621,8 +621,10 @@ review rather than more checks in this runner.
 ## Boundaries
 
 The runner has no git, GitHub, label, release, host lifecycle, cleanup, or
-global-state authority. Time limits and whole-job teardown belong to the
-caller harness. Power-loss durability is not guaranteed. Deletion authority
+global-state authority. Whole-job teardown belongs to the caller harness under
+the continuation and limit authority rule in `SKILL.md` `## Worker Delegation`.
+An observational host wait boundary leaves the foreground carrier active; the
+runner adds no elapsed-time or work ceiling. Power-loss durability is not guaranteed. Deletion authority
 lives only in `clean-codex-worker-runs.sh`, bounded to terminal-only,
 manifest-named, whole-flight artifact retirement with dry-run default and no
 force override, and in `prune-inactive-codex-worker-runs.sh`, bounded to

@@ -14,7 +14,7 @@ No module contains `sorry`, `axiom`, `native_decide`, or a proposition defined a
 | Layer | Modules | What it formalizes |
 |---|---|---|
 | Mechanics | `Sshx/*.lean` | verdict alphabets, carriers and fallback, flight accounting, the completion predicate, `BlockingAuthority` and downgrade, the three truth tables (exhaustive, order-sensitive), `pass_budget`, gate applicability and binding, isolation, records, stage order |
-| Behavior | `Sshx/Behavior/*.lean` | the caller as an operational model: `ProtocolState`, one `Action` per caller act, one guard per "must" clause, `step`, `Reachable`, finite implementation batches, shared whole-candidate review readiness, and safety invariants over every reachable state |
+| Behavior | `Sshx/Behavior/*.lean` | the caller as an operational model: `ProtocolState`, one `Action` per caller act, one guard per "must" clause, `step`, `Reachable`, scoped implementation batches and evidence-backed handoffs, shared whole-candidate review readiness, and safety invariants over every reachable state |
 | Reasoning | `Sshx/Reasoning/*.lean` | the reasoning logic every seat applies: reference frame, aesthetic verdict, seek truth from facts, mathematical applicability, prospective evidence, depth discipline, goal primacy, boundary checks, blocking authority in full, the six seats and the locus dyad, meta-judge convergence and the focused round, review downgrade, repair passes, termination seats and ownership routing |
 | Semantics | `Sshx/Semantics/*.lean` | the contract's concepts as instances of the kernel-frozen theorems of [trureturing](https://github.com/the-omega-institute/trureturing) (`D5`, pinned by commit in `lakefile.toml`); each instance discharges the theorem's premises with `sshx` structures |
 | Clauses | `Sshx/Clauses/*.lean` | the remaining definitional clauses: identity and trigger, goal contract records, protocol records, envelope, completion, context pollution, worker delegation mechanics, boundaries, baseline failure modes, verification |
@@ -57,8 +57,32 @@ Declared non-instances, with the reason each premise does not match `sshx`:
 `Sshx/Behavior/Scenarios.lean` proves each action's actual `allowed` guard along composed
 initial multi-flight, repair, included-last-unit-review, carrier recovery/exhaustion,
 tests-seat fallback, autonomous-intake, and single-flight traces. Effect assertions also
-check partial/active/failed/exhausted work. Approved-plan fixtures supply the prior thinking
+check partial/active/failed work and explicit-cap exhaustion. Approved-plan fixtures supply the prior thinking
 settlement; these traces do not prove the truth of worker evidence or reviewer approval.
+
+The no-cap route removes mandatory implementation assignment counts. Approved obligations
+remain finite scope; each handoff carries new work/check evidence for the remaining gap.
+The batch's `continuationJustified` and the direction gate's corresponding evidence projection
+are interpreted worker/gate conclusions, not new runtime fields. Dispatch clears the handoff
+projection; a terminal worker return supplies the next one. Unchanged handoffs and passes
+are refused. Candidate readiness still requires all obligations/checks and settled flights.
+`no_cap_handoff_prefix` composes actual `allowed` and `step` for every natural-number prefix
+of justified handoffs with a check still pending; no large finite allowance replaces the
+removed quota. It proves continuation admission, not that evidence is true, work eventually
+finishes or a carrier can run forever.
+
+`PassLimitEvidence` interprets a precommitted limit's authority, source, scope, applicability
+and units from the existing GoalArtifact/harness. Cap recording refuses caller-only,
+unsupported, out-of-scope or mismatched-unit evidence. Source truth and applicability remain
+premises; the model does not authenticate provenance or parse English. Existing immutable
+caps, pass debit and already-paid final review remain effective. An absent cap stays absent.
+The formal `waitBoundary` action projects a host observation yield, not artifact polling or
+a new scheduler/API. Every finite prefix leaves the active flight unchanged even with zero
+retry capacity. Collection still requires launch and actual host completion notification;
+ended malformed/failed attempts retain finite retry/fallback and honest abstention. Held-open
+Codex and broker behavior tests verify that the existing synchronous runners publish no
+terminal status during observations, then distinguish actual terminal success/failure.
+Their watchdogs bound tests only, not production work.
 
 Gate applicability is derived from one current continuation source. Intake records the
 initial source; only an owner-authorized, source-supported append-only correction can

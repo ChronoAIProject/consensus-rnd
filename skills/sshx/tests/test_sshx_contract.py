@@ -36,8 +36,8 @@ unpinned. The stored digest is a change detector, not a semantic judge or self-a
 legitimate edit requires both a synchronized digest update and Review Triplet judgment.
 
 ``pass_budget`` is the one counter the contract keeps; ``pass_budget_after`` and
-``resolve_termination_claim`` model its decrement. The Lean behavior model additionally projects finite implementation scope and its local flight
-allowance from existing conclusions; this is not another global pass counter. English semantics
+``resolve_termination_claim`` model its decrement. The Lean behavior model projects scoped implementation obligations and evidence-backed
+handoffs from existing conclusions; neither is a numerical stopping quota. English semantics
 stay with the Review Triplet absorber.
 Continuation baseline (recorded before batching edits): without whole-plan routing,
 a completed first flight of a two-flight plan can enter review with approved work
@@ -99,6 +99,17 @@ published contract required an owner-precommitted finite `pass_budget` before an
 post-review pass, and a missing budget denied pass authority. The requested change
 sets the default to no round ceiling while retaining an explicit finite cap as an
 opt-in control; carrier retry budgets remain finite and independent.
+
+No-cap baseline (2026-10-09, supplied before this implementation's tracked edits):
+SKILL and the actual behavior model still required a positive finite flightAllowance,
+debited flightsLeft on each new assignment, admitted recordPassBudget without source
+or scope, and assigned unrestricted time limits to caller orchestration. Prior native
+research was reported stopped at a caller deadline with an unfinished roster; that is
+supplied recovered evidence, not a replay or independent healthy-carrier measurement.
+The admitted change removes these caller stopping quotas while retaining scoped work,
+fresh evidence, sourced applicable limits, finite terminal-failure recovery and complete
+candidate review. Production Lean guard/effect proofs and held-open fake-carrier tests
+supply forward evidence without claiming unlimited external service.
 
 Implementation handoff baseline (2026-10-05, observed before tracked edits): an
 isolated evaluator without this skill produced initial and repair exporter briefs
@@ -395,7 +406,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "95cd70530808f96bb2e9ba248db068e465824cc0f7f98d458820dba3079675b9"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "143ee5ee2252e2cb8f26e9803ed67edaa4e0f880b55fe4ee7a9fca3ea9a15580"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -960,6 +971,32 @@ class SshxContractTests(unittest.TestCase):
         self.assertLessEqual(len(text.splitlines()), 470)
         self.assertLessEqual(len(text.encode("utf-8")), 75_000)
 
+    def test_sshx_continuation_and_limit_authority_has_one_source_owner(self) -> None:
+        # Correspondence/authority checks; operational routes and held-open carrier tests
+        # separately check the behavior. English meaning remains independently reviewed.
+        text = read(SKILL)
+        delegation = section(text, "## Worker Delegation", "## Result Envelope")
+        rule = "Healthy authorized work continues without caller-invented runtime, work/assignment or round ceilings."
+        self.assertEqual(text.count(rule), 1)
+        self.assertIn(rule, delegation)
+        for phrase in (
+            "Only explicit applicable user/boundary-owner or hard host/carrier limits",
+            "orchestration grants no limit authority",
+            "organize work, not stopping quotas",
+            "even at `retry_budget` zero; neither triggers retry/fallback",
+            "external capability is not unlimited",
+        ):
+            self.assertIn(phrase, delegation)
+        for spec in (SPEC, ORACLE_SPEC):
+            self.assertIn("continuation and limit", read(spec).lower())
+            self.assertIn("`SKILL.md` `## Worker Delegation`", read(spec))
+        implementation = section(text, "## Implementation Worker", "## Review Triplet")
+        self.assertIn("without a mandatory assignment allowance", implementation)
+        self.assertIn("through evidence-backed handoffs", implementation)
+        self.assertIn("unchanged repetition is not progress", implementation)
+        self.assertNotIn("within the allowance", implementation)
+        self.assertNotIn("exhaustion/failure", implementation)
+
     def test_sshx_implementation_handoff_has_one_source_owner(self) -> None:
         # Ownership/correspondence only; the fixture evaluation judges brief semantics.
         text = read(SKILL)
@@ -968,7 +1005,7 @@ class SshxContractTests(unittest.TestCase):
         owner = "Send goal, verifiable acceptance, authorized scope/prohibitions"
         self.assertEqual(text.count(owner), 1)
         self.assertIn(owner, implementation)
-        self.assertIn("under `## Implementation Worker` handoff, allowance and evidence rules", repair)
+        self.assertIn("under `## Implementation Worker` handoff and evidence rules", repair)
 
     def test_sshx_goal_contract_source_regression(self) -> None:
         text = read(SKILL)
@@ -1011,7 +1048,7 @@ class SshxContractTests(unittest.TestCase):
             text,
         )
         self.assertIn(
-            "under `## Implementation Worker` handoff, allowance and evidence rules",
+            "under `## Implementation Worker` handoff and evidence rules",
             text,
         )
         self.assertIn("stay orchestration-only for the repair", text)
@@ -2314,7 +2351,7 @@ class SshxContractTests(unittest.TestCase):
                 text.count("Protocol policy, not a mathematical consequence:"),
                 "Carrier heterogeneity is this protocol's policy, not a theorem premise or consequence" in text,
                 "Protocol policy, not mathematics, defines these two conjuncts" in text,
-                "before the first pass after the initial review triplet, the caller may record one owner-precommitted finite integer `pass_budget`; by default it records no cap" in text,
+                "before the first post-review pass, record a finite integer `pass_budget` only for a precommitted applicable user/boundary-owner or hard external limit with source and scope; default: no cap" in text,
             ),
             (6, True, True, True),
         )
@@ -2866,7 +2903,7 @@ class SshxContractTests(unittest.TestCase):
         completion = section(text, "## Worker Completion Contract", "## No Context Pollution")
         for anchor in [
             "The caller does not decide which failure occurred before retrying",
-            "every outcome short of terminal completion follows this one path",
+            "every ended attempt short of terminal completion follows this one path",
             "runner diagnostics stay behind the flight record as data, never as a routing input",
         ]:
             self.assertIn(anchor, completion)
@@ -3000,7 +3037,7 @@ class SshxContractTests(unittest.TestCase):
         text = read(SKILL)
         self.assertIn("If an initially paired carrier is unavailable before a flight can be opened", text)
         self.assertIn("without claiming that a same-carrier retry budget was exhausted", text)
-        self.assertIn("If any flight lacks terminal completion after its finite same-carrier retry budget is exhausted", text)
+        self.assertIn("If an ended attempt lacks terminal completion after its finite same-carrier retry budget is exhausted", text)
         self.assertIn(
             "marks that flight `abstained` with empty `result_envelope_ref` and `completion_sentinel_ref`",
             text,
@@ -3510,8 +3547,8 @@ class SshxContractTests(unittest.TestCase):
         outside_fix_or_done = text.replace(fix_or_done, "", 1)
         ownership = "This section is the sole owner of the optional `pass_budget`"
         precommit = (
-            "before the first pass after the initial review triplet, the caller may record one "
-            "owner-precommitted finite integer `pass_budget`; by default it records no cap"
+            "before the first post-review pass, record a "
+            "finite integer `pass_budget` only for a precommitted applicable user/boundary-owner or hard external limit with source and scope; default: no cap"
         )
         self.assertNotIn(DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION, text)
         for anchor in [

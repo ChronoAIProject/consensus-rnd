@@ -484,6 +484,31 @@ class OracleRunnerTests(unittest.TestCase):
         self.addCleanup(os.close, release_fd)
         return gate, ready_fd, release_fd
 
+    def test_healthy_wait_boundaries_preserve_the_call_until_real_terminal_outcome(self) -> None:
+        # No retry is requested; production zero-retry routing is checked in Lean.
+        for stream, expected in ((COMPLETE_STREAM, "COMPLETE"),
+                                 (content_chunk("unfinished"), "STREAM_NOT_TERMINAL")):
+            with self.subTest(terminal_outcome=expected):
+                gate, ready_fd, release_fd = self.gate_fifos()
+                self.stream.write_text(stream)
+                with self.launch(FAKE_CHAT_GATE=str(gate)) as process:
+                    try:
+                        receipt = self.launch_until_broker_call(process, ready_fd)
+                        status_ref = Path(str(receipt["status_ref"]))
+                        for _ in range(3):
+                            with self.assertRaises(subprocess.TimeoutExpired):
+                                process.wait(timeout=0.05)
+                            self.assertFalse(status_ref.exists())
+                        os.write(release_fd, b"release\n")
+                        process.wait(timeout=WATCHDOG_SECONDS)
+                    finally:
+                        os.write(release_fd, b"release\n")
+                        if process.poll() is None:
+                            process.terminate()  # verification watchdog cleanup only
+                        process.wait(timeout=WATCHDOG_SECONDS)
+                self.assertEqual(process.returncode, 0 if expected == "COMPLETE" else 1)
+                self.assertEqual(json.loads(status_ref.read_text())["reason_code"], expected)
+
     def test_status_appears_only_after_the_broker_call_exits(self) -> None:
         gate, ready_fd, release_fd = self.gate_fifos()
         self.stream.write_text(COMPLETE_STREAM)

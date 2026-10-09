@@ -463,7 +463,7 @@ inductive TeardownOwner
   | runner
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Time limits and final teardown of the whole job tree are the caller AI harness's responsibility."
+-- SKILL[def]: "Caller harness teardown follows this section's limit authority rule."
 def teardownOwner : TeardownOwner := .callerHarness
 
 -- SKILL[ref]: "The caller records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the runner reports completion and the envelope and sentinel validate."

@@ -159,27 +159,50 @@ def RevisionEvidence.valid (e : RevisionEvidence) (r : Revision) : Prop :=
 def FlightRec.active (f : FlightRec) : Bool :=
   f.status == .inFlight || f.status == .retrying
 
-/-- Finite decomposition in the existing approved plan/batch conclusion, not a runtime schema. -/
+/-- Scoped obligations in the existing approved conclusion, not an assignment quota or runtime schema. -/
+-- SKILL[def]: "Finite rosters, scoped obligations, repair batches and relevance/evidence bounds organize work, not stopping quotas."
 structure ImplementationPlan where
   obligations : List String
-  flightAllowance : Nat
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Predeclare finite assignments and allowance in the approved plan's conclusion."
+-- SKILL[def]: "Record approved obligations without a mandatory assignment allowance."
 def ImplementationPlan.valid (p : ImplementationPlan) : Prop :=
-  p.obligations ≠ [] ∧ 0 < p.flightAllowance
+  p.obligations ≠ []
 
 /-- Ghost projection of accumulated worker conclusions. `firstFlight` scopes the current
 candidate; it is also reset for an explicitly budgeted repeated review. -/
 structure ImplementationBatch where
   remaining : List String
   checksPassed : Bool
-  flightsLeft : Nat
+  continuationJustified : Bool
   firstFlight : Nat
   deriving DecidableEq, Repr
 
 def ImplementationPlan.start (p : ImplementationPlan) (firstFlight : Nat) : ImplementationBatch :=
-  ⟨p.obligations, false, p.flightAllowance, firstFlight⟩
+  ⟨p.obligations, false, true, firstFlight⟩
+
+/-- Interpreted source authority from GoalArtifact/harness, not a new runtime record
+or a provenance authenticator. The caller's orchestration role grants no cap authority. -/
+inductive LimitAuthority
+  | user
+  | boundaryOwner
+  | hardExternal
+  | caller
+  deriving DecidableEq, Repr
+
+structure PassLimitEvidence where
+  authority : LimitAuthority
+  sourceRef : String
+  scopeRef : String
+  sourceSupported : Bool
+  applicable : Bool
+  declaredUnits : Nat
+  deriving DecidableEq, Repr
+
+-- SKILL[guard]: "Only explicit applicable user/boundary-owner or hard host/carrier limits authorize stops, with source/scope in `GoalArtifact` or `harness`; orchestration grants no limit authority."
+def PassLimitEvidence.valid (e : PassLimitEvidence) (units : Nat) : Prop :=
+  e.authority ≠ .caller ∧ e.sourceRef ≠ "" ∧ e.scopeRef ≠ "" ∧
+    e.sourceSupported = true ∧ e.applicable = true ∧ e.declaredUnits = units
 
 /-- The caller-side protocol state. -/
 structure ProtocolState where
@@ -190,6 +213,8 @@ structure ProtocolState where
   flights : List FlightRec
   context : List ContextItem
   passBudget : Option Nat
+  /-- Ghost projection of whether a post-initial-review pass was already started. -/
+  passStarted : Bool
   batch : Option ImplementationBatch
   continuationAuthority : ContinuationAuthority
   terminationExit : Option TerminationExit
@@ -202,7 +227,7 @@ structure ProtocolState where
 
 def ProtocolState.initial : ProtocolState :=
   { stage := .intake, goal := none, mode := none, capabilityChecked := [], flights := [],
-    context := [], passBudget := none, batch := none,
+    context := [], passBudget := none, passStarted := false, batch := none,
     continuationAuthority := ⟨⟨[], .silent⟩, 0⟩,
     terminationExit := none, terminationAuthority := none,
     claimed := false, mutationLog := [] }
@@ -219,14 +244,16 @@ inductive Action
   | launchDelegated (flight : Nat)
   | launchViaShellBackground (flight : Nat)
   | pollArtifacts (flight : Nat)
+  | waitBoundary (flight : Nat)
   | hostNotified (flight : Nat)
   | collect (flight : Nat) (o : Observation)
   | fallbackFlight (flight : Nat) (carrier : Carrier)
   | mutateTarget (target : String)
   | carry (item : ContextItem)
-  | recordPassBudget (units : Nat)
+  | recordPassBudget (units : Nat) (evidence : PassLimitEvidence)
   | beginImplementation (plan : ImplementationPlan)
   | recordImplementation (flight : Nat) (completed : List String) (checksPassed : Bool)
+      (continuationJustified : Bool)
   | pass (t : Transition) (e : Reasoning.FamilyEvidence) (plan : Option ImplementationPlan)
   | advanceStage
   | evaluateTermination (source : ClaimSource) (evidence : TerminationEvidence)
@@ -302,11 +329,11 @@ def ProtocolState.reviewComplete (s : ProtocolState) : Bool :=
   s.reviewReady && reviewRoles.all fun role =>
     s.batchFlights.any fun f => f.stage == .review && f.role == role && f.status == .terminal
 
--- SKILL[guard]: "Pending work/checks stay in implementation within the allowance; exhaustion/failure reports unresolved work."
+-- SKILL[guard]: "Pending approved work/checks continue through evidence-backed handoffs; unrecovered failure reports unresolved work."
 def guardImplementationFlight (s : ProtocolState) : Prop :=
   (s.stage = .implementation ∨ s.stage = .fixOrDone) ∧
     s.reviewStarted = false ∧ s.reviewReady = false ∧ s.batchSettled = true ∧
-    ∃ b, s.batch = some b ∧ 0 < b.flightsLeft
+    ∃ b, s.batch = some b ∧ b.continuationJustified = true
 
 /-- Shared per-seat constraint for the recorded draw, dispatch, and fallback. -/
 def seatEligible : Role → Carrier → Bool
@@ -378,6 +405,11 @@ def guardNoShellBackground : Prop := False
 -- SKILL[guard]: "The caller must not poll worker artifact paths while a runner is active."
 def guardNoPolling : Prop := False
 
+-- SKILL[guard]: "Wait boundaries and quietness leave healthy active flights active, even at `retry_budget` zero; neither triggers retry/fallback."
+/-- A host wait yield, not artifact polling or a terminal notification. -/
+def guardWaitBoundary (s : ProtocolState) (id : Nat) : Prop :=
+  ∃ f, s.flight id = some f ∧ f.launched = true ∧ f.notified = false ∧ f.active = true
+
 -- SKILL[guard]: "The caller must launch each runner through a host-provided background job mechanism that notifies the caller when the carrier process exits."
 def guardHostNotified (s : ProtocolState) (id : Nat) : Prop :=
   ∃ f, s.flight id = some f ∧ f.launched = true
@@ -397,7 +429,7 @@ def ProtocolState.eligibleCarriers (s : ProtocolState) (f : FlightRec) : Carrier
     (f.stage != .review || seatEligible f.role c)
   ⟨eligible .codexCli, eligible .nyxidOracle, eligible .isolatedTokenSubagent⟩
 
--- SKILL[guard]: "If any flight lacks terminal completion after its finite same-carrier retry budget is exhausted, the caller marks that flight `abstained` with empty `result_envelope_ref` and `completion_sentinel_ref`."
+-- SKILL[guard]: "If an ended attempt lacks terminal completion after its finite same-carrier retry budget is exhausted, the caller marks that flight `abstained` with empty `result_envelope_ref` and `completion_sentinel_ref`."
 /-- A replacement uses the existing finite selector for the entire failed assignment.
 An active or successful replacement closes fallback through any earlier flight id. -/
 def guardFallback (s : ProtocolState) (id : Nat) (carrier : Carrier) : Prop :=
@@ -414,10 +446,10 @@ def guardMutateTarget (s : ProtocolState) (target : String) : Prop :=
 def guardCarry (item : ContextItem) : Prop := item.permitted = true
 
 -- SKILL[guard]: "This section is the sole owner of the optional `pass_budget`."
-def guardRecordPassBudget (s : ProtocolState) : Prop :=
-  s.stage = .fixOrDone ∧ s.passBudget = none
+def guardRecordPassBudget (s : ProtocolState) (units : Nat) (e : PassLimitEvidence) : Prop :=
+  s.stage = .fixOrDone ∧ s.passBudget = none ∧ s.passStarted = false ∧ e.valid units
 
--- SKILL[guard]: "Accumulate completed/remaining obligations and test evidence; terminal completion permits handoff only."
+-- SKILL[guard]: "Accumulate work/check evidence and remaining obligations; terminal completion permits handoff only."
 def guardRecordImplementation (s : ProtocolState) (id : Nat) : Prop :=
   s.reviewStarted = false ∧ s.batch.isSome = true ∧
     ∃ f ∈ s.batchFlights, f.id = id ∧ f.stage = .implementation ∧ f.status = .terminal ∧
@@ -432,14 +464,15 @@ def passContinuationAllowed (budget : Option Nat) (directionGate : Bool) : Bool 
   | none => directionGate
   | some remaining => directionGate && remaining > 0
 
--- SKILL[guard]: "The batch debit includes all bounded assignments and final review even at zero remaining units, with no subsequent pass authority under that finite cap."
--- SKILL[guard]: "For `fix`, freeze admitted repairs as a finite batch under `## Implementation Worker` handoff, allowance and evidence rules;"
+-- SKILL[guard]: "The batch debit includes all scoped assignments and final review even at zero remaining units, with no subsequent pass authority under that finite cap."
+-- SKILL[guard]: "For `fix`, freeze admitted repairs as a finite batch under `## Implementation Worker` handoff and evidence rules;"
 def guardPass (s : ProtocolState) (t : Transition) (e : Reasoning.FamilyEvidence)
     (plan : Option ImplementationPlan) : Prop :=
   s.stage = .fixOrDone ∧ Reasoning.familyPassAllowed e t = true ∧
     s.reviewComplete = true ∧ t ≠ .initialReviewTriplet ∧
     (t.counted = true → s.passBudget = none ∨ ∃ b, s.passBudget = some b ∧ 0 < b) ∧
-    (if t = .repairWithRerunReview then ∃ p, plan = some p ∧ p.valid else plan = none)
+    (if t = .repairWithRerunReview then ∃ p, plan = some p ∧ p.valid else plan = none) ∧
+    e.continuationJustified = true
 
 def guardAdvanceStage (s : ProtocolState) : Prop :=
   s.stage.next.isSome = true ∧
@@ -475,14 +508,15 @@ def allowed (s : ProtocolState) : Action → Prop
   | .launchDelegated id => guardLaunchDelegated s id
   | .launchViaShellBackground _ => guardNoShellBackground
   | .pollArtifacts _ => guardNoPolling
+  | .waitBoundary id => guardWaitBoundary s id
   | .hostNotified id => guardHostNotified s id
   | .collect id _ => guardCollect s id
   | .fallbackFlight id carrier => guardFallback s id carrier
   | .mutateTarget target => guardMutateTarget s target
   | .carry item => guardCarry item
-  | .recordPassBudget _ => guardRecordPassBudget s
+  | .recordPassBudget units e => guardRecordPassBudget s units e
   | .beginImplementation p => guardBeginImplementation s p
-  | .recordImplementation id _ _ => guardRecordImplementation s id
+  | .recordImplementation id _ _ _ => guardRecordImplementation s id
   | .pass t e p => guardPass s t e p
   | .advanceStage => guardAdvanceStage s
   | .evaluateTermination _ e => guardEvaluateTermination s e
@@ -492,7 +526,7 @@ def allowed (s : ProtocolState) : Action → Prop
 -- SKILL[ref]: "Include any non-blocking advisory feedback without inlining logs."
 abbrev advisoryWithoutLogs := @ContextItem.permitted
 
--- SKILL[policy]: "Protocol policy, not a mathematical consequence: before the first pass after the initial review triplet, the caller may record one owner-precommitted finite integer `pass_budget`; by default it records no cap."
+-- SKILL[policy]: "Protocol policy, not a mathematical consequence: before the first post-review pass, record a finite integer `pass_budget` only for a precommitted applicable user/boundary-owner or hard external limit with source and scope; default: no cap."
 abbrev passBudgetPrecommitment := @guardRecordPassBudget
 
 /-! ## Effects -/
@@ -500,6 +534,7 @@ abbrev passBudgetPrecommitment := @guardRecordPassBudget
 def updateFlight (s : ProtocolState) (id : Nat) (f : FlightRec → FlightRec) : ProtocolState :=
   { s with flights := s.flights.map fun x => if x.id == id then f x else x }
 
+-- SKILL[ref]: "Terminal failure/malformed completion retains finite recovery and honest unresolved routing; external capability is not unlimited."
 /-- Collecting an observation applies the completion predicate and the same-carrier retry rule. -/
 def collectEffect (o : Observation) (f : FlightRec) : FlightRec :=
   if done o then
@@ -549,11 +584,12 @@ def step (s : ProtocolState) : Action → ProtocolState
     { s with
       flights := s.flights ++ [newFlight s.freshId stage role carrier target retryBudget],
       batch := s.batch.map fun b => if stage = .implementation then
-        { b with flightsLeft := b.flightsLeft - 1, checksPassed := false } else b }
+        { b with continuationJustified := false, checksPassed := false } else b }
   | .launchViaRunner id | .launchDelegated id =>
     updateFlight s id fun f => { f with launched := true }
   | .launchViaShellBackground _ => s
   | .pollArtifacts _ => s
+  | .waitBoundary _ => s
   | .hostNotified id => updateFlight s id fun f => { f with notified := true }
   | .collect id o => updateFlight s id (collectEffect o)
   | .fallbackFlight id carrier =>
@@ -563,14 +599,18 @@ def step (s : ProtocolState) : Action → ProtocolState
       { s with flights := s.flights ++ [reopenFlight s.freshId carrier f] }
   | .mutateTarget target => { s with mutationLog := (target, s.activeOn target) :: s.mutationLog }
   | .carry item => { s with context := item :: s.context }
-  | .recordPassBudget units => { s with passBudget := some units }
+  | .recordPassBudget units _ => { s with passBudget := some units }
   | .beginImplementation p => { s with batch := some (p.start s.freshId) }
-  | .recordImplementation _ completed checksPassed =>
+  | .recordImplementation _ completed checksPassed continuationJustified =>
     { s with batch := s.batch.map fun b =>
-        { b with remaining := b.remaining.filter (fun x => !completed.contains x), checksPassed := checksPassed } }
+        { b with
+          remaining := b.remaining.filter (fun x => !completed.contains x)
+          checksPassed := checksPassed
+          continuationJustified := continuationJustified } }
   | .pass t _ plan =>
     { s with
       passBudget := s.passBudget.bind fun b => Sshx.step b t,
+      passStarted := true,
       batch := if t = .repairWithRerunReview then plan.map (·.start s.freshId)
         else if t = .repeatedReviewPass then s.batch.map fun b => { b with firstFlight := s.freshId }
         else s.batch }
@@ -578,7 +618,8 @@ def step (s : ProtocolState) : Action → ProtocolState
   | .evaluateTermination source e =>
     { s with terminationExit := some (terminationRoute source e.roster),
              terminationAuthority := some e.authority,
-             passBudget := s.passBudget.bind fun b => Sshx.step b .terminationGateEvaluation }
+             passBudget := s.passBudget.bind fun b => Sshx.step b .terminationGateEvaluation,
+             passStarted := true }
   | .claimSatisfied => { s with claimed := true }
   | .lifecycle _ => s
 

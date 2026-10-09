@@ -83,6 +83,8 @@ structure FamilyEvidence where
   changesDomainOrCriterion : Bool
   ownerAuthorized : Bool
   revision : Option Revision
+  /-- New evidence, authorized correction or changed goal gap at the direction gate. -/
+  continuationJustified : Bool
   deriving DecidableEq, Repr
 
 -- SKILL[ref]: "Domain or criterion changes require the existing owner authorization and append-only revision."

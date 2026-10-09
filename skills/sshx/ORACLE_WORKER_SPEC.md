@@ -92,8 +92,9 @@ The body carries no `metadata` key, so every submission opens a fresh ChatGPT
 conversation and parallel seats receive disjoint conversations. It always sets
 `"stream": true`: Cloudflare in front of NyxID cuts a silent request after 100 seconds,
 and the stream's keep-alive lines prevent that. A Pro answer usually takes 1 to 5 minutes;
-the runner keeps the call open with no time limit of its own, and time limits remain the
-caller harness's responsibility.
+the runner keeps the call open with no time limit of its own. Continuation and limit
+authority belong to `SKILL.md` `## Worker Delegation`; an observational host wait boundary
+does not end an active broker call. Actual hard broker/carrier limits remain external facts.
 
 ## Terminal Decision
 

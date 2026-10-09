@@ -394,6 +394,55 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assert_terminal(result, "CARRIER_EXIT_NONZERO")
         self.assertEqual(result.status["carrier_exit"], 127)
 
+    def test_healthy_wait_boundaries_do_not_end_a_zero_retry_flight(self) -> None:
+        # retry_budget is caller transcript policy, not a runner timeout option.
+        # Lean separately checks zero-budget wait/recovery routing on actual allowed/step.
+        flight = self.next_flight()
+        ready = self.temp_dir / "healthy-ready"
+        release = self.temp_dir / "healthy-release"
+        os.mkfifo(ready)
+        os.mkfifo(release)
+        ready_fd = os.open(ready, os.O_RDWR | os.O_NONBLOCK)
+        release_fd = os.open(release, os.O_RDWR | os.O_NONBLOCK)
+        self.addCleanup(os.close, ready_fd)
+        process = subprocess.Popen(
+            self.command(flight), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True,
+            env=self.environment("interrupt_wait", FAKE_READY=str(ready),
+                                 FAKE_RELEASE=str(release),
+                                 FAKE_CARRIER_PID=str(self.temp_dir / "healthy-pid")),
+        )
+        try:
+            assert process.stdout is not None
+            readable, _, _ = select.select([process.stdout], [], [], 10)
+            self.assertTrue(readable, "watchdog: no launch receipt")
+            self.assertEqual(json.loads(process.stdout.readline())["flight_id"], flight)
+            readable, _, _ = select.select([ready_fd], [], [], 10)
+            self.assertTrue(readable, "watchdog: carrier never opened")
+            self.assertEqual(os.read(ready_fd, 64).strip(), b"ready")
+            for _ in range(3):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    process.wait(timeout=0.05)  # finite observation, not a production stop
+                self.assertFalse((self.expected_run_dir(flight) / "status.json").exists())
+            os.write(release_fd, b"release\n")
+            os.close(release_fd)
+            release_fd = -1
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(stdout, "")
+            # The fake really ends without artifacts: failure now, never during waiting.
+            self.assertEqual(process.returncode, 1)
+            status = json.loads((self.expected_run_dir(flight) / "status.json").read_text())
+            self.assertEqual(status["status"], "NOT_COMPLETE")
+            self.assertEqual(status["reason_code"], "RESULT_MISSING")
+            self.assert_timestamped_progress(stderr)
+        finally:
+            if release_fd >= 0:
+                os.write(release_fd, b"release\n")
+                os.close(release_fd)
+            if process.poll() is None:
+                process.terminate()  # verification watchdog cleanup only
+            process.communicate(timeout=10)
+
     def test_runner_waits_until_carrier_exits_after_artifacts_appear(self) -> None:
         flight = self.next_flight()
         ready = self.temp_dir / "carrier-ready"

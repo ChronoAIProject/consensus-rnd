@@ -22,17 +22,17 @@ private def readyState : ProtocolState :=
     stage := .implementation, goal := some goal, mode := some (.carrier .codexCli),
     capabilityChecked := [.codexCli, .isolatedTokenSubagent] }
 
-private def twoParts : ImplementationPlan := ⟨["contract", "verification"], 2⟩
+private def twoParts : ImplementationPlan := ⟨["contract", "verification"]⟩
 private def begin := step readyState (.beginImplementation twoParts)
 private def opened := step begin (.openFlight .implementation .implementation .codexCli "target" 0)
 private def successful : Observation := ⟨true, true, true, true, true⟩
 private def finish (s : ProtocolState) (id : Nat) (o : Observation) : ProtocolState :=
   step (step (step s (.launchViaRunner id)) (.hostNotified id)) (.collect id o)
 private def returned := finish opened 0 successful
-private def partDone := step returned (.recordImplementation 0 ["contract"] true)
+private def partDone := step returned (.recordImplementation 0 ["contract"] true true)
 private def second := step partDone (.openFlight .implementation .implementation .codexCli "target" 0)
 private def complete := step (finish second 1 successful)
-  (.recordImplementation 1 ["verification"] true)
+  (.recordImplementation 1 ["verification"] true true)
 
 -- The first worker is terminal and its tests passed; remaining scope still blocks review.
 example : (partDone.flight 0).map (·.status) = some .terminal := by decide
@@ -85,7 +85,7 @@ example : fix.stage = .fixOrDone := by decide
 
 private def family : FamilyEvidence :=
   ⟨"goal", "correct output", "ordinary inputs", "shared mechanism", "worker", "behavior check",
-    true, true, 2, false, .uniformInvariant true, false, false, false, false, none⟩
+    true, true, 2, false, .uniformInvariant true, false, false, false, false, none, true⟩
 
 -- The default fix state carries no cap, so a direction-gated pass remains admissible
 -- and leaves the absent cap unchanged.
@@ -98,9 +98,46 @@ example : allowed fix (.pass .repeatedReviewPass family none) := by
     ownerAuthorizedDomainChange, classGateActive, FamilyEvidence.recordComplete,
     coverageBasisVerified, Transition.counted]
 private def defaultRepeated := step fix (.pass .repeatedReviewPass family none)
+example : ¬ allowed defaultRepeated (.recordPassBudget 1
+    ⟨.user, "late user quota", "post-review", true, true, 1⟩) := by
+  simp [allowed, guardRecordPassBudget, defaultRepeated, step]
 example : defaultRepeated.passBudget = none := by decide
 
-private def funded := step fix (.recordPassBudget 1)
+private def ownerLimit (units : Nat) : PassLimitEvidence :=
+  ⟨.boundaryOwner, "explicit owner constraint", "post-initial-review passes", true, true, units⟩
+
+private def funded := step fix (.recordPassBudget 1 (ownerLimit 1))
+example : ¬ allowed fix (.recordPassBudget 1
+    { ownerLimit 1 with authority := .caller }) := by
+  apply caller_cap_never_admitted
+  rfl
+example : ¬ allowed fix (.recordPassBudget 1
+    { ownerLimit 1 with sourceRef := "" }) := by
+  simp [allowed, guardRecordPassBudget, PassLimitEvidence.valid]
+example : ¬ allowed fix (.recordPassBudget 1
+    { ownerLimit 1 with scopeRef := "" }) := by
+  simp [allowed, guardRecordPassBudget, PassLimitEvidence.valid]
+example : ¬ allowed fix (.recordPassBudget 1
+    { ownerLimit 1 with sourceSupported := false }) := by
+  simp [allowed, guardRecordPassBudget, PassLimitEvidence.valid]
+example : ¬ allowed fix (.recordPassBudget 2 (ownerLimit 1)) := by
+  simp [allowed, guardRecordPassBudget, PassLimitEvidence.valid, ownerLimit]
+example : allowed fix (.recordPassBudget 1
+    { ownerLimit 1 with authority := .user }) := by
+  simp only [allowed, guardRecordPassBudget, PassLimitEvidence.valid, ownerLimit]
+  decide
+example : allowed fix (.recordPassBudget 1
+    { ownerLimit 1 with authority := .hardExternal }) := by
+  simp only [allowed, guardRecordPassBudget, PassLimitEvidence.valid, ownerLimit]
+  decide
+example : ¬ allowed fix (.recordPassBudget 1
+    { ownerLimit 1 with applicable := false }) := by
+  simp [allowed, guardRecordPassBudget, PassLimitEvidence.valid]
+example : ¬ allowed fix (.pass .repeatedReviewPass
+    { family with continuationJustified := false } none) := by
+  apply unchanged_pass_never_admitted
+  rfl
+
 private def repair := step funded (.pass .repairWithRerunReview family (some twoParts))
 example : allowed funded (.pass .repairWithRerunReview family (some twoParts)) := by
   have hs : funded.stage = .fixOrDone := by decide
@@ -113,11 +150,11 @@ example : repair.passBudget = some 0 := by decide
 example : repair.stage = .fixOrDone := by decide
 private def repairedFirst := step (finish (step repair
   (.openFlight .implementation .implementation .codexCli "target" 0)) 5 successful)
-  (.recordImplementation 5 ["contract"] true)
+  (.recordImplementation 5 ["contract"] true true)
 example : repairedFirst.reviewReady = false := by decide
 private def repaired := step (finish (step repairedFirst
   (.openFlight .implementation .implementation .codexCli "target" 0)) 6 successful)
-  (.recordImplementation 6 ["verification"] true)
+  (.recordImplementation 6 ["verification"] true true)
 example : repaired.reviewReady = true := by decide
 example : repaired.passBudget = some 0 := by decide
 -- The last paid unit includes this final review, with no new unit or pass needed.
@@ -164,25 +201,31 @@ example : ¬ allowed funded (.pass .repairWithRerunReview
   simp [allowed, guardPass, familyPassAllowed, familyRoute, family,
     classGateActive, ownerAuthorizedDomainChange, coverageBasisVerified]
 
--- Active, terminal-with-failed-checks, and exhausted incomplete assignments never admit review.
+-- Active, terminal-with-failed-checks, and incomplete assignments never admit review.
 example : opened.reviewReady = false := by decide
 private def unchecked := step (finish second 1 successful)
-  (.recordImplementation 1 ["verification"] false)
+  (.recordImplementation 1 ["verification"] false true)
 example : unchecked.reviewReady = false := by decide
 private def failed := finish second 1 { successful with exitZero := false }
 example : failed.batchSettled = false := by decide
 example : failed.reviewReady = false := by decide
-private def exhausted := step (finish second 1 successful)
-  (.recordImplementation 1 [] true)
-example : exhausted.reviewReady = false := by decide
-example : ¬ guardImplementationFlight exhausted := by
-  have hb : exhausted.batch = some ⟨["verification"], true, 0, 0⟩ := by decide
-  simp [guardImplementationFlight, hb]
+private def pending := step (finish second 1 successful)
+  (.recordImplementation 1 [] true true)
+example : pending.reviewReady = false := by decide
+-- Assignment count does not exhaust authorized pending work with new evidence.
+example : guardImplementationFlight pending := by
+  simp only [guardImplementationFlight]
+  decide
+private def unchanged := step (finish second 1 successful)
+  (.recordImplementation 1 [] true false)
+example : ¬ guardImplementationFlight unchanged := by
+  simp only [guardImplementationFlight]
+  decide
 -- A single flight still goes directly to its one initial triplet after all checks.
 private def single := step (finish (step (step readyState
-  (.beginImplementation ⟨["all work"], 1⟩))
+  (.beginImplementation ⟨["all work"]⟩))
   (.openFlight .implementation .implementation .codexCli "target" 0)) 0 successful)
-  (.recordImplementation 0 ["all work"] true)
+  (.recordImplementation 0 ["all work"] true true)
 example : single.reviewReady = true := by decide
 
 /-- A trace checks each production guard at the state produced by its preceding actions. -/
@@ -193,13 +236,213 @@ private def admitted (s : ProtocolState) : List Action → Prop
 private def run (s : ProtocolState) (actions : List Action) : ProtocolState :=
   actions.foldl step s
 
+-- Every finite number of host wait yields uses the actual production guard/effect.
+private def waitActions (id n : Nat) : List Action := List.replicate n (.waitBoundary id)
+private theorem wait_prefix (s : ProtocolState) (id n : Nat)
+    (h : allowed s (.waitBoundary id)) :
+    admitted s (waitActions id n) ∧ run s (waitActions id n) = s := by
+  induction n with
+  | zero => simp [waitActions, admitted, run]
+  | succ n ih =>
+    constructor
+    · simpa [waitActions, List.replicate_succ, admitted, step] using And.intro h ih.1
+    · simpa [waitActions, List.replicate_succ, run, step] using ih.2
+
+private def waiting := step opened (.launchViaRunner 0)
+example (n : Nat) : admitted waiting (waitActions 0 n) ∧
+    run waiting (waitActions 0 n) = waiting := by
+  apply wait_prefix
+  simp only [allowed, guardWaitBoundary]
+  decide
+example : (waiting.flight 0).map (·.retryBudget) = some 0 := by decide
+example : ¬ allowed waiting (.collect 0 successful) := by
+  simp only [allowed, guardCollect]
+  decide
+example : ¬ allowed waiting (.fallbackFlight 0 .isolatedTokenSubagent) := by
+  simp only [allowed, guardFallback]
+  decide
+
+/-- A history of evidence-backed terminal handoffs with an approved check still pending.
+This is a fixture of production ProtocolState, not another decision model. -/
+private def completedFlight (id : Nat) : FlightRec :=
+  { newFlight id .implementation .implementation .codexCli "target" 0 with
+    status := .terminal
+    launched := true
+    notified := true
+    envelopeRef := some "result"
+    sentinelRef := some "sentinel" }
+private def pendingState (n : Nat) : ProtocolState :=
+  { readyState with
+    flights := (List.range n).map completedFlight
+    batch := some ⟨["verification"], false, true, 0⟩ }
+private def handoffActions (n : Nat) : List Action :=
+  [.openFlight .implementation .implementation .codexCli "target" 0,
+   .launchViaRunner n, .hostNotified n, .collect n successful,
+   .recordImplementation n [] false true]
+private def handoffPrefix : Nat → List Action
+  | 0 => []
+  | n + 1 => handoffPrefix n ++ handoffActions n
+
+private theorem old_flight_ids (n : Nat) (f : FlightRec)
+    (hf : f ∈ (pendingState n).flights) : f.id < n := by
+  simp only [pendingState, List.mem_map] at hf
+  obtain ⟨i, hi, rfl⟩ := hf
+  simpa [completedFlight, newFlight] using List.mem_range.mp hi
+
+private theorem old_lookup_none (n : Nat) : (pendingState n).flight n = none := by
+  apply List.find?_eq_none.mpr
+  intro f hf
+  have hlt := old_flight_ids n f hf
+  simp only [beq_iff_eq]
+  omega
+
+/-- A current flight appended by production dispatch, before recording its handoff. -/
+private def currentState (n : Nat) (f : FlightRec) : ProtocolState :=
+  { pendingState n with
+    flights := (pendingState n).flights ++ [f]
+    batch := some ⟨["verification"], false, false, 0⟩ }
+private def startedFlight (n : Nat) := newFlight n .implementation .implementation .codexCli "target" 0
+private def launchedFlight (n : Nat) := { startedFlight n with launched := true }
+private def notifiedFlight (n : Nat) := { launchedFlight n with notified := true }
+
+private theorem open_pending_allowed (n : Nat) : allowed (pendingState n)
+    (.openFlight .implementation .implementation .codexCli "target" 0) := by
+  simp [allowed, guardOpenFlight, guardImplementationFlight, pendingState, readyState,
+    ProtocolState.initial, ProtocolState.modeResolved, ProtocolState.abstained,
+    ProtocolState.reviewStarted, ProtocolState.reviewReady, ProtocolState.batchSettled,
+    ProtocolState.batchFlights, completedFlight, newFlight, List.any_map, List.all_map]
+
+private theorem open_pending_effect (n : Nat) :
+    step (pendingState n) (.openFlight .implementation .implementation .codexCli "target" 0) =
+      currentState n (startedFlight n) := by
+  simp [step, pendingState, ProtocolState.freshId, currentState, startedFlight]
+
+private theorem update_current (n : Nat) (f : FlightRec) (g : FlightRec → FlightRec)
+    (hid : f.id = n) :
+    updateFlight (currentState n f) n g = currentState n (g f) := by
+  have hold : ((pendingState n).flights.map fun x =>
+      if x.id == n then g x else x) = (pendingState n).flights := by
+    calc
+      _ = (pendingState n).flights.map id := by
+        apply List.map_congr_left
+        intro x hx
+        have hne : x.id ≠ n := Nat.ne_of_lt (old_flight_ids n x hx)
+        simp [hne]
+      _ = _ := List.map_id _
+  simp only [beq_iff_eq] at hold
+  simp [updateFlight, currentState, List.map_append, hid, hold]
+
+private theorem lookup_current (n : Nat) (f : FlightRec) (hid : f.id = n) :
+    (currentState n f).flight n = some f := by
+  have hn : (pendingState n).flights.find? (fun f => f.id == n) = none := old_lookup_none n
+  simp [ProtocolState.flight, currentState, List.find?_append, hn, hid]
+
+private theorem launch_current_effect (n : Nat) :
+    step (currentState n (startedFlight n)) (.launchViaRunner n) =
+      currentState n (launchedFlight n) :=
+  update_current n (startedFlight n) (fun f => { f with launched := true }) rfl
+private theorem notify_current_effect (n : Nat) :
+    step (currentState n (launchedFlight n)) (.hostNotified n) =
+      currentState n (notifiedFlight n) :=
+  update_current n (launchedFlight n) (fun f => { f with notified := true }) rfl
+private theorem collect_current_effect (n : Nat) :
+    step (currentState n (notifiedFlight n)) (.collect n successful) =
+      currentState n (completedFlight n) := by
+  have h := update_current n (notifiedFlight n) (collectEffect successful) rfl
+  simpa [step, collectEffect, done, successful, notifiedFlight, launchedFlight,
+    startedFlight, completedFlight, newFlight] using h
+
+private theorem record_current_allowed (n : Nat) :
+    allowed (currentState n (completedFlight n)) (.recordImplementation n [] false true) := by
+  refine ⟨?_, ?_, completedFlight n, ?_, rfl, rfl, rfl, ?_⟩
+  · simp [ProtocolState.reviewStarted, ProtocolState.batchFlights, currentState,
+      pendingState, completedFlight, newFlight, List.any_map]
+  · rfl
+  · simp [ProtocolState.batchFlights, currentState, pendingState, completedFlight, newFlight]
+  · intro f hf _
+    have hm : f ∈ (pendingState n).flights ++ [completedFlight n] := by
+      simpa [ProtocolState.batchFlights, currentState] using hf
+    rcases List.mem_append.mp hm with hold | hnew
+    · exact Nat.le_of_lt (old_flight_ids n f hold)
+    · rw [List.mem_singleton.mp hnew]
+      exact Nat.le_refl n
+
+private theorem record_current_effect (n : Nat) :
+    step (currentState n (completedFlight n)) (.recordImplementation n [] false true) =
+      pendingState (n + 1) := by
+  simp [step, currentState, pendingState, List.range_succ]
+
+private theorem handoff_admitted (n : Nat) : admitted (pendingState n) (handoffActions n) := by
+  simp only [admitted, handoffActions]
+  refine ⟨open_pending_allowed n, ?_⟩
+  rw [open_pending_effect]
+  refine ⟨?_, ?_⟩
+  · exact ⟨startedFlight n, lookup_current n _ rfl, rfl, rfl⟩
+  rw [launch_current_effect]
+  refine ⟨?_, ?_⟩
+  · exact ⟨launchedFlight n, lookup_current n _ rfl, rfl⟩
+  rw [notify_current_effect]
+  refine ⟨?_, ?_⟩
+  · exact ⟨notifiedFlight n, lookup_current n _ rfl, rfl, rfl⟩
+  rw [collect_current_effect]
+  exact ⟨record_current_allowed n, trivial⟩
+
+private theorem handoff_effect (n : Nat) :
+    run (pendingState n) (handoffActions n) = pendingState (n + 1) := by
+  simp only [run, handoffActions, List.foldl_cons, List.foldl_nil,
+    open_pending_effect, launch_current_effect, notify_current_effect,
+    collect_current_effect, record_current_effect]
+
+private theorem admitted_append (s : ProtocolState) (xs ys : List Action) :
+    admitted s (xs ++ ys) ↔ admitted s xs ∧ admitted (run s xs) ys := by
+  induction xs generalizing s with
+  | nil => simp [admitted, run]
+  | cons a xs ih => simp [admitted, run, ih, and_assoc]
+
+-- SKILL[thm]: "Healthy authorized work continues without caller-invented runtime, work/assignment or round ceilings."
+/-- For arbitrary n, every actual allowed/step handoff is admitted and leaves pending work
+eligible for another justified handoff. New evidence is an interpreted premise at each return;
+this proves finite-prefix continuation, not eventual completion or infinite carrier service. -/
+private theorem no_cap_handoff_prefix (n : Nat) :
+    admitted (pendingState 0) (handoffPrefix n) ∧
+    run (pendingState 0) (handoffPrefix n) = pendingState n := by
+  induction n with
+  | zero => simp [handoffPrefix, admitted, run]
+  | succ n ih =>
+    constructor
+    · rw [handoffPrefix, admitted_append, ih.2]
+      exact ⟨ih.1, handoff_admitted n⟩
+    · simp only [handoffPrefix, run, List.foldl_append]
+      change run (run (pendingState 0) (handoffPrefix n)) (handoffActions n) = _
+      rw [ih.2, handoff_effect]
+
+example (n : Nat) : allowed (pendingState n)
+    (.openFlight .implementation .implementation .codexCli "target" 0) := open_pending_allowed n
+-- The arbitrary prefix begins with an actual admitted approved-plan start.
+example (n : Nat) : admitted readyState
+    (.beginImplementation ⟨["verification"]⟩ :: handoffPrefix n) := by
+  refine ⟨?_, ?_⟩
+  · simp [allowed, guardBeginImplementation, readyState, ProtocolState.initial,
+      ImplementationPlan.valid]
+  · change admitted (pendingState 0) (handoffPrefix n)
+    exact (no_cap_handoff_prefix n).1
+
+example (n : Nat) : ¬ allowed (pendingState n) .advanceStage := by
+  simp [allowed, guardAdvanceStage, pendingState, readyState, ProtocolState.reviewReady]
+example (n : Nat) : ¬ allowed (pendingState n)
+    (.openFlight .review .architecture .codexCli "target" 0) := by
+  simp [allowed, guardOpenFlight, guardReviewFlight, pendingState, readyState,
+    ProtocolState.reviewReady]
+example (n : Nat) : (pendingState n).reviewReady = false := rfl
+example (n : Nat) : (pendingState n).passBudget = none := rfl
+
 private def implementationActions (firstId : Nat) : List Action :=
   [.openFlight .implementation .implementation .codexCli "target" 0,
    .launchViaRunner firstId, .hostNotified firstId, .collect firstId successful,
-   .recordImplementation firstId ["contract"] true,
+   .recordImplementation firstId ["contract"] true true,
    .openFlight .implementation .implementation .codexCli "target" 0,
    .launchViaRunner (firstId + 1), .hostNotified (firstId + 1), .collect (firstId + 1) successful,
-   .recordImplementation (firstId + 1) ["verification"] true]
+   .recordImplementation (firstId + 1) ["verification"] true true]
 private def reviewActions (firstId : Nat) : List Action :=
   [.openFlight .review .architecture .codexCli "target" 0,
    .openFlight .review .quality .codexCli "target" 0,
@@ -234,8 +477,8 @@ example : allowed reviewed .advanceStage := by
   simp only [allowed, guardAdvanceStage, ProtocolState.goalWritten, ProtocolState.modeResolved,
     ProtocolState.abstained]
   decide
-example : allowed fix (.recordPassBudget 1) := by
-  simp only [allowed, guardRecordPassBudget]
+example : allowed fix (.recordPassBudget 1 (ownerLimit 1)) := by
+  simp only [allowed, guardRecordPassBudget, PassLimitEvidence.valid, ownerLimit]
   decide
 
 -- A paid repair uses identical whole-plan admission and still includes its review at zero.
@@ -263,7 +506,7 @@ example : admitted repaired (reviewActions 7) := by
 example : run repaired (reviewActions 7) = repairReviewed := rfl
 
 private def recoveryActions (observation : Observation) : List Action :=
-  [.beginImplementation ⟨["all work"], 1⟩,
+  [.beginImplementation ⟨["all work"]⟩,
    .openFlight .implementation .implementation .codexCli "target" 0,
    .launchViaRunner 0, .hostNotified 0, .collect 0 { successful with exitZero := false },
    .fallbackFlight 0 .isolatedTokenSubagent,
@@ -283,12 +526,12 @@ private theorem recovery_admitted (observation : Observation) :
     Carrier.univ, CarrierSet.get]
 
 private def recoveryReturned := run readyState (recoveryActions successful)
-example : allowed recoveryReturned (.recordImplementation 1 ["all work"] true) := by
+example : allowed recoveryReturned (.recordImplementation 1 ["all work"] true true) := by
   simp [allowed, guardRecordImplementation, recoveryReturned, run, recoveryActions,
     readyState, ProtocolState.initial, step, ProtocolState.reviewStarted,
     ProtocolState.batchFlights, ProtocolState.flight, ProtocolState.freshId,
     newFlight, reopenFlight, ImplementationPlan.start, updateFlight, collectEffect, done, successful]
-private def recovered := step recoveryReturned (.recordImplementation 1 ["all work"] true)
+private def recovered := step recoveryReturned (.recordImplementation 1 ["all work"] true true)
 example : recovered.reviewReady = true := by decide
 example : allowed recovered .advanceStage := by
   simp only [allowed, guardAdvanceStage, ProtocolState.goalWritten, ProtocolState.modeResolved, ProtocolState.abstained]
@@ -361,10 +604,10 @@ example : ¬ allowed recoveryReturned (.fallbackFlight 0 .isolatedTokenSubagent)
     newFlight, reopenFlight, updateFlight, collectEffect, done, successful]
 
 example : admitted readyState
-    [.beginImplementation ⟨["all work"], 1⟩,
+    [.beginImplementation ⟨["all work"]⟩,
      .openFlight .implementation .implementation .codexCli "target" 0,
      .launchViaRunner 0, .hostNotified 0, .collect 0 successful,
-     .recordImplementation 0 ["all work"] true, .advanceStage] := by
+     .recordImplementation 0 ["all work"] true true, .advanceStage] := by
   simp [admitted, allowed, guardBeginImplementation, ImplementationPlan.valid,
     guardOpenFlight, guardImplementationFlight, guardLaunchViaRunner, guardHostNotified,
     guardCollect, guardRecordImplementation, guardAdvanceStage, readyState,
@@ -504,12 +747,12 @@ private def satisfiedRoster : Roster := ⟨true, .satisfied, .satisfied, .satisf
 private def evidenceA1 : TerminationEvidence :=
   ⟨⟨continuationSource .present, 1⟩, satisfiedRoster⟩
 private def evaluateA1 : Action := .evaluateTermination .terminationSeats evidenceA1
-private def correctionFunded := step (corrected .present) (.recordPassBudget 2)
+private def correctionFunded := step (corrected .present) (.recordPassBudget 2 (ownerLimit 2))
 private def settled := step correctionFunded evaluateA1
 -- Each action is guarded: evaluation consumes supplied evidence for the current source.
-example : admitted fix [correctionAction .present, .recordPassBudget 2, evaluateA1, .claimSatisfied] := by
+example : admitted fix [correctionAction .present, .recordPassBudget 2 (ownerLimit 2), evaluateA1, .claimSatisfied] := by
   simp only [admitted, correctionAction, evaluateA1, allowed, guardAppendRevision,
-    RevisionEvidence.valid, guardRecordPassBudget, guardEvaluateTermination,
+    RevisionEvidence.valid, guardRecordPassBudget, PassLimitEvidence.valid, ownerLimit, guardEvaluateTermination,
     guardClaimSatisfied, ProtocolState.goalWritten]
   decide
 example : settled.terminationExit = some .claimPermitted := by decide

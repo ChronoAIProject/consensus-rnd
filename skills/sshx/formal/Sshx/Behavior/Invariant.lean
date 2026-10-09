@@ -148,6 +148,7 @@ theorem safe_step {s : ProtocolState} {a : Action} (hs : Safe s) (ha : allowed s
     refine ⟨fun hne => h1 (updateFlight_ne_nil hne), h2, h4, hu.1, hu.2, h7, h8, h9⟩
   | launchViaShellBackground id => exact ha.elim
   | pollArtifacts id => exact ha.elim
+  | waitBoundary id => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
   | hostNotified id =>
     have hu := refs_attempt_updateFlight (s := s) (id := id)
       (g := fun f => { f with notified := true })
@@ -204,9 +205,9 @@ theorem safe_step {s : ProtocolState} {a : Action} (hs : Safe s) (ha : allowed s
     rcases hi with hi | hi
     · rw [hi]; exact ha
     · exact h7 i hi
-  | recordPassBudget units => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
+  | recordPassBudget units e => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
   | beginImplementation p => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
-  | recordImplementation id completed checks => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
+  | recordImplementation id completed checks justified => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
   | pass t e p => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
   | advanceStage => exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
   | evaluateTermination source evidence =>
@@ -284,7 +285,7 @@ theorem claim_only_under_permitted_gate (s : ProtocolState) (ha : allowed s .cla
 theorem budget_never_increases (s : ProtocolState) (a : Action) (ha : allowed s a) (b b' : Nat)
     (hb : s.passBudget = some b) (hb' : (step s a).passBudget = some b') : b' ≤ b := by
   cases a
-  case recordPassBudget units => obtain ⟨-, hnone⟩ := ha; simp [hnone] at hb
+  case recordPassBudget units e => obtain ⟨-, hnone, -⟩ := ha; simp [hnone] at hb
   case pass t e p =>
     simp only [step, hb, Option.bind_some] at hb'
     exact Sshx.step_le b t b' hb'
@@ -295,6 +296,36 @@ theorem budget_never_increases (s : ProtocolState) (a : Action) (ha : allowed s 
     simp only [step] at hb'
     split at hb' <;> simp_all
   all_goals simp_all [step, updateFlight]
+
+/-- Unsourced orchestration can never admit a cap, regardless of state or number. -/
+theorem caller_cap_never_admitted (s : ProtocolState) (units : Nat) (e : PassLimitEvidence)
+    (h : e.authority = .caller) : ¬ allowed s (.recordPassBudget units e) := by
+  simp [allowed, guardRecordPassBudget, PassLimitEvidence.valid, h]
+
+theorem cap_requires_applicable_source_scope (s : ProtocolState) (units : Nat)
+    (e : PassLimitEvidence) (ha : allowed s (.recordPassBudget units e)) :
+    e.valid units := ha.2.2.2
+
+/-- Every ended failure at zero retry capacity abstains; healthy waiting does not collect. -/
+theorem ended_failure_at_zero_abstains (f : FlightRec) (o : Observation)
+    (hz : f.retryBudget = 0) (hbad : done o = false) :
+    (collectEffect o f).status = .abstained := by
+  simp [collectEffect, hz, hbad]
+
+/-- Wait boundaries have no counter, completion, budget or work effects. -/
+theorem wait_preserves_state (s : ProtocolState) (id : Nat) :
+    step s (.waitBoundary id) = s := rfl
+
+theorem unchanged_pass_never_admitted (s : ProtocolState) (t : Transition)
+    (e : Reasoning.FamilyEvidence) (plan : Option ImplementationPlan)
+    (he : e.continuationJustified = false) : ¬ allowed s (.pass t e plan) := by
+  simp [allowed, guardPass, he]
+
+/-- Dispatch is organization, not a new round debit or a work quota. -/
+theorem implementation_preserves_pass_budget (s : ProtocolState) (carrier : Carrier)
+    (target : String) (retries : Nat) :
+    (step s (.openFlight .implementation .implementation carrier target retries)).passBudget =
+      s.passBudget := rfl
 
 /-- Stage index in protocol order. -/
 def Stage.index : Stage → Nat
@@ -330,12 +361,12 @@ theorem review_dispatch_needs_whole_candidate (s : ProtocolState) (role : Role)
     (ha : allowed s (.openFlight .review role carrier target retries)) :
     s.reviewReady = true := ha.2.2.2.2.1
 
-/-- Each new assignment consumes one predeclared local slot; retries/fallback use their own bounds. -/
--- SKILL[inv]: "Local allowance is separate from `pass_budget` and carrier retry/fallback bounds."
-theorem implementation_consumes_local_slot (s : ProtocolState) (carrier : Carrier)
+/-- Dispatch requires fresh handoff evidence before another assignment; no counter is debited. -/
+-- SKILL[inv]: "Handoffs name the remaining goal gap and new work/check evidence; unchanged repetition is not progress."
+theorem implementation_requires_fresh_handoff (s : ProtocolState) (carrier : Carrier)
     (target : String) (retries : Nat) (b : ImplementationBatch) (hb : s.batch = some b) :
     (step s (.openFlight .implementation .implementation carrier target retries)).batch =
-      some { b with flightsLeft := b.flightsLeft - 1, checksPassed := false } := by
+      some { b with continuationJustified := false, checksPassed := false } := by
   simp [step, hb]
 
 /-- The included review never debits the pass budget again. -/
