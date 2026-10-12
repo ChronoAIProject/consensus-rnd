@@ -14,16 +14,34 @@ NyxID oracle 可作为 codex / Claude 之外的独立推理通道，只走 oracl
 
 ```text
 .
-├── .claude-plugin/        # Claude Code: plugin.json + marketplace.json
-├── .codex-plugin/         # Codex: plugin.json
-├── .cursor-plugin/        # Cursor: plugin.json
-├── gemini-extension.json + GEMINI.md
-├── package.json           # npm 风格元数据 / 版本锚点
-├── AGENTS.md -> CLAUDE.md # 跨 agent 约定(符号链接)
-├── README.md + README.zh-CN.md
+├── .claude-plugin/        # Claude Code 清单与 marketplace
+├── .codex-plugin/         # Codex 清单
+│   └── skills -> ../skills
+├── .cursor-plugin/        # Cursor 清单
+├── .gitattributes
+├── .github/
+│   ├── scripts/           # 版本同步工具
+│   ├── tests/             # 仓库级文档一致性检查
+│   └── workflows/         # CI
+├── .gitignore
+├── .version-bump.json     # 版本同步映射
+├── AGENTS.md -> CLAUDE.md # 跨 agent 约定
+├── CLAUDE.md              # 仓库规则
+├── CONTRIBUTING.md        # 贡献指南
+├── GEMINI.md              # Gemini 上下文入口
 ├── LICENSE
-├── skills/sshx/           # 发布的 worker-delegated inline consensus skill
-└── .version-bump.json     # 版本号同步映射
+├── README.md              # 英文公开文档
+├── README.zh-CN.md        # 中文公开文档
+├── gemini-extension.json  # Gemini 扩展清单
+├── package.json           # 包元数据
+└── skills/
+    └── sshx/             # 发布的共识 skill
+        ├── CODEX_WORKER_SPEC.md
+        ├── ORACLE_WORKER_SPEC.md
+        ├── SKILL.md
+        ├── formal/       # Lean 模型
+        ├── scripts/      # Worker 机械实现
+        └── tests/        # Skill 合同与行为验证
 ```
 
 ## 设计哲学(跨 skill 不动点)
