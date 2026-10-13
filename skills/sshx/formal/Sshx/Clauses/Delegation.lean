@@ -71,7 +71,7 @@ def oracleRouteAllowed : OracleRoute → Bool
 def capabilityCheckMutates (_ : Carrier) : Bool := false
 
 /-- The behavior model agrees: an oracle flight is launched through its own runner and never by
-the delegated launch, which admits only the in-context subagent. -/
+the delegated launch, which admits heca MCP and the in-context subagent. -/
 theorem oracle_launch_needs_its_runner (s : Behavior.ProtocolState) (id : Nat) (f : Behavior.FlightRec)
     (hf : s.flight id = some f) (hc : f.carrier = .nyxidOracle) :
     ¬ Behavior.allowed s (.launchDelegated id) ∧
@@ -83,8 +83,8 @@ theorem oracle_launch_needs_its_runner (s : Behavior.ProtocolState) (id : Nat) (
   cases hg
   simp [hc] at hnone
 
-theorem only_subagent_launch_is_delegated (c : Carrier) :
-    Behavior.runnerFor c = none ↔ c = .isolatedTokenSubagent := by
+theorem runnerless_launch_carriers (c : Carrier) :
+    Behavior.runnerFor c = none ↔ c = .heca ∨ c = .isolatedTokenSubagent := by
   cases c <;> simp
 
 -- SKILL[ref]: "It must run with isolated token context so same-round workers cannot read one another's full reasoning or peer outputs before returning their own verdict."
@@ -105,12 +105,12 @@ def legacyStageComposition (seats : Nat) : List Carrier :=
   if seats ≤ 1 then List.replicate seats .codexCli
   else [.isolatedTokenSubagent, .nyxidOracle] ++ List.replicate (seats - 2) .codexCli
 
--- SKILL[ref]: "The three-seat `## Termination Gate` follows that same composition; every single-worker stage assigns its worker to `codex-cli` (heca only through fallback)."
--- SKILL[policy]: "Protocol policy, not a mathematical consequence: at dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `codex-cli`; when heca is detected, exactly one seat from that remainder goes to `heca`."
+-- SKILL[ref]: "The three-seat `## Termination Gate` follows that same composition; every single-worker stage assigns its worker to `heca` when detected, otherwise `codex-cli`."
+-- SKILL[policy]: "Protocol policy, not a mathematical consequence: at dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `heca` when detected, otherwise `codex-cli`."
 def stageComposition (seats : Nat) (hecaDetected : Bool := false) : List Carrier :=
-  if seats ≤ 1 then List.replicate seats .codexCli
+  if seats ≤ 1 then List.replicate seats (if hecaDetected then .heca else .codexCli)
   else if hecaDetected then
-    [.isolatedTokenSubagent, .nyxidOracle, .heca] ++ List.replicate (seats - 3) .codexCli
+    [.isolatedTokenSubagent, .nyxidOracle] ++ List.replicate (seats - 2) .heca
   else [.isolatedTokenSubagent, .nyxidOracle] ++ List.replicate (seats - 2) .codexCli
 
 -- SKILL[thm]: "When heca is absent, that composition is unchanged."
@@ -121,13 +121,17 @@ theorem composition_heca_absent (seats : Nat) :
 theorem detected_composition (seats : Nat) (h : 3 ≤ seats) :
     (stageComposition seats true).count .isolatedTokenSubagent = 1 ∧
     (stageComposition seats true).count .nyxidOracle = 1 ∧
-    (stageComposition seats true).count .heca = 1 ∧
-    (stageComposition seats true).count .codexCli = seats - 3 := by
+    (stageComposition seats true).count .heca = seats - 2 ∧
+    (stageComposition seats true).count .codexCli = 0 := by
   have hgt : ¬ seats ≤ 1 := by omega
   simp [stageComposition, hgt, List.count_cons, List.count_replicate]
 
-theorem single_worker_unchanged (detected : Bool) :
-    stageComposition 1 detected = [.codexCli] := rfl
+theorem single_worker_heca_detected : stageComposition 1 true = [.heca] := rfl
+
+theorem detected_composition_has_no_codex (seats : Nat) :
+    (stageComposition seats true).count .codexCli = 0 := by
+  simp only [stageComposition]
+  split <;> simp [List.count_cons, List.count_replicate]
 
 theorem composition_one_subagent_one_oracle (seats : Nat) (h : 2 ≤ seats) :
     (stageComposition seats).count .isolatedTokenSubagent = 1 ∧
@@ -203,7 +207,8 @@ theorem draw_keeps_composition {seats : List Behavior.Role} {a : SeatAssignment}
 
 /-- The constraint filter is what keeps the oracle off the `tests` seat in every draw. -/
 theorem oracle_never_drawn_for_tests {seats : List Behavior.Role} {a : SeatAssignment}
-    (h : drawFeasible seats a) : (Behavior.Role.tests, Carrier.nyxidOracle) ∉ a := by
+    {detected : Bool} (h : drawFeasible seats a detected) :
+    (Behavior.Role.tests, Carrier.nyxidOracle) ∉ a := by
   intro hmem
   have := h.2.2 _ hmem
   simp [Behavior.seatEligible, canRunRepositoryCommands] at this
@@ -236,6 +241,41 @@ theorem heca_review_draw_feasible : drawFeasible reviewSeats hecaReviewDraw true
   simp [SeatAssignment.carriers, hecaReviewDraw, stageComposition, reviewSeats]
 
 theorem heca_can_hold_tests : testsSeatEligible .heca = true := rfl
+
+/-- The detected branch has a feasible initial draw for each dispatched stage, including
+implementation and repair (the same single-worker role). No Codex CLI seat remains. -/
+def hecaThinkingDraw : SeatAssignment :=
+  [(.teleology, .isolatedTokenSubagent), (.parsimony, .nyxidOracle), (.fidelity, .heca),
+   (.naturalOwnership, .heca), (.proportionalContainment, .heca), (.worth, .heca)]
+
+def hecaTerminationDraw : SeatAssignment :=
+  [(.criterionEvidence, .isolatedTokenSubagent), (.residualGap, .nyxidOracle),
+   (.claimIntegrity, .heca)]
+
+theorem heca_thinking_draw_feasible :
+    drawFeasible [.teleology, .parsimony, .fidelity, .naturalOwnership,
+      .proportionalContainment, .worth] hecaThinkingDraw true := by
+  refine ⟨rfl, ?_, by decide⟩
+  simp [SeatAssignment.carriers, hecaThinkingDraw, stageComposition]
+
+theorem heca_termination_draw_feasible :
+    drawFeasible [.criterionEvidence, .residualGap, .claimIntegrity]
+      hecaTerminationDraw true := by
+  refine ⟨rfl, ?_, by decide⟩
+  simp [SeatAssignment.carriers, hecaTerminationDraw, stageComposition]
+
+theorem heca_single_worker_draw_feasible :
+    drawFeasible [.implementation] [(.implementation, .heca)] true := by
+  refine ⟨rfl, ?_, by decide⟩
+  simp [SeatAssignment.carriers, stageComposition]
+
+def hecaReviewDrawB : SeatAssignment :=
+  [(.architecture, .nyxidOracle), (.quality, .isolatedTokenSubagent), (.tests, .heca)]
+
+theorem heca_review_draw_b_feasible : drawFeasible reviewSeats hecaReviewDrawB true := by
+  refine ⟨rfl, ?_, by decide⟩
+  simp [SeatAssignment.carriers, hecaReviewDrawB, stageComposition, reviewSeats]
+  exact List.Perm.swap _ _ _
 
 /-- No role keeps a standing carrier: the same seat holds different carriers in two feasible
 draws of the same stage. -/
@@ -296,6 +336,11 @@ feasible draw that differs from the previous one. -/
 theorem review_rotation_is_satisfiable :
     drawFeasible reviewSeats reviewDrawB ∧ repeatDrawValid 2 reviewDrawA reviewDrawB = true :=
   ⟨reviewDrawB_feasible, by decide⟩
+
+theorem heca_review_rotation_is_satisfiable :
+    drawFeasible reviewSeats hecaReviewDrawB true ∧
+      repeatDrawValid 2 hecaReviewDraw hecaReviewDrawB = true :=
+  ⟨heca_review_draw_b_feasible, by decide⟩
 
 -- SKILL[policy]: "Carrier heterogeneity is this protocol's policy, not a theorem premise or consequence."
 def carrierHeterogeneityIsPolicy : Bool := true
@@ -366,11 +411,10 @@ theorem receipt_cannot_rebind (f : Behavior.FlightRec) (id index other : Nat) :
 theorem receipt_preserves_protocol (f : RunnerFlight) (id : Nat) :
     (bindRunnerIdentity f id).protocol = f.protocol := rfl
 
--- SKILL[ref]: "Read-only target protection starts at dispatch, including pending identity."
+-- SKILL[ref]: "Dispatch protects the target read-only, even with pending identity."
 /-- The existing target guard depends on target/status, never receipt binding. -/
 abbrev pendingIdentityTargetProtection := @Behavior.guardMutateTarget
 
--- SKILL[ref]: "The caller is non-mutating for that target and its external resources."
 abbrev callerNonMutating := @Behavior.guardMutateTarget
 
 /-! ## Runner mechanics as the caller sees them -/
@@ -380,10 +424,10 @@ inductive PathOwner
   | caller
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Only runners mint IDs and derive disjoint attempt paths; callers cannot supply artifact paths."
+-- SKILL[def]: "runners alone mint IDs/disjoint attempt paths; caller paths forbidden."
 def artifactPathOwner : PathOwner := .runner
 
--- SKILL[def]: "Receipts precede directories, stdin, and carrier execution."
+-- SKILL[def]: "Receipts precede directories/stdin/execution;"
 /-- Receipt ordering is checked by runner behavior tests; this adapter projects
 only the external attempt, independently of the protocol retry counter. -/
 def runnerAttempt (f : RunnerFlight) : Nat :=
@@ -414,8 +458,7 @@ def collectRunnerEffect (o : Observation) (f : RunnerFlight) : RunnerFlight :=
 theorem runner_collection_projects_protocol (o : Observation) (f : RunnerFlight) :
     (collectRunnerEffect o f).protocol = Behavior.collectEffect o f.protocol := rfl
 
--- SKILL[thm]: "Until a valid receipt binds `flight_id`, leave it empty and omit identity options;"
--- SKILL[thm]: "`attempt` stays 1."
+-- SKILL[thm]: "Runner receipts/paths: pending `flight_id` empty, omit identity options, `attempt` 1;"
 theorem pending_retry_without_identity (f : Behavior.FlightRec) (o : Observation)
     (failed : done o = false) (capacity : f.attempt < f.retryBudget) :
     runnerIdentityOptions (collectRunnerEffect o ⟨f, .pending⟩) = none ∧
@@ -423,7 +466,7 @@ theorem pending_retry_without_identity (f : Behavior.FlightRec) (o : Observation
   simp [collectRunnerEffect, Behavior.collectEffect, failed, capacity,
     runnerIdentityOptions, runnerAttempt]
 
--- SKILL[thm]: "Bound retries reuse that ID and increment `attempt`."
+-- SKILL[thm]: "bound retries reuse ID/increment `attempt`."
 theorem retry_identity_and_attempt (f : Behavior.FlightRec) (o : Observation) (id index : Nat)
     (failed : done o = false) (capacity : f.attempt < f.retryBudget) :
     (collectRunnerEffect o ⟨f, .bound id index⟩).protocol.id = f.id ∧
@@ -432,7 +475,7 @@ theorem retry_identity_and_attempt (f : Behavior.FlightRec) (o : Observation) (i
   simp [collectRunnerEffect, Behavior.collectEffect, failed, capacity,
     runnerIdentityOptions, runnerAttempt]
 
--- SKILL[thm]: "Count every retry against the fixed `retry_budget` in the transcript, separately from `attempt`; missing receipts and binding never reset it."
+-- SKILL[thm]: "Record every retry in the transcript against fixed `retry_budget`, independent of `attempt`; receipt/binding never resets it."
 theorem runner_retry_consumes_allowance (f : RunnerFlight) (o : Observation)
     (failed : done o = false) (capacity : f.protocol.attempt < f.protocol.retryBudget) :
     (collectRunnerEffect o f).protocol.attempt = f.protocol.attempt + 1 ∧
@@ -461,7 +504,7 @@ theorem runner_accounting_stays_bounded (f : RunnerFlight) (o : Observation)
   split <;> simp_all
   split <;> simp_all
 
--- SKILL[thm]: "Both states exhaust into fallback; new tasks and fallback start fresh flights."
+-- SKILL[thm]: "Both identity states exhaust to fallback; new tasks/fallback use new flights."
 theorem runner_exhausted_abstains (f : RunnerFlight) (o : Observation)
     (failed : done o = false) (exhausted : ¬ f.protocol.attempt < f.protocol.retryBudget) :
     (collectRunnerEffect o f).protocol.status = .abstained ∧
@@ -488,7 +531,7 @@ example :
     retry.protocol.attempt = 2 ∧ runnerIdentityOptions retry = some (42, 2) ∧
     (collectRunnerEffect failed retry).protocol.status = .abstained := by decide
 
--- SKILL[def]: "Mechanics are owned by `CODEX_WORKER_SPEC.md`, `HECA_WORKER_SPEC.md`, and `ORACLE_WORKER_SPEC.md`; use the Codex runner's default `danger-full-access` unless the maintainer explicitly requests a narrower sandbox."
+-- SKILL[def]: "Codex defaults to `danger-full-access` unless maintainer explicitly requests narrower."
 def defaultSandbox : String := "danger-full-access"
 
 inductive TeardownOwner
@@ -496,30 +539,36 @@ inductive TeardownOwner
   | runner
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Time limits and whole-job-tree teardown belong to the caller AI harness."
+-- SKILL[def]: "Harness owns runner time limits/job-tree teardown."
 def teardownOwner : TeardownOwner := .callerHarness
 
--- SKILL[ref]: "Record `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the runner reports completion and the envelope and sentinel validate."
+-- SKILL[ref]: "Bind result/completion refs only after runner completion and valid envelope/sentinel."
 abbrev refsOnlyOnCompletion := @Behavior.collectEffect
 
--- SKILL[ref]: "Completion and verdict recognition stay governed by the `## Worker Completion Contract`."
-abbrev completionGovernedByPredicate := @done
+-- SKILL[ref]: "`CODEX_WORKER_SPEC.md` and `ORACLE_WORKER_SPEC.md` own mechanics;"
+def runnerMechanicsSpecs : List String := ["CODEX_WORKER_SPEC.md", "ORACLE_WORKER_SPEC.md"]
 
 /-! ## Batch dispatch -/
 
--- SKILL[def]: "`skills/sshx/scripts/run-codex-worker-batch.sh` is the permitted one-call fan-out alternative for the `codex-cli` subset of a multi-seat stage."
+-- SKILL[def]: "`skills/sshx/scripts/run-codex-worker-batch.sh` permits one-call fan-out of a multi-seat stage’s `codex-cli` subset."
 def batchSeats (layout : List Carrier) : List Carrier := layout.filter (· == .codexCli)
 
--- SKILL[thm]: "The `heca` (when detected), `nyxid-oracle`, and `isolated-token-subagent` seats reserved by dispatch composition remain outside the batch, which never covers a whole stage."
+-- SKILL[thm]: "Composition excludes `heca`, `nyxid-oracle`/`isolated-token-subagent` from batches; heca detection leaves no initial batch seats; batches never cover a whole stage."
 theorem batch_never_covers_whole_stage (seats : Nat) (h : 3 ≤ seats) (detected : Bool) :
     (batchSeats (stageComposition seats detected)).length < (stageComposition seats detected).length := by
   have hgt : ¬ seats ≤ 1 := by omega
   cases detected <;> simp [batchSeats, stageComposition, hgt, List.filter_replicate] <;> omega
 
--- SKILL[ref]: "The dispatcher validates joined receipts with the runner's pure path projection and puts assigned rows in `resolved_manifest`."
+theorem detected_initial_batch_empty (seats : Nat) :
+    batchSeats (stageComposition seats true) = [] := by
+  simp only [stageComposition]
+  split <;> simp [batchSeats, List.filter_replicate]
+
+-- SKILL[ref]: "Validate joined receipts via runner pure path projection; put assigned rows in `resolved_manifest`."
 abbrev batchPathsFromRunner := artifactPathOwner
 
--- SKILL[def]: "Internal shell `&` followed by `wait` is permitted inside that one named batch script because it remains the foreground process of one host-tracked job, records every child, and joins every recorded child before publishing a report; its signal handling, interruption reporting, and inherited-disposition limits are owned by `CODEX_WORKER_SPEC.md` and the script's behavior tests, and whole-job-tree teardown remains the host's responsibility."
+-- SKILL[def]: "Only that batch script permits internal `&` then `wait`: one foreground host job records/joins all children before report."
+-- SKILL[ref]: "`CODEX_WORKER_SPEC.md`/behavior tests own signals, interruption reports and inherited-disposition limits; host owns job-tree teardown."
 def batchInternalWaitPermitted : Bool := true
 
 inductive NotificationGranularity
@@ -527,16 +576,16 @@ inductive NotificationGranularity
   | perBatch
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Batching degrades host completion notification from per-carrier to per-batch."
+-- SKILL[def]: "notice per-batch;"
 def notificationGranularity (batched : Bool) : NotificationGranularity :=
   if batched then .perBatch else .perCarrier
 
--- SKILL[def]: "Launching one host job per seat remains permitted and is the form on which per-seat retry and fallback latency depends; batching is an alternative, not a mandate."
+-- SKILL[def]: "Batching optional;"
 def oneJobPerSeatPermitted : Bool := true
 
 def batchingMandated : Bool := false
 
--- SKILL[ref]: "Status reading is a one-shot, after-terminal collection convenience and is not authorization to poll while any runner is active."
+-- SKILL[ref]: "Collect once;"
 abbrev statusReadAfterNotification := @Behavior.guardCollect
 
 /-- Kinds of artifact around a flight. -/
@@ -546,41 +595,178 @@ inductive ArtifactKind
   | statusProjection
   deriving DecidableEq, Repr
 
--- SKILL[def]: "The batch report is dispatcher-owned orchestration evidence, not a worker artifact, and neither it nor the status projection changes completion or verdict routing."
+-- SKILL[def]: "batch reports/status projections are dispatcher evidence, not worker artifacts; completion/verdict routing is unchanged."
 def changesRouting : ArtifactKind → Bool
   | .workerArtifact => true
   | .dispatcherEvidence | .statusProjection => false
 
-/-! ## Heca: host transport and flight lifetime -/
+/-! ## Heca: MCP tools and flight lifetime
+These are interpreted dispatch/observation facts, not a heca implementation. -/
 
--- SKILL[ref]: "`heca` uses an already-running host daemon solely as out-of-process worker transport."
-abbrev hecaTransport := hostDaemonTransportAllowed
-
-/-- Capability facts are supplied by the non-mutating check, not inferred from env/PATH. -/
--- SKILL[def]: "Its non-mutating check requires a reachable daemon and usable host provider/mode, not PATH or `HECA_*` alone; record once per run."
+-- SKILL[def]: "`heca` is available exactly when the caller's own toolset exposes heca's MCP agent tools, including tools listed but loaded lazily; no out-of-heca route exists."
+-- SKILL[def]: "PATH, `HECA_*`, CLI, daemon, provider and mode probes are not detection."
 structure HecaCapability where
-  daemonReachable : Bool
-  providerUsable : Bool
-  modeUnattended : Bool
-  bindingHostSupplied : Bool
+  callerToolsExposed : Bool
   deriving DecidableEq, Repr
 
-def HecaCapability.detected (facts : HecaCapability) : Bool :=
-  facts.daemonReachable && facts.providerUsable && facts.modeUnattended && facts.bindingHostSupplied
+def HecaCapability.detected (facts : HecaCapability) : Bool := facts.callerToolsExposed
 
--- SKILL[ref]: "Later outages use fallback, never re-probing or recomposing."
+-- SKILL[ref]: "This non-mutating check calls nothing; record tool exposure once per run, including absence;"
+-- SKILL[ref]: "Later failures use fallback, never re-probing or recomposing."
 abbrev hecaNoReprobe := Behavior.guardHecaCheck
 
--- SKILL[def]: "No existing heca worktree matching `work_target` means unavailable for that flight; the route creates no placement."
-def hecaFlightEligible (detected existingMatchingPlacement : Bool) : Bool :=
-  detected && existingMatchingPlacement
+theorem heca_generic_capability_probe_refused (s : Behavior.ProtocolState) :
+    ¬ Behavior.allowed s (.capabilityCheck .heca) := by
+  simp [Behavior.allowed]
 
-theorem unmatched_heca_target_unavailable (detected : Bool) :
-    hecaFlightEligible detected false = false := by simp [hecaFlightEligible]
+/-- Availability is taken from the exposure fact by the recorded, non-calling check. -/
+theorem heca_record_uses_tool_exposure (s : Behavior.ProtocolState) (facts : HecaCapability) :
+    (Behavior.step s (.recordHecaCheck facts.detected)).capabilityChecked =
+      if facts.callerToolsExposed then .heca :: s.capabilityChecked else s.capabilityChecked := rfl
 
--- SKILL[thm]: "Before retry, `abstained`, or fallback on the same `work_target`, a heca flight’s agent must be confirmed not running; killing the runner does not stop it."
-/-- `carrierExited` denotes agent-not-running evidence for heca, including failed attempts.
-It is an interpreted observation premise, not a daemon authentication proof. -/
+-- SKILL[def]: "Omit placement for caller-live `work_target`; else name its existing heca worktree or fail unavailable."
+def hecaPlacement (callerLiveTarget : Bool) (existingWorktree : Option String) :
+    Option (Option String) :=
+  if callerLiveTarget then some none else existingWorktree.map some
+
+example : hecaPlacement false none = none := rfl
+example (existing : Option String) : hecaPlacement true existing = some none := rfl
+
+-- SKILL[guard]: "Require returned placement not loose, worktree/cwd equal `work_target`; mismatch stops that agent/fails closed."
+structure HecaPlacementEvidence where
+  loose : Bool
+  worktreeTarget : String
+  cwd : String
+  deriving DecidableEq, Repr
+
+def HecaPlacementEvidence.matches (e : HecaPlacementEvidence) (target : String) : Bool :=
+  !e.loose && e.worktreeTarget == target && e.cwd == target
+
+example (wt cwd target : String) : HecaPlacementEvidence.matches ⟨true, wt, cwd⟩ target = false := rfl
+
+theorem heca_cwd_mismatch_refused (e : HecaPlacementEvidence) (target : String)
+    (mismatch : e.cwd ≠ target) : e.matches target = false := by
+  simp [HecaPlacementEvidence.matches, mismatch]
+
+theorem heca_worktree_mismatch_refused (e : HecaPlacementEvidence) (target : String)
+    (mismatch : e.worktreeTarget ≠ target) : e.matches target = false := by
+  simp [HecaPlacementEvidence.matches, mismatch]
+
+-- SKILL[def]: "Pass user/host provider/model unchanged; default provider: heca's `codex` if reported enabled, else caller's heca provider; model: heca default; no Settings/orchestration-preferences reads or `effort`."
+structure HecaSelection where
+  provider : String
+  model : Option String
+  deriving DecidableEq, Repr
+
+def selectHeca (codexReportedEnabled : Bool) (callerProvider : String)
+    (provider model : Option String) : HecaSelection :=
+  ⟨provider.getD (if codexReportedEnabled then "codex" else callerProvider), model⟩
+
+example (enabled : Bool) (caller provider : String) (model : Option String) :
+    selectHeca enabled caller (some provider) model = ⟨provider, model⟩ := rfl
+example (caller : String) : selectHeca true caller none none = ⟨"codex", none⟩ := rfl
+example (caller : String) : selectHeca false caller none none = ⟨caller, none⟩ := rfl
+
+theorem heca_model_passed_unchanged (enabled : Bool) (caller : String)
+    (provider model : Option String) : (selectHeca enabled caller provider model).model = model := rfl
+
+-- SKILL[ref]: "Model reports prove only that invocation, no diversity/quality claim."
+abbrev hecaModelBenefitStatus := diversityBenefitStatus
+
+/-- Facts about the single whole-brief file, interpreted from the caller's dispatch.
+These do not authenticate filesystem access or bind content cryptographically. -/
+structure HecaBriefFile where
+  wholeBrief : Bool
+  callerKept : Bool
+  readableInSeatPlacement : Bool
+  unchangedDuringFlight : Bool
+  apartFromPeerOutputs : Bool
+  deriving DecidableEq, Repr
+
+-- SKILL[guard]: "Single spawn prompt fixes the whole task: inline brief or one caller-kept whole-brief file, readable in seat placement, unchanged during flight, apart from peer outputs; prompt always carries compact final `SshxResultEnvelope` reply contract."
+inductive HecaBrief
+  | inline (wholeBrief : Bool)
+  | file (facts : HecaBriefFile)
+  deriving DecidableEq, Repr
+
+def HecaBrief.valid : HecaBrief → Bool
+  | .inline whole => whole
+  | .file f => f.wholeBrief && f.callerKept && f.readableInSeatPlacement &&
+      f.unchangedDuringFlight && f.apartFromPeerOutputs
+
+example : HecaBrief.valid (.inline true) = true := rfl
+example : HecaBrief.valid (.inline false) = false := rfl
+example : HecaBrief.valid (.file ⟨true, true, true, true, true⟩) = true := rfl
+example (whole kept readable unchanged separate : Bool) :
+    HecaBrief.valid (.file ⟨whole, kept, readable, unchanged, separate⟩) = true ↔
+      whole = true ∧ kept = true ∧ readable = true ∧ unchanged = true ∧ separate = true := by
+  simp [HecaBrief.valid, and_assoc]
+
+-- SKILL[guard]: "`heca_agent_spawn` creates one fresh agent/turn per `heca` attempt: explicit unattended bypass-equivalent `mode`, `notify_on_finish: true`, no extra MCP-server opt-in."
+structure HecaDispatch where
+  freshAgentOneTurn : Bool
+  taskFixedBySingleSpawn : Bool
+  brief : HecaBrief
+  replyContractInPrompt : Bool
+  finalEnvelopeReply : Bool
+  explicitUnattendedMode : Bool
+  notifyOnFinish : Bool
+  extraMcpOptIn : Bool
+  deriving DecidableEq, Repr
+
+def HecaDispatch.valid (d : HecaDispatch) : Bool :=
+  d.freshAgentOneTurn && d.taskFixedBySingleSpawn && d.brief.valid &&
+    d.replyContractInPrompt && d.finalEnvelopeReply &&
+    d.explicitUnattendedMode && d.notifyOnFinish && !d.extraMcpOptIn
+
+theorem heca_missing_prompt_reply_contract_refused (d : HecaDispatch)
+    (missing : d.replyContractInPrompt = false) : d.valid = false := by
+  simp [HecaDispatch.valid, missing]
+
+theorem heca_task_not_fixed_by_spawn_refused (d : HecaDispatch)
+    (notFixed : d.taskFixedBySingleSpawn = false) : d.valid = false := by
+  simp [HecaDispatch.valid, notFixed]
+
+example : HecaDispatch.valid ⟨true, true, .inline true, true, true, true, true, false⟩ = true := rfl
+example : HecaDispatch.valid
+    ⟨true, true, .file ⟨true, true, true, true, true⟩, true, true, true, true, false⟩ = true := rfl
+
+-- SKILL[guard]: "Retry uses a new agent, never follow-up."
+def hecaRetryAllowed (freshAgent : Bool) : Bool := freshAgent
+
+-- SKILL[ref]: "`heca` and `isolated-token-subagent` use no runner/receipt/minted ID/attempt path;"
+-- SKILL[ref]: "`flight_id` is heca's returned agent identity."
+abbrev hecaFlightIdentity := String
+
+/-- A ghost protocol id is not a minted public flight identity. -/
+theorem heca_runner_launch_refused (s : Behavior.ProtocolState) (id : Nat) (f : Behavior.FlightRec)
+    (hf : s.flight id = some f) (hc : f.carrier = .heca) :
+    ¬ Behavior.allowed s (.launchViaRunner id) := by
+  intro h
+  obtain ⟨g, hg, _, hr⟩ := h
+  rw [hf] at hg
+  cases hg
+  simp [hc] at hr
+
+inductive HecaOperation
+  | dispatchCollect
+  | stopOwnAgent
+  | other
+  deriving DecidableEq, Repr
+
+-- SKILL[def]: "Stop only own agent; all other heca lifecycle/orchestration is forbidden."
+-- SKILL[ref]: "No new/Loose placement; never retry failed spawn without placement; briefs allow only caller dispatch."
+def hecaOperationAllowed (sameSpawnedAgent : Bool) : HecaOperation → Bool
+  | .dispatchCollect => true
+  | .stopOwnAgent => sameSpawnedAgent
+  | .other => false
+
+theorem heca_cannot_stop_other_agent : hecaOperationAllowed false .stopOwnAgent = false := rfl
+example (same : Bool) : hecaOperationAllowed same .other = false := rfl
+
+-- SKILL[thm]: "Before retry, `abstained` or fallback on the same `work_target`, confirm the heca flight’s agent is not running."
+/-- `carrierExited` denotes agent-not-running evidence, including failed attempts.
+It is an interpreted observation premise, not a tool/status authentication proof. -/
 theorem heca_collection_requires_stop (s : Behavior.ProtocolState) (id : Nat)
     (o : Observation) (f : Behavior.FlightRec) (hf : s.flight id = some f)
     (hc : f.carrier = .heca) (h : Behavior.guardCollect s id o) :
@@ -590,7 +776,7 @@ theorem heca_collection_requires_stop (s : Behavior.ProtocolState) (id : Nat)
   cases hg
   exact stopped hc
 
--- SKILL[thm]: "Otherwise the flight stays protected and reports the unresolved outcome."
+-- SKILL[thm]: "Else keep the flight protected/report the unresolved outcome."
 theorem heca_live_cannot_collect (s : Behavior.ProtocolState) (id : Nat)
     (o : Observation) (f : Behavior.FlightRec) (hf : s.flight id = some f)
     (hc : f.carrier = .heca) (running : o.carrierExited = false) :
@@ -599,31 +785,133 @@ theorem heca_live_cannot_collect (s : Behavior.ProtocolState) (id : Nat)
   have stopped := heca_collection_requires_stop s id o f hf hc admitted
   simp [running] at stopped
 
-inductive HecaOperation
-  | transport
-  | stopOwnAgent
-  | daemonLifecycle
-  | archiveDelete
-  | mcpOptIn
-  | genericForward
-  | orchestration
+/-- Successful result collection still needs the matching finish notice, even after stop. -/
+theorem heca_success_requires_notice (s : Behavior.ProtocolState) (id : Nat)
+    (o : Observation) (f : Behavior.FlightRec) (hf : s.flight id = some f)
+    (h : Behavior.allowed s (.collect id o)) : f.notified = true := by
+  obtain ⟨g, hg, notice, _, _⟩ := h
+  rw [hf] at hg
+  cases hg
+  exact notice
+
+/-- The failure action consumes the real stop projection rather than a disconnected flag. -/
+theorem heca_failure_requires_confirmed_stop (s : Behavior.ProtocolState) (id : Nat)
+    (e : Behavior.HecaStopEvidence)
+    (h : Behavior.allowed s (.recordStoppedHecaFailure id e)) :
+    e.sameAgent = true ∧ e.archivedByTool = true ∧ e.statusNotRunning = true := by
+  obtain ⟨_, _, _, _, _, confirmed⟩ := h
+  simpa [Behavior.HecaStopEvidence.confirmed, and_assoc] using confirmed
+
+theorem heca_running_stop_refused (s : Behavior.ProtocolState) (id : Nat)
+    (e : Behavior.HecaStopEvidence) (running : e.statusNotRunning = false) :
+    ¬ Behavior.allowed s (.recordStoppedHecaFailure id e) := by
+  intro h
+  have stopped := (heca_failure_requires_confirmed_stop s id e h).2.2
+  simp [running] at stopped
+
+theorem heca_other_agent_stop_refused (s : Behavior.ProtocolState) (id : Nat)
+    (e : Behavior.HecaStopEvidence) (other : e.sameAgent = false) :
+    ¬ Behavior.allowed s (.recordStoppedHecaFailure id e) := by
+  intro h
+  have own := (heca_failure_requires_confirmed_stop s id e h).1
+  simp [other] at own
+
+/-- Stop never creates result/completion references or changes the fixed retry budget. -/
+theorem heca_stopped_failure_has_empty_refs (f : Behavior.FlightRec) :
+    (Behavior.collectEffect Behavior.stoppedHecaFailure f).envelopeRef = none ∧
+    (Behavior.collectEffect Behavior.stoppedHecaFailure f).sentinelRef = none ∧
+    (Behavior.collectEffect Behavior.stoppedHecaFailure f).retryBudget = f.retryBudget := by
+  by_cases capacity : f.attempt < f.retryBudget <;>
+    simp [Behavior.collectEffect, Behavior.stoppedHecaFailure, done, capacity]
+
+theorem heca_stopped_failure_retries_bounded (f : Behavior.FlightRec)
+    (capacity : f.attempt < f.retryBudget) :
+    (Behavior.collectEffect Behavior.stoppedHecaFailure f).status = .retrying ∧
+    (Behavior.collectEffect Behavior.stoppedHecaFailure f).attempt = f.attempt + 1 ∧
+    (Behavior.collectEffect Behavior.stoppedHecaFailure f).launched = false ∧
+    (Behavior.collectEffect Behavior.stoppedHecaFailure f).notified = false := by
+  simp [Behavior.collectEffect, Behavior.stoppedHecaFailure, done, capacity]
+
+theorem heca_stopped_failure_exhausts (f : Behavior.FlightRec)
+    (exhausted : ¬ f.attempt < f.retryBudget) :
+    (Behavior.collectEffect Behavior.stoppedHecaFailure f).status = .abstained ∧
+    (Behavior.collectEffect Behavior.stoppedHecaFailure f).attempt = f.attempt := by
+  simp [Behavior.collectEffect, Behavior.stoppedHecaFailure, done, exhausted]
+
+-- SKILL[def]: "Host job limits/teardown do not reach heca-owned agents."
+def hostJobStopsHeca : Bool := false
+
+-- SKILL[guard]: "Caller must end/yield its turn after dispatch/meanwhile work, keeping flights in-flight/targets protected; blocking wait/sleep/poll loops cannot substitute."
+/-- `laterTurn` interprets an actual caller turn boundary, not elapsed time in a wait.
+Flight status and target protection remain owned by Behavior.guardMutateTarget. -/
+inductive HecaCollectionContext
+  | laterTurn
+  | dispatchTurn
+  | blockingWait
+  | sleep
+  | pollLoop
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Only that agent may be stopped; every other heca lifecycle or orchestration operation is forbidden."
-def hecaOperationAllowed (sameSpawnedAgent : Bool) : HecaOperation → Bool
-  | .transport => true
-  | .stopOwnAgent => sameSpawnedAgent
-  | _ => false
+-- SKILL[guard]: "Finish notice permits one newest-two `heca_agent_activity` read for heca's recorded turn-end transition/final reply, never completion."
+-- SKILL[guard]: "Missing either fails collection; no paging, widening or running-seat status/activity polling."
+structure HecaActivityWindow where
+  collectionContext : HecaCollectionContext
+  matchingFinishNotified : Bool
+  newestTwoWindow : Bool
+  turnEndRef : Option String
+  finalReply : Option (Envelope String)
+  otherActivity : List String
+  deriving DecidableEq, Repr
 
-theorem heca_cannot_stop_other_agent : hecaOperationAllowed false .stopOwnAgent = false := rfl
+-- SKILL[def]: "Only final reply is envelope (JSON fencing is presentation); heca's recorded turn-end is terminal observation/`completion_sentinel_ref`; exclude other activity from caller context."
+-- SKILL[def]: "`log_ref` is an opaque heca-agent reference."
+structure HecaCollected where
+  envelope : Envelope String
+  terminalRef : String
+  deriving DecidableEq, Repr
 
--- SKILL[ref]: "Provider and unattended permission mode are explicit host inputs, never Settings or orchestration preferences."
-abbrev hecaBinding := HecaCapability
+-- SKILL[guard]: "Collect on a later caller turn after the matching finish notice."
+def collectHecaWindow (w : HecaActivityWindow) : Option HecaCollected := do
+  if w.collectionContext != .laterTurn || !w.matchingFinishNotified || !w.newestTwoWindow then none
+  else
+    let terminal ← w.turnEndRef
+    let reply ← w.finalReply
+    if terminal == "" then none else some ⟨reply, terminal⟩
 
--- SKILL[def]: "The worker alone atomically publishes its envelope and sentinel; event text never supplies a conclusion."
-def hecaArtifactOwner : ArtifactKind := .workerArtifact
+example (context : HecaCollectionContext) (notice newest : Bool)
+    (reply : Option (Envelope String)) (other : List String) :
+    collectHecaWindow ⟨context, notice, newest, none, reply, other⟩ = none := by
+  cases context <;> cases notice <;> cases newest <;> rfl
+
+example (context : HecaCollectionContext) (notice newest : Bool)
+    (terminal : Option String) (other : List String) :
+    collectHecaWindow ⟨context, notice, newest, terminal, none, other⟩ = none := by
+  cases context <;> cases notice <;> cases newest <;> cases terminal <;> rfl
+
+example (context : HecaCollectionContext) (notice : Bool) (terminal : Option String)
+    (reply : Option (Envelope String)) (other : List String) :
+    collectHecaWindow ⟨context, notice, false, terminal, reply, other⟩ = none := by
+  cases context <;> cases notice <;> rfl
+
+theorem heca_no_notice_no_collection (w : HecaActivityWindow)
+    (missing : w.matchingFinishNotified = false) : collectHecaWindow w = none := by
+  simp [collectHecaWindow, missing]
+
+theorem heca_no_turn_boundary_no_collection (w : HecaActivityWindow)
+    (sameTurn : w.collectionContext ≠ .laterTurn) : collectHecaWindow w = none := by
+  simp [collectHecaWindow, sameTurn]
+
+/-- A valid later-turn window retains only the terminal reply and transition reference. -/
+example (reply : Envelope String) (other : List String) :
+    collectHecaWindow ⟨.laterTurn, true, true, some "turn-end", some reply, other⟩ =
+      some ⟨reply, "turn-end"⟩ := rfl
+
+/-- Process detail cannot affect the projection, and a notice cannot provide missing facts. -/
+theorem heca_collection_ignores_other_activity (w : HecaActivityWindow) (other : List String) :
+    collectHecaWindow { w with otherActivity := other } = collectHecaWindow w := rfl
 
 /-! ## The oracle carrier -/
+
 
 /-- One oracle attempt as the caller must set it up. -/
 structure OracleAttempt where

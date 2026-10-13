@@ -14,22 +14,21 @@ open Sshx
 
 /-! ## Boundaries -/
 
--- SKILL[def]: "The closed set of exactly seven named mechanical script exceptions is governed only by `skills/sshx/CODEX_WORKER_SPEC.md`, `skills/sshx/HECA_WORKER_SPEC.md`, `skills/sshx/ORACLE_WORKER_SPEC.md`, and their behavior tests:"
+-- SKILL[def]: "The closed set of exactly six named mechanical script exceptions is governed only by `skills/sshx/CODEX_WORKER_SPEC.md`, `skills/sshx/ORACLE_WORKER_SPEC.md`, and their behavior tests:"
 -- SKILL[def]: "- `skills/sshx/scripts/run-codex-worker.sh`;"
 -- SKILL[def]: "- `skills/sshx/scripts/run-oracle-worker.py`;"
--- SKILL[def]: "- `skills/sshx/scripts/run-heca-worker.py`;"
 -- SKILL[def]: "- `skills/sshx/scripts/run-codex-worker-batch.sh`;"
 -- SKILL[def]: "- `skills/sshx/scripts/read-codex-worker-status.sh`;"
 -- SKILL[def]: "- `skills/sshx/scripts/clean-codex-worker-runs.sh`;"
 -- SKILL[def]: "- `skills/sshx/scripts/prune-inactive-codex-worker-runs.sh`."
 def mechanicalScripts : List String :=
-  ["skills/sshx/scripts/run-codex-worker.sh", "skills/sshx/scripts/run-oracle-worker.py", "skills/sshx/scripts/run-heca-worker.py",
+  ["skills/sshx/scripts/run-codex-worker.sh", "skills/sshx/scripts/run-oracle-worker.py",
     "skills/sshx/scripts/run-codex-worker-batch.sh",
     "skills/sshx/scripts/read-codex-worker-status.sh",
     "skills/sshx/scripts/clean-codex-worker-runs.sh",
     "skills/sshx/scripts/prune-inactive-codex-worker-runs.sh"]
 
-theorem exactly_seven_scripts : mechanicalScripts.length = 7 := rfl
+theorem exactly_six_scripts : mechanicalScripts.length = 6 := rfl
 
 /-- Runtime surfaces none of the contract's named objects are. -/
 inductive RuntimeSurface
@@ -61,7 +60,7 @@ inductive ForbiddenDependency
 
 -- SKILL[def]: "It must not add or depend on:"
 -- SKILL[def]: "- any other helper script;"
--- SKILL[def]: "- skill-owned daemons (only the heca carrier may use an already-running host daemon as transport);"
+-- SKILL[def]: "- skill-owned daemons;"
 -- SKILL[def]: "- repository-owned CLI;"
 -- SKILL[def]: "- GitHub lifecycle operations;"
 -- SKILL[def]: "- git lifecycle operations;"
@@ -79,13 +78,6 @@ abbrev allowedCarriers := Carrier.univ
 
 -- SKILL[def]: "Use them only as worker delegation capability, not as controller authority."
 def carrierHasControllerAuthority (_ : Carrier) : Bool := false
-
-/-- Host daemon transport is the only daemon dependency exception. -/
-def hostDaemonTransportAllowed (carrier : Carrier) : Bool := carrier == .heca
-
-theorem host_daemon_only_for_heca (carrier : Carrier) :
-    hostDaemonTransportAllowed carrier = true ↔ carrier = .heca := by
-  cases carrier <;> decide
 
 /-! ## Baseline failure modes -/
 

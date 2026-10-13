@@ -37,7 +37,6 @@ NyxID oracle 可作为 codex / Claude 之外的独立推理通道，只走 oracl
 └── skills/
     └── sshx/             # 发布的共识 skill
         ├── CODEX_WORKER_SPEC.md
-        ├── HECA_WORKER_SPEC.md
         ├── ORACLE_WORKER_SPEC.md
         ├── SKILL.md
         ├── formal/       # Lean 模型

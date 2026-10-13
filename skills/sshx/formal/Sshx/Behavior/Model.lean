@@ -209,13 +209,24 @@ def ProtocolState.initial : ProtocolState :=
     terminationExit := none, terminationAuthority := none,
     claimed := false, mutationLog := [] }
 
+-- SKILL[guard]: "Stop via `heca_agent_archive`, confirm via `heca_agent_status`; finished idle agents are host housekeeping."
+/-- Interpreted evidence for this flight's own stopped agent, not status authentication. -/
+structure HecaStopEvidence where
+  sameAgent : Bool
+  archivedByTool : Bool
+  statusNotRunning : Bool
+  deriving DecidableEq, Repr
+
+def HecaStopEvidence.confirmed (e : HecaStopEvidence) : Bool :=
+  e.sameAgent && e.archivedByTool && e.statusNotRunning
+
 /-- Every caller-side act the contract speaks about. `hostNotified` is an environment event. -/
 inductive Action
   | inspectReadOnly
   | writeGoal (g : GoalArtifact) (e : IntakeEvidence)
   | appendRevision (r : Revision) (e : RevisionEvidence)
   | capabilityCheck (c : Carrier)
-  | recordHecaCheck (detected : Bool)
+  | recordHecaCheck (callerToolsExposed : Bool)
   | resolveMode (m : WorkerMode)
   | openFlight (stage : FlightStage) (role : Role) (carrier : Carrier) (target : String) (retryBudget : Nat)
   | launchViaRunner (flight : Nat)
@@ -224,6 +235,7 @@ inductive Action
   | pollArtifacts (flight : Nat)
   | hostNotified (flight : Nat)
   | collect (flight : Nat) (o : Observation)
+  | recordStoppedHecaFailure (flight : Nat) (e : HecaStopEvidence)
   | fallbackFlight (flight : Nat) (carrier : Carrier)
   | mutateTarget (target : String)
   | carry (item : ContextItem)
@@ -341,7 +353,7 @@ def guardWriteGoal (s : ProtocolState) (g : GoalArtifact) (e : IntakeEvidence) :
 def guardAppendRevision (s : ProtocolState) (r : Revision) (e : RevisionEvidence) : Prop :=
   s.goalWritten ∧ e.valid r
 
--- SKILL[guard]: "Its capability check is non-mutating: everywhere in this contract, non-mutating means it changes no file, Git state, GitHub state, label, release, host configuration, lifecycle state, or other external resource."
+-- SKILL[guard]: "Non-mutating means no changes to files, Git/GitHub state, labels, releases, host configuration, lifecycle or external resources."
 def guardCapabilityCheck (s : ProtocolState) : Prop :=
   s.goalWritten ∧ s.stage = .chooseWorkerMode
 
@@ -362,30 +374,27 @@ def guardOpenFlight (s : ProtocolState) (stage : FlightStage) (role : Role) (car
     | .review => guardReviewFlight s role carrier
     | _ => s.stage = stage.protocolStage
 
-/-- The closed-set runner each out-of-process carrier is launched through; the in-context
-subagent has none. -/
+/-- Only Codex and oracle have closed-set runners; heca MCP and subagent dispatch do not. -/
 @[simp] def runnerFor : Carrier → Option String
   | .codexCli => some "skills/sshx/scripts/run-codex-worker.sh"
-  | .heca => some "skills/sshx/scripts/run-heca-worker.py"
   | .nyxidOracle => some "skills/sshx/scripts/run-oracle-worker.py"
-  | .isolatedTokenSubagent => none
+  | .heca | .isolatedTokenSubagent => none
 
--- SKILL[guard]: "Use `skills/sshx/scripts/run-codex-worker.sh` for every `codex-cli` launch, `skills/sshx/scripts/run-heca-worker.py` for every `heca` launch, and `skills/sshx/scripts/run-oracle-worker.py` for every `nyxid-oracle` launch."
+-- SKILL[guard]: "Use `skills/sshx/scripts/run-codex-worker.sh` for every `codex-cli` launch and `skills/sshx/scripts/run-oracle-worker.py` for every `nyxid-oracle` launch."
 def guardLaunchViaRunner (s : ProtocolState) (id : Nat) : Prop :=
   ∃ f, s.flight id = some f ∧ f.launched = false ∧ (runnerFor f.carrier).isSome = true
 
-/-- Direct subagent invocation, the only launch outside a runner. This models host dispatch
-only; carrier-specific isolation remains at its existing contract owner. -/
+/-- Host tool invocation for heca MCP or isolated subagent; no runner identity or paths.
+Carrier-specific isolation and heca evidence remain interpreted contract premises. -/
 def guardLaunchDelegated (s : ProtocolState) (id : Nat) : Prop :=
   ∃ f, s.flight id = some f ∧ f.launched = false ∧ runnerFor f.carrier = none
 
--- SKILL[guard]: "Shell `&` must not background the runner: it detaches host tracking and may leave an init-adopted carrier running without completion notification."
+-- SKILL[guard]: "caller shell `&` is forbidden: detachment risks untracked init-adopted workers without notice."
 def guardNoShellBackground : Prop := False
 
--- SKILL[guard]: "The caller must not poll worker artifact paths while a runner is active."
 def guardNoPolling : Prop := False
 
--- SKILL[guard]: "The caller must launch each runner through a host-provided background job mechanism that notifies the caller when the carrier process exits."
+-- SKILL[guard]: "Launch runners via host background jobs notifying on carrier exit;"
 def guardHostNotified (s : ProtocolState) (id : Nat) : Prop :=
   ∃ f, s.flight id = some f ∧ f.launched = true
 
@@ -393,6 +402,12 @@ def guardHostNotified (s : ProtocolState) (id : Nat) : Prop :=
 def guardCollect (s : ProtocolState) (id : Nat) (observation : Observation) : Prop :=
   ∃ f, s.flight id = some f ∧ f.notified = true ∧ f.active = true ∧
     (f.carrier = .heca → observation.carrierExited = true)
+
+/-- Failure recording after own-agent archive/status confirmation needs no finish notice.
+This admits no result collection and adds no completion predicate. -/
+def guardStoppedHecaFailure (s : ProtocolState) (id : Nat) (e : HecaStopEvidence) : Prop :=
+  ∃ f, s.flight id = some f ∧ f.carrier = .heca ∧ f.active = true ∧
+    f.launched = true ∧ e.confirmed = true
 
 /-- Tried carriers come from all attempts of this assignment, including replacements. -/
 def ProtocolState.triedCarriers (s : ProtocolState) (assignment : Nat) : CarrierSet :=
@@ -414,7 +429,7 @@ def guardFallback (s : ProtocolState) (id : Nat) (carrier : Carrier) : Prop :=
       (fun g => g.status == .abstained) = true ∧
     nextCarrier (s.eligibleCarriers f) (s.triedCarriers f.assignment) = some carrier
 
--- SKILL[guard]: "While any `SshxWorkerFlightRecord` for the same `work_target` is `in-flight` or `retrying`, the caller is read-only for that target."
+-- SKILL[guard]: "Active (`in-flight`/`retrying`) flights make caller read-only for `work_target`/external resources; quiet process/log/workspace snapshots never permit takeover."
 def guardMutateTarget (s : ProtocolState) (target : String) : Prop :=
   s.activeOn target = false
 
@@ -486,6 +501,7 @@ def allowed (s : ProtocolState) : Action → Prop
   | .pollArtifacts _ => guardNoPolling
   | .hostNotified id => guardHostNotified s id
   | .collect id o => guardCollect s id o
+  | .recordStoppedHecaFailure id e => guardStoppedHecaFailure s id e
   | .fallbackFlight id carrier => guardFallback s id carrier
   | .mutateTarget target => guardMutateTarget s target
   | .carry item => guardCarry item
@@ -518,6 +534,9 @@ def collectEffect (o : Observation) (f : FlightRec) : FlightRec :=
              envelopeRef := none, sentinelRef := none }
   else
     { f with status := .abstained, envelopeRef := none, sentinelRef := none }
+
+/-- A stopped attempt without a terminal result supplies none of the result facts. -/
+def stoppedHecaFailure : Observation := ⟨true, false, false, false, false⟩
 
 /-- A freshly opened flight record. -/
 def newFlight (id : Nat) (stage : FlightStage) (role : Role) (carrier : Carrier)
@@ -569,6 +588,7 @@ def step (s : ProtocolState) : Action → ProtocolState
   | .pollArtifacts _ => s
   | .hostNotified id => updateFlight s id fun f => { f with notified := true }
   | .collect id o => updateFlight s id (collectEffect o)
+  | .recordStoppedHecaFailure id _ => updateFlight s id (collectEffect stoppedHecaFailure)
   | .fallbackFlight id carrier =>
     match s.flight id with
     | none => s

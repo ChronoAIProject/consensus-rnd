@@ -10,7 +10,7 @@ Use it when product, architecture, correctness, safety, or cost risks justify se
 
 | skill | What it is for | Runtime shape |
 |---|---|---|
-| `sshx` | Worker-delegated inline consensus for a decision, plan, or finished change. | Prompt contract with worker runners; no skill-owned daemon, GitHub, git, label, release, or lifecycle orchestration authority; optional transport through an existing host heca daemon. |
+| `sshx` | Worker-delegated inline consensus for a decision, plan, or finished change. | Prompt contract with worker runners; no skill-owned daemon, GitHub, git, label, release, or lifecycle orchestration authority; optional heca MCP delegation inside heca. |
 
 ## Core
 
@@ -60,10 +60,11 @@ A [termination gate](./skills/sshx/SKILL.md#termination-gate) applies inside the
 ## Risks and Limits
 
 - **Broad execution access:** the Codex runner defaults to `danger-full-access`. Read the [invocation contract](./skills/sshx/CODEX_WORKER_SPEC.md#invocation) and [threat model](./skills/sshx/CODEX_WORKER_SPEC.md#threat-model) before supplying a work target.
-- **Cost and duration:** a full initial run dispatches at least 10 model calls: six thinking seats, one implementation worker, and three reviewers. Repair, focused, repeated review, and applicable termination passes add work. There is **no `pass_budget` cap by default**; see the [protocol](./skills/sshx/SKILL.md#inlineconsensusprotocol), [panel](./skills/sshx/SKILL.md#thinking-panel), [review](./skills/sshx/SKILL.md#review-triplet), and [pass accounting](./skills/sshx/SKILL.md#fix-or-done).
+- **Heca execution:** seats run unattended with full permissions; heca owns their agents, so host job time limits and teardown do not reach them. Finished agents remain host housekeeping, and support is limited to recorded evidence. See [worker delegation](./skills/sshx/SKILL.md#worker-delegation).
+- **Cost and duration:** a full initial run dispatches at least 10 worker turns, each potentially making multiple model calls: six thinking seats, one implementation worker, and three reviewers. Repair, focused, repeated review, and applicable termination passes add work. There is **no `pass_budget` cap by default**; see the [protocol](./skills/sshx/SKILL.md#inlineconsensusprotocol), [panel](./skills/sshx/SKILL.md#thinking-panel), [review](./skills/sshx/SKILL.md#review-triplet), and [pass accounting](./skills/sshx/SKILL.md#fix-or-done).
 - **External content transfer:** the oracle seat sends the inlined brief through NyxID to an external ChatGPT Pro account. Consider what the brief contains before dispatch; see [worker delegation](./skills/sshx/SKILL.md#worker-delegation) and the oracle [request contract](./skills/sshx/ORACLE_WORKER_SPEC.md#request).
-- **Artifact retention:** briefs, logs, and results accumulate under `${SSHX_HOME:-$HOME/.sshx}/<flight-id>/attempt-<n>` until cleaned or pruned. See the [run directory](./skills/sshx/CODEX_WORKER_SPEC.md#run-directory) and [inactive-flight sweep](./skills/sshx/CODEX_WORKER_SPEC.md#inactive-flight-sweep); a short retention window can remove a still-running silent flight.
-- **Host responsibility:** time limits and teardown of the whole job tree belong to the host harness. Teardown behavior for Codex, Cursor, and Gemini hosts is unverified in the [teardown specification](./skills/sshx/CODEX_WORKER_SPEC.md#teardown-prerequisite); also see [delegation](./skills/sshx/SKILL.md#worker-delegation).
+- **Artifact retention:** runner briefs, logs, and results accumulate under `${SSHX_HOME:-$HOME/.sshx}/<flight-id>/attempt-<n>` until cleaned or pruned. See the [run directory](./skills/sshx/CODEX_WORKER_SPEC.md#run-directory) and [inactive-flight sweep](./skills/sshx/CODEX_WORKER_SPEC.md#inactive-flight-sweep); a short retention window can remove a still-running silent flight.
+- **Host responsibility:** runner time limits and teardown of the whole job tree belong to the host harness. Teardown behavior for Codex, Cursor, and Gemini hosts is unverified in the [teardown specification](./skills/sshx/CODEX_WORKER_SPEC.md#teardown-prerequisite); also see [delegation](./skills/sshx/SKILL.md#worker-delegation).
 - **Changing contract:** this is a prerelease, as indicated by the [package metadata](./package.json). The contract may change; check the [skill](./skills/sshx/SKILL.md) and [contribution guidance](./CONTRIBUTING.md) when updating.
 - **Untrusted output:** consensus remains AI output requiring independent verification ([repository invariant FI-001](./CLAUDE.md#共识研发不动点)). Context isolation does not prove independent priors or better results ([delegation limits](./skills/sshx/SKILL.md#worker-delegation)). The [Lean model](./skills/sshx/formal/README.md#what-the-model-cannot-verify) checks formal objects, not the truth of evidence or compliance of real runs; correspondence with the prose remains a human judgment.
 
@@ -75,19 +76,19 @@ The host must provide background execution with completion notification, time li
 
 | Carrier | Prerequisites and role |
 |---|---|
-| `codex-cli` | Bash, `jq`, and an executable, usable Codex CLI; a writable run root and supplied work target. All launches use the [Codex runner](./skills/sshx/CODEX_WORKER_SPEC.md#carrier). |
-| `heca` | Python 3, Bash and `jq` for path projection, and a Heca CLI connected to an already-running daemon; an existing heca-owned placement matching the work target and an explicit verified unattended binding. See [Using Heca Workers](#using-heca-workers) and the [Heca runner](./skills/sshx/HECA_WORKER_SPEC.md#scope-and-invocation). |
+| `codex-cli` | Bash, `jq`, and an executable, usable Codex CLI; a writable run root and supplied work target. Initial seats outside heca and fallback seats inside heca use the [Codex runner](./skills/sshx/CODEX_WORKER_SPEC.md#carrier). |
+| `heca` | Run sshx inside heca with heca's MCP agent tools exposed to the session and an existing placement matching the work target. Takes all initial Codex seats when detected, including implementation and repair. See [Using Heca Workers](#using-heca-workers) and [worker delegation](./skills/sshx/SKILL.md#worker-delegation). |
 | `nyxid-oracle` | Python 3, Bash and `jq` for path projection, and a usable NyxID CLI with an active broker pool containing an online worker. The [oracle runner](./skills/sshx/ORACLE_WORKER_SPEC.md#invocation) owns dispatch; see [pool selection](./skills/sshx/ORACLE_WORKER_SPEC.md#pool-choice) and [login diagnostics](./skills/sshx/ORACLE_WORKER_SPEC.md#broker-diagnostics). |
 | `isolated-token-subagent` | A host subagent facility with isolated token context; same-round peers cannot read one another's outputs before returning their verdicts. |
 | `abstain` | Stop honestly when no carrier is available or a required flight exhausts retries and fallback; this is an outcome, not an execution carrier. |
 
-Every multi-seat stage initially assigns one seat to the isolated subagent, one to the oracle, and the rest to Codex CLI, with one Codex seat given to heca when detected, subject to seat constraints and fallback. The tests reviewer needs a carrier that can execute verification in the work target. Carrier assignment and isolation do not by themselves establish model diversity; see the [owning policy](./skills/sshx/SKILL.md#worker-delegation).
+Every multi-seat stage initially assigns one seat to the isolated subagent, one to the oracle, and the rest to heca when detected, otherwise Codex CLI, subject to seat constraints and fallback. The tests reviewer needs a carrier that can execute verification in the work target. Carrier assignment and isolation do not by themselves establish model diversity; see the [owning policy](./skills/sshx/SKILL.md#worker-delegation).
 
 #### Using Heca Workers
 
-`sshx` supports `heca` alongside `codex-cli` and `nyxid-oracle` as a worker carrier. When its non-mutating capability check detects heca, each multi-seat stage gives it one seat from the Codex remainder. When heca is absent, existing carrier composition and fallback stay unchanged; single-worker stages still start with Codex and reach heca only through fallback.
+`sshx` supports `heca` alongside `codex-cli` and `nyxid-oracle` as a worker carrier. When its non-mutating capability check detects heca, it takes every seat otherwise assigned to Codex CLI: the remainder of each multi-seat stage and every single-worker stage, including implementation and repair. When heca is absent, existing carrier composition stays unchanged. The fallback priority stays unchanged, so Codex CLI remains reachable inside heca.
 
-Run `sshx` normally in an existing heca-owned placement, such as the main checkout opened in heca or a worktree heca created. The heca CLI must reach an already-running daemon, and the host must explicitly supply a verified unattended binding: `claude` / `bypassPermissions` or `codex` / `full-access`. A target without a matching existing placement cannot use this carrier. Its mechanics and recorded verification limits live in [`HECA_WORKER_SPEC.md`](./skills/sshx/HECA_WORKER_SPEC.md).
+The heca option is offered only when sshx runs inside heca and the caller's session exposes heca's MCP agent tools. Seats use those tools directly. You or the host may select a provider and model per seat; by default, seats use heca's `codex` provider when reported enabled, otherwise the caller's own heca provider, with heca's default model. The work target must have a matching existing heca placement. [Worker delegation](./skills/sshx/SKILL.md#worker-delegation) owns the contract and its evidence limits.
 
 ### Claude Code
 
@@ -117,7 +118,7 @@ The [extension manifest](./gemini-extension.json) selects `GEMINI.md` as its con
 | Repository rules and structure | [CLAUDE.md](./CLAUDE.md), also exposed through the tracked `AGENTS.md` symlink. |
 | Protocol and behavioral contract | [SKILL.md](./skills/sshx/SKILL.md). |
 | Codex execution and artifact maintenance | [CODEX_WORKER_SPEC.md](./skills/sshx/CODEX_WORKER_SPEC.md) and [scripts](./skills/sshx/scripts/). |
-| Heca worker transport | [HECA_WORKER_SPEC.md](./skills/sshx/HECA_WORKER_SPEC.md). |
+| Heca MCP delegation | [SKILL.md](./skills/sshx/SKILL.md#worker-delegation). |
 | NyxID broker dispatch | [ORACLE_WORKER_SPEC.md](./skills/sshx/ORACLE_WORKER_SPEC.md). |
 | Formal evidence and its limits | [Formal model README](./skills/sshx/formal/README.md). |
 | Platform entrypoints | [Claude marketplace](./.claude-plugin/marketplace.json), [Claude plugin](./.claude-plugin/plugin.json), [Codex](./.codex-plugin/plugin.json), [Cursor](./.cursor-plugin/plugin.json), and [Gemini](./gemini-extension.json). |
