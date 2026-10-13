@@ -20,8 +20,7 @@ open Sshx
 
 /-! ## Identity -/
 
--- SKILL[def]: "`sshx` is a lightweight worker-delegated inline consensus skill."
--- SKILL[def]: "It applies the consensus engine philosophy to a single decision or implementation task by dispatching isolated worker perspectives without depending on any long-running runtime or lifecycle surface."
+-- SKILL[def]: "`sshx` applies the consensus engine philosophy to one task through isolated workers, without skill-owned runtime or lifecycle authority."
 structure SkillShape where
   lightweight : Bool
   workerDelegated : Bool
@@ -132,7 +131,7 @@ inductive CallerDuty
   | produceFinalReportFromConclusions
   deriving DecidableEq, Repr
 
--- SKILL[def]: "The caller context may intake the task, choose worker mode, dispatch workers, run the meta-judge over returned `SshxResultEnvelope.conclusion` values, aggregate conclusions, and produce the final report from conclusions only while preserving `log_ref` references."
+-- SKILL[def]: "The caller context may intake, choose worker mode, dispatch workers, meta-judge returned `SshxResultEnvelope.conclusion` values, and aggregate and report conclusions only, retaining `log_ref` references."
 def callerMay (_ : CallerDuty) : Bool := true
 
 -- SKILL[ref]: "Each `visible_inputs` value must include the complete `GoalArtifact` (including `harness`) and must not include same-round peer outputs."
@@ -356,25 +355,26 @@ abbrev rosterLedger := @ledgerValid
 -- SKILL[ref]: "One event that uses out-of-prefix evidence invalidates that roster, not an unrelated earlier roster; later appends cannot change a frozen prefix or recompute an earlier settlement."
 abbrev frozenPrefix := @ledger_prefix_stable
 
--- SKILL[def]: "Prior sterility is weaker and none of the allowed carriers provides it: `codex-cli` inherits repository `CLAUDE.md` or `AGENTS.md` context, `nyxid-oracle` may inherit unknown and uncontrollable account memory and project context, and `isolated-token-subagent` inherits `CLAUDE.md` and the caller's `MEMORY.md`."
+-- SKILL[def]: "Prior sterility is weaker and none of the allowed carriers provides it: `codex-cli` inherits repository `CLAUDE.md` or `AGENTS.md` context, `heca` inherits those rules and unknown/uncontrollable provider user memory, `nyxid-oracle` may inherit unknown and uncontrollable account memory and project context, and `isolated-token-subagent` inherits `CLAUDE.md` and the caller's `MEMORY.md`."
 def inheritedPrior : Carrier → List String
   | .codexCli => ["CLAUDE.md", "AGENTS.md"]
+  | .heca => ["CLAUDE.md", "AGENTS.md", "unknown/uncontrollable provider user memory"]
   | .nyxidOracle => ["account memory", "project context"]
   | .isolatedTokenSubagent => ["CLAUDE.md", "MEMORY.md"]
 
--- SKILL[thm]: "All three still count as independent seats, but none may be described as context-sterile or cited as evidence that their priors are independent."
+-- SKILL[thm]: "All carriers count as independent seats; none may be described as context-sterile or cited as evidence of independent priors."
 def contextSterile (_ : Carrier) : Bool := false
 
 theorem no_carrier_is_sterile (c : Carrier) : contextSterile c = false := rfl
 
 -- SKILL[def]: "The oracle seat is permanently sterile-context-unverified."
 def sterilityVerifiable : Carrier → Bool
-  | .nyxidOracle => false
+  | .nyxidOracle | .heca => false
   | .codexCli | .isolatedTokenSubagent => true
 
--- SKILL[def]: "Each seat must disclose these inherited context sources in its existing `visible_inputs` value and state whether each source is unknown or uncontrollable, using `repo-prior-exposed` for `codex-cli`, `external-prior-exposed` for `nyxid-oracle`, and `caller-prior-exposed` for `isolated-token-subagent`; these are disclosure labels, not new fields."
+-- SKILL[def]: "Each seat must disclose these inherited context sources in its existing `visible_inputs` value and state whether each source is unknown or uncontrollable, using `repo-prior-exposed` for `codex-cli` and `heca`, `external-prior-exposed` for `nyxid-oracle`, and `caller-prior-exposed` for `isolated-token-subagent`; these are disclosure labels, not new fields."
 def disclosureLabel : Carrier → String
-  | .codexCli => "repo-prior-exposed"
+  | .codexCli | .heca => "repo-prior-exposed"
   | .nyxidOracle => "external-prior-exposed"
   | .isolatedTokenSubagent => "caller-prior-exposed"
 

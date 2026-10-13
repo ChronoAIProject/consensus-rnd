@@ -5,11 +5,15 @@ Source: `## Worker Delegation` (`WorkerMode` priority list, fallback rule) and
 `## Boundaries` (closed carrier set).
 -/
 
+set_option maxRecDepth 8192
+set_option maxHeartbeats 800000
+
 namespace Sshx
 
 /-- The closed carrier set of `## Boundaries`. -/
 inductive Carrier
   | codexCli
+  | heca
   | nyxidOracle
   | isolatedTokenSubagent
   deriving DecidableEq, Repr
@@ -18,21 +22,22 @@ inductive Carrier
 /-- `WorkerMode` priority order: a lower number is tried first. -/
 def Carrier.priority : Carrier → Nat
   | .codexCli => 0
-  | .nyxidOracle => 1
-  | .isolatedTokenSubagent => 2
+  | .heca => 1
+  | .nyxidOracle => 2
+  | .isolatedTokenSubagent => 3
 
 /-- Carriers in priority order. -/
-def Carrier.univ : List Carrier := [.codexCli, .nyxidOracle, .isolatedTokenSubagent]
+def Carrier.univ : List Carrier := [.codexCli, .heca, .nyxidOracle, .isolatedTokenSubagent]
 
 theorem Carrier.mem_univ (c : Carrier) : c ∈ Carrier.univ := by
   cases c <;> decide
 
 -- SKILL[def]: "A `tests` review seat must be assigned to a carrier capable of executing repository verification commands in the `work_target`, which is the per-seat constraint that keeps `nyxid-oracle` out of that seat's feasible draws."
 def canRunRepositoryCommands : Carrier → Bool
-  | .codexCli | .isolatedTokenSubagent => true
+  | .codexCli | .heca | .isolatedTokenSubagent => true
   | .nyxidOracle => false
 
-/-- `WorkerMode` has exactly the three carriers plus `abstain`. -/
+/-- `WorkerMode` has exactly the four carriers plus `abstain`. -/
 inductive WorkerMode
   | carrier (c : Carrier)
   | abstain
@@ -42,34 +47,51 @@ inductive WorkerMode
 and for "eligible for this stage and role" (available and role-permitted). -/
 structure CarrierSet where
   codexCli : Bool
+  heca : Bool
   nyxidOracle : Bool
   isolatedTokenSubagent : Bool
   deriving DecidableEq, Repr
 
 def CarrierSet.get (s : CarrierSet) : Carrier → Bool
   | .codexCli => s.codexCli
+  | .heca => s.heca
   | .nyxidOracle => s.nyxidOracle
   | .isolatedTokenSubagent => s.isolatedTokenSubagent
 
 def CarrierSet.insert (s : CarrierSet) : Carrier → CarrierSet
   | .codexCli => { s with codexCli := true }
+  | .heca => { s with heca := true }
   | .nyxidOracle => { s with nyxidOracle := true }
   | .isolatedTokenSubagent => { s with isolatedTokenSubagent := true }
 
-def CarrierSet.empty : CarrierSet := ⟨false, false, false⟩
+def CarrierSet.empty : CarrierSet := ⟨false, false, false, false⟩
 
 /-- Number of carriers not in the set. -/
 def CarrierSet.remaining (s : CarrierSet) : Nat :=
-  (if s.codexCli then 0 else 1) + (if s.nyxidOracle then 0 else 1)
+  (if s.codexCli then 0 else 1) + (if s.heca then 0 else 1) + (if s.nyxidOracle then 0 else 1)
     + (if s.isolatedTokenSubagent then 0 else 1)
 
 def CarrierSet.univ : List CarrierSet :=
-  [⟨false, false, false⟩, ⟨false, false, true⟩, ⟨false, true, false⟩, ⟨false, true, true⟩,
-   ⟨true, false, false⟩, ⟨true, false, true⟩, ⟨true, true, false⟩, ⟨true, true, true⟩]
+  [⟨false, false, false, false⟩,
+   ⟨false, false, false, true⟩,
+   ⟨false, false, true, false⟩,
+   ⟨false, false, true, true⟩,
+   ⟨false, true, false, false⟩,
+   ⟨false, true, false, true⟩,
+   ⟨false, true, true, false⟩,
+   ⟨false, true, true, true⟩,
+   ⟨true, false, false, false⟩,
+   ⟨true, false, false, true⟩,
+   ⟨true, false, true, false⟩,
+   ⟨true, false, true, true⟩,
+   ⟨true, true, false, false⟩,
+   ⟨true, true, false, true⟩,
+   ⟨true, true, true, false⟩,
+   ⟨true, true, true, true⟩]
 
 theorem CarrierSet.mem_univ (s : CarrierSet) : s ∈ CarrierSet.univ := by
   cases s with
-  | mk a b c => cases a <;> cases b <;> cases c <;> decide
+  | mk a b c d => cases a <;> cases b <;> cases c <;> cases d <;> decide
 
 -- SKILL[def]: "reopen the assignment on the highest-priority eligible untried carrier from the full `WorkerMode` list"
 /-- `## Worker Delegation` fallback rule: reopen the seat on the highest-priority eligible
@@ -112,15 +134,45 @@ def fallbackChain (eligible : CarrierSet) : CarrierSet → Nat → List Carrier
     | none => []
     | some c => c :: fallbackChain eligible (tried.insert c) fuel
 
-/-- At most three carriers are ever opened for one seat, whatever the eligibility. -/
+/-- At most four carriers are ever opened for one seat, whatever the eligibility. -/
 theorem fallbackChain_length_le :
     ∀ e ∈ CarrierSet.univ, ∀ t ∈ CarrierSet.univ,
-      (fallbackChain e t 4).length ≤ t.remaining := by
+      (fallbackChain e t (Carrier.univ.length + 1)).length ≤ t.remaining := by
   decide
 
-theorem fallbackChain_from_empty_le_three (e : CarrierSet) :
-    (fallbackChain e CarrierSet.empty 4).length ≤ 3 :=
+theorem fallbackChain_from_empty_le_carrier_count (e : CarrierSet) :
+    (fallbackChain e CarrierSet.empty (Carrier.univ.length + 1)).length ≤ Carrier.univ.length :=
   fallbackChain_length_le e (CarrierSet.mem_univ e) CarrierSet.empty (by decide)
+
+/-- The pre-heca selector, retained as an explicit correspondence target. -/
+def legacyNextCarrier (eligible tried : CarrierSet) : Option Carrier :=
+  ([.codexCli, .nyxidOracle, .isolatedTokenSubagent].filter
+    (fun c => eligible.get c && !(tried.get c))).head?
+
+theorem nextCarrier_heca_absent (e t : CarrierSet) (absent : e.heca = false) :
+    nextCarrier e t = legacyNextCarrier e t := by
+  cases e with
+  | mk a b c d =>
+    cases t with
+    | mk w x y z =>
+      cases a <;> cases b <;> cases c <;> cases d <;>
+        cases w <;> cases x <;> cases y <;> cases z <;> simp_all [nextCarrier, legacyNextCarrier, Carrier.univ, CarrierSet.get]
+
+def legacyFallbackChain (eligible : CarrierSet) : CarrierSet → Nat → List Carrier
+  | _, 0 => []
+  | tried, fuel + 1 =>
+    match legacyNextCarrier eligible tried with
+    | none => []
+    | some c => c :: legacyFallbackChain eligible (tried.insert c) fuel
+
+theorem fallback_heca_absent (e : CarrierSet) (absent : e.heca = false)
+    (fuel : Nat) (t : CarrierSet) :
+    fallbackChain e t fuel = legacyFallbackChain e t fuel := by
+  induction fuel generalizing t with
+  | zero => rfl
+  | succ fuel ih =>
+    simp only [fallbackChain, legacyFallbackChain, nextCarrier_heca_absent e t absent]
+    cases legacyNextCarrier e t <;> simp [ih]
 
 -- SKILL[def]: "Only when no eligible untried carrier remains or every fallback fails to produce terminal completion is the result `abstain`"
 /-- Every seat ends in a carrier flight or `abstain`: when nothing eligible remains untried,

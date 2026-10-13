@@ -111,6 +111,105 @@ and state any deviation. The realistic scenario in fixtures/implementation_dispa
 supports repeatable forward evaluation; generated responses stay outside published
 source. Phrase/digest checks and formal projections do not establish agent behavior.
 
+Heca MCP baseline and real-tool evidence (2026-10-13 probes; as of R4/R5 repair
+dispatch, 2026-10-14):
+without a carrier contract, a finish notification is only a turn-end notice, not
+completion: it supplies neither the worker envelope nor its terminal transition.
+This no-script baseline is the caller's observed tool behavior, not a simulated
+worker run. The original implementation worker was codex-cli without heca MCP
+tools; all real-tool evidence here was supplied by the caller. Flights after this
+cutoff, including this repair flight and its subsequent review stage, are outside
+the record by construction and are not claimed in advance.
+Caller probes used heca CLI/daemon 0.1.0-nightly-20260929-1. The caller's toolset
+exposed heca_agent_spawn/status/activity/send_prompt/archive/list, provider_list,
+model_list and worktree_list. Spawn requires provider; model/mode/prompt/name,
+notify_on_finish and an existing placement are supported. Omitted placement
+inherits the caller's live placement; bypass-equivalent modes translate per
+provider. Omitted mode may use Settings/default and prompt, so it is unsuitable.
+No extra MCP-server opt-in was used.
+Short claude/claude-haiku-4-5/bypassPermissions and codex/gpt-6-luna/full-access
+probes inherited the caller's worktree (loose false). Status confirmed requested
+models/modes and the caller's heca.parent-agent-id label. Each produced one
+[heca system] Background agent <id> (<name>) finished. notification without
+polling. Codex effort low returned thinking_option x_high; effort was not honored.
+An explicit-worktree claude/claude-sonnet-5-5/bypassPermissions probe ran repository
+documentation checks (9 tests OK) and inventory in this work target. Its turn
+lasted about 220 s with 74 activity events. One activity read with limit 2 returned
+exactly running-to-idle and the whole final Text reply: a 31 KB JSON object in
+one event. Haiku fenced its JSON; Codex and Sonnet returned bare JSON. Larger
+activity windows include tool calls/process detail and are unsuitable caller input.
+Archiving a running child with a live blocking command yielded status archived,
+pid null and archived_at set; both agent and blocking command disappeared from
+the OS process table. A child finishing during the caller's active turn delivered
+its notice only after that turn ended. No notice was observed for the running
+child that was archived. Thus stop confirmation cannot depend on finish notice.
+A Claude-provider seat loaded the caller project's memory index. A caller
+subagent also sees heca tools: caller-only dispatch is a brief-carried contract,
+not a host guarantee. These probes preceded the actual stage below; no fake-heca
+harness or mechanical replacement test establishes the route.
+Real sshx review stage (caller, 2026-10-13/14, same heca version): architecture used
+isolated-token-subagent, quality nyxid-oracle, and tests heca through MCP. Spawn
+used provider claude, omitted model (provider default applied; status had no model
+key), mode bypassPermissions, explicit worktree_id for this target,
+notify_on_finish true, and no MCP-server opt-in. The single short spawn prompt
+named a 27.7 KB caller-kept brief file as the complete task and included the reply
+contract itself; it did not inline that whole brief. Returned loose was false;
+worktree/cwd matched this target, and the parent label matched the caller.
+One [heca system] finished. notice arrived after the caller's turn ended. One
+heca_agent_activity read with limit 2 returned exactly running-to-idle and the
+whole final reply: one JSON envelope, about 9 KB, verdict reject, out of 215
+activity events. The seat's turn lasted about 1,198 s (20 minutes); it ran the full
+sshx suite, documentation checks, version check and 29 Lean mutation builds.
+First single-worker repair flight (caller, 2026-10-14, same heca version):
+heca_agent_spawn used provider codex, omitted model (status reported gpt-6.1-sol),
+mode full-access, explicit worktree_id of this target, notify_on_finish true,
+and no MCP-server opt-in. Its whole brief (about 3 KB) and reply contract were
+inline in the prompt. Placement was not loose, cwd matched this target, and the
+parent label matched the caller. One finish notice arrived on a later caller
+turn; one heca_agent_activity read with limit 2 returned running-to-idle and the
+final envelope, out of 28 events. The turn lasted about 85 s. It edited only the
+two README files and ran the documentation checks.
+Rerun review stage (caller, 2026-10-14, same heca version): architecture used
+heca through MCP with provider codex, omitted model (status reported gpt-6.1-sol),
+mode full-access, explicit worktree_id, notify_on_finish true, and no MCP-server
+opt-in. Its short spawn prompt named one caller-kept file as the whole brief and
+carried the reply contract. Placement was not loose and cwd matched this target.
+One finish notice arrived on a later caller turn; one activity read with limit 2
+returned the turn-end transition and final envelope, verdict comment, out of
+76 events. The turn lasted about 349 s; it ran the contract and formal tests,
+including lake build, documentation checks and the version check. Quality was
+drawn on nyxid-oracle; both attempts lacked terminal completion after the broker
+refused them with a per-account concurrency quota. That flight was marked
+abstained, and the seat reran on codex-cli under the unchanged fallback rule:
+the first codex-cli fallback inside heca. Tests used isolated-token-subagent.
+Verified scope includes a real single-worker heca repair on the codex provider
+with a short inline brief, a codex-provider review turn of about 349 s, and
+codex-cli fallback inside heca, alongside the prior probes and 20-minute
+Claude-provider review. These bounds are invocation evidence, not general limits.
+ASSUMED-UNVERIFIED (not supported) as of this repair: a seat-sized brief (tens of
+KB) inline in prompt; a heca turn longer than about 1,198 s; a codex-provider heca
+turn longer than about 349 s; notice shape on child error or permission wait;
+MCP tool availability for non-Claude callers; effort; a heca implementation-stage
+seat doing a multi-file change beyond the short README-only flight (this repair
+flight is outside the record). Model identifiers prove only that invocation;
+the existing diversity, quality, prior-independence and Codex/subagent
+model-family-separation benefits remain unverified.
+
+Heca MCP repair baseline (2026-10-13/14, before repair edits): the contract
+requires wholeBrief/whole brief as prompt although the real review used a brief
+file, and omits ending/yielding the caller turn although notices arrive only
+between caller turns. Detected composition still replaces only one Codex seat
+and keeps single-worker stages on Codex. R1-R3 repair these observed contract
+and model gaps under GoalArtifact revision 2; no new heca run is claimed here.
+
+Heca MCP stop-closure baseline (2026-10-14, before R4 model edits): every
+guardCollect requires notified, including failed observations; collectEffect is
+the only route to retrying/abstained, and fallback requires abstained.
+HecaStopEvidence.confirmed feeds no transition. A confirmed own-agent archive
+without a finish notice therefore cannot record failure or release the target.
+The caller supplied the reviewer's production-guard Lean probe and the real
+stop probe above; no review-seat files were read by this repair worker.
+
 The behavior helpers below cover fixed truth tables and other load-bearing mechanical contracts,
 but do not infer English semantics.
 Files outside ``skills/sshx/SKILL.md`` are outside this positional boundary and remain governed
@@ -154,6 +253,7 @@ from pathlib import Path
 from typing import TypeAlias
 
 
+
 ROOT = Path(__file__).resolve().parents[3]
 CONSTITUTION = ROOT / "CLAUDE.md"
 SKILL = ROOT / "skills" / "sshx" / "SKILL.md"
@@ -175,25 +275,26 @@ UNCOUNTED_TRANSITIONS = frozenset({"initial review triplet", "carrier retry", "c
 THINKING_VERDICTS = {"propose", "revise", "reject", "abstain"}
 TERMINATION_VERDICTS = {"satisfied", "unsatisfied", "abstain"}
 TERMINATION_ROLES = ("criterion-evidence", "residual-gap", "claim-integrity")
-CARRIER_NAMES = ("codex-cli", "nyxid-oracle", "isolated-token-subagent")
+CARRIER_NAMES = ("codex-cli", "heca", "nyxid-oracle", "isolated-token-subagent")
 CARRIER_IDENTIFIERS = tuple(f"`{carrier}`" for carrier in CARRIER_NAMES)
 DEFAULT_SEAT_ALLOCATION_PATTERNS = (
     ("dispatch-time assertion", r"\b(?:at dispatch time|when dispatch begins)\b"),
     ("multi-seat stage scope", r"\b(?:every|each) multi-seat stage assigns\b"),
     ("one isolated-token-subagent seat", r"\bexactly one seat to `isolated-token-subagent`"),
     ("one nyxid-oracle seat", r"\bexactly one seat to `nyxid-oracle`"),
+    ("absent heca unchanged", r"When heca is absent, that composition is unchanged"),
     (
-        "remaining codex-cli seats",
-        r"\b(?:every|each) remaining seat(?: in that stage)?(?: goes)? to `codex-cli`",
+        "detected heca remainder and absent codex-cli remainder",
+        r"\b(?:every|each) remaining seat(?: in that stage)?(?: goes)? to `heca` when detected, otherwise `codex-cli`",
     ),
     (
-        "single-worker codex-cli assignment",
-        r"\b(?:every|each) single-worker stage assigns its worker to `codex-cli`",
+        "detected heca and absent codex-cli single-worker assignment",
+        r"\b(?:every|each) single-worker stage assigns its worker to `heca` when detected, otherwise `codex-cli`",
     ),
     ("uniform random seat draw", r"\bdraws? one assignment uniformly at random\b"),
     (
         "feasible-draw scope",
-        r"\bfrom (?:every|each) assignment that satisfies that composition and (?:this|the) stage's per-seat carrier constraints",
+        r"\bfrom all assignments satisfying the composition and per-seat carrier constraints",
     ),
     ("mechanical randomness source", r"\bmechanical randomness source\b"),
     (
@@ -207,10 +308,9 @@ DEFAULT_SEAT_ALLOCATION_PATTERNS = (
     ),
 )
 SEAT_ROTATION_SPAN_TAIL = (
-    "Which named seat holds which carrier rotates: at each stage dispatch the caller draws one "
-    "assignment uniformly at random from every assignment that satisfies that composition and this "
-    "stage's per-seat carrier constraints, so a named role holds a carrier only for the stage "
-    "dispatch it was drawn for. "
+    "At each stage dispatch the caller draws one assignment uniformly at random from all "
+    "assignments satisfying the composition and per-seat carrier constraints; a named role holds "
+    "its drawn carrier only for that dispatch. "
     "The draw must come from a mechanical randomness source outside the caller's own preference, "
     "and its result is recorded in `worker_delegation.seat_rotation` before the first worker of that "
     "stage is launched. "
@@ -247,6 +347,15 @@ EXTERNAL_REPOSITORY_IDENTIFIERS = (
 )
 SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
     {
+        "heca",
+        "heca_agent_spawn",
+        "heca_agent_activity",
+        "heca_agent_archive",
+        "heca_agent_status",
+        "notify_on_finish",
+        "codex",
+        "mode",
+        "effort",
         "AGENTS.md",
         "ASSUMED-UNVERIFIED",
         "BlockingAuthority",
@@ -393,7 +502,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "95cd70530808f96bb2e9ba248db068e465824cc0f7f98d458820dba3079675b9"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "a247b09b2116f1e8798b6b1e8164d6dab7bb374bc2b6e18a74c633f2c0873ae6"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -985,7 +1094,7 @@ class SshxContractTests(unittest.TestCase):
         ])
         self.assertIn("The user's current input is the only source for the goal", text)
         self.assertIn(
-            "must not discover or infer the goal from external lifecycle milestones, release state, runtime host configuration, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface",
+            "must not discover or infer the goal from lifecycle milestones, release state, runtime host configuration, GitHub issues or pull requests, labels, branches, or other external lifecycle surfaces",
             text,
         )
 
@@ -1099,14 +1208,14 @@ class SshxContractTests(unittest.TestCase):
         for claim_surface in [
             "a final report",
             "`done with advisory surfaced` outcome used as success",
-            "`stop` action carrying the claim",
+            "`stop` action, or elsewhere",
         ]:
             self.assertIn(claim_surface, termination)
         self.assertIn(
-            "The gate binds every exit that carries an affirmative `GoalArtifact` satisfaction claim, wherever the claim appears",
+            "The gate binds every affirmative `GoalArtifact` satisfaction claim",
             termination,
         )
-        self.assertIn("and binds no exit that carries none", termination)
+        self.assertIn("and no exit without one", termination)
         self.assertIn(
             "non-achievement exits keep their existing routing and must never be relabelled as goal satisfaction",
             termination,
@@ -1464,10 +1573,10 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(row, truth_table)
         for anchor in [
-            "rows are evaluated in this order and are complete and, under this evaluation order, unambiguous",
+            "Evaluate rows in this order; they are complete and unambiguous under it",
             "unanimous `satisfied` means one valid `satisfied` result from each of the exactly three distinct named termination seats",
-            "The table evaluates only the presenting source and the resulting seat roster and results",
-            "a fallback-recovered result is a valid result like any other",
+            "The table evaluates only the presenting source, resulting seat roster and results",
+            "fallback-recovered results are equally valid",
             "Roster means the dispatch-time recorded named role identities",
             "a named role present without a valid result remains in the roster as a missing result",
             "meta-judge has no termination verdict of its own",
@@ -1737,8 +1846,8 @@ class SshxContractTests(unittest.TestCase):
         review = section(text, "## Review Triplet", "## Review Truth Table")
         review_truth = section(text, "## Review Truth Table", "## Fix Or Done")
         fix_or_done = section(text, "## Fix Or Done", "## Termination Gate")
-        self.assertIn("resolves these sub-items from the user's current input, repository rules", goal)
-        self.assertIn("records those sources and labels any minimal engineering assumptions explicitly", goal)
+        self.assertIn("resolves them from current user input, repository rules", goal)
+        self.assertIn("recording sources and explicitly labelling minimal engineering assumptions", goal)
         self.assertIn("must not ask a startup boundary or harness confirmation question", goal)
         for field in ["trigger", "trigger_actor", "trigger_path", "mechanism_family", "recorded_occurrence"]:
             self.assertIn(f"`{field}`", envelope)
@@ -2496,17 +2605,17 @@ class SshxContractTests(unittest.TestCase):
     def test_sshx_worker_modes(self) -> None:
         text = read(SKILL)
         contract_text = without_refactor_comments(text)
-        mode_lines = re.findall(r"^\d+\. `(codex-cli|nyxid-oracle|isolated-token-subagent|abstain)`$", text, re.MULTILINE)
-        self.assertEqual(mode_lines, ["codex-cli", "nyxid-oracle", "isolated-token-subagent", "abstain"])
+        mode_lines = re.findall(r"^\d+\. `(codex-cli|heca|nyxid-oracle|isolated-token-subagent|abstain)`$", text, re.MULTILINE)
+        self.assertEqual(mode_lines, ["codex-cli", "heca", "nyxid-oracle", "isolated-token-subagent", "abstain"])
         self.assertIn("`WorkerDelegationContract`", text)
         self.assertIn(
-            "`abstain` is required when none of `codex-cli`, `nyxid-oracle`, or `isolated-token-subagent` is available",
+            "`abstain` is required when none of `codex-cli`, `heca`, `nyxid-oracle`, or `isolated-token-subagent` is available",
             text,
         )
         self.assertIn("Do not self-apply the triplet inside the caller context", text)
         self.assertIn("fallible advisory worker exactly like `codex-cli`, with no authority of any kind", text)
         self.assertIn(
-            "everywhere in this contract, non-mutating means it changes no file, Git state, GitHub state, label, release, host configuration, lifecycle state, or other external resource",
+            "Non-mutating means no changes to files, Git/GitHub state, labels, releases, host configuration, lifecycle or external resources",
             text,
         )
         self.assertIn(
@@ -2532,7 +2641,7 @@ class SshxContractTests(unittest.TestCase):
         )
         self.assertIn("must not be rebalanced in response to completion outcomes", text)
         self.assertIn("a retry or fallback may replace only the failed flight for the same seat and role", text)
-        self.assertIn("neither is a mechanism for redrawing or restoring a stage's recorded assignment", text)
+        self.assertIn("never redraw or restore the stage's recorded assignment", text)
         self.assertIn("This is the dispatch-time rotation rule", text)
         self.assertNotIn("sealed-transcript", contract_text.lower())
         self.assertNotIn("actor-isolated", contract_text.lower())
@@ -2557,13 +2666,14 @@ class SshxContractTests(unittest.TestCase):
                 text[:start] + f"{allocation} Unless the caller prefers otherwise." + text[end:]
             )
         composition_rewrites = (
-            "At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent` and exactly one seat to `nyxid-oracle`. Every remaining seat in that stage goes to `codex-cli`, and every single-worker stage assigns its worker to `codex-cli`.",
-            "At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `codex-cli`. Every single-worker stage assigns its worker to `codex-cli`.",
-            "At dispatch time:\n- Every multi-seat stage assigns exactly one seat to `isolated-token-subagent` and exactly one seat to `nyxid-oracle`.\n- Every remaining seat in that stage goes to `codex-cli`.\n- Every single-worker stage assigns its worker to `codex-cli`.",
-            "At dispatch time, each multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and each remaining seat to `codex-cli`; each single-worker stage assigns its worker to `codex-cli`.",
-            "At dispatch time, every multi-seat stage assigns exactly one seat to `nyxid-oracle`, exactly one seat to `isolated-token-subagent`, and every remaining seat to `codex-cli`; every single-worker stage assigns its worker to `codex-cli`.",
+            "At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent` and exactly one seat to `nyxid-oracle`. Every remaining seat in that stage goes to `heca` when detected, otherwise `codex-cli`, and every single-worker stage assigns its worker to `heca` when detected, otherwise `codex-cli`.",
+            "At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `heca` when detected, otherwise `codex-cli`. Every single-worker stage assigns its worker to `heca` when detected, otherwise `codex-cli`.",
+            "At dispatch time:\n- Every multi-seat stage assigns exactly one seat to `isolated-token-subagent` and exactly one seat to `nyxid-oracle`.\n- Every remaining seat in that stage goes to `heca` when detected, otherwise `codex-cli`.\n- Every single-worker stage assigns its worker to `heca` when detected, otherwise `codex-cli`.",
+            "At dispatch time, each multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and each remaining seat to `heca` when detected, otherwise `codex-cli`; each single-worker stage assigns its worker to `heca` when detected, otherwise `codex-cli`.",
+            "At dispatch time, every multi-seat stage assigns exactly one seat to `nyxid-oracle`, exactly one seat to `isolated-token-subagent`, and every remaining seat to `heca` when detected, otherwise `codex-cli`; every single-worker stage assigns its worker to `heca` when detected, otherwise `codex-cli`.",
         )
-        rewrites = tuple(f"{rewrite} {SEAT_ROTATION_SPAN_TAIL}" for rewrite in composition_rewrites)
+        heca_branch = "When heca is absent, that composition is unchanged."
+        rewrites = tuple(f"{rewrite} {heca_branch} {SEAT_ROTATION_SPAN_TAIL}" for rewrite in composition_rewrites)
         for rewrite in rewrites:
             mutated = text[:start] + rewrite + text[end:]
             rewritten_start, rewritten_end = default_seat_allocation_span(mutated)
@@ -2575,7 +2685,7 @@ class SshxContractTests(unittest.TestCase):
             "exactly one seat to `codex-cli`",
             1,
         ).replace(
-            "every remaining seat to `codex-cli`",
+            "every remaining seat to `heca`",
             "every remaining seat to `isolated-token-subagent`",
             1,
         )
@@ -2658,7 +2768,7 @@ class SshxContractTests(unittest.TestCase):
             text,
         )
         self.assertIn(
-            "Before any worker dispatch, including delegated intake context-gathering by subagent, Agent, Task, or codex, the caller must complete the non-mutating `codex-cli` capability check and resolve `WorkerMode`",
+            "Before any worker dispatch, including delegated intake context-gathering by subagent, Agent, Task, or codex, the caller must complete the non-mutating `codex-cli` and `heca` capability checks and resolve `WorkerMode`",
             text,
         )
         self.assertIn("worker_mode_gate:", text)
@@ -2730,7 +2840,7 @@ class SshxContractTests(unittest.TestCase):
             "`skills/sshx/scripts/run-oracle-worker.py` for every `nyxid-oracle` launch",
             "It reaches NyxID only through the oracle runner",
             "the legacy `nyxid oracle` CLI is never invoked by any caller or worker",
-            "Mechanics are owned by `CODEX_WORKER_SPEC.md` and `ORACLE_WORKER_SPEC.md`",
+            "`CODEX_WORKER_SPEC.md` and `ORACLE_WORKER_SPEC.md` own mechanics",
             "may use a reference to the actual raw terminal response the oracle runner saved for that same flight and attempt",
         ]:
             self.assertIn(required, worker_delegation)
@@ -2761,6 +2871,133 @@ class SshxContractTests(unittest.TestCase):
         self.assertNotIn("one fail-closed predicate", spec)
         for legacy in ["## Legacy", "nyxid oracle ask", "legacy-task:", "--new-conversation", "pool list"]:
             self.assertNotIn(legacy, raw_spec)
+
+    def test_heca_mcp_contract_pins_detection_dispatch_and_placement(self) -> None:
+        delegation = section(read(SKILL), "## Worker Delegation", "## Result Envelope")
+        for required in (
+            "caller's own toolset exposes heca's MCP agent tools, including tools listed but loaded lazily",
+            "no out-of-heca route exists", "This non-mutating check calls nothing",
+            "record tool exposure once per run, including absence",
+            "PATH, `HECA_*`, CLI, daemon, provider and mode probes are not detection",
+            "Later failures use fallback, never re-probing or recomposing",
+            "`heca_agent_spawn` creates one fresh agent/turn per `heca` attempt",
+            "Single spawn prompt fixes the whole task: inline brief or one caller-kept whole-brief file",
+            "readable in seat placement, unchanged during flight, apart from peer outputs",
+            "prompt always carries compact final `SshxResultEnvelope` reply contract",
+            "explicit unattended bypass-equivalent `mode`, `notify_on_finish: true`",
+            "no extra MCP-server opt-in", "Retry uses a new agent, never follow-up",
+            "Pass user/host provider/model unchanged",
+            "default provider: heca's `codex` if reported enabled, else caller's heca provider; model: heca default",
+            "no Settings/orchestration-preferences reads or `effort`",
+            "Model reports prove only that invocation, no diversity/quality claim",
+            "`heca` and `isolated-token-subagent` use no runner/receipt/minted ID/attempt path",
+            "`flight_id` is heca's returned agent identity",
+            "Omit placement for caller-live `work_target`",
+            "else name its existing heca worktree or fail unavailable",
+            "not loose, worktree/cwd equal `work_target`",
+            "mismatch stops that agent/fails closed",
+            "No new/Loose placement; never retry failed spawn without placement",
+            "briefs allow only caller dispatch",
+        ):
+            self.assertIn(required, delegation)
+        for forbidden in ("reachable daemon", "usable host provider/mode", "killing the runner"):
+            self.assertNotIn(forbidden, delegation)
+
+    def test_heca_mcp_collection_and_stop_keep_shared_completion_and_isolation(self) -> None:
+        text = read(SKILL)
+        delegation = section(text, "## Worker Delegation", "## Result Envelope")
+        for required in (
+            "Caller must end/yield its turn after dispatch/meanwhile work, keeping flights in-flight/targets protected",
+            "blocking wait/sleep/poll loops cannot substitute",
+            "Collect on a later caller turn after the matching finish notice",
+            "Finish notice permits one newest-two `heca_agent_activity` read",
+            "heca's recorded turn-end transition/final reply, never completion",
+            "Missing either fails collection",
+            "no paging, widening or running-seat status/activity polling",
+            "Only final reply is envelope (JSON fencing is presentation)",
+            "heca's recorded turn-end is terminal observation/`completion_sentinel_ref`",
+            "exclude other activity from caller context",
+            "`log_ref` is an opaque heca-agent reference",
+            "confirm the heca flight’s agent is not running",
+            "Else keep the flight protected/report the unresolved outcome",
+            "Stop only own agent; all other heca lifecycle/orchestration is forbidden",
+            "Stop via `heca_agent_archive`, confirm via `heca_agent_status`",
+            "finished idle agents are host housekeeping",
+            "Host job limits/teardown do not reach heca-owned agents",
+        ):
+            self.assertIn(required, delegation)
+        self.assertIn("`heca` inherits those rules and unknown/uncontrollable provider user memory", text)
+        self.assertIn("using `repo-prior-exposed` for `codex-cli` and `heca`", text)
+        completion = section(text, "## Worker Completion Contract", "## No Context Pollution")
+        self.assertNotIn("heca", completion)
+        self.assertIn("For every worker carrier, completion and verdict routing use one fail-closed predicate", completion)
+
+    def test_heca_script_route_is_removed_without_another_spec_or_harness(self) -> None:
+        skill_root = ROOT / "skills" / "sshx"
+        removed = (
+            skill_root / "scripts" / ("run-" + "heca-worker.py"),
+            skill_root / ("HECA_" + "WORKER_SPEC.md"),
+            skill_root / "tests" / ("test_run_" + "heca_worker.py"),
+        )
+        for path in removed:
+            self.assertFalse(path.exists(), path)
+        self.assertEqual(set(skill_root.glob("*_WORKER_SPEC.md")), {SPEC, ORACLE_SPEC})
+        tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT, text=True)
+        for name in tracked.split("\0"):
+            path = ROOT / name
+            if name and path.is_file() and not path.is_symlink():
+                with self.subTest(path=name):
+                    source = read(path)
+                    for removed_path in removed:
+                        self.assertNotIn(removed_path.name, source)
+
+    def test_heca_real_tool_evidence_has_one_dated_home_and_bounded_support(self) -> None:
+        record = __doc__.split("Heca MCP baseline and real-tool evidence (2026-10-13", 1)[1]
+        record = " ".join(record.split("The behavior helpers below", 1)[0].split())
+        for evidence in (
+            "as of R4/R5 repair dispatch, 2026-10-14",
+            "finish notification is only a turn-end notice, not completion",
+            "0.1.0-nightly-20260929-1", "220 s", "74 activity events", "31 KB",
+            "archived", "pid null", "OS process table", "after that turn ended",
+            "memory index", "not a host guarantee", "2026-10-13/14", "provider claude",
+            "omitted model (provider default applied; status had no model", "27.7 KB",
+            "contract itself", "did not inline that whole brief", "1,198 s (20 minutes)",
+            "215", "about 9 KB", "verdict reject", "29 Lean mutation builds",
+            "First single-worker repair flight (caller, 2026-10-14",
+            "provider codex, omitted model (status reported gpt-6.1-sol)",
+            "mode full-access", "explicit worktree_id", "notify_on_finish true",
+            "no MCP-server opt-in", "whole brief (about 3 KB) and reply contract",
+            "inline in the prompt", "not loose", "cwd matched this target",
+            "parent label matched the caller", "28 events", "about 85 s",
+            "edited only the two README files", "ran the documentation checks",
+            "Rerun review stage (caller, 2026-10-14", "architecture used heca through MCP",
+            "one caller-kept file as the whole brief", "carried the reply contract",
+            "limit 2", "verdict comment", "76 events", "about 349 s",
+            "including lake build", "per-account concurrency quota",
+            "both attempts lacked terminal completion", "flight was marked abstained",
+            "first codex-cli fallback inside heca", "Tests used isolated-token-subagent",
+            "Flights after this cutoff, including this repair flight and its subsequent review stage, "
+            "are outside the record by construction",
+        ):
+            self.assertIn(evidence, record)
+        assumed = record.split("ASSUMED-UNVERIFIED (not supported) as of this repair: ", 1)[1]
+        assumed = assumed.split(" Model identifiers", 1)[0]
+        self.assertEqual(
+            assumed,
+            "a seat-sized brief (tens of KB) inline in prompt; "
+            "a heca turn longer than about 1,198 s; "
+            "a codex-provider heca turn longer than about 349 s; "
+            "notice shape on child error or permission wait; "
+            "MCP tool availability for non-Claude callers; effort; "
+            "a heca implementation-stage seat doing a multi-file change beyond the short "
+            "README-only flight (this repair flight is outside the record).",
+        )
+        self.assertNotIn("only a 17 s probe exists", record)
+        self.assertNotIn("a heca seat in a single-worker implementation stage", assumed)
+
+    def test_skill_stays_within_approved_size_budget(self) -> None:
+        self.assertLessEqual(SKILL.stat().st_size, 75000)
+        self.assertLessEqual(read(SKILL).count("\n"), 470)
 
     def test_constitution_oracle_channel_offers_only_the_broker(self) -> None:
         constitution = read(CONSTITUTION)
@@ -2834,18 +3071,18 @@ class SshxContractTests(unittest.TestCase):
         worker_delegation = text[wd_start:wd_end]
         for contract_string in [
             "Use `skills/sshx/scripts/run-codex-worker.sh` for every `codex-cli` launch",
-            "Until a valid receipt binds `flight_id`, leave it empty and omit identity options; `attempt` stays 1",
-            "Bound retries reuse that ID and increment `attempt`",
+            "Runner receipts/paths: pending `flight_id` empty, omit identity options, `attempt` 1",
+            "bound retries reuse ID/increment `attempt`",
             "and `skills/sshx/scripts/run-oracle-worker.py` for every `nyxid-oracle` launch",
-            "Only the runners mint IDs and derive disjoint attempt paths",
-            "callers cannot supply artifact paths",
-            "owned by `CODEX_WORKER_SPEC.md`",
-            "use the Codex runner's default `danger-full-access`",
-            "unless the maintainer explicitly requests a narrower sandbox",
-            "The caller must not poll worker artifact paths while a runner is active",
-            "The caller must launch each runner through a host-provided background job mechanism",
-            "The caller records `result_envelope_ref` and `completion_sentinel_ref` on the matching flight only if the runner reports completion and the envelope and sentinel validate.",
-            "Completion and verdict recognition stay governed by the `## Worker Completion Contract`",
+            "runners alone mint IDs/disjoint attempt paths",
+            "caller paths forbidden",
+            "`CODEX_WORKER_SPEC.md` and `ORACLE_WORKER_SPEC.md` own mechanics",
+            "Codex defaults to `danger-full-access`",
+            "unless maintainer explicitly requests narrower",
+            "No active-runner artifact/file/log polling",
+            "Launch runners via host background jobs notifying on carrier exit",
+            "Bind result/completion refs only after runner completion and valid envelope/sentinel.",
+            "Record every retry in the transcript against fixed `retry_budget`, independent of `attempt`; receipt/binding never resets it",
         ]:
             self.assertIn(contract_string, worker_delegation)
         for deleted_mechanic in [
@@ -2855,7 +3092,7 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertNotIn(deleted_mechanic, worker_delegation)
         self.assertLess(
-            text.index("The caller records `result_envelope_ref` and `completion_sentinel_ref`"),
+            text.index("Bind result/completion refs"),
             text.index("## Worker Completion Contract"),
         )
 
@@ -2889,18 +3126,18 @@ class SshxContractTests(unittest.TestCase):
         sentences = re.split(r"(?<=[.!?])\s+", dispatch)
         shell_rule = next((sentence for sentence in sentences if "shell" in sentence and ("background" in sentence or "ampersand" in sentence or "`&`" in sentence)), "")
         self.assertRegex(shell_rule, r"(?:must not|forbid\w*|prohibit\w*|never)")
-        self.assertRegex(shell_rule, r"(?:detach\w*|disconnect\w*).{0,100}host(?: lifecycle)? tracking")
+        self.assertRegex(shell_rule, r"(?:detach\w*|disconnect\w*).{0,100}(?:(?:host(?: lifecycle)? )?tracking|untracked)")
         polling_rule = next((sentence for sentence in sentences if re.search(r"\bfiles?\b", sentence) and re.search(r"\blogs?\b", sentence) and "poll" in sentence), "")
-        self.assertRegex(polling_rule, r"(?:must not|forbid\w*|prohibit\w*|never)")
+        self.assertRegex(polling_rule, r"(?:must not|forbid\w*|prohibit\w*|never|no active-runner)")
 
     def test_sshx_batch_signal_semantics_are_spec_owned(self) -> None:
         text = read(SKILL)
         worker_delegation = section(text, "## Worker Delegation", "## Result Envelope")
         for required in [
-            "records every child, and joins every recorded child before publishing a report",
-            "its signal handling, interruption reporting, and inherited-disposition limits are owned by `CODEX_WORKER_SPEC.md` and the script's behavior tests",
-            "whole-job-tree teardown remains the host's responsibility",
-            "Caller-authored `&`, `nohup`, `disown`, and `setsid` remain forbidden",
+            "one foreground host job records/joins all children before report",
+            "`CODEX_WORKER_SPEC.md`/behavior tests own signals, interruption reports and inherited-disposition limits",
+            "host owns job-tree teardown",
+            "Caller `&`, `nohup`, `disown`, `setsid` are forbidden",
         ]:
             self.assertIn(required, worker_delegation)
         for duplicated in ["catches `INT` and `TERM`", "`SIGINT` ignored", "repeats a wait only when"]:
@@ -2941,10 +3178,9 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_in_flight_worker_blocks_caller_mutation(self) -> None:
         text = read(SKILL)
-        self.assertIn("While any `SshxWorkerFlightRecord` for the same `work_target` is `in-flight` or `retrying`", text)
-        self.assertIn("the caller is read-only for that target", text)
-        self.assertIn("The caller is non-mutating for that target and its external resources.", text)
-        self.assertIn("must not take over the same `work_target`", text)
+        self.assertIn("Active (`in-flight`/`retrying`) flights", text)
+        self.assertIn("make caller read-only for `work_target`/external resources", text)
+        self.assertIn("quiet process/log/workspace snapshots never permit takeover", text)
 
         in_flight = {"work_target": "skills/sshx/SKILL.md", "status": "in-flight"}
         retrying = {"work_target": "skills/sshx/SKILL.md", "status": "retrying"}
@@ -3015,7 +3251,7 @@ class SshxContractTests(unittest.TestCase):
 
         flight = {"status": "retrying", "retry_budget": 2, "attempt": 1}
         self.assertEqual(resolve_failed_flight(flight, fallback_available=False, consumed_retries=1), "retry-same-carrier")
-        for worker_mode in ("codex-cli", "nyxid-oracle", "isolated-token-subagent"):
+        for worker_mode in CARRIER_NAMES:
             exhausted = {**flight, "worker_mode": worker_mode, "attempt": 2}
             self.assertEqual(
                 resolve_failed_flight(exhausted, fallback_available=True, consumed_retries=2),
@@ -3052,7 +3288,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("no worker may see a same-round peer output or caller-conversation transcript content", text)
         self.assertIn("none of the allowed carriers provides it", text)
         self.assertIn("unknown and uncontrollable account memory and project context", text)
-        self.assertIn("none may be described as context-sterile or cited as evidence that their priors are independent", text)
+        self.assertIn("none may be described as context-sterile or cited as evidence of independent priors", text)
         self.assertIn("permanently sterile-context-unverified", text)
         for label in ("repo-prior-exposed", "external-prior-exposed", "caller-prior-exposed"):
             self.assertIn(label, text)
@@ -3089,7 +3325,7 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(forbidden_inline, text)
         self.assertIn("Logs are not inline in caller context", text)
         self.assertIn("Final reports aggregate `conclusion` values only", text)
-        self.assertIn("produce the final report from conclusions only while preserving `log_ref` references", text)
+        self.assertIn("aggregate and report conclusions only, retaining `log_ref` references", text)
         self.assertIn("opaque `log_ref`", text)
         self.assertIn("without inlining logs", text)
 
@@ -3157,7 +3393,7 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_runner_ownership_wording_has_no_legacy_assignment(self) -> None:
         text = read(SKILL)
-        self.assertIn("Only the runners mint IDs and derive disjoint attempt paths", text)
+        self.assertIn("runners alone mint IDs/disjoint attempt paths", text)
         self.assertNotIn("caller-assigned `result_ref`", text.lower())
         self.assertNotIn("caller-assigned `completion_sentinel`", text.lower())
 
@@ -3578,7 +3814,7 @@ class SshxContractTests(unittest.TestCase):
         text = read(SKILL)
         for forbidden_boundary in [
             "any other helper script",
-            "daemons",
+            "skill-owned daemons",
             "repository-owned CLI",
             "GitHub lifecycle operations",
             "git lifecycle operations",
@@ -3606,7 +3842,7 @@ class SshxContractTests(unittest.TestCase):
         )
         self.assertIn("No lifecycle authority is granted", text)
         self.assertIn(
-            "Allowed worker carriers are limited to `codex-cli`, `nyxid-oracle`, and `isolated-token-subagent`",
+            "Allowed worker carriers are limited to `codex-cli`, `heca`, `nyxid-oracle`, and `isolated-token-subagent`",
             text,
         )
         self.assertIn("not as controller authority", text)
@@ -3738,7 +3974,7 @@ class SshxContractTests(unittest.TestCase):
             review,
         )
         self.assertIn(
-            "whether an unrecognized token or phrase couples the contract to an external identifier or source",
+            "external identifier or source coupling by an unrecognized token or phrase",
             review,
         )
 

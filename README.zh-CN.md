@@ -10,7 +10,7 @@
 
 | skill | 用途 | 运行形态 |
 |---|---|---|
-| `sshx` | 面向决策、方案或已完成变更的 worker-delegated inline consensus。 | Prompt 合同与 worker runner；无 daemon、GitHub、git、label、release 或生命周期编排权限。 |
+| `sshx` | 面向决策、方案或已完成变更的 worker-delegated inline consensus。 | Prompt 合同与 worker runner；无 skill 自有 daemon、GitHub、git、label、release 或生命周期编排权限；可选在 heca 内通过 MCP 委派 worker。 |
 
 ## 核心
 
@@ -60,10 +60,11 @@
 ## 风险与限制
 
 - **宽执行权限：** Codex runner 默认使用 `danger-full-access`。提供工作目标前，请阅读[调用合同](./skills/sshx/CODEX_WORKER_SPEC.md#invocation)和[威胁模型](./skills/sshx/CODEX_WORKER_SPEC.md#threat-model)。
-- **成本与时长：** 完整的初始运行至少派发 10 次模型调用：六个思考席、一个实现 worker、三个 reviewer。修复、聚焦轮、重复 review 及适用的终止检查会增加工作。**默认不设置 `pass_budget` 上限**；详见[协议](./skills/sshx/SKILL.md#inlineconsensusprotocol)、[思考面板](./skills/sshx/SKILL.md#thinking-panel)、[评审](./skills/sshx/SKILL.md#review-triplet)和[轮次计费规则](./skills/sshx/SKILL.md#fix-or-done)。
+- **Heca 执行：** 席位使用无人值守的完整权限；agent 由 heca 拥有，host 任务超时与 teardown 无法触及。已完成 agent 的整理归 host，支持范围限于已记录的证据。详见 [worker 委派](./skills/sshx/SKILL.md#worker-delegation)。
+- **成本与时长：** 完整的初始运行至少派发 10 个 worker turn，每个 turn 都可能包含多次模型调用：六个思考席、一个实现 worker、三个 reviewer。修复、聚焦轮、重复 review 及适用的终止检查会增加工作。**默认不设置 `pass_budget` 上限**；详见[协议](./skills/sshx/SKILL.md#inlineconsensusprotocol)、[思考面板](./skills/sshx/SKILL.md#thinking-panel)、[评审](./skills/sshx/SKILL.md#review-triplet)和[轮次计费规则](./skills/sshx/SKILL.md#fix-or-done)。
 - **内容外发：** oracle 席将内联 brief 经 NyxID 发送到外部 ChatGPT Pro 账号。派发前应考虑 brief 中的内容；详见[worker 委派](./skills/sshx/SKILL.md#worker-delegation)和 oracle 的[请求合同](./skills/sshx/ORACLE_WORKER_SPEC.md#request)。
-- **产物留存：** brief、日志和结果会积累在 `${SSHX_HOME:-$HOME/.sshx}/<flight-id>/attempt-<n>`，直到清理或裁剪。详见[运行目录](./skills/sshx/CODEX_WORKER_SPEC.md#run-directory)与[不活跃 flight 清理](./skills/sshx/CODEX_WORKER_SPEC.md#inactive-flight-sweep)；过短的保留窗口可能删除仍在静默运行的 flight。
-- **Host 责任：** 超时与整个任务进程树的终止由 host harness 负责。[终止前提](./skills/sshx/CODEX_WORKER_SPEC.md#teardown-prerequisite)尚未验证 Codex、Cursor 和 Gemini host 的 teardown 行为；另见[委派合同](./skills/sshx/SKILL.md#worker-delegation)。
+- **产物留存：** runner 的 brief、日志和结果会积累在 `${SSHX_HOME:-$HOME/.sshx}/<flight-id>/attempt-<n>`，直到清理或裁剪。详见[运行目录](./skills/sshx/CODEX_WORKER_SPEC.md#run-directory)与[不活跃 flight 清理](./skills/sshx/CODEX_WORKER_SPEC.md#inactive-flight-sweep)；过短的保留窗口可能删除仍在静默运行的 flight。
+- **Host 责任：** runner 的超时与整个任务进程树的终止由 host harness 负责。[终止前提](./skills/sshx/CODEX_WORKER_SPEC.md#teardown-prerequisite)尚未验证 Codex、Cursor 和 Gemini host 的 teardown 行为；另见[委派合同](./skills/sshx/SKILL.md#worker-delegation)。
 - **合同变化：** [包元数据](./package.json)表明当前处于预发布阶段。合同可能变化，更新时请检查 [skill](./skills/sshx/SKILL.md) 与[贡献指南](./CONTRIBUTING.md)。
 - **产物不可信：** 共识仍是需要独立验证的 AI 产物（[仓库不动点 FI-001](./CLAUDE.md#共识研发不动点)）。上下文隔离不能证明先验独立或结果更好（[委派限制](./skills/sshx/SKILL.md#worker-delegation)）。[Lean 模型](./skills/sshx/formal/README.md#what-the-model-cannot-verify)检查形式对象，不能证明证据真实或实际运行合规；模型与文字是否对应仍需人工判断。
 
@@ -75,12 +76,19 @@ Host 必须为 runner 派发提供带完成通知的后台执行、超时和整�
 
 | Carrier | 前提与职责 |
 |---|---|
-| `codex-cli` | Bash、`jq`、可执行且可用的 Codex CLI，以及可写的运行根目录和提供的工作目标。每次启动都经过 [Codex runner](./skills/sshx/CODEX_WORKER_SPEC.md#carrier)。 |
+| `codex-cli` | Bash、`jq`、可执行且可用的 Codex CLI，以及可写的运行根目录和提供的工作目标。heca 外的初始席与 heca 内的回退席都经过 [Codex runner](./skills/sshx/CODEX_WORKER_SPEC.md#carrier)。 |
+| `heca` | 在 heca 内运行 sshx，当前会话须暴露 heca 的 MCP agent tools，工作目标须匹配已有 placement。检测到时接管全部初始 Codex 席，包括实现和修复。详见[使用 Heca Worker](#使用-heca-worker)与 [worker 委派](./skills/sshx/SKILL.md#worker-delegation)。 |
 | `nyxid-oracle` | Python 3、路径投影所需的 Bash 与 `jq`，以及可用的 NyxID CLI；broker 须有包含在线 worker 的 active pool。[Oracle runner](./skills/sshx/ORACLE_WORKER_SPEC.md#invocation)负责派发；另见 [pool 选择](./skills/sshx/ORACLE_WORKER_SPEC.md#pool-choice)与[登录诊断](./skills/sshx/ORACLE_WORKER_SPEC.md#broker-diagnostics)。 |
 | `isolated-token-subagent` | Host 提供隔离 token 上下文的 subagent 能力；同轮席位返回各自 verdict 前不得读取彼此输出。 |
 | `abstain` | 无 carrier 可用，或必需 flight 耗尽重试与 fallback 时诚实停止；它是结果，不是执行 carrier。 |
 
-每个多席阶段初始分配一个隔离 subagent 席、一个 oracle 席，其余为 Codex CLI，并受席位约束与 fallback 规则限制。tests reviewer 必须能在工作目标中执行验证。仅凭 carrier 分配和隔离不能证明模型多样性，详见[所属规则](./skills/sshx/SKILL.md#worker-delegation)。
+每个多席阶段初始分配一个隔离 subagent 席、一个 oracle 席；检测到 heca 时其余席位归 heca，否则归 Codex CLI，并受席位约束与 fallback 规则限制。tests reviewer 必须能在工作目标中执行验证。仅凭 carrier 分配和隔离不能证明模型多样性，详见[所属规则](./skills/sshx/SKILL.md#worker-delegation)。
+
+#### 使用 Heca Worker
+
+`sshx` 支持与 `codex-cli`、`nyxid-oracle` 并列的 `heca` worker 载体。非变更能力检查检测到 heca 时，它接管原本分给 Codex CLI 的全部席位：每个多席阶段的余量与每个单 worker 阶段，包括实现和修复。heca 缺席时，既有载体组成不变。回退优先级始终不变，因此在 heca 内仍可通过回退使用 Codex CLI。
+
+只有 sshx 在 heca 内运行且 caller 会话暴露 heca 的 MCP agent tools 时，才提供 heca 选项。席位直接通过这些工具运行。用户或 host 可逐席指定 provider 和 model；默认优先使用 heca 报告已启用的 `codex` provider，否则使用 caller 自身的 heca provider，并采用 heca 默认 model。工作目标须匹配已有 heca placement。[Worker 委派](./skills/sshx/SKILL.md#worker-delegation)拥有合同与证据边界。
 
 ### Claude Code
 
@@ -110,6 +118,7 @@ Host 必须为 runner 派发提供带完成通知的后台执行、超时和整�
 | 仓库规则与结构 | [CLAUDE.md](./CLAUDE.md)，同时由受版本控制的 `AGENTS.md` 符号链接提供。 |
 | 协议与行为合同 | [SKILL.md](./skills/sshx/SKILL.md)。 |
 | Codex 执行与产物维护 | [CODEX_WORKER_SPEC.md](./skills/sshx/CODEX_WORKER_SPEC.md) 与 [scripts](./skills/sshx/scripts/)。 |
+| Heca MCP 委派 | [SKILL.md](./skills/sshx/SKILL.md#worker-delegation)。 |
 | NyxID broker 派发 | [ORACLE_WORKER_SPEC.md](./skills/sshx/ORACLE_WORKER_SPEC.md)。 |
 | 形式证据与局限 | [形式模型 README](./skills/sshx/formal/README.md)。 |
 | 平台入口 | [Claude marketplace](./.claude-plugin/marketplace.json)、[Claude 插件](./.claude-plugin/plugin.json)、[Codex](./.codex-plugin/plugin.json)、[Cursor](./.cursor-plugin/plugin.json) 和 [Gemini](./gemini-extension.json)。 |

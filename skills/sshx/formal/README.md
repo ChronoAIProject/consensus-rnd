@@ -82,6 +82,52 @@ The association and semantic truth of external evidence remain premises; this is
 provenance authentication scheme or new runtime record. There is no independent declaration
 action.
 
+The carrier universe has four entries and the fallback bound follows its length.
+`nextCarrier_heca_absent` and `fallback_heca_absent` compare the new selector/chain
+with the retained pre-heca functions for every eligibility/tried table. Composition
+is parameterized by the recorded heca detection: `composition_heca_absent` proves
+exact equality with the old layout for every seat count; detected protocol rosters
+give every seat in the Codex remainder to heca, including the executable tests
+seat, and single-worker stages also use heca. Feasible draws are proved for thinking,
+review, termination, and implementation/repair; detected initial batches are empty. The once-per-run heca check records even a
+negative tool-exposure result before mode resolution and cannot be repeated. Detection
+reads only the caller's exposed heca MCP agent toolset, including tools listed for lazy
+loading; it invokes nothing and has no CLI/daemon/provider probe or outside-heca route.
+For heca, `Observation.carrierExited` means confirmed agent-not-running evidence.
+Result collection still requires a finish notice and agent-not-running evidence.
+`recordStoppedHecaFailure` separately records a failed attempt after own-agent
+archive/status confirmation, without a finish notice; it uses the existing
+`collectEffect` with a failed observation and empty result/completion references.
+The same finite retry budget then permits a fresh launch or exhaustion to abstention
+and the unchanged fallback selector. Unconfirmed/running or other-agent stop evidence
+cannot release the target; retrying flights remain protected. These interpreted
+evidence premises do not authenticate status or prove host tool behavior.
+The MCP dispatch fixes the whole task through one spawn prompt: an inline whole
+brief or one caller-kept, readable, unchanged, peer-output-free whole-brief file,
+with the reply contract always in the prompt. Provider/model overrides pass through;
+the default provider is heca’s codex when reported enabled, otherwise the caller’s
+provider, and an omitted model uses the provider default. Placement mismatch in
+either cwd or worktree fails closed. The newest-two collection projection refuses
+a missing matching notice or a caller still in the dispatch turn, including a
+blocking wait, sleep or poll loop; the caller must end/yield and collect on a later
+turn. The flight remains active and its existing target guard remains in force.
+Own-agent archive/status projections add no controller lifecycle power. The operation
+model admits dispatch/collection and stopping the flight's own agent; everything else
+is forbidden. No model claims a notification is completion or that activity process
+detail is a conclusion. Real-tool probes and the ASSUMED-UNVERIFIED register have one
+home: the 2026-10-13 baseline and dated evidence as of the R4/R5 repair dispatch
+on 2026-10-14 at the top of
+[`test_sshx_contract.py`](../tests/test_sshx_contract.py). There is no mechanical heca
+runner or replacement behavior harness; the real 20-minute Claude-provider review
+and the subsequent 85-second single-worker and 349-second review flights on the
+codex provider are recorded there. Later flights, including this repair and its
+review, fall outside that record's cutoff. Composed heca-first implementation and
+stop-without-notice recovery traces check every dispatch, fresh retry launch,
+failure record, heca-to-Codex fallback, result collection and review-readiness guard
+for an absent or explicit finite pass cap, including zero; recovery preserves the
+cap. Named negative statements refuse an unconfirmed stop, unnotified success,
+repeated failure recording without a new launch, and target mutation while active.
+
 Fallback uses the existing
 `nextCarrier` selector against tried carriers projected from one assignment's flight history.
 The original flight id is a ghost assignment link preserved by replacements, so distinct
@@ -89,10 +135,13 @@ approved assignments on the same target remain distinct. Every admitted fallback
 reduces that assignment's untried-carrier remainder. Draws, review dispatch and fallback
 share the executable-carrier restriction for the tests seat.
 
-The model's `launchDelegated` action projects the direct subagent invocation, the only
-launch outside a runner. Codex and oracle flights require `launchViaRunner`, each through its
-own closed-set runner (`runnerFor`), so a delegated oracle launch is refused. Both paths
-require launch and host completion before collection. This adds no runtime interface, host capability, worker-record field or budget.
+The model's `launchDelegated` action projects direct heca MCP or isolated-subagent
+invocation, with no runner receipt, minted identity or attempt path. Codex and oracle
+require `launchViaRunner` through their closed-set runner (`runnerFor`); runner launches
+of heca and delegated oracle launches are refused. Both paths require launch and a host
+notification before one-shot result collection; a confirmed own-agent stop can instead
+record failure without collecting a result. A notification grants collection authority,
+not completion. This adds no runtime interface, host capability, worker-record field or budget.
 The seven stages and per-flight completion predicate are unchanged. Batch progress is a
 formal projection of existing worker conclusions, not a runtime scheduler. Trigger-aware
 downgrade and plan admission retain the existing contextual evidence chain.

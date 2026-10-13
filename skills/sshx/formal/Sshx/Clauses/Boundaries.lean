@@ -14,7 +14,7 @@ open Sshx
 
 /-! ## Boundaries -/
 
--- SKILL[def]: "This skill is a prompt contract with a closed set of exactly six named mechanical script exceptions, governed only by `skills/sshx/CODEX_WORKER_SPEC.md`, `skills/sshx/ORACLE_WORKER_SPEC.md`, and their behavior tests:"
+-- SKILL[def]: "The closed set of exactly six named mechanical script exceptions is governed only by `skills/sshx/CODEX_WORKER_SPEC.md`, `skills/sshx/ORACLE_WORKER_SPEC.md`, and their behavior tests:"
 -- SKILL[def]: "- `skills/sshx/scripts/run-codex-worker.sh`;"
 -- SKILL[def]: "- `skills/sshx/scripts/run-oracle-worker.py`;"
 -- SKILL[def]: "- `skills/sshx/scripts/run-codex-worker-batch.sh`;"
@@ -47,7 +47,7 @@ def namedObjectIs (_ : RuntimeSurface) : Bool := false
 /-- Dependencies the skill must not add or depend on. -/
 inductive ForbiddenDependency
   | anyOtherHelperScript
-  | daemons
+  | skillOwnedDaemons
   | repositoryOwnedCli
   | githubLifecycleOperations
   | gitLifecycleOperations
@@ -60,7 +60,7 @@ inductive ForbiddenDependency
 
 -- SKILL[def]: "It must not add or depend on:"
 -- SKILL[def]: "- any other helper script;"
--- SKILL[def]: "- daemons;"
+-- SKILL[def]: "- skill-owned daemons;"
 -- SKILL[def]: "- repository-owned CLI;"
 -- SKILL[def]: "- GitHub lifecycle operations;"
 -- SKILL[def]: "- git lifecycle operations;"
@@ -73,7 +73,7 @@ def mayDependOn (_ : ForbiddenDependency) : Bool := false
 -- SKILL[def]: "- other skills' or repository-owned internal prompts, scripts, or runtimes as an implementation dependency."
 theorem nothing_forbidden_is_depended_on (d : ForbiddenDependency) : mayDependOn d = false := rfl
 
--- SKILL[ref]: "Allowed worker carriers are limited to `codex-cli`, `nyxid-oracle`, and `isolated-token-subagent`."
+-- SKILL[ref]: "Allowed worker carriers are limited to `codex-cli`, `heca`, `nyxid-oracle`, and `isolated-token-subagent`."
 abbrev allowedCarriers := Carrier.univ
 
 -- SKILL[def]: "Use them only as worker delegation capability, not as controller authority."
@@ -86,7 +86,7 @@ def carrierHasControllerAuthority (_ : Carrier) : Bool := false
 -- SKILL[def]: "- false grounding: unverified premises, retrospective fit, imagined relevance, or a mathematical name whose hypotheses the recorded mechanism state does not instantiate;"
 -- SKILL[def]: "- rabbit-holing: blocking by default, peripheral detail, repeated unchanged work, finite case registers, procedural findings against the run's own records, or per-case diagnosis after one declared absorber already determines the goal-visible route;"
 -- SKILL[def]: "- goal loss: 忘记目标 drift to an unranked target, 因小失大 a part served at the whole's cost, or 买椟还珠 form held above substance;"
--- SKILL[def]: "- wrong convergence: beauty without worth, scalarized incomparable candidates, path-dependent gain on non-additive coordinates, or budget and lifecycle milestones presented as completion;"
+-- SKILL[def]: "- wrong convergence: beauty without worth, scalarized incomparable candidates, path-dependent gain on non-additive coordinates, or spawn acknowledgments, wait exit 0 on timeout, budget and lifecycle milestones presented as completion;"
 -- SKILL[def]: "- contaminated adjudication: same-round peer evidence, an out-of-prefix ledger event, or dependency-reaching evidence presented as independent;"
 -- SKILL[def]: "- boundary drift: carrier diversity over-claims, improvised worker mechanics, or daemon, GitHub, git, label, and release orchestration for an inline decision."
 inductive BaselineFailure

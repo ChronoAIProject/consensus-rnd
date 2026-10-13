@@ -67,7 +67,7 @@ inductive ResidualClass
   | unrecognizedTokenCouplesExternally
   deriving DecidableEq, Repr
 
--- SKILL[def]: "This reviewer duty is the declared absorber for the residual classes that positional and lexical checks cannot decide: whether arbitrary English semantically entails such a weakening, and whether an unrecognized token or phrase couples the contract to an external identifier or source."
+-- SKILL[def]: "This duty absorbs what positional and lexical checks cannot decide: semantic weakening in arbitrary English and external identifier or source coupling by an unrecognized token or phrase."
 def absorber : ResidualClass → ProtocolTextCheck
   | .arbitraryEnglishEntailsWeakening => .semanticWeakening
   | .unrecognizedTokenCouplesExternally => .unrecognizedExternalCoupling

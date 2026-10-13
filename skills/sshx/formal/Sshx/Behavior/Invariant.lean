@@ -14,14 +14,14 @@ open Sshx
 
 /-! ## Actions that are never allowed -/
 
--- SKILL[inv]: "Caller-authored `&`, `nohup`, `disown`, and `setsid` remain forbidden."
+-- SKILL[inv]: "Caller `&`, `nohup`, `disown`, `setsid` are forbidden."
 theorem never_shell_background (s : ProtocolState) (id : Nat) :
     ¬ allowed s (.launchViaShellBackground id) := fun h => h
 
--- SKILL[inv]: "It must not monitor files or logs to poll for completion; doing so conflicts with the no-polling rule above."
+-- SKILL[inv]: "No active-runner artifact/file/log polling."
 theorem never_poll (s : ProtocolState) (id : Nat) : ¬ allowed s (.pollArtifacts id) := fun h => h
 
--- SKILL[inv]: "`sshx` must not discover or infer the goal from external lifecycle milestones, release state, runtime host configuration, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface."
+-- SKILL[inv]: "`sshx` must not discover or infer the goal from lifecycle milestones, release state, runtime host configuration, GitHub issues or pull requests, labels, branches, or other external lifecycle surfaces."
 theorem never_lifecycle (s : ProtocolState) (op : LifecycleOp) : ¬ allowed s (.lifecycle op) :=
   fun h => h
 
@@ -93,6 +93,24 @@ theorem refs_attempt_updateFlight {s : ProtocolState} {id : Nat} {g : FlightRec 
     · rw [hfx]; exact h6 x hx
     · rw [hfx]; exact hg' x hx
 
+theorem safe_collectEffect {s : ProtocolState} (hs : Safe s) (id : Nat) (o : Observation) :
+    Safe (updateFlight s id (collectEffect o)) := by
+  obtain ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩ := hs
+  have hu := refs_attempt_updateFlight (s := s) (id := id) (g := collectEffect o)
+    (fun x _ hr => by
+      simp only [collectEffect] at hr ⊢
+      split
+      · rfl
+      · split <;> simp_all)
+    (fun x hx => by
+      simp only [collectEffect]
+      split
+      · simpa using h6 x hx
+      · split
+        · rename_i hlt; simpa using hlt
+        · simpa using h6 x hx) h5 h6
+  exact ⟨fun hne => h1 (updateFlight_ne_nil hne), h2, h4, hu.1, hu.2, h7, h8, h9⟩
+
 theorem safe_step {s : ProtocolState} {a : Action} (hs : Safe s) (ha : allowed s a) :
     Safe (step s a) := by
   obtain ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩ := hs
@@ -110,8 +128,12 @@ theorem safe_step {s : ProtocolState} {a : Action} (hs : Safe s) (ha : allowed s
   | capabilityCheck c =>
     refine ⟨h1, h2, ?_, h5, h6, h7, h8, h9⟩
     intro hm; simp only [step, List.mem_cons]; exact Or.inr (h4 hm)
+  | recordHecaCheck detected =>
+    refine ⟨h1, h2, ?_, h5, h6, h7, h8, h9⟩
+    intro hm
+    cases detected <;> simp [step, h4 hm]
   | resolveMode m =>
-    obtain ⟨hg, -, hnone, hcodex, hm⟩ := ha
+    obtain ⟨hg, -, hnone, hcodex, -, hm⟩ := ha
     have hempty : s.flights = [] := by
       by_contra hne
       obtain ⟨c, hc⟩ := h1 hne
@@ -154,21 +176,9 @@ theorem safe_step {s : ProtocolState} {a : Action} (hs : Safe s) (ha : allowed s
       (fun x _ hr => by simpa using h5 x ‹_› (by simpa using hr))
       (fun x hx => by simpa using h6 x hx) h5 h6
     refine ⟨fun hne => h1 (updateFlight_ne_nil hne), h2, h4, hu.1, hu.2, h7, h8, h9⟩
-  | collect id o =>
-    have hu := refs_attempt_updateFlight (s := s) (id := id) (g := collectEffect o)
-      (fun x _ hr => by
-        simp only [collectEffect] at hr ⊢
-        split
-        · rfl
-        · split <;> simp_all)
-      (fun x hx => by
-        simp only [collectEffect]
-        split
-        · simpa using h6 x hx
-        · split
-          · rename_i hlt; simpa using hlt
-          · simpa using h6 x hx) h5 h6
-    refine ⟨fun hne => h1 (updateFlight_ne_nil hne), h2, h4, hu.1, hu.2, h7, h8, h9⟩
+  | collect id o => exact safe_collectEffect ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩ id o
+  | recordStoppedHecaFailure id _ =>
+    exact safe_collectEffect ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩ id stoppedHecaFailure
   | fallbackFlight id carrier =>
     obtain ⟨f0, hf0, -, -, -⟩ := ha
     have hstep : step s (.fallbackFlight id carrier) =
@@ -264,7 +274,6 @@ theorem context_only_permitted {s : ProtocolState} (h : Reachable s) (item : Con
     (hi : item ∈ s.context) : item.permitted = true :=
   (safe_of_reachable h).contextPermitted item hi
 
--- SKILL[inv]: "The caller must not take over the same `work_target` because a process snapshot, log text, or workspace state appears quiet."
 theorem no_mutation_while_active {s : ProtocolState} (h : Reachable s) (entry : String × Bool)
     (he : entry ∈ s.mutationLog) : entry.2 = false :=
   (safe_of_reachable h).noMutationWhileActive entry he

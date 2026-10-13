@@ -20,7 +20,7 @@ private def intake (continuation : ContinuationEntry) : IntakeEvidence :=
 private def readyState : ProtocolState :=
   { ProtocolState.initial with
     stage := .implementation, goal := some goal, mode := some (.carrier .codexCli),
-    capabilityChecked := [.codexCli, .isolatedTokenSubagent] }
+    capabilityChecked := [.codexCli, .isolatedTokenSubagent], hecaCheckRecorded := true }
 
 private def twoParts : ImplementationPlan := ⟨["contract", "verification"], 2⟩
 private def begin := step readyState (.beginImplementation twoParts)
@@ -295,6 +295,123 @@ example : allowed recovered .advanceStage := by
   decide
 example : recovered.passBudget = none := by decide
 
+-- Detected initial implementation is heca-first; failure recovers through the unchanged
+-- priority selector to Codex. Neither retry nor fallback spends a pass-budget unit.
+private def hecaReady (budget : Option Nat) : ProtocolState :=
+  { readyState with
+    capabilityChecked := Carrier.univ, passBudget := budget, mode := some (.carrier .heca) }
+
+private def ownStop : HecaStopEvidence := ⟨true, true, true⟩
+private def hecaInitialActions (retries : Nat) : List Action :=
+  [.beginImplementation ⟨["all work"], 1⟩,
+   .openFlight .implementation .implementation .heca "target" retries,
+   .launchDelegated 0]
+private def hecaInFlight (budget : Option Nat) (retries : Nat) :=
+  run (hecaReady budget) (hecaInitialActions retries)
+
+theorem heca_first_implementation_admitted (budget : Option Nat) (retries : Nat) :
+    admitted (hecaReady budget) (hecaInitialActions retries) := by
+  simp [admitted, hecaInitialActions, hecaReady, allowed, guardBeginImplementation,
+    ImplementationPlan.valid, guardOpenFlight, guardImplementationFlight,
+    guardLaunchDelegated, readyState, ProtocolState.initial, ProtocolState.modeResolved,
+    ProtocolState.abstained, ProtocolState.reviewStarted, ProtocolState.reviewReady,
+    ProtocolState.batchSettled, ProtocolState.batchFlights, ProtocolState.flight,
+    ProtocolState.freshId, step, ImplementationPlan.start, newFlight, FlightRec.active,
+    Carrier.univ]
+
+theorem heca_stopped_no_notice_failure_admitted (budget : Option Nat) (retries : Nat) :
+    ((hecaInFlight budget retries).flight 0).map (·.notified) = some false ∧
+    allowed (hecaInFlight budget retries) (.recordStoppedHecaFailure 0 ownStop) := by
+  simp [allowed, guardStoppedHecaFailure, hecaInFlight, run, hecaInitialActions,
+    hecaReady, readyState, ProtocolState.initial, ProtocolState.flight,
+    ProtocolState.freshId, step, ImplementationPlan.start, newFlight, updateFlight,
+    FlightRec.active, ownStop, HecaStopEvidence.confirmed]
+
+theorem heca_unnotified_success_refused (budget : Option Nat) (retries : Nat) :
+    ¬ allowed (hecaInFlight budget retries) (.collect 0 successful) := by
+  simp [allowed, guardCollect, hecaInFlight, run, hecaInitialActions, hecaReady,
+    readyState, ProtocolState.initial, ProtocolState.flight, ProtocolState.freshId,
+    step, ImplementationPlan.start, newFlight, updateFlight]
+
+theorem heca_running_unnotified_failure_refused (budget : Option Nat) (retries : Nat) :
+    ¬ allowed (hecaInFlight budget retries)
+      (.recordStoppedHecaFailure 0 ⟨true, true, false⟩) ∧
+    ¬ allowed (hecaInFlight budget retries) (.collect 0 stoppedHecaFailure) ∧
+    ¬ allowed (hecaInFlight budget retries) (.mutateTarget "target") := by
+  simp [allowed, guardStoppedHecaFailure, guardCollect, guardMutateTarget,
+    hecaInFlight, run, hecaInitialActions, hecaReady, readyState, ProtocolState.initial,
+    ProtocolState.flight, ProtocolState.freshId, ProtocolState.activeOn, step,
+    ImplementationPlan.start, newFlight, updateFlight, FlightRec.active,
+    HecaStopEvidence.confirmed]
+
+private def hecaRetried (budget : Option Nat) :=
+  step (hecaInFlight budget 1) (.recordStoppedHecaFailure 0 ownStop)
+
+theorem heca_stopped_no_notice_retry (budget : Option Nat) :
+    ((hecaRetried budget).flight 0).map (fun f =>
+      (f.status, f.attempt, f.envelopeRef, f.sentinelRef, f.notified)) =
+      some (.retrying, 1, none, none, false) ∧
+    ¬ allowed (hecaRetried budget) (.recordStoppedHecaFailure 0 ownStop) ∧
+    ¬ allowed (hecaRetried budget) (.mutateTarget "target") := by
+  simp [hecaRetried, hecaInFlight, run, hecaInitialActions, hecaReady, readyState,
+    ProtocolState.initial, ProtocolState.flight, ProtocolState.freshId,
+    ProtocolState.activeOn, step, ImplementationPlan.start, newFlight, updateFlight,
+    collectEffect, stoppedHecaFailure, done, FlightRec.active, allowed,
+    guardStoppedHecaFailure, guardMutateTarget]
+
+private def hecaRecoveryActions : List Action :=
+  hecaInitialActions 1 ++
+    [.recordStoppedHecaFailure 0 ownStop,
+     .launchDelegated 0, .recordStoppedHecaFailure 0 ownStop,
+     .fallbackFlight 0 .codexCli,
+     .launchViaRunner 1, .hostNotified 1, .collect 1 successful,
+     .recordImplementation 1 ["all work"] true, .advanceStage]
+
+theorem heca_stop_without_notice_recovery_admitted (budget : Option Nat) :
+    admitted (hecaReady budget) hecaRecoveryActions := by
+  simp [admitted, hecaRecoveryActions, hecaInitialActions, hecaReady, allowed,
+    guardBeginImplementation, ImplementationPlan.valid, guardOpenFlight,
+    guardImplementationFlight, guardLaunchViaRunner, guardLaunchDelegated,
+    guardStoppedHecaFailure, ownStop, HecaStopEvidence.confirmed, guardHostNotified,
+    guardCollect, guardFallback, guardRecordImplementation, guardAdvanceStage,
+    readyState, ProtocolState.initial, ProtocolState.modeResolved,
+    ProtocolState.abstained, ProtocolState.reviewStarted, ProtocolState.reviewReady,
+    ProtocolState.batchSettled, ProtocolState.batchFlights, ProtocolState.flight,
+    ProtocolState.freshId, ProtocolState.triedCarriers, ProtocolState.eligibleCarriers,
+    step, ImplementationPlan.start, newFlight, reopenFlight, updateFlight,
+    collectEffect, stoppedHecaFailure, done, successful, FlightRec.active,
+    nextCarrier, Carrier.univ, CarrierSet.get, Stage.next]
+
+private def hecaRecovered (budget : Option Nat) := run (hecaReady budget) hecaRecoveryActions
+
+theorem heca_stop_without_notice_recovery_settles (budget : Option Nat) :
+    ((hecaRecovered budget).flight 0).map (fun f =>
+      (f.status, f.attempt, f.envelopeRef, f.sentinelRef, f.notified)) =
+      some (.abstained, 1, none, none, false) ∧
+    ((hecaRecovered budget).flight 1).map (·.carrier) = some .codexCli ∧
+    ((hecaRecovered budget).flight 1).map (·.status) = some .terminal ∧
+    (hecaRecovered budget).reviewReady = true ∧
+    (hecaRecovered budget).stage = .reviewTriplet ∧
+    (hecaRecovered budget).passBudget = budget := by
+  simp [hecaRecovered, run, hecaRecoveryActions, hecaInitialActions, hecaReady,
+    readyState, ProtocolState.initial, step, ImplementationPlan.start, newFlight,
+    reopenFlight, updateFlight, collectEffect, stoppedHecaFailure, done, successful,
+    ProtocolState.reviewReady, ProtocolState.batchSettled, ProtocolState.batchFlights,
+    ProtocolState.flight, ProtocolState.freshId, FlightRec.active, Stage.next]
+
+example : admitted (hecaReady none) hecaRecoveryActions :=
+  heca_stop_without_notice_recovery_admitted none
+example : admitted (hecaReady (some 0)) hecaRecoveryActions :=
+  heca_stop_without_notice_recovery_admitted (some 0)
+
+-- A notified attempt with a still-running agent cannot release the flight either.
+example (budget : Option Nat) :
+    ¬ allowed (step (hecaInFlight budget 0) (.hostNotified 0))
+      (.collect 0 { successful with carrierExited := false }) := by
+  simp [allowed, guardCollect, hecaInFlight, run, hecaInitialActions, hecaReady,
+    readyState, ProtocolState.initial, step, ProtocolState.flight, ProtocolState.freshId,
+    ImplementationPlan.start, newFlight, updateFlight, successful]
+
 private def carrierExhausted := run readyState
   (recoveryActions { successful with exitZero := false })
 example : carrierExhausted.reviewReady = false := by decide
@@ -374,7 +491,7 @@ example : admitted readyState
     step, ImplementationPlan.start, newFlight, updateFlight, collectEffect, done,
     successful, FlightRec.active, Stage.next]
 
-private def testsReviewState := { review with capabilityChecked := Carrier.univ }
+private def testsReviewState := { review with capabilityChecked := [.codexCli, .nyxidOracle, .isolatedTokenSubagent] }
 private def testsRecoveryActions (observation : Observation) : List Action :=
   [.openFlight .review .tests .codexCli "target" 0,
    .launchViaRunner 2, .hostNotified 2, .collect 2 { successful with exitZero := false },
@@ -429,11 +546,29 @@ private def authorizedRevision (r : Revision) (source : Option ContinuationSourc
 private def startupActions (c : ContinuationEntry) : List Action :=
   [.writeGoal goal (intake c),
    .appendRevision scopeNote (authorizedRevision scopeNote none),
-   .advanceStage, .capabilityCheck .codexCli, .resolveMode (.carrier .codexCli), .advanceStage]
+   .advanceStage, .capabilityCheck .codexCli, .recordHecaCheck false, .resolveMode (.carrier .codexCli), .advanceStage]
+-- Heca records even an absent check once; it cannot redraw availability later.
+example (s : ProtocolState) (first second : Bool) :
+    ¬ allowed (step s (.recordHecaCheck first)) (.recordHecaCheck second) := by
+  simp [allowed, guardHecaCheck, step]
+
+example (s : ProtocolState) :
+    (step s (.recordHecaCheck false)).capabilityChecked = s.capabilityChecked := rfl
+
+example (s : ProtocolState) :
+    Carrier.heca ∈ (step s (.recordHecaCheck true)).capabilityChecked := by
+  simp [step]
+
+example : allowed { review with capabilityChecked := Carrier.univ }
+    (.openFlight .review .tests .heca "target" 0) := by
+  simp only [allowed, guardOpenFlight, guardReviewFlight, ProtocolState.modeResolved,
+    ProtocolState.abstained]
+  decide
+
 -- All authority states permit routine startup without a question, preserving revision support.
 example (c : ContinuationEntry) : admitted ProtocolState.initial (startupActions c) := by
   simp [admitted, startupActions, allowed, guardWriteGoal, guardAppendRevision,
-    guardAdvanceStage, guardCapabilityCheck, guardResolveMode, Harness.complete,
+    guardAdvanceStage, guardCapabilityCheck, guardHecaCheck, guardResolveMode, Harness.complete,
     authorizedRevision, RevisionEvidence.valid,
     IntakeEvidence.complete, goal, intake, ProtocolState.initial, ProtocolState.goalWritten,
     ProtocolState.modeResolved, ProtocolState.abstained, step, GoalArtifact.correct, Stage.next]
