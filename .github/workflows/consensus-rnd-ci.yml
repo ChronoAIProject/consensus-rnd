@@ -84,6 +84,7 @@ jobs:
       - name: Run contract tests
         run: |
           python3 -m unittest discover -s skills/sshx/tests -p 'test_*.py'
+          python3 -m unittest discover -s .github/tests -p 'test_*.py'
 
   manifest-version-sync:
     name: manifest-version-sync
@@ -114,33 +115,10 @@ jobs:
 
       - name: Install advisory lint tools
         shell: bash
-        run: |
-          set +e
-          python3 -m pip install --user ruff
-          RUFF_INSTALL_STATUS=$?
-          npm install -g markdownlint-cli2
-          MARKDOWNLINT_INSTALL_STATUS=$?
-          {
-            echo "## lint-advisory installs"
-            echo "- ruff install exit: ${RUFF_INSTALL_STATUS}"
-            echo "- markdownlint-cli2 install exit: ${MARKDOWNLINT_INSTALL_STATUS}"
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+        run: python3 -m pip install ruff==0.14.0
 
       - name: Run advisory linters
         shell: bash
         run: |
-          set +e
-          if compgen -G ".github/scripts/*.sh" > /dev/null; then shellcheck .github/scripts/*.sh; else true; fi
-          SHELLCHECK_STATUS=$?
-          python3 -m ruff check --select E9,F63,F7,F82 .github/scripts skills/sshx/tests
-          RUFF_STATUS=$?
-          markdownlint-cli2 "**/*.md" "!node_modules" "!.git"
-          MARKDOWNLINT_STATUS=$?
-          {
-            echo "## lint-advisory results"
-            echo "- shellcheck exit: ${SHELLCHECK_STATUS}"
-            echo "- ruff exit: ${RUFF_STATUS}"
-            echo "- markdownlint-cli2 exit: ${MARKDOWNLINT_STATUS}"
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+          shellcheck --severity=warning --exclude=SC1007 skills/sshx/scripts/*.sh
+          python3 -m ruff check --select E9,F63,F7,F82 .github/scripts .github/tests skills/sshx/scripts skills/sshx/tests

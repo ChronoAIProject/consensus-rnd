@@ -13,7 +13,6 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
-MAP_PATH = ROOT / ".version-bump.json"
 SEMVER_RE = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
     r"(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"

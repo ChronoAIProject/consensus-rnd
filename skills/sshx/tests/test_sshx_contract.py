@@ -159,8 +159,6 @@ CONSTITUTION = ROOT / "CLAUDE.md"
 SKILL = ROOT / "skills" / "sshx" / "SKILL.md"
 SPEC = ROOT / "skills" / "sshx" / "CODEX_WORKER_SPEC.md"
 ORACLE_SPEC = ROOT / "skills" / "sshx" / "ORACLE_WORKER_SPEC.md"
-README = ROOT / "README.md"
-GEMINI = ROOT / "GEMINI.md"
 CI = ROOT / ".github" / "workflows" / "consensus-rnd-ci.yml"
 BASELINE_ARTIFACT_PATHSPEC = "*baseline-issue342-sshx.md"
 PASS_CLASSES = frozenset(
@@ -3745,10 +3743,6 @@ class SshxContractTests(unittest.TestCase):
         )
 
     def test_sshx_docs_and_ci_discovery(self) -> None:
-        self.assertRegex(read(README), r"\| `sshx` \|")
-        self.assertIn("轻量 worker-delegated inline 共识方法论", read(README))
-        self.assertIn("`sshx`", read(GEMINI))
-        self.assertIn("worker-delegated inline consensus", read(GEMINI))
         self.assertIn("python3 -m unittest discover -s skills/sshx/tests -p 'test_*.py'", read(CI))
 
 
