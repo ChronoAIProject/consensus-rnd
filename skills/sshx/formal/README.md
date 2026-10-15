@@ -93,11 +93,15 @@ review, termination, and implementation/repair; detected initial batches are emp
 negative tool-exposure result before mode resolution and cannot be repeated. Detection
 reads only the caller's exposed heca MCP agent toolset, including tools listed for lazy
 loading; it invokes nothing and has no CLI/daemon/provider probe or outside-heca route.
-For heca, `Observation.carrierExited` means confirmed agent-not-running evidence.
-Result collection still requires a finish notice and agent-not-running evidence.
-`recordStoppedHecaFailure` separately records a failed attempt after own-agent
-archive/status confirmation, without a finish notice; it uses the existing
-`collectEffect` with a failed observation and empty result/completion references.
+For heca, `Observation.carrierExited` means terminal/not-running evidence from
+the collection read. A finish notice authorizes one read even when it lacks the
+turn-end transition: `step` records that failed collection, while `collectReadEffect`
+clears result/completion references and keeps the attempt active, launched, and at
+its current retry count. After recording either archive outcome, `recordStoppedHecaFailure` consumes
+same-agent status confirmation that the agent is not running, preserves the recorded
+archive outcome (including a reported failure), then applies the existing
+`collectEffect` with a failed observation. The separate no-notice stop route is
+unchanged. Neither route supplies completion evidence.
 The same finite retry budget then permits a fresh launch or exhaustion to abstention
 and the unchanged fallback selector. Unconfirmed/running or other-agent stop evidence
 cannot release the target; retrying flights remain protected. These interpreted
@@ -111,22 +115,43 @@ either cwd or worktree fails closed. The newest-two collection projection refuse
 a missing matching notice or a caller still in the dispatch turn, including a
 blocking wait, sleep or poll loop; the caller must end/yield and collect on a later
 turn. The flight remains active and its existing target guard remains in force.
-Own-agent archive/status projections add no controller lifecycle power. The operation
-model admits dispatch/collection and stopping the flight's own agent; everything else
-is forbidden. No model claims a notification is completion or that activity process
-detail is a conclusion. Real-tool probes and the ASSUMED-UNVERIFIED register have one
-home: the 2026-10-13 baseline and dated evidence as of the R4/R5 repair dispatch
-on 2026-10-14 at the top of
-[`test_sshx_contract.py`](../tests/test_sshx_contract.py). There is no mechanical heca
-runner or replacement behavior harness; the real 20-minute Claude-provider review
-and the subsequent 85-second single-worker and 349-second review flights on the
-codex provider are recorded there. Later flights, including this repair and its
-review, fall outside that record's cutoff. Composed heca-first implementation and
-stop-without-notice recovery traces check every dispatch, fresh retry launch,
-failure record, heca-to-Codex fallback, result collection and review-readiness guard
-for an absent or explicit finite pass cap, including zero; recovery preserves the
-cap. Named negative statements refuse an unconfirmed stop, unnotified success,
-repeated failure recording without a new launch, and target mutation while active.
+The ownership projection checks only own-agent scope for stop/archive operations;
+it admits dispatch/collection and forbids every other heca lifecycle or orchestration
+operation. Production `Behavior.Model` refines that projection with collection and
+heca-carrier requirements, through `Action`, `allowed`, `step`, and `Reachable`. Its
+archive guard refuses the matching-notice-to-collection window, another agent, and
+non-heca flights. The model implements the archive duty as a settlement gate before
+relaunch, implementation recording, stage advance, termination evaluation, and claim —
+a stricter ordering than the `SKILL.md` sentence. A failed archive remains explicitly
+reported as unresolved housekeeping; recording that outcome satisfies the reporting
+gate without proving cleanup success. This is a safety/duty property, not a liveness
+or eventual-success guarantee for an interrupted caller. The confirmed no-notice stop
+archive already discharges the duty and cannot be repeated. Both successful and failed
+collections admit the subsequent archive. `archive_preserves_protocol` preserves
+flights (including completion, references, retry allowance and target protection),
+batch, pass budget, mutation log, and claim state; housekeeping changes and gates
+later actions. `archive_operation_refines_production_guard` in
+`Clauses/Delegation.lean` proves production-allowed implies ownership-projection-allowed.
+No model claims a notification is completion or that activity process detail is a
+conclusion. Composed heca-first implementation and stop-without-notice recovery traces
+check dispatch, fresh retry launch, failure record, fallback, collection and readiness
+for absent or finite pass caps, including zero. The notified unreadable-read trace
+checks failed collection, either archive outcome, confirmed stop, and retry or exhausted
+fallback, and refuses archive in the notice window or retry without confirmation.
+The success traces refuse recording or advance before archive/reporting, admit both
+archive outcomes before recording and advance, and refuse a repeated archive after
+success or a no-notice stop. Failed terminal collection pins the fallback settlement
+gate. A newly collected termination flight pins evaluation and claim settlement after
+stage advance. Batch readiness tracks implementation completion; housekeeping gates
+remain at relaunch, recording, advance, fallback, evaluation, and claim. Runner launch
+has no heca settlement check because its carriers cannot be heca. Recovery preserves
+the pass cap.
+Unconfirmed/running or other-agent evidence cannot release the target.
+
+Real-tool probes, the no-skill baseline, dated invocation evidence, and the
+ASSUMED-UNVERIFIED register have one home at the top of
+[`test_sshx_contract.py`](../tests/test_sshx_contract.py). That record owns its evidence
+scope and cutoffs. There is no mechanical heca runner or replacement behavior harness.
 
 Fallback uses the existing
 `nextCarrier` selector against tried carriers projected from one assignment's flight history.

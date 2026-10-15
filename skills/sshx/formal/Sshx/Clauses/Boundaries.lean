@@ -86,7 +86,7 @@ def carrierHasControllerAuthority (_ : Carrier) : Bool := false
 -- SKILL[def]: "- false grounding: unverified premises, retrospective fit, imagined relevance, or a mathematical name whose hypotheses the recorded mechanism state does not instantiate;"
 -- SKILL[def]: "- rabbit-holing: blocking by default, peripheral detail, repeated unchanged work, finite case registers, procedural findings against the run's own records, or per-case diagnosis after one declared absorber already determines the goal-visible route;"
 -- SKILL[def]: "- goal loss: 忘记目标 drift to an unranked target, 因小失大 a part served at the whole's cost, or 买椟还珠 form held above substance;"
--- SKILL[def]: "- wrong convergence: beauty without worth, scalarized incomparable candidates, path-dependent gain on non-additive coordinates, or spawn acknowledgments, wait exit 0 on timeout, budget and lifecycle milestones presented as completion;"
+-- SKILL[def]: "- wrong convergence: beauty without worth, scalarized incomparable candidates, path-dependent gain on non-additive coordinates, or spawn acknowledgments, budget and lifecycle milestones presented as completion;"
 -- SKILL[def]: "- contaminated adjudication: same-round peer evidence, an out-of-prefix ledger event, or dependency-reaching evidence presented as independent;"
 -- SKILL[def]: "- boundary drift: carrier diversity over-claims, improvised worker mechanics, or daemon, GitHub, git, label, and release orchestration for an inline decision."
 inductive BaselineFailure
@@ -114,7 +114,7 @@ def guardedBy : BaselineFailure → String
 
 /-! ## Transcript template -/
 
--- SKILL[def]: "Use this compact nesting shape when the decision is non-trivial; every referenced record keeps the fields already defined by its owning section:"
+-- SKILL[def]: "Non-trivial decisions use this nesting; records keep their owning section's fields:"
 structure TranscriptShape where
   intake : Bool
   workerDelegation : Bool

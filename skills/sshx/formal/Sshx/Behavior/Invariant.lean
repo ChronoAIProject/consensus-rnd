@@ -111,6 +111,42 @@ theorem safe_collectEffect {s : ProtocolState} (hs : Safe s) (id : Nat) (o : Obs
         · simpa using h6 x hx) h5 h6
   exact ⟨fun hne => h1 (updateFlight_ne_nil hne), h2, h4, hu.1, hu.2, h7, h8, h9⟩
 
+theorem safe_collectReadEffect {s : ProtocolState} (hs : Safe s) (id : Nat)
+    (o : Observation) : Safe (updateFlight s id (collectReadEffect o)) := by
+  obtain ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩ := hs
+  have hu := refs_attempt_updateFlight (s := s) (id := id) (g := collectReadEffect o)
+    (fun x hx hr => by
+      by_cases wait : (x.carrier == .heca && !o.carrierExited) = true
+      · simp [collectReadEffect, wait] at hr
+      · simp only [collectReadEffect, wait, Bool.false_eq_true, ↓reduceIte] at hr ⊢
+        simp only [collectEffect] at hr ⊢
+        split
+        · rfl
+        · split <;> simp_all)
+    (fun x hx => by
+      by_cases wait : (x.carrier == .heca && !o.carrierExited) = true
+      · simpa [collectReadEffect, wait] using h6 x hx
+      · simp only [collectReadEffect, wait, Bool.false_eq_true, ↓reduceIte, collectEffect]
+        split
+        · simpa using h6 x hx
+        · split
+          · rename_i hlt; simpa using hlt
+          · simpa using h6 x hx) h5 h6
+  exact ⟨fun hne => h1 (updateFlight_ne_nil hne), h2, h4, hu.1, hu.2, h7, h8, h9⟩
+
+theorem safe_recordHousekeeping {s : ProtocolState} (hs : Safe s) (id attempt : Nat)
+    (collected : Bool) (archive : Option ArchiveOutcome) :
+    Safe (recordHousekeeping s id attempt collected archive) := by
+  obtain ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩ := hs
+  exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
+
+theorem safe_recordPendingArchive {s : ProtocolState} (hs : Safe s) (id : Nat)
+    (outcome : ArchiveOutcome) :
+    Safe (recordPendingArchive s id outcome) := by
+  obtain ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩ := hs
+  unfold recordPendingArchive
+  split <;> exact ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩
+
 theorem safe_step {s : ProtocolState} {a : Action} (hs : Safe s) (ha : allowed s a) :
     Safe (step s a) := by
   obtain ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩ := hs
@@ -176,9 +212,29 @@ theorem safe_step {s : ProtocolState} {a : Action} (hs : Safe s) (ha : allowed s
       (fun x _ hr => by simpa using h5 x ‹_› (by simpa using hr))
       (fun x hx => by simpa using h6 x hx) h5 h6
     refine ⟨fun hne => h1 (updateFlight_ne_nil hne), h2, h4, hu.1, hu.2, h7, h8, h9⟩
-  | collect id o => exact safe_collectEffect ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩ id o
+  | collect id o =>
+    cases hf : s.flight id with
+    | none => simpa [step, hf] using
+        (show Safe s from ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩)
+    | some f =>
+      simpa [step, recordAttempt, hf] using
+        (safe_recordHousekeeping (safe_collectReadEffect
+          ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩ id o)
+          id f.attempt true none)
   | recordStoppedHecaFailure id _ =>
-    exact safe_collectEffect ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩ id stoppedHecaFailure
+    cases hf : s.flight id with
+    | none => simpa [step, hf] using
+        (show Safe s from ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩)
+    | some f =>
+      simpa [step, recordAttempt, hf] using
+        (safe_recordHousekeeping (safe_collectEffect
+          ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩ id stoppedHecaFailure)
+          id f.attempt true (if f.notified then (s.housekeepingFor f).bind (·.archive)
+            else some .archived))
+  | archiveHecaAttempt id same outcome =>
+    simpa [step] using
+      (safe_recordPendingArchive (show Safe s from ⟨h1, h2, h4, h5, h6, h7, h8, h9⟩)
+        id outcome)
   | fallbackFlight id carrier =>
     obtain ⟨f0, hf0, -, -, -⟩ := ha
     have hstep : step s (.fallbackFlight id carrier) =
@@ -303,7 +359,14 @@ theorem budget_never_increases (s : ProtocolState) (a : Action) (ha : allowed s 
   case fallbackFlight id carrier =>
     simp only [step] at hb'
     split at hb' <;> simp_all
-  all_goals simp_all [step, updateFlight]
+  case collect id o =>
+    cases hf : s.flight id <;> simp_all [step, updateFlight, hf, recordAttempt, recordHousekeeping]
+  case recordStoppedHecaFailure id e =>
+    cases hf : s.flight id <;> simp_all [step, updateFlight, hf, recordAttempt, recordHousekeeping]
+  case archiveHecaAttempt id same outcome =>
+    cases hf : s.flight id <;> simp_all [step, updateFlight, hf, recordAttempt,
+      recordHousekeeping]
+  all_goals simp_all [step, updateFlight, recordAttempt, recordHousekeeping]
 
 /-- Stage index in protocol order. -/
 def Stage.index : Stage → Nat
@@ -325,12 +388,19 @@ theorem stage_never_regresses (s : ProtocolState) (a : Action) :
   case fallbackFlight id carrier =>
     simp only [step]
     split <;> simp
-  all_goals simp [step, updateFlight]
+  case collect id o =>
+    cases hf : s.flight id <;> simp_all [step, updateFlight, hf, recordAttempt, recordHousekeeping]
+  case recordStoppedHecaFailure id e =>
+    cases hf : s.flight id <;> simp_all [step, updateFlight, hf, recordAttempt, recordHousekeeping]
+  case archiveHecaAttempt id same outcome =>
+    cases hf : s.flight id <;> simp_all [step, updateFlight, hf, recordAttempt,
+      recordHousekeeping]
+  all_goals simp [step, updateFlight, recordAttempt, recordHousekeeping]
 
 /-- Flight completion alone cannot open initial formal review. -/
 theorem initial_advance_needs_whole_candidate (s : ProtocolState)
     (hs : s.stage = .implementation) (ha : allowed s .advanceStage) :
-    s.reviewReady = true := ha.2.2.2.1 hs
+    s.reviewReady = true := ha.2.2.2.2.1 hs
 
 /-- Both normal and included repair review consume the same readiness projection. -/
 -- SKILL[inv]: "Complete the batch before its one mandatory rerun review triplet; a chunk boundary never starts formal review."
@@ -377,7 +447,15 @@ theorem authority_change_requires_correction (s : ProtocolState) (a : Action)
   case fallbackFlight id carrier =>
     simp only [step] at hc
     split at hc <;> exact (hc rfl).elim
-  all_goals exact (hc rfl).elim
+  case collect id o =>
+    cases hf : s.flight id <;> simp_all [step, updateFlight, recordAttempt, recordHousekeeping]
+  case recordStoppedHecaFailure id e =>
+    cases hf : s.flight id <;> simp_all [step, updateFlight, recordAttempt, recordHousekeeping]
+  case archiveHecaAttempt id same outcome =>
+    cases hf : s.flight id <;> simp_all [step, recordAttempt,
+        recordHousekeeping]
+  all_goals simp [step, updateFlight, recordAttempt,
+    recordHousekeeping] at hc
 
 /-- The source position is derived from the revision ledger, never selected by evidence. -/
 theorem authority_revision_in_ledger {s : ProtocolState} (h : Reachable s) :
@@ -405,7 +483,15 @@ theorem authority_revision_in_ledger {s : ProtocolState} (h : Reachable s) :
     case fallbackFlight id carrier =>
       simp only [step]
       split <;> exact ih
-    all_goals exact ih
+    case collect id o =>
+      cases hf : s.flight id <;> simp_all [step, updateFlight, recordAttempt, recordHousekeeping]
+    case recordStoppedHecaFailure id e =>
+      cases hf : s.flight id <;> simp_all [step, updateFlight, recordAttempt, recordHousekeeping]
+    case archiveHecaAttempt id same outcome =>
+      cases hf : s.flight id <;> simp_all [step, recordAttempt,
+        recordHousekeeping]
+    all_goals simpa [step, updateFlight, recordAttempt,
+      recordHousekeeping] using ih
 
 /-- Every relevant correction advances the source position, including identical payloads. -/
 theorem correction_advances_authority {s : ProtocolState} (h : Reachable s)
@@ -481,7 +567,8 @@ theorem unrelated_revision_preserves_evaluation (s : ProtocolState) (r : Revisio
       allowed s (.evaluateTermination source e) := by
   simp [allowed, guardEvaluateTermination, step, ProtocolState.correctedAuthority, hn,
     ProtocolState.gate, ProtocolState.reviewComplete, ProtocolState.reviewReady,
-    ProtocolState.batchSettled, ProtocolState.batchFlights]
+    ProtocolState.batchSettled, ProtocolState.batchFlights, ProtocolState.attemptSettled,
+    ProtocolState.housekeepingFor, ProtocolState.allHecaHousekeepingSettled]
 
 /-- A recorded settlement has an actual admitted evaluation with the same supplied
 evidence/source association. Later corrections preserve that historical witness. -/
@@ -503,7 +590,17 @@ theorem settlement_has_evidence_source {s : ProtocolState} (h : Reachable s) :
     case fallbackFlight id carrier =>
       simp only [step]
       split <;> exact ih
-    all_goals exact ih
+    case launchViaRunner id | launchDelegated id | hostNotified id =>
+      simpa [step, updateFlight] using ih
+    case collect id o =>
+      cases hf : s.flight id <;> simp_all [step, updateFlight, recordAttempt, recordHousekeeping]
+    case recordStoppedHecaFailure id e =>
+      cases hf : s.flight id <;> simp_all [step, updateFlight, recordAttempt, recordHousekeeping]
+    case archiveHecaAttempt id same outcome =>
+      cases hf : s.flight id <;> simp_all [step, recordAttempt,
+        recordHousekeeping]
+    all_goals simpa [step, updateFlight, recordAttempt,
+      recordHousekeeping] using ih
 
 /-- A reachable affirmative claim under an applicable gate has evidence that was
 admitted for its own source and still corresponds to the current authority. -/
