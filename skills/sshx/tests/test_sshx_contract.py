@@ -186,12 +186,13 @@ Verified scope includes a real single-worker heca repair on the codex provider
 with a short inline brief, a codex-provider review turn of about 349 s, and
 codex-cli fallback inside heca, alongside the prior probes and 20-minute
 Claude-provider review. These bounds are invocation evidence, not general limits.
-ASSUMED-UNVERIFIED (not supported) as of this repair: a seat-sized brief (tens of
-KB) inline in prompt; a heca turn longer than about 1,198 s; a codex-provider heca
-turn longer than about 349 s; notice shape on child error or permission wait;
-MCP tool availability for non-Claude callers; effort; a heca implementation-stage
-seat doing a multi-file change beyond the short README-only flight (this repair
-flight is outside the record). Model identifiers prove only that invocation;
+ASSUMED-UNVERIFIED (not supported) as of the 2026-10-15/16 evidence cutoff:
+a seat-sized brief (tens of KB) inline in prompt; a heca turn (including on the
+codex provider) longer than about 4,507 s, or one completing with a final reply
+longer than about 3,204 s; notice shape on child error or permission wait (a
+standard finish notice for a turn that ended without a final reply is observed,
+but its cause is undetermined); MCP tool availability for non-Claude callers;
+effort. Model identifiers prove only that invocation;
 the existing diversity, quality, prior-independence and Codex/subagent
 model-family-separation benefits remain unverified.
 
@@ -209,6 +210,90 @@ HecaStopEvidence.confirmed feeds no transition. A confirmed own-agent archive
 without a finish notice therefore cannot record failure or release the target.
 The caller supplied the reviewer's production-guard Lean probe and the real
 stop probe above; no review-seat files were read by this repair worker.
+
+Heca archive baseline and real-tool evidence (caller, 2026-10-15, before archive
+contract/model edits; same heca CLI/daemon 0.1.0-nightly-20260929-1): without the
+new duty, finished seats accumulate as idle agents. This is the no-skill cleanup
+baseline, not a simulated carrier. This build has no native finished-agent cleanup:
+no agent retention setting in daemon config, no auto-archive/idle-reap setting in
+the daemon binary, and no archive-on-finish spawn parameter. The workspace-container
+idle timeout, blob-store reaper and provider child-retention limit do not clean up
+finished heca agents. Manual cleanup is available through the UI, agent delete or
+heca_agent_archive. Archived agents remain readable: status reports state archived,
+pid null and archived_at set; an archived probe retained all 10 activity events.
+Archive appends a newest state_change with body {cancel_requested: true}, so
+archiving between the matching finish notice and the newest-two collection read
+would displace the turn-end/final-reply pair. Collection must precede that archive.
+Real collect-then-archive evidence: four thinking seats of this change used provider
+codex, omitted model (status reported gpt-6.1-sol), mode full-access, explicit
+worktree_id of this target and one caller-kept whole-brief file named in a short
+prompt carrying the reply contract. Each delivered one finish notice between caller
+turns (all four together). For each the caller made one limit 2 activity read of
+the turn-end transition and final envelope, then archived that seat's own agent.
+All four subsequently had state archived, pid null and archived_at set. The inspected
+teleology seat retained its full 57-event history: archive cancel_requested at seq 57,
+turn-end at seq 56, final reply at seq 55. Turns lasted about 376 s, 270 s, 261 s and
+283 s. The caller performed these archives as host housekeeping under the old
+contract, in the order the new rule prescribes. This record ends after those four
+archives on 2026-10-15; later implementation/review flights are outside this cutoff
+and are not claimed in advance. It establishes neither storage reclamation nor
+worktree/branch cleanup. The ASSUMED-UNVERIFIED register above is updated to the
+later evidence cutoff below.
+
+Heca collect-then-archive review and repair evidence (caller-reported, 2026-10-15/16,
+as of this evidence repair's dispatch): the caller reported the following real
+flights under the new archive rule, using heca CLI/daemon
+0.1.0-nightly-20260929-1. All three seats used provider codex, omitted model
+(status reported gpt-6.1-sol), mode full-access, explicit worktree_id of this
+target, and a short prompt naming one caller-kept whole-brief file and carrying
+the reply contract. The caller confirms it omitted the model parameter in each of
+the three heca spawns recorded in this entry; the status model alone does not establish that omission.
+Review stage: architecture used heca; the other two seats used nyxid-oracle and
+isolated-token-subagent. One finish notice arrived between caller turns. One
+limit 2 activity read returned the turn-end transition and final envelope,
+verdict reject; the caller then archived that seat's own agent. Status afterwards
+confirmed state archived, pid null and archived_at set. About 482 s elapsed from
+spawn to archive.
+Repair attempt 1: a single-worker implementation-stage seat was dispatched for
+the multi-file Lean/test/README repair of fix pass 1. The caller's later git status
+showed Lean files and the contract test changed, and Housekeeping.lean removed;
+which final README lines this attempt authored is unknown. Its turn lasted about
+4,507 s (about 29.0 M input tokens) and ended without a final reply. The newest
+event before the turn-end was a command cut off with "Turn ended before this tool reported completion". Heca
+still delivered one standard [heca system] Background agent <id> (<name>) finished.
+notice between caller turns. The one limit 2 activity read returned the
+running-to-idle transition and that interrupted tool call, no final reply;
+collection failed without widening the read. The caller then archived that
+attempt's own agent; status confirmed state archived, pid null. The cause of the
+turn end was not determined; this is not verified child-error evidence.
+Repair attempt 2: the retry used a fresh agent, never a follow-up prompt. The
+turn lasted about 3,204 s (about 15.0 M input tokens). This single-worker
+implementation-stage seat completed the multi-file repair with a final reply;
+this attempt is the basis for removing the register's multi-file-change limitation.
+One finish notice arrived between caller turns; one limit 2 activity read returned
+the running-to-idle
+transition and final reply, a single JSON envelope, verdict done. The caller then
+archived that agent; status confirmed state archived, pid null and archived_at set.
+In all three flights archive followed the successful or failed collection read;
+no archive occurred between a finish notice and its collection read. The notice
+authorizes only the collection read and is not completion evidence: attempt 1
+received a standard finish notice for a turn that ended without a final reply.
+This record ends at this evidence repair's dispatch; flights after that dispatch,
+including this evidence repair flight and the rerun review, are outside this
+cutoff and are not claimed in advance.
+
+Heca unreadable-notice model baseline (2026-10-16, before fix pass 2 edits):
+guardCollect requires carrierExited for heca, while guardStoppedHecaFailure requires
+notified false. A notified read without a turn-end transition can therefore neither
+record failed collection nor use the no-notice stop route, so it cannot archive and
+confirm stop before recovery. The repair checks the production composed trace; it
+adds no real-tool claim about child error or permission wait.
+
+Heca reported-archive recovery model baseline (2026-10-16, before fix pass 3 edits):
+the notified recovery guard requires archive success, and its effect overwrites the
+recorded archive outcome with archived. A reported archive failure therefore blocks
+confirmed recovery. Composed production traces check both outcomes and preserve the
+failure report; they make no new real-tool claim.
 
 The behavior helpers below cover fixed truth tables and other load-bearing mechanical contracts,
 but do not infer English semantics.
@@ -502,7 +587,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "a247b09b2116f1e8798b6b1e8164d6dab7bb374bc2b6e18a74c633f2c0873ae6"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "7cf570d68c1e25ecefc6a3978b4d937e270a9f2599766f633c663a1dba699656"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -2642,7 +2727,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("must not be rebalanced in response to completion outcomes", text)
         self.assertIn("a retry or fallback may replace only the failed flight for the same seat and role", text)
         self.assertIn("never redraw or restore the stage's recorded assignment", text)
-        self.assertIn("This is the dispatch-time rotation rule", text)
+        self.assertIn("`WorkerMode` order governs only carrier-failure fallback", text)
         self.assertNotIn("sealed-transcript", contract_text.lower())
         self.assertNotIn("actor-isolated", contract_text.lower())
 
@@ -2875,26 +2960,26 @@ class SshxContractTests(unittest.TestCase):
     def test_heca_mcp_contract_pins_detection_dispatch_and_placement(self) -> None:
         delegation = section(read(SKILL), "## Worker Delegation", "## Result Envelope")
         for required in (
-            "caller's own toolset exposes heca's MCP agent tools, including tools listed but loaded lazily",
-            "no out-of-heca route exists", "This non-mutating check calls nothing",
-            "record tool exposure once per run, including absence",
+            "caller tools expose heca MCP agent tools, including tools listed but loaded lazily",
+            "no out-of-heca route exists", "Check calls nothing",
+            "record tool exposure once/run, including absence",
             "PATH, `HECA_*`, CLI, daemon, provider and mode probes are not detection",
-            "Later failures use fallback, never re-probing or recomposing",
+            "Failures use fallback, never re-probe/recompose",
             "`heca_agent_spawn` creates one fresh agent/turn per `heca` attempt",
-            "Single spawn prompt fixes the whole task: inline brief or one caller-kept whole-brief file",
-            "readable in seat placement, unchanged during flight, apart from peer outputs",
-            "prompt always carries compact final `SshxResultEnvelope` reply contract",
+            "Spawn prompt fixes the whole task: inline or one caller-kept whole-brief file",
+            "seat-readable, unchanged in flight, peer-output-free",
+            "always carries compact final `SshxResultEnvelope` reply contract",
             "explicit unattended bypass-equivalent `mode`, `notify_on_finish: true`",
             "no extra MCP-server opt-in", "Retry uses a new agent, never follow-up",
             "Pass user/host provider/model unchanged",
-            "default provider: heca's `codex` if reported enabled, else caller's heca provider; model: heca default",
+            "defaults: heca `codex` if reported enabled, else caller's heca provider; heca default model",
             "no Settings/orchestration-preferences reads or `effort`",
-            "Model reports prove only that invocation, no diversity/quality claim",
-            "`heca` and `isolated-token-subagent` use no runner/receipt/minted ID/attempt path",
+            "Model reports prove invocation only, never diversity/quality",
+            "No runner/receipt/minted ID/attempt path for `heca`/`isolated-token-subagent`",
             "`flight_id` is heca's returned agent identity",
             "Omit placement for caller-live `work_target`",
-            "else name its existing heca worktree or fail unavailable",
-            "not loose, worktree/cwd equal `work_target`",
+            "else use its existing heca worktree or fail unavailable",
+            "not-loose returned placement, worktree/cwd = `work_target`",
             "mismatch stops that agent/fails closed",
             "No new/Loose placement; never retry failed spawn without placement",
             "briefs allow only caller dispatch",
@@ -2920,9 +3005,13 @@ class SshxContractTests(unittest.TestCase):
             "`log_ref` is an opaque heca-agent reference",
             "confirm the heca flight’s agent is not running",
             "Else keep the flight protected/report the unresolved outcome",
-            "Stop only own agent; all other heca lifecycle/orchestration is forbidden",
+            "Stop/archive only own attempt's agent; all other heca lifecycle/orchestration is forbidden",
             "Stop via `heca_agent_archive`, confirm via `heca_agent_status`",
-            "finished idle agents are host housekeeping",
+            "Caller archives each attempt after successful/failed collection",
+            "never between matching notice and collection read",
+            "Confirmed stop archive counts for failure recorded without notice; never archive again",
+            "Archive/outcome never proves completion or routes",
+            "archive failure stays unresolved/reported, preserves result, creates no attempt",
             "Host job limits/teardown do not reach heca-owned agents",
         ):
             self.assertIn(required, delegation)
@@ -2978,19 +3067,81 @@ class SshxContractTests(unittest.TestCase):
             "first codex-cli fallback inside heca", "Tests used isolated-token-subagent",
             "Flights after this cutoff, including this repair flight and its subsequent review stage, "
             "are outside the record by construction",
+            "Heca archive baseline and real-tool evidence (caller, 2026-10-15",
+            "finished seats accumulate as idle agents", "no native finished-agent cleanup",
+            "no agent retention setting", "no auto-archive/idle-reap setting",
+            "no archive-on-finish spawn parameter", "Archived agents remain readable",
+            "retained all 10 activity events", "newest state_change",
+            "{cancel_requested: true}", "Collection must precede that archive",
+            "four thinking seats", "one finish notice between caller turns (all four together)",
+            "one limit 2 activity read", "then archived that seat's own agent",
+            "All four subsequently had state archived, pid null and archived_at set",
+            "full 57-event history", "seq 57", "seq 56", "seq 55",
+            "376 s, 270 s, 261 s and 283 s", "host housekeeping under the old contract",
+            "later implementation/review flights are outside this cutoff",
+            "neither storage reclamation nor worktree/branch cleanup",
         ):
             self.assertIn(evidence, record)
-        assumed = record.split("ASSUMED-UNVERIFIED (not supported) as of this repair: ", 1)[1]
+        new_heading = (
+            "Heca collect-then-archive review and repair evidence "
+            "(caller-reported, 2026-10-15/16,"
+        )
+        self.assertEqual(record.count(new_heading), 1)
+        archive_flights = record.split(new_heading, 1)[1]
+        for evidence in (
+            "as of this evidence repair's dispatch", "under the new archive rule",
+            "0.1.0-nightly-20260929-1", "All three seats used provider codex",
+            "omitted model (status reported gpt-6.1-sol)", "mode full-access",
+            "explicit worktree_id of this target", "one caller-kept whole-brief file",
+            "carrying the reply contract", "architecture used heca",
+            "other two seats used nyxid-oracle and isolated-token-subagent",
+            "One finish notice arrived between caller turns",
+            "One limit 2 activity read returned the turn-end transition and final envelope, verdict reject",
+            "then archived that seat's own agent",
+            "state archived, pid null and archived_at set",
+            "About 482 s elapsed from spawn to archive",
+            "caller confirms it omitted the model parameter in each of the three heca spawns recorded in this entry",
+            "status model alone does not establish that omission",
+            "single-worker implementation-stage seat was dispatched for the multi-file Lean/test/README repair of fix pass 1",
+            "caller's later git status showed Lean files and the contract test changed, and Housekeeping.lean removed",
+            "which final README lines this attempt authored is unknown",
+            "about 4,507 s (about 29.0 M input tokens)", "ended without a final reply",
+            'command cut off with "Turn ended before this tool reported completion"',
+            "one standard [heca system] Background agent <id> (<name>) finished. notice between caller turns",
+            "one limit 2 activity read returned the running-to-idle transition and that interrupted tool call, no final reply",
+            "collection failed without widening the read",
+            "then archived that attempt's own agent; status confirmed state archived, pid null",
+            "cause of the turn end was not determined; this is not verified child-error evidence",
+            "retry used a fresh agent, never a follow-up prompt",
+            "about 3,204 s (about 15.0 M input tokens)",
+            "single-worker implementation-stage seat completed the multi-file repair with a final reply",
+            "this attempt is the basis for removing the register's multi-file-change limitation",
+            "one limit 2 activity read returned the running-to-idle transition and final reply, a single JSON envelope, verdict done",
+            "then archived that agent; status confirmed state archived, pid null and archived_at set",
+            "In all three flights archive followed the successful or failed collection read",
+            "no archive occurred between a finish notice and its collection read",
+            "notice authorizes only the collection read and is not completion evidence",
+            "standard finish notice for a turn that ended without a final reply",
+            "record ends at this evidence repair's dispatch",
+            "including this evidence repair flight and the rerun review, are outside this cutoff and are not claimed in advance",
+        ):
+            self.assertIn(evidence, archive_flights)
+        self.assertIn(
+            "The ASSUMED-UNVERIFIED register above is updated to the later evidence cutoff below",
+            record,
+        )
+        assumed = record.split(
+            "ASSUMED-UNVERIFIED (not supported) as of the 2026-10-15/16 evidence cutoff: ", 1
+        )[1]
         assumed = assumed.split(" Model identifiers", 1)[0]
         self.assertEqual(
             assumed,
             "a seat-sized brief (tens of KB) inline in prompt; "
-            "a heca turn longer than about 1,198 s; "
-            "a codex-provider heca turn longer than about 349 s; "
-            "notice shape on child error or permission wait; "
-            "MCP tool availability for non-Claude callers; effort; "
-            "a heca implementation-stage seat doing a multi-file change beyond the short "
-            "README-only flight (this repair flight is outside the record).",
+            "a heca turn (including on the codex provider) longer than about 4,507 s, "
+            "or one completing with a final reply longer than about 3,204 s; "
+            "notice shape on child error or permission wait (a standard finish notice for a turn "
+            "that ended without a final reply is observed, but its cause is undetermined); "
+            "MCP tool availability for non-Claude callers; effort.",
         )
         self.assertNotIn("only a 17 s probe exists", record)
         self.assertNotIn("a heca seat in a single-worker implementation stage", assumed)

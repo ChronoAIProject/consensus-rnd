@@ -60,7 +60,7 @@
 ## 风险与限制
 
 - **宽执行权限：** Codex runner 默认使用 `danger-full-access`。提供工作目标前，请阅读[调用合同](./skills/sshx/CODEX_WORKER_SPEC.md#invocation)和[威胁模型](./skills/sshx/CODEX_WORKER_SPEC.md#threat-model)。
-- **Heca 执行：** 席位使用无人值守的完整权限；agent 由 heca 拥有，host 任务超时与 teardown 无法触及。已完成 agent 的整理归 host，支持范围限于已记录的证据。详见 [worker 委派](./skills/sshx/SKILL.md#worker-delegation)。
+- **Heca 执行：** 席位使用无人值守的完整权限；agent 由 heca 拥有，host 任务超时与 teardown 无法触及。普通路径先收集每次尝试的成功或失败结果，再归档该尝试自己的 agent。停止失败路径中，已确认的停止归档就是该归档，并且先于记录失败。既未收集也未停止的尝试（例如 caller 在收集前中断）保持未归档；收集后归档调用失败时，caller 将其报告为未解决的 housekeeping。归档后的历史在 heca 中仍可读取。支持范围限于已记录的证据。详见 [worker 委派](./skills/sshx/SKILL.md#worker-delegation)。
 - **成本与时长：** 完整的初始运行至少派发 10 个 worker turn，每个 turn 都可能包含多次模型调用：六个思考席、一个实现 worker、三个 reviewer。修复、聚焦轮、重复 review 及适用的终止检查会增加工作。**默认不设置 `pass_budget` 上限**；详见[协议](./skills/sshx/SKILL.md#inlineconsensusprotocol)、[思考面板](./skills/sshx/SKILL.md#thinking-panel)、[评审](./skills/sshx/SKILL.md#review-triplet)和[轮次计费规则](./skills/sshx/SKILL.md#fix-or-done)。
 - **内容外发：** oracle 席将内联 brief 经 NyxID 发送到外部 ChatGPT Pro 账号。派发前应考虑 brief 中的内容；详见[worker 委派](./skills/sshx/SKILL.md#worker-delegation)和 oracle 的[请求合同](./skills/sshx/ORACLE_WORKER_SPEC.md#request)。
 - **产物留存：** runner 的 brief、日志和结果会积累在 `${SSHX_HOME:-$HOME/.sshx}/<flight-id>/attempt-<n>`，直到清理或裁剪。详见[运行目录](./skills/sshx/CODEX_WORKER_SPEC.md#run-directory)与[不活跃 flight 清理](./skills/sshx/CODEX_WORKER_SPEC.md#inactive-flight-sweep)；过短的保留窗口可能删除仍在静默运行的 flight。
