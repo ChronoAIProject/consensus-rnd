@@ -247,7 +247,7 @@ inductive Action
   | writeGoal (g : GoalArtifact) (e : IntakeEvidence)
   | appendRevision (r : Revision) (e : RevisionEvidence)
   | capabilityCheck (c : Carrier)
-  | recordHecaCheck (callerToolsExposed : Bool)
+  | recordHecaCheck (facts : HecaCapability)
   | resolveMode (m : WorkerMode)
   | openFlight (stage : FlightStage) (role : Role) (carrier : Carrier) (target : String) (retryBudget : Nat)
   | launchViaRunner (flight : Nat)
@@ -511,7 +511,7 @@ def guardStoppedHecaFailure (s : ProtocolState) (id : Nat) (e : HecaStopEvidence
       (f.notified = true ∧ ∃ h, s.housekeepingFor f = some h ∧
         h.collected = true ∧ h.archive.isSome = true))
 
--- SKILL[guard]: "Caller archives each attempt after successful/failed collection; never between matching notice and collection read."
+-- SKILL[guard]: "Archive each attempt after successful/failed collection; never between matching notice and collection."
 /-- Production archive admission: collection is the predecessor, the attempt's own
 agent is the only target, and the outcome is recorded exactly once. -/
 def guardArchiveHeca (s : ProtocolState) (id : Nat) (sameAgent : Bool)
@@ -716,10 +716,10 @@ def step (s : ProtocolState) : Action → ProtocolState
       goal := s.goal.map (fun g => g.correct r),
       continuationAuthority := s.correctedAuthority e }
   | .capabilityCheck c => { s with capabilityChecked := c :: s.capabilityChecked }
-  | .recordHecaCheck detected =>
+  | .recordHecaCheck facts =>
     { s with
       hecaCheckRecorded := true,
-      capabilityChecked := if detected then .heca :: s.capabilityChecked else s.capabilityChecked }
+      capabilityChecked := if facts.detected then .heca :: s.capabilityChecked else s.capabilityChecked }
   | .resolveMode m => { s with mode := some m }
   | .openFlight stage role carrier target retryBudget =>
     { s with
@@ -830,7 +830,7 @@ theorem stopped_failure_requires_no_notice_or_collected_archive (s : ProtocolSta
   obtain ⟨f, hf, _, _, _, _, route⟩ := h
   exact ⟨f, hf, route⟩
 
--- SKILL[inv]: "Confirmed stop archive counts for failure recorded without notice; never archive again."
+-- SKILL[inv]: "Confirmed stop archive counts for no-notice failure; never archive again."
 theorem stopped_failure_records_archive (s : ProtocolState) (id : Nat)
     (e : HecaStopEvidence) (f : FlightRec) (hf : s.flight id = some f)
     (noNotice : f.notified = false) :
@@ -839,7 +839,7 @@ theorem stopped_failure_records_archive (s : ProtocolState) (id : Nat)
   refine ⟨⟨id, f.attempt, true, some .archived⟩, ?_, rfl, rfl⟩
   simp [step, recordAttempt, hf, noNotice]
 
--- SKILL[thm]: "Archive/outcome never proves completion or routes; archive failure stays unresolved/reported, preserves result, creates no attempt."
+-- SKILL[thm]: "Archive/outcome never proves completion or routes; failure stays unresolved/reported, preserves result, creates no attempt."
 /-- Only housekeeping changes; a failed outcome remains explicitly recorded as
 `failedReported`. Settlement acknowledges that report, not successful cleanup. -/
 theorem archive_preserves_protocol (s : ProtocolState) (id : Nat)

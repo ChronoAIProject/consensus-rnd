@@ -164,10 +164,10 @@ theorem safe_step {s : ProtocolState} {a : Action} (hs : Safe s) (ha : allowed s
   | capabilityCheck c =>
     refine ⟨h1, h2, ?_, h5, h6, h7, h8, h9⟩
     intro hm; simp only [step, List.mem_cons]; exact Or.inr (h4 hm)
-  | recordHecaCheck detected =>
+  | recordHecaCheck facts =>
     refine ⟨h1, h2, ?_, h5, h6, h7, h8, h9⟩
     intro hm
-    cases detected <;> simp [step, h4 hm]
+    cases h : facts.detected <;> simp [step, h, h4 hm]
   | resolveMode m =>
     obtain ⟨hg, -, hnone, hcodex, -, hm⟩ := ha
     have hempty : s.flights = [] := by

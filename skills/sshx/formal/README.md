@@ -85,14 +85,19 @@ action.
 The carrier universe has four entries and the fallback bound follows its length.
 `nextCarrier_heca_absent` and `fallback_heca_absent` compare the new selector/chain
 with the retained pre-heca functions for every eligibility/tried table. Composition
-is parameterized by the recorded heca detection: `composition_heca_absent` proves
+is parameterized by the recorded heca availability: `composition_heca_absent` proves
 exact equality with the old layout for every seat count; detected protocol rosters
 give every seat in the Codex remainder to heca, including the executable tests
 seat, and single-worker stages also use heca. Feasible draws are proved for thinking,
 review, termination, and implementation/repair; detected initial batches are empty. The once-per-run heca check records even a
-negative tool-exposure result before mode resolution and cannot be repeated. Detection
+negative enablement or tool-exposure result before mode resolution and cannot be repeated. Availability requires explicit user/host opt-in for this run (disabled by default) and
 reads only the caller's exposed heca MCP agent toolset, including tools listed for lazy
 loading; it invokes nothing and has no CLI/daemon/provider probe or outside-heca route.
+The opt-in source is an interpreted projection of existing run/gate evidence, not a new
+runtime setting or an authority detector. Silence, mention, running in heca and tool exposure
+alone remain disabled. The same recorded availability feeds initial composition, single-worker
+dispatch and fallback. All opt-in/exposure combinations are checked at those consumers;
+existing opted-in lifecycle traces retain their scope and do not prove live tool capability.
 For heca, `Observation.carrierExited` means terminal/not-running evidence from
 the collection read. A finish notice authorizes one read even when it lacks the
 turn-end transition: `step` records that failed collection, while `collectReadEffect`
