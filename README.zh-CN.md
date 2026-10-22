@@ -76,19 +76,19 @@ Host 必须为 runner 派发提供带完成通知的后台执行、超时和整�
 
 | Carrier | 前提与职责 |
 |---|---|
-| `codex-cli` | Bash、`jq`、可执行且可用的 Codex CLI，以及可写的运行根目录和提供的工作目标。heca 外的初始席与 heca 内的回退席都经过 [Codex runner](./skills/sshx/CODEX_WORKER_SPEC.md#carrier)。 |
-| `heca` | 在 heca 内运行 sshx，当前会话须暴露 heca 的 MCP agent tools，工作目标须匹配已有 placement。检测到时接管全部初始 Codex 席，包括实现和修复。详见[使用 Heca Worker](#使用-heca-worker)与 [worker 委派](./skills/sshx/SKILL.md#worker-delegation)。 |
+| `codex-cli` | Bash、`jq`、可执行且可用的 Codex CLI，以及可写的运行根目录和提供的工作目标。heca 不可用时的初始席与 heca 内的回退席都经过 [Codex runner](./skills/sshx/CODEX_WORKER_SPEC.md#carrier)。 |
+| `heca` | 用户或 host 须对本次 sshx 运行显式开启，当前会话须暴露 heca 的 MCP agent tools，工作目标须匹配已有 placement。默认关闭；可用时接管全部初始 Codex 席，包括实现和修复。详见[使用 Heca Worker](#使用-heca-worker)与 [worker 委派](./skills/sshx/SKILL.md#worker-delegation)。 |
 | `nyxid-oracle` | Python 3、路径投影所需的 Bash 与 `jq`，以及可用的 NyxID CLI；broker 须有包含在线 worker 的 active pool。[Oracle runner](./skills/sshx/ORACLE_WORKER_SPEC.md#invocation)负责派发；另见 [pool 选择](./skills/sshx/ORACLE_WORKER_SPEC.md#pool-choice)与[登录诊断](./skills/sshx/ORACLE_WORKER_SPEC.md#broker-diagnostics)。 |
 | `isolated-token-subagent` | Host 提供隔离 token 上下文的 subagent 能力；同轮席位返回各自 verdict 前不得读取彼此输出。 |
 | `abstain` | 无 carrier 可用，或必需 flight 耗尽重试与 fallback 时诚实停止；它是结果，不是执行 carrier。 |
 
-每个多席阶段初始分配一个隔离 subagent 席、一个 oracle 席；检测到 heca 时其余席位归 heca，否则归 Codex CLI，并受席位约束与 fallback 规则限制。tests reviewer 必须能在工作目标中执行验证。仅凭 carrier 分配和隔离不能证明模型多样性，详见[所属规则](./skills/sshx/SKILL.md#worker-delegation)。
+每个多席阶段初始分配一个隔离 subagent 席、一个 oracle 席；显式开启且 heca 可用时其余席位归 heca，否则归 Codex CLI，并受席位约束与 fallback 规则限制。tests reviewer 必须能在工作目标中执行验证。仅凭 carrier 分配和隔离不能证明模型多样性，详见[所属规则](./skills/sshx/SKILL.md#worker-delegation)。
 
 #### 使用 Heca Worker
 
-`sshx` 支持与 `codex-cli`、`nyxid-oracle` 并列的 `heca` worker 载体。非变更能力检查检测到 heca 时，它接管原本分给 Codex CLI 的全部席位：每个多席阶段的余量与每个单 worker 阶段，包括实现和修复。heca 缺席时，既有载体组成不变。回退优先级始终不变，因此在 heca 内仍可通过回退使用 Codex CLI。
+`sshx` 支持与 `codex-cli`、`nyxid-oracle` 并列的 `heca` worker 载体。Heca 默认关闭。用户或 host 对本次 sshx 运行显式开启，且非变更能力检查确认暴露 MCP agent tools 时，它接管原本分给 Codex CLI 的全部席位：每个多席阶段的余量与每个单 worker 阶段，包括实现和修复。heca 不可用时，既有载体组成不变。回退优先级始终不变，因此在 heca 内仍可通过回退使用 Codex CLI。
 
-只有 sshx 在 heca 内运行且 caller 会话暴露 heca 的 MCP agent tools 时，才提供 heca 选项。席位直接通过这些工具运行。用户或 host 可逐席指定 provider 和 model；默认优先使用 heca 报告已启用的 `codex` provider，否则使用 caller 自身的 heca provider，并采用 heca 默认 model。工作目标须匹配已有 heca placement。[Worker 委派](./skills/sshx/SKILL.md#worker-delegation)拥有合同与证据边界。
+可显式指定，例如：“本次 sshx 使用 heca worker。”host 对本次运行显式启用 heca 的指令也有效。沉默、仅提及 heca、在 heca 内运行或仅暴露工具均不构成开启。caller 在现有 run/gate 证据中每次运行只记录一次开启状态、用户或 host 来源（或缺席）及工具暴露情况。初始组成、单 worker 委派与 fallback 均须同时满足显式开启和 MCP agent tools 暴露；开启不能补足缺失的工具。席位直接通过这些工具运行。用户或 host 可逐席指定 provider 和 model；默认优先使用 heca 报告已启用的 `codex` provider，否则使用 caller 自身的 heca provider，并采用 heca 默认 model。工作目标须匹配已有 heca placement。[Worker 委派](./skills/sshx/SKILL.md#worker-delegation)拥有合同与证据边界。
 
 ### Claude Code
 

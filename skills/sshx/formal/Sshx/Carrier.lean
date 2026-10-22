@@ -10,6 +10,24 @@ set_option maxHeartbeats 800000
 
 namespace Sshx
 
+/-- Interpreted opt-in source in existing run/gate evidence, not a runtime setting.
+The truth and run applicability of explicit user/host authority are premises. -/
+inductive HecaOptIn
+  | disabled
+  | user
+  | host
+  deriving DecidableEq, Repr
+
+-- SKILL[def]: "`heca` defaults off: requires explicit user/host opt-in for this run AND exposed heca MCP agent tools (lazy-listed included)."
+-- SKILL[def]: "Silence/mention/heca context/tools alone never opt in."
+structure HecaCapability where
+  callerToolsExposed : Bool
+  optIn : HecaOptIn := .disabled
+  deriving DecidableEq, Repr
+
+def HecaCapability.detected (facts : HecaCapability) : Bool :=
+  facts.optIn != .disabled && facts.callerToolsExposed
+
 /-- The closed carrier set of `## Boundaries`. -/
 inductive Carrier
   | codexCli

@@ -295,6 +295,24 @@ recorded archive outcome with archived. A reported archive failure therefore blo
 confirmed recovery. Composed production traces check both outcomes and preserve the
 failure report; they make no new real-tool claim.
 
+Heca opt-in no-skill baseline (2026-10-22, base HEAD 6be58be4):
+without the requested opt-in restriction, the pre-change published availability
+clause equates exposed MCP tools with heca availability. HecaCapability.detected
+returns callerToolsExposed; recordHecaCheck true inserts heca into capabilityChecked.
+That list admits openFlight and feeds eligibleCarriers/nextCarrier after a failed
+Codex flight. stageComposition seats true assigns the remainder and single worker
+to heca. There is no user/host enablement input at any of those consumers, so tool
+exposure alone admits heca without opt-in, including fallback. This source-owned
+baseline records the existing contract/model failure, not a fresh live heca run or
+an independent evaluator's response. Recovery independently reconstructed the
+baseline from base HEAD after inheriting partial edits and before making recovery
+edits: copied Carrier.lean and the original capability/composition definitions,
+then checked exposed-tool availability, initial/single composition and failed-Codex
+fallback assertions with Lean (exit 0). This establishes the pre-change behavior,
+not when the earlier attempt recorded its baseline. Regressions exercise those
+existing consumers for all opt-in/exposure combinations; model evidence cannot prove live
+heca capability or change the earlier real-tool evidence cutoffs.
+
 The behavior helpers below cover fixed truth tables and other load-bearing mechanical contracts,
 but do not infer English semantics.
 Files outside ``skills/sshx/SKILL.md`` are outside this positional boundary and remain governed
@@ -367,14 +385,14 @@ DEFAULT_SEAT_ALLOCATION_PATTERNS = (
     ("multi-seat stage scope", r"\b(?:every|each) multi-seat stage assigns\b"),
     ("one isolated-token-subagent seat", r"\bexactly one seat to `isolated-token-subagent`"),
     ("one nyxid-oracle seat", r"\bexactly one seat to `nyxid-oracle`"),
-    ("absent heca unchanged", r"When heca is absent, that composition is unchanged"),
+    ("absent heca unchanged", r"When heca is unavailable, that composition is unchanged"),
     (
         "detected heca remainder and absent codex-cli remainder",
-        r"\b(?:every|each) remaining seat(?: in that stage)?(?: goes)? to `heca` when detected, otherwise `codex-cli`",
+        r"\b(?:every|each) remaining seat(?: in that stage)?(?: goes)? to `heca` when available, otherwise `codex-cli`",
     ),
     (
         "detected heca and absent codex-cli single-worker assignment",
-        r"\b(?:every|each) single-worker stage assigns its worker to `heca` when detected, otherwise `codex-cli`",
+        r"\b(?:every|each) single-worker stage assigns its worker to `heca` when available, otherwise `codex-cli`",
     ),
     ("uniform random seat draw", r"\bdraws? one assignment uniformly at random\b"),
     (
@@ -587,7 +605,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "7cf570d68c1e25ecefc6a3978b4d937e270a9f2599766f633c663a1dba699656"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "3c919b7e5936a12ff48fb2f04307e37db9dd047b016baa978b80248684722e87"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -2751,13 +2769,13 @@ class SshxContractTests(unittest.TestCase):
                 text[:start] + f"{allocation} Unless the caller prefers otherwise." + text[end:]
             )
         composition_rewrites = (
-            "At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent` and exactly one seat to `nyxid-oracle`. Every remaining seat in that stage goes to `heca` when detected, otherwise `codex-cli`, and every single-worker stage assigns its worker to `heca` when detected, otherwise `codex-cli`.",
-            "At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `heca` when detected, otherwise `codex-cli`. Every single-worker stage assigns its worker to `heca` when detected, otherwise `codex-cli`.",
-            "At dispatch time:\n- Every multi-seat stage assigns exactly one seat to `isolated-token-subagent` and exactly one seat to `nyxid-oracle`.\n- Every remaining seat in that stage goes to `heca` when detected, otherwise `codex-cli`.\n- Every single-worker stage assigns its worker to `heca` when detected, otherwise `codex-cli`.",
-            "At dispatch time, each multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and each remaining seat to `heca` when detected, otherwise `codex-cli`; each single-worker stage assigns its worker to `heca` when detected, otherwise `codex-cli`.",
-            "At dispatch time, every multi-seat stage assigns exactly one seat to `nyxid-oracle`, exactly one seat to `isolated-token-subagent`, and every remaining seat to `heca` when detected, otherwise `codex-cli`; every single-worker stage assigns its worker to `heca` when detected, otherwise `codex-cli`.",
+            "At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent` and exactly one seat to `nyxid-oracle`. Every remaining seat in that stage goes to `heca` when available, otherwise `codex-cli`, and every single-worker stage assigns its worker to `heca` when available, otherwise `codex-cli`.",
+            "At dispatch time, every multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and every remaining seat to `heca` when available, otherwise `codex-cli`. Every single-worker stage assigns its worker to `heca` when available, otherwise `codex-cli`.",
+            "At dispatch time:\n- Every multi-seat stage assigns exactly one seat to `isolated-token-subagent` and exactly one seat to `nyxid-oracle`.\n- Every remaining seat in that stage goes to `heca` when available, otherwise `codex-cli`.\n- Every single-worker stage assigns its worker to `heca` when available, otherwise `codex-cli`.",
+            "At dispatch time, each multi-seat stage assigns exactly one seat to `isolated-token-subagent`, exactly one seat to `nyxid-oracle`, and each remaining seat to `heca` when available, otherwise `codex-cli`; each single-worker stage assigns its worker to `heca` when available, otherwise `codex-cli`.",
+            "At dispatch time, every multi-seat stage assigns exactly one seat to `nyxid-oracle`, exactly one seat to `isolated-token-subagent`, and every remaining seat to `heca` when available, otherwise `codex-cli`; every single-worker stage assigns its worker to `heca` when available, otherwise `codex-cli`.",
         )
-        heca_branch = "When heca is absent, that composition is unchanged."
+        heca_branch = "When heca is unavailable, that composition is unchanged."
         rewrites = tuple(f"{rewrite} {heca_branch} {SEAT_ROTATION_SPAN_TAIL}" for rewrite in composition_rewrites)
         for rewrite in rewrites:
             mutated = text[:start] + rewrite + text[end:]
@@ -2960,15 +2978,18 @@ class SshxContractTests(unittest.TestCase):
     def test_heca_mcp_contract_pins_detection_dispatch_and_placement(self) -> None:
         delegation = section(read(SKILL), "## Worker Delegation", "## Result Envelope")
         for required in (
-            "caller tools expose heca MCP agent tools, including tools listed but loaded lazily",
-            "no out-of-heca route exists", "Check calls nothing",
-            "record tool exposure once/run, including absence",
-            "PATH, `HECA_*`, CLI, daemon, provider and mode probes are not detection",
+            "exposed heca MCP agent tools (lazy-listed included)",
+            "no out-of-heca route", "Check calls nothing",
+            "Once/run record opt-in/source or absence and exposure in existing run/gate evidence",
+            "defaults off", "explicit user/host opt-in for this run",
+            "Silence/mention/heca context/tools alone never opt in",
+            "this availability gates composition/single workers/fallback",
+            "PATH/`HECA_*`/CLI/daemon/provider/mode probes",
             "Failures use fallback, never re-probe/recompose",
             "`heca_agent_spawn` creates one fresh agent/turn per `heca` attempt",
-            "Spawn prompt fixes the whole task: inline or one caller-kept whole-brief file",
+            "Spawn prompt fixes whole task inline or in a caller-kept whole-brief file",
             "seat-readable, unchanged in flight, peer-output-free",
-            "always carries compact final `SshxResultEnvelope` reply contract",
+            "always carries compact `SshxResultEnvelope` reply contract",
             "explicit unattended bypass-equivalent `mode`, `notify_on_finish: true`",
             "no extra MCP-server opt-in", "Retry uses a new agent, never follow-up",
             "Pass user/host provider/model unchanged",
@@ -2979,8 +3000,8 @@ class SshxContractTests(unittest.TestCase):
             "`flight_id` is heca's returned agent identity",
             "Omit placement for caller-live `work_target`",
             "else use its existing heca worktree or fail unavailable",
-            "not-loose returned placement, worktree/cwd = `work_target`",
-            "mismatch stops that agent/fails closed",
+            "not-loose placement, worktree/cwd = `work_target`",
+            "mismatch stops agent/fails closed",
             "No new/Loose placement; never retry failed spawn without placement",
             "briefs allow only caller dispatch",
         ):
@@ -2992,27 +3013,27 @@ class SshxContractTests(unittest.TestCase):
         text = read(SKILL)
         delegation = section(text, "## Worker Delegation", "## Result Envelope")
         for required in (
-            "Caller must end/yield its turn after dispatch/meanwhile work, keeping flights in-flight/targets protected",
+            "End/yield after dispatch/meanwhile work; flights stay in-flight/targets protected",
             "blocking wait/sleep/poll loops cannot substitute",
-            "Collect on a later caller turn after the matching finish notice",
+            "Collect on a later turn after the matching finish notice",
             "Finish notice permits one newest-two `heca_agent_activity` read",
             "heca's recorded turn-end transition/final reply, never completion",
-            "Missing either fails collection",
+            "Either missing fails collection",
             "no paging, widening or running-seat status/activity polling",
-            "Only final reply is envelope (JSON fencing is presentation)",
-            "heca's recorded turn-end is terminal observation/`completion_sentinel_ref`",
+            "Only final reply is envelope (fencing is presentation)",
+            "recorded turn-end is terminal observation/`completion_sentinel_ref`",
             "exclude other activity from caller context",
             "`log_ref` is an opaque heca-agent reference",
-            "confirm the heca flight’s agent is not running",
-            "Else keep the flight protected/report the unresolved outcome",
+            "confirm its heca agent is not running",
+            "Else protect flight/report unresolved outcome",
             "Stop/archive only own attempt's agent; all other heca lifecycle/orchestration is forbidden",
             "Stop via `heca_agent_archive`, confirm via `heca_agent_status`",
-            "Caller archives each attempt after successful/failed collection",
-            "never between matching notice and collection read",
-            "Confirmed stop archive counts for failure recorded without notice; never archive again",
+            "Archive each attempt after successful/failed collection",
+            "never between matching notice and collection",
+            "Confirmed stop archive counts for no-notice failure; never archive again",
             "Archive/outcome never proves completion or routes",
-            "archive failure stays unresolved/reported, preserves result, creates no attempt",
-            "Host job limits/teardown do not reach heca-owned agents",
+            "failure stays unresolved/reported, preserves result, creates no attempt",
+            "Host job limits/teardown do not reach heca agents",
         ):
             self.assertIn(required, delegation)
         self.assertIn("`heca` inherits those rules and unknown/uncontrollable provider user memory", text)

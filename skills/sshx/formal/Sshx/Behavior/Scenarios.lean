@@ -1,5 +1,6 @@
 import Sshx.Behavior.Invariant
 import Sshx.Reasoning.Authority
+import Sshx.Clauses.Delegation
 
 /-!
 Observable route regressions. These compose the production `step`, `allowed`, downgrade
@@ -821,18 +822,117 @@ private def authorizedRevision (r : Revision) (source : Option ContinuationSourc
 private def startupActions (c : ContinuationEntry) : List Action :=
   [.writeGoal goal (intake c),
    .appendRevision scopeNote (authorizedRevision scopeNote none),
-   .advanceStage, .capabilityCheck .codexCli, .recordHecaCheck false, .resolveMode (.carrier .codexCli), .advanceStage]
+   .advanceStage, .capabilityCheck .codexCli, .recordHecaCheck ⟨false, .disabled⟩, .resolveMode (.carrier .codexCli), .advanceStage]
+-- Every opt-in/exposure combination passes through the production check and consumers.
+-- Opt-in source is supplied evidence; these cases do not detect authority from English.
+private def optInCheckState : ProtocolState :=
+  { readyState with
+    stage := .chooseWorkerMode, mode := none,
+    hecaCheckRecorded := false, capabilityChecked := [.codexCli, .isolatedTokenSubagent] }
+
+private def optInState (source : HecaOptIn) (exposed : Bool) : ProtocolState :=
+  { step optInCheckState (.recordHecaCheck ⟨exposed, source⟩) with
+    stage := .implementation, mode := some (.carrier .codexCli) }
+
+example (facts : HecaCapability) : allowed optInCheckState (.recordHecaCheck facts) := by
+  simp [allowed, guardHecaCheck, guardCapabilityCheck, optInCheckState, readyState,
+    ProtocolState.initial, ProtocolState.goalWritten]
+
+
+private def optInFailed (source : HecaOptIn) (exposed : Bool) : ProtocolState :=
+  finish (step (step (optInState source exposed)
+    (.beginImplementation ⟨["all work"], 1⟩))
+    (.openFlight .implementation .implementation .codexCli "target" 0)) 0
+    { successful with exitZero := false }
+
+-- All six source/exposure cases include the four requested enablement/exposure cases.
+-- Initial composition, single-worker admission and the actual fallback guard agree.
+theorem heca_opt_in_consumer_matrix :
+    ∀ source ∈ [HecaOptIn.disabled, .user, .host], ∀ exposed ∈ [false, true],
+      let s := optInState source exposed
+      let available := s.capabilityChecked.contains .heca
+      available = (source != .disabled && exposed) ∧
+      (Clauses.stageComposition 3 available).contains .heca = available ∧
+      (Clauses.stageComposition 1 available).contains .heca = available ∧
+      (allowed (step s (.beginImplementation ⟨["all work"], 1⟩))
+        (.openFlight .implementation .implementation .heca "target" 0) ↔ available = true) ∧
+      (allowed (optInFailed source exposed) (.fallbackFlight 0 .heca) ↔ available = true) := by
+  intro source _ exposed _
+  cases source <;> cases exposed <;>
+    simp [optInState, optInCheckState, optInFailed, readyState, ProtocolState.initial,
+      finish, allowed, guardOpenFlight, guardImplementationFlight, guardFallback,
+      guardBeginImplementation, ImplementationPlan.valid, admitted,
+      guardLaunchViaRunner, guardHostNotified, guardCollect,
+      ProtocolState.modeResolved, ProtocolState.abstained, step, ImplementationPlan.start,
+      newFlight, ProtocolState.freshId, ProtocolState.flight, updateFlight, collectEffect,
+      done, successful, FlightRec.active, ProtocolState.eligibleCarriers,
+      ProtocolState.triedCarriers, nextCarrier, Carrier.univ, CarrierSet.get,
+      HecaCapability.detected, Clauses.stageComposition,
+      ProtocolState.reviewStarted, ProtocolState.reviewReady, ProtocolState.batchSettled,
+      ProtocolState.batchFlights, ProtocolState.allHecaHousekeepingSettled,
+      ProtocolState.attemptSettled, ProtocolState.housekeepingFor]
+
+-- Failure really is reached by an admitted Codex dispatch/notification/collection trace.
+theorem opt_in_codex_failure_admitted :
+    ∀ source ∈ [HecaOptIn.disabled, .user, .host], ∀ exposed ∈ [false, true],
+      admitted (optInState source exposed)
+        [.beginImplementation ⟨["all work"], 1⟩,
+         .openFlight .implementation .implementation .codexCli "target" 0,
+         .launchViaRunner 0, .hostNotified 0, .collect 0 { successful with exitZero := false }] := by
+  intro source _ exposed _
+  cases source <;> cases exposed <;>
+    simp [optInState, optInCheckState, optInFailed, readyState, ProtocolState.initial,
+      finish, allowed, guardOpenFlight, guardImplementationFlight, guardFallback,
+      guardBeginImplementation, ImplementationPlan.valid, admitted,
+      guardLaunchViaRunner, guardHostNotified, guardCollect,
+      ProtocolState.modeResolved, ProtocolState.abstained, step, ImplementationPlan.start,
+      newFlight, ProtocolState.freshId, ProtocolState.flight, updateFlight, collectEffect,
+      done, successful, FlightRec.active, ProtocolState.eligibleCarriers,
+      ProtocolState.triedCarriers, nextCarrier, Carrier.univ, CarrierSet.get,
+      HecaCapability.detected, Clauses.stageComposition,
+      ProtocolState.reviewStarted, ProtocolState.reviewReady, ProtocolState.batchSettled,
+      ProtocolState.batchFlights, ProtocolState.allHecaHousekeepingSettled,
+      ProtocolState.attemptSettled, ProtocolState.housekeepingFor]
+
+-- With no enablement or no tools, fallback actually continues on the existing subagent route.
+theorem opt_in_unavailable_fallback :
+    ∀ source ∈ [HecaOptIn.disabled, .user, .host], ∀ exposed ∈ [false, true],
+      (source = .disabled ∨ exposed = false) →
+      allowed (optInFailed source exposed) (.fallbackFlight 0 .isolatedTokenSubagent) := by
+  intro source _ exposed _
+  cases source <;> cases exposed <;>
+    simp [optInState, optInCheckState, optInFailed, readyState, ProtocolState.initial,
+      finish, allowed, guardOpenFlight, guardImplementationFlight, guardFallback,
+      guardBeginImplementation, ImplementationPlan.valid, admitted,
+      guardLaunchViaRunner, guardHostNotified, guardCollect,
+      ProtocolState.modeResolved, ProtocolState.abstained, step, ImplementationPlan.start,
+      newFlight, ProtocolState.freshId, ProtocolState.flight, updateFlight, collectEffect,
+      done, successful, FlightRec.active, ProtocolState.eligibleCarriers,
+      ProtocolState.triedCarriers, nextCarrier, Carrier.univ, CarrierSet.get,
+      HecaCapability.detected, Clauses.stageComposition,
+      ProtocolState.reviewStarted, ProtocolState.reviewReady, ProtocolState.batchSettled,
+      ProtocolState.batchFlights, ProtocolState.allHecaHousekeepingSettled,
+      ProtocolState.attemptSettled, ProtocolState.housekeepingFor]
+
+-- Opted-in lifecycle fixtures have the same available carrier membership as the check.
+theorem opt_in_preserves_heca_lifecycle_fixture :
+    ∀ source ∈ [HecaOptIn.user, .host], ∀ c ∈ Carrier.univ,
+      c ∈ (step { readyState with capabilityChecked := [.codexCli, .nyxidOracle, .isolatedTokenSubagent] }
+        (.recordHecaCheck ⟨true, source⟩)).capabilityChecked ↔
+      c ∈ (hecaReady none).capabilityChecked := by
+  decide
+
 -- Heca records even an absent check once; it cannot redraw availability later.
-example (s : ProtocolState) (first second : Bool) :
+example (s : ProtocolState) (first second : HecaCapability) :
     ¬ allowed (step s (.recordHecaCheck first)) (.recordHecaCheck second) := by
   simp [allowed, guardHecaCheck, step]
 
 example (s : ProtocolState) :
-    (step s (.recordHecaCheck false)).capabilityChecked = s.capabilityChecked := rfl
+    (step s (.recordHecaCheck ⟨false, .disabled⟩)).capabilityChecked = s.capabilityChecked := rfl
 
 example (s : ProtocolState) :
-    Carrier.heca ∈ (step s (.recordHecaCheck true)).capabilityChecked := by
-  simp [step]
+    Carrier.heca ∈ (step s (.recordHecaCheck ⟨true, .user⟩)).capabilityChecked := by
+  simp [step, HecaCapability.detected]
 
 example : allowed { review with capabilityChecked := Carrier.univ }
     (.openFlight .review .tests .heca "target" 0) := by
@@ -843,7 +943,7 @@ example : allowed { review with capabilityChecked := Carrier.univ }
 -- All authority states permit routine startup without a question, preserving revision support.
 example (c : ContinuationEntry) : admitted ProtocolState.initial (startupActions c) := by
   simp [admitted, startupActions, allowed, guardWriteGoal, guardAppendRevision,
-    guardAdvanceStage, guardCapabilityCheck, guardHecaCheck, guardResolveMode, Harness.complete,
+    guardAdvanceStage, guardCapabilityCheck, guardHecaCheck, guardResolveMode, HecaCapability.detected, Harness.complete,
     authorizedRevision, RevisionEvidence.valid,
     IntakeEvidence.complete, goal, intake, ProtocolState.initial, ProtocolState.goalWritten,
     ProtocolState.modeResolved, ProtocolState.abstained, step, GoalArtifact.correct, Stage.next]
