@@ -67,16 +67,24 @@ structure RemainingDifference where
   difference : String
   responsibleParty : String
   input : Input
+  trigger : TriggerRecord
   broadensIntoImprovementSearch : Bool
   deriving DecidableEq, Repr
 
 -- SKILL[def]: "- `residual-gap`: adversarially falsify termination by answering the existing `iteration_question` with one concrete remaining difference from `GoalArtifact`, and name the responsible party for it. It must not broaden into a generic improvement search. The named difference must pass `BlockingAuthority`; an advisory worry is not a remaining difference."
 def RemainingDifference.counts (d : RemainingDifference) : Bool :=
-  (force d.input == .blocking) && !d.broadensIntoImprovementSearch && (d.responsibleParty != "")
+  completeAdmission ⟨d.input, d.trigger⟩ && !d.broadensIntoImprovementSearch &&
+    (d.responsibleParty != "")
 
 theorem advisory_worry_is_not_a_difference (d : RemainingDifference)
     (h : force d.input = .advisory) : d.counts = false := by
-  simp [RemainingDifference.counts, h]
+  have ha : completeAdmission ⟨d.input, d.trigger⟩ = false := by
+    simp [completeAdmission, h]
+  simp [RemainingDifference.counts, ha]
+
+theorem failed_trigger_is_not_a_difference (d : RemainingDifference)
+    (h : triggerCheck d.trigger = false) : d.counts = false := by
+  simp [RemainingDifference.counts, completeAdmission, h]
 
 /-- What `claim-integrity` refuses as evidence that an obligation is discharged. -/
 inductive ProxyEvidence
@@ -123,9 +131,11 @@ abbrev rosterIdentities := @Roster
 abbrev noPermissionFromNonSatisfied := @no_permission_from_nonsatisfied
 
 -- SKILL[ref]: "Each termination seat applies `BlockingAuthority` itself before returning."
-abbrev seatAppliesAuthority := @settleSeat
+def seatAppliesAuthority (v : TerminationSeat) (b : DecisionBasis)
+    (redispatchedAlready : Bool) : TerminationSeat :=
+  settleSeat v (completeAdmission b) redispatchedAlready
 
--- SKILL[ref]: "An `unsatisfied` that names both conjuncts keeps its full force and may never be converted into permission by calling it unpersuasive."
+-- SKILL[ref]: "An admitted confirmed `unsatisfied` that names both conjuncts keeps its full force and may never be converted into permission by calling it unpersuasive."
 abbrev groundedUnsatisfiedKept := @grounded_unsatisfied_kept
 
 /-! ## Routing a withheld claim by ownership -/

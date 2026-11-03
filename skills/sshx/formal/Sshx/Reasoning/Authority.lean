@@ -56,7 +56,7 @@ theorem boundary_checks_independent :
 
 /-! ## Blocking authority, extended -/
 
--- SKILL[def]: "`BlockingAuthority` is the single admissibility rule for every input that would hold a candidate out of `implement`, turn a review toward `fix`, or withhold `satisfied` — a plan objection, a review finding, or a termination difference."
+-- SKILL[def]: "`BlockingAuthority` is the single admissibility rule for every input that would hold a candidate out of `implement`, turn a review toward `fix`, or withhold `satisfied`."
 inductive DecisionInputKind
   | planObjection
   | reviewFinding
@@ -64,16 +64,16 @@ inductive DecisionInputKind
   deriving DecidableEq, Repr
 
 /-- Every kind of decision input passes through the same rule. -/
-def admissibility (_ : DecisionInputKind) (i : Input) : Force := force i
+def admissibility (_ : DecisionInputKind) (b : DecisionBasis) : Bool := completeAdmission b
 
-theorem one_rule_for_every_input (k k' : DecisionInputKind) (i : Input) :
-    admissibility k i = admissibility k' i := rfl
+theorem one_rule_for_every_input (k k' : DecisionInputKind) (b : DecisionBasis) :
+    admissibility k b = admissibility k' b := rfl
 
--- SKILL[policy]: "Protocol policy, not mathematics, defines these two conjuncts."
+-- SKILL[policy]: "Protocol policy, not mathematics, defines these conjuncts."
 /-- The two conjuncts are policy constants of the contract, not derived. -/
 def conjunctCount : Nat := 2
 
--- SKILL[thm]: "An input that names both is blocking, and stays blocking however expensive, inconvenient, or late the repair is after it passes the trigger check"
+-- SKILL[thm]: "After these admission checks, both named conjuncts block regardless of repair cost, inconvenience or lateness."
 /-- Cost, inconvenience, lateness, and persuasiveness are not inputs of `force`. -/
 theorem force_ignores_cost_and_persuasion (i : Input) (cost lateness persuasiveness : Nat) :
     force i = force i ∧ (cost, lateness, persuasiveness) = (cost, lateness, persuasiveness) :=
@@ -81,17 +81,16 @@ theorem force_ignores_cost_and_persuasion (i : Input) (cost lateness persuasiven
 
 /-- A downgrade record carries the input's own words, or that it named none. -/
 inductive DowngradeRecord
-  | namedInOwnWords (words : String)
-  | namedNone
+  | namedInOwnWords (words : String) (triggerPassed : Bool)
+  | namedNone (triggerPassed : Bool)
   deriving DecidableEq, Repr
 
--- SKILL[def]: "An input that names fewer than both is advisory: its downgrade record carries what it named, or that it named none, in its own words and never a paraphrase, and it is never the sole basis of a `revise`, `reject`, `abstain`, blocking finding, `unsatisfied`, or any element of a concrete plan"
-def downgradeRecord (i : Input) (ownWords : String) : Option DowngradeRecord :=
-  match force i with
-  | .blocking => none
-  | .advisory =>
-    if i.namesGoalTerm || i.namesWorkEvidence then some (.namedInOwnWords ownWords)
-    else some (.namedNone)
+-- SKILL[def]: "Fewer than both, or a failed trigger check, is advisory: record its original words (including what it named or none) and trigger decision, never paraphrase, in the downgrade"
+def downgradeRecord (b : DecisionBasis) (ownWords : String) : Option DowngradeRecord :=
+  if completeAdmission b then none
+  else if b.input.namesGoalTerm || b.input.namesWorkEvidence then
+    some (.namedInOwnWords ownWords (triggerCheck b.trigger))
+  else some (.namedNone (triggerCheck b.trigger))
 
 /-- The decisions an advisory input may never be the sole basis of. -/
 inductive SoleBasisDecision
@@ -103,10 +102,11 @@ inductive SoleBasisDecision
   | concretePlanElement
   deriving DecidableEq, Repr
 
-def mayBeSoleBasis (i : Input) (_ : SoleBasisDecision) : Bool := force i == .blocking
+def mayBeSoleBasis (b : DecisionBasis) (_ : SoleBasisDecision) : Bool := completeAdmission b
 
-theorem advisory_never_sole_basis (i : Input) (h : force i = .advisory) (d : SoleBasisDecision) :
-    mayBeSoleBasis i d = false := by
+theorem advisory_never_sole_basis (b : DecisionBasis)
+    (h : completeAdmission b = false) (d : SoleBasisDecision) :
+    mayBeSoleBasis b d = false := by
   simp [mayBeSoleBasis, h]
 
 /-- A plan element and what admits it. -/
@@ -117,24 +117,25 @@ structure PlanElement where
   onlyTestIntroducedWithIt : Bool
   deriving DecidableEq, Repr
 
--- SKILL[def]: "The same two conjuncts admit a plan element: a defense, validation, abstraction, or compatibility path enters a plan only when it names the `GoalArtifact` term that demands it or a current consumer (an existing call site), and a test introduced together with it may corroborate that basis but never creates it."
--- SKILL[def]: "Findings and plan elements share this contextual chain: default to non-malicious ordinary use and mistakes, tracing actor, actual input path and goal-visible residue after declared recovery."
--- SKILL[def]: "Safety labels supply no evidence; ineligible or absorbed threats authorize no defense, validation or further repair."
+-- SKILL[def]: "The same two conjuncts and evidence-status/goal-basis checks admit a plan element: name the demanding `GoalArtifact` term or current consumer (existing call site); a co-introduced test corroborates but cannot create that basis."
+-- SKILL[def]: "Findings/plans trace non-malicious ordinary use/mistakes, actor, actual input path and goal-visible residue after declared recovery."
+-- SKILL[def]: "Safety labels prove nothing; ineligible/absorbed threats authorize no defense, validation or repair."
 def planElementAdmitted (e : PlanElement) : Bool :=
   let input := { e.basis.input with
     namesGoalTerm := e.basis.input.namesGoalTerm || e.namesCurrentConsumer }
-  downgrade { e.basis with verdict := .reject, input } == .reject
+  downgrade { e.basis with verdict := .reject, input } == .reject && !e.basis.requiresOwnerDecision
 
 theorem test_never_creates_admission (e : PlanElement) (h : e.basis.input.namesGoalTerm = false)
     (h' : e.namesCurrentConsumer = false) : planElementAdmitted e = false := by
-  simp [planElementAdmitted, downgrade, force, h, h']
+  simp [planElementAdmitted, downgrade, completeAdmission, force, h, h']
 
--- SKILL[thm]: "Failure is objective, not semantic: the rule asks only whether both conjuncts are named, never how well they are evidenced, while the trigger check is mechanical"
+-- SKILL[thm]: "After evidence-status/goal-basis admission, force asks whether both conjuncts are named, not how persuasive they are; workflow grounding and owner-policy compliance remain trigger-check premises."
 /-- An actual defect names both conjuncts, so the rule never removes it. -/
 theorem actual_defect_stays_blocking (i : Input) (hterm : i.namesGoalTerm = true)
-    (hev : i.namesWorkEvidence = true) (hfalse : i.basisShownFalse = false) :
+    (hev : i.namesWorkEvidence = true) (hfalse : i.basisShownFalse = false)
+    (hstatus : i.evidenceStatus = .confirmed) (hbasis : i.userGoalBasis ≠ "") :
     force i = .blocking :=
-  (force_blocking_iff i).mpr ⟨hterm, hev, hfalse⟩
+  (force_blocking_iff i).mpr ⟨hterm, hev, hfalse, hstatus, hbasis⟩
 
 /-! ## Advisory shapes and escaping residues -/
 
@@ -252,7 +253,7 @@ theorem no_constructor_no_escape :
 /-! ## Six independent questions -/
 
 -- SKILL[def]: "`BlockingAuthority` asks only whether a decision input may block;"
-def asksMayBlock (i : Input) : Force := force i
+def asksMayBlock (b : DecisionBasis) : Bool := completeAdmission b
 
 -- SKILL[def]: "`ThreatEligibility` asks who the actor is;"
 def asksWhoTheActorIs (t : TrustedPartyConduct) : Bool := threatEligible t
@@ -281,6 +282,6 @@ theorem three_checks_independent :
     ∃ i : Input, force i = .blocking ∧
       ∃ c : CandidateSolution, capabilityOverlap c = false ∧
         ∃ t : TrustedPartyConduct, threatEligible t = false :=
-  ⟨⟨true, true, false, false⟩, rfl, ⟨false, false⟩, rfl, .deliberateMalice, rfl⟩
+  ⟨⟨true, true, false, false, .confirmed, "current goal/contract source"⟩, rfl, ⟨false, false⟩, rfl, .deliberateMalice, rfl⟩
 
 end Sshx.Reasoning

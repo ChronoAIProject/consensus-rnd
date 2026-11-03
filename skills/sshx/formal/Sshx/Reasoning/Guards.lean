@@ -59,11 +59,8 @@ def unverifiedSourceCanRoute (sourceVerified : Bool) : Bool := sourceVerified
 def searchResultsCreateGrounding (sourceVerified : Bool) : Bool := false
 
 -- SKILL[def]: "When `conclusion.blocking_findings` is present"
-structure BlockingFindingMetadata where
-  trigger : String
-  triggerActor : String
-  mechanismFamily : String
-  deriving DecidableEq, Repr
+-- SKILL[ref]: "Describe before judging."
+abbrev BlockingFindingMetadata := TriggerRecord
 
 -- SKILL[def]: "Trusted-party failure, omission, and uncertainty remain eligible"
 def ordinaryOperationKeepsTrustedFailureEligible (ordinaryPath : Bool) (trustedFailure : Bool) : Bool :=
@@ -100,7 +97,10 @@ def missingPlanningEvidenceBlocksImplement (evidenceVerified : Bool) : Bool := !
 
 -- SKILL[def]: "It must carry the fields required by `## Result Envelope`."
 def findingMetadataShapeComplete (metadata : TriggerRecord) : Bool :=
-  metadata.trigger != "" && metadata.triggerActor != "" && metadata.mechanismFamily != ""
+  metadata.trigger != "" && metadata.triggerActor != "" && metadata.mechanismFamily != "" &&
+    metadata.familyBasis.failedProperty != "" && metadata.familyBasis.causalMechanism != "" &&
+    metadata.familyBasis.correspondenceEvidence != ""
+    -- Typed input evidence and owner policy are mandatory in TriggerRecord.
 
 -- SKILL[def]: "On every review pass after the initial implementation, the review triplet must list each defense"
 def reviewListsNewDefenses (listed : Bool) : Bool := listed

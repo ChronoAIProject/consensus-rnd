@@ -142,6 +142,20 @@ atomic rename for those artifacts. It also states the envelope's structural
 acceptance conditions and includes one runner-rendered, stage-specific minimum
 valid envelope example.
 
+The actual injected brief must convey exclusive ownership: worker writes only result,
+sentinel and their same-directory publication temporaries; stdout/stderr/last-message,
+brief/status/exit and their temporaries are runner-owned and must not be created,
+overwritten, appended, repaired, normalized or forged by the worker. `log_ref` is copied
+as an opaque reference to the existing diagnostic sink, without opening its body or
+creating a narrative log; another existing reference needs explicit task supply.
+All work/checks precede publication. The last worker tool action atomically publishes
+result then sentinel, and the worker immediately returns its compact final reply with
+no further tool, artifact inspection or rewrite. These prompt obligations do not impose
+same-user filesystem protection. Simulation may demonstrate violations; it does not
+prove real workers comply, nor establish timeout causality. A post-sentinel rewrite or
+log overwrite cannot replace successful terminal carrier observation. The runner does
+not audit write history or strengthen/weaken the completion predicate to do so.
+
 Launch receipts and pure queries are the only sanctioned path discovery mechanisms for the
 batch, status-read, cleanup, and sweep scripts and for the oracle runner. Those scripts contain no
 run-layout formula, attempt naming rule, or artifact basename and do not parse

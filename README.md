@@ -2,9 +2,9 @@
 
 English canonical public documentation. [Chinese companion](./README.zh-CN.md).
 
-`consensus-rnd` publishes Agent Skills for Claude Code, Codex, Cursor, and Gemini. Its `sshx` skill brings isolated worker perspectives to a high-risk decision or implementation task, converges on a concrete plan, and checks the result through independent review. The deliverable is a prompt contract and its supporting files, shared across platform manifests.
+`consensus-rnd` publishes Agent Skills for Claude Code, Codex, Cursor, and Gemini. Its `sshx` skill brings isolated worker perspectives to an authorized decision or implementation task, converges on a concrete plan, and checks the result through independent review. The deliverable is a prompt contract and its supporting files, shared across platform manifests.
 
-Use it when product, architecture, correctness, safety, or cost risks justify separate perspectives. Routine one-step answers whose outcome would not change do not justify the protocol's cost. See the [trigger and exclusions](./skills/sshx/SKILL.md#trigger).
+Activate it only for an explicit request for consensus, multi-angle thinking or delegated review, or an applicable host/repository mandate. Risk alone and a generic architecture review request do not activate it; within authorization, weigh whether separate perspectives justify the cost. See the [trigger and exclusions](./skills/sshx/SKILL.md#trigger).
 
 ## What It Provides
 
@@ -57,6 +57,8 @@ The [review triplet](./skills/sshx/SKILL.md#review-triplet) applies the [review 
 
 A [termination gate](./skills/sshx/SKILL.md#termination-gate) applies inside the final stage only when the host has positively declared a goal-driven continuation mechanism in the [goal contract](./skills/sshx/SKILL.md#goal-contract), and an affirmative satisfaction claim is being considered. It is not an eighth stage and grants no control over the host mechanism.
 
+Only confirmed defects against the current goal or an existing contract enter automatic repairs. Findings retain `evidence_status` and `user_goal_basis`; uncertain changes to product or permission semantics go to their owner for clarification. A user correction cancels dependent stale plan, review and repair authority while preserving history and active-job protection. See [goal corrections](./skills/sshx/SKILL.md#goal-contract) and [admission](./skills/sshx/SKILL.md#reasoning-discipline).
+
 ## Risks and Limits
 
 - **Broad execution access:** the Codex runner defaults to `danger-full-access`. Read the [invocation contract](./skills/sshx/CODEX_WORKER_SPEC.md#invocation) and [threat model](./skills/sshx/CODEX_WORKER_SPEC.md#threat-model) before supplying a work target.
@@ -105,6 +107,24 @@ The plugin identity is declared in the [marketplace](./.claude-plugin/marketplac
 ### Codex / Cursor
 
 The [Codex](./.codex-plugin/plugin.json) and [Cursor](./.cursor-plugin/plugin.json) manifests both declare `"skills": "./skills/"`. Use the platform's plugin support to load the repository and read the [skill contract](./skills/sshx/SKILL.md); installation and invocation details depend on the host.
+
+### Verify the effective copy and refresh manually
+
+Before dispatch, [worker delegation](./skills/sshx/SKILL.md#worker-delegation) records the actually read skill path, SHA-256, available checkout revision/dirty state, and current Heca policy in existing gate evidence. A manifest version or upstream release cannot identify a copied or locally edited skill, or prove an open session adopted it. Explicit user disable wins opt-in on every route, including retry, fallback, repair and resume; tools alone never opt in.
+
+Inspect the path reported by the host, following any symlink, rather than assuming an installation directory. For a checkout, these read-only commands distinguish bytes from revision and manifest metadata:
+
+```bash
+shasum -a 256 <effective-skill-root>/SKILL.md
+git -C <source-checkout> rev-parse HEAD
+git -C <source-checkout> status --short
+```
+
+Compare the effective file with the intended checkout's `skills/sshx/SKILL.md` using `diff`; also compare supporting files because the whole skill directory is the distribution unit. A copied installation may have no Git revision: report that limitation and keep the content hash. None of these observations proves current-session adoption. Confirm the newly read path/hash and policy in the next run; if the host cannot expose that association, label adoption `ASSUMED-UNVERIFIED`.
+
+Manual refresh is an owner action, never automatic sshx behavior. For a direct-folder installation, refresh the entire resolved skill directory from a verified checkout using the host's supported skill installation procedure, then compare again. [Official Codex skills guidance](https://developers.openai.com/codex/skills/) documents discovery locations, symlink support and automatic change detection; restart Codex if an update does not appear. When multiple copies exist, verify the selected path. This does not assert that a legacy `~/.codex/skills` copy is the selected source or that an existing session reloaded it.
+
+For the Claude marketplace installation above, [official plugin guidance](https://code.claude.com/docs/en/discover-plugins#update-plugins-now) documents `claude plugin update consensus-rnd@consensus-rnd`, then `/reload-plugins` to apply updated disk content to the session. Use the installed host's supported UI if that command is unavailable. For Cursor and Gemini, use their installed plugin/extension manager and confirm the effective source again; no reload command or adoption behavior is claimed here. These official owner procedures were not exercised on this host: local refresh/reload remains `ASSUMED-UNVERIFIED`. The skill executes no refresh or host/global setting change.
 
 ### Gemini CLI
 

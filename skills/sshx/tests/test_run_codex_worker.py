@@ -72,6 +72,26 @@ case "${FAKE_MODE:-success}" in
     mv "$result_ref.tmp" "$result_ref"
     write_sentinel
     ;;
+  brief_contract)
+    ownership=false; opaque=false; final_action=false; immediate_return=false
+    case "$brief" in *"Worker-owned: only result.json, completion.sentinel"*"Runner-owned: brief.md, worker.stdout.log, worker.stderr.log, last-message.txt, status.json, carrier.exit"*"Do not create, overwrite, append to, repair, normalize or forge"*) ownership=true ;; esac
+    case "$brief" in *"Copy the example's"*"opaque diagnostic reference"*"no creation, repair or narrative log"*) opaque=true ;; esac
+    case "$brief" in *"Complete all work and verification BEFORE publication"*"LAST tool action"*"atomically rename"*) final_action=true ;; esac
+    case "$brief" in *"immediately return your compact final reply"*"Do not run further tools"*) immediate_return=true ;; esac
+    printf '{"conclusion":{"verdict":"%s","ownership":%s,"opaque":%s,"final_action":%s,"immediate_return":%s},"log_ref":"fake-log"}\n' "$verdict" "$ownership" "$opaque" "$final_action" "$immediate_return" > "$result_ref.tmp"
+    mv "$result_ref.tmp" "$result_ref"; write_sentinel
+    ;;
+  overwrite_and_rewrite_nonzero|overwrite_and_rewrite_zero)
+    # Deliberate simulated violation: prompt obligations are not an OS boundary.
+    printf '%s\n' forged > "$run_dir/worker.stdout.log"
+    write_result; write_sentinel
+    verdict=reject; write_result
+    [ "$FAKE_MODE" != overwrite_and_rewrite_nonzero ] || exit 9
+    ;;
+  invalid_after_sentinel)
+    write_result; write_sentinel
+    printf '%s\n' '{"conclusion":' > "$result_ref"
+    ;;
   bad_verdict) verdict=unexpected; write_result; write_sentinel ;;
   missing_sentinel) write_result ;;
   stdout_only) printf '%s\n' '{"conclusion":{"verdict":"propose"},"log_ref":"fake-log"}'; printf '%s\n' 'completion marker' ;;
@@ -380,6 +400,27 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assertIsNone(result.status["started_at"])
         self.assertIsNone(result.status["finished_at"])
         self.assertIsNone(result.status["duration_seconds"])
+
+    def test_received_brief_conveys_ownership_and_last_action_for_every_stage(self) -> None:
+        for stage, verdict in (("thinking", "propose"), ("implementation", "unused"),
+                               ("review", "approve"), ("termination", "satisfied")):
+            with self.subTest(stage=stage):
+                result = self.run_worker("brief_contract", stage=stage, extra_env={"FAKE_VERDICT": verdict})
+                self.assert_terminal(result, "COMPLETE")
+                conclusion = json.loads((result.run_dir / "result.json").read_text())["conclusion"]
+                self.assertTrue(all(conclusion[key] for key in
+                                    ("ownership", "opaque", "final_action", "immediate_return")))
+
+    def test_simulated_artifact_violations_do_not_replace_terminal_predicate(self) -> None:
+        failed = self.run_worker("overwrite_and_rewrite_nonzero")
+        self.assert_terminal(failed, "CARRIER_EXIT_NONZERO")
+        self.assertEqual((failed.run_dir / "worker.stdout.log").read_text(), "forged\n")
+        self.assertEqual(json.loads((failed.run_dir / "result.json").read_text())["conclusion"]["verdict"], "reject")
+        # Honest limit: no same-user write protection or write-history audit is claimed.
+        completed = self.run_worker("overwrite_and_rewrite_zero")
+        self.assert_terminal(completed, "COMPLETE")
+        self.assertEqual(completed.status["verdict"], "reject")
+        self.assert_terminal(self.run_worker("invalid_after_sentinel"), "ENVELOPE_INVALID")
 
     def test_nonzero_carrier_wins_even_with_complete_artifacts(self) -> None:
         result = self.run_worker("nonzero_with_artifacts")

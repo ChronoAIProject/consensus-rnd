@@ -313,6 +313,93 @@ not when the earlier attempt recorded its baseline. Regressions exercise those
 existing consumers for all opt-in/exposure combinations; model evidence cannot prove live
 heca capability or change the earlier real-tool evidence cutoffs.
 
+Issues #1071-#1074 incident-derived no-skill baseline (2026-10-31, recorded
+before this batch's skill/spec/runner/model edits): the supplied issue reports are
+untrusted historical evidence, not newly observed carrier behavior. #1071 reports a
+beta.54 loaded copy and five unapproved Heca launches; #1072 reports stdout overwrite,
+post-sentinel result rewrites and two interrupted carriers; #1073 reports synthetic
+Git-state blockers and an owner restriction omitted from briefs; #1074 reports five
+paraphrased family names across three passes. Installation cause, timeout causality,
+the host census, historical incidents and counterfactual time savings are NOT replayed
+or verified here. Without the proposed guidance, these incidents motivate the missing
+boundaries; they do not establish what a fresh no-skill evaluator would do.
+Newly observed pre-edit source evidence in this clean worktree: Heca already requires
+current-run opt-in and exposed tools, and runner nonzero exit already fails closed.
+The actual injected brief permits replacing log_ref without conveying runner-owned
+stdout/stderr/last-message/brief/status/exit ownership or immediate final return.
+BlockingAuthority accepts a self-labelled ordinary-operation without workflow/input
+provenance or sourced owner admission restriction. mechanism_family explicitly uses
+exact equality, and the class gate supplies no settled-prior family correspondence.
+These are source observations, not live host failures. Preserve the completed opt-in
+and terminal checks. Forward evidence must distinguish simulated runner regressions,
+composed operational Lean guards, and any explicitly scoped real Codex invocation.
+No fresh no-skill agent experiment, historical host access, global update, or Heca
+probe is claimed. This baseline is source-owned; runtime logs remain untracked.
+
+ARCH-001 / QUALITY-1074-01 repair baseline (2026-10-31, before this repair's
+implementation edits): a fresh ``lake env lean --stdin`` check imported the current
+Behavior.Model and constructed a one-pass FamilyEvidence with no prior label, no
+settled prior, an evidenced reason new, peer-free inputs, no earlier unsupported
+enumeration, no owner/domain change and unknown class coverage. It compiled exit 0:
+classGateActive=false, familyRoute=reviseOrInvestigate, and familyPassAllowed for
+repairWithRerunReview=false. The same check proved universally that no ProtocolState
+or ImplementationPlan can admit that repair through the production allowed/guardPass.
+This records a current compiled contract/model mismatch, not a host stall or a new
+no-skill evaluator experiment. SKILL.md already permits a family_basis reason new and
+the initial review's finite repair; no contract or authorized domain change is needed.
+The forward regression must compose the initial review, first paid repair, whole-batch
+implementation and included review, while preserving unresolved comparison, verified
+paraphrase recurrence, distinct-cause and class-coverage routes at the same consumers.
+
+Changed-runner real Codex evidence (2026-10-31, after baseline and runner edits):
+installed codex-cli 0.161.0, changed sanctioned runner, standalone peer-free arithmetic
+brief, temporary work target/run root, foreground supervised subprocess (no detachment
+or active-artifact polling). One terminal collection through the sanctioned status
+reader reported flight 6ae50ea40dc75dc5193fdea7 attempt 1 COMPLETE, carrier exit 0,
+duration 30 seconds. The compact result reported assertion 2 + 2 = 4 passed and
+received worker-only result/sentinel, runner-owned diagnostics, opaque log_ref, last
+atomic publication and immediate-return obligations. Only terminal compact result and
+status metadata were collected; no reasoning/log bodies or write-history audit.
+This observes receipt-to-successful-terminal for this bounded run, not historical
+incident replay, timeout causality, adversarial compliance or same-user isolation.
+The brief-contract and deliberate overwrite/post-sentinel regressions are simulations,
+not additional live carrier observations. No Heca or installation refresh was run.
+
+Issue #1075 / distribution follow-up baseline (2026-11-04, before this assignment's
+contract/model/test edits; inherited dirty candidate on c97a7e03): source inspection
+still finds risk-only Trigger activation, an unconditional startup-question ban,
+and BlockingAuthority force from two named conjuncts without evidence_status or
+user_goal_basis. appendRevision preserves batch, flights and stage: dependent
+pending/review/repair authority is not revoked. These are observed source gaps;
+the issue's permission-expansion incident is supplied historical evidence, not a
+fresh no-skill evaluator result. A pre-edit Lean probe did NOT compile: the pinned
+4.33.0 toolchain was unavailable and its automatic global download was interrupted.
+No compiled-baseline or new real-carrier claim is made. Existing S1 identity tests
+assert guidance but do not observe copied/symlinked/edited complete directories.
+Forward evidence must exercise actual admission/revision consumers and read real
+temporary distribution files; source hashes cannot establish session adoption.
+The earlier #1071-#1074 baseline and caller-reported carrier evidence retain their
+original scope and timing; they are not observations by this assignment.
+
+ARCH-001 / TEST-1073-01 frozen repair baseline (2026-11-04): before this batch,
+the delegating caller supplied two independent compiled counterexamples against
+the dirty candidate. A confirmed, goal-sourced input with a failed trigger was
+advisory to review/plan admission but blocking to focusedRoundRequired, goalGapOf,
+RemainingDifference.counts and mayBeSoleBasis; downgradeRecord returned no record.
+These names map to the same cause: the generic Input projection lost trigger
+provenance. The supplied baseline authorizes S3/C6/S6 correspondence repair only;
+it is not a new live host incident or a baseline compiled by this repair worker.
+Forward verification calls the existing consumers with one DecisionBasis and
+checks failed-trigger rejection parametrically, plus ordinary/manual/fixture/
+owner-restricted evidence classes. Constructed fixtures prove formal behavior,
+not actual workflow occurrence, provenance truth or real-carrier compliance.
+
+Official guidance checked read-only on 2026-11-04: fetched
+https://developers.openai.com/codex/skills/ (symlink discovery, change detection,
+restart if not visible) and https://code.claude.com/docs/en/discover-plugins.md
+(plugin update and session reload). No installation/refresh/reload was exercised;
+Cursor/Gemini procedures and session adoption remain ASSUMED-UNVERIFIED.
+
 The behavior helpers below cover fixed truth tables and other load-bearing mechanical contracts,
 but do not infer English semantics.
 Files outside ``skills/sshx/SKILL.md`` are outside this positional boundary and remain governed
@@ -509,14 +596,12 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "decision_ownership",
         "disown",
         "escalate",
-        "exit",
         "external-prior-exposed",
         "fidelity",
         "finding_downgrades",
         "fix",
         "fix_or_done",
         "flight_id",
-        "goal_gap",
         "harness",
         "harness.decision_ownership",
         "harness.provided_capabilities",
@@ -531,9 +616,16 @@ SSHX_CONTRACT_FORMAL_IDENTIFIERS = frozenset(
         "log_ref",
         "malicious",
         "mechanism_family",
+        "family_basis",
+        "input_evidence",
+        "evidence_status",
+        "confirmed",
+        "advisory",
+        "conditional",
+        "unverified",
+        "user_goal_basis",
         "meta_judge",
         "natural-ownership",
-        "next_iteration_question",
         "nohup",
         "none",
         "normalized_goal",
@@ -605,7 +697,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "3c919b7e5936a12ff48fb2f04307e37db9dd047b016baa978b80248684722e87"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "f590f8a8529b03053cbcd63a2d9478ede828a1261af3d9976ddc57fd93a2f6f2"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -905,9 +997,13 @@ def blocking_force(
     names_work_evidence: bool,
     basis_shown_false: bool,
     basis_disputed: bool,
+    evidence_status: str,
+    user_goal_basis: str,
 ) -> str:
     del basis_disputed
-    if basis_shown_false:
+    if evidence_status not in {"confirmed", "advisory", "conditional", "unverified"}:
+        raise ContractFailure("invalid evidence status")
+    if basis_shown_false or evidence_status != "confirmed" or not user_goal_basis:
         return "advisory"
     if names_goal_term and names_work_evidence:
         return "blocking"
@@ -921,19 +1017,33 @@ def blocking_finding_force(
     basis_shown_false: bool,
     trigger_path: str,
     recorded_occurrence: str | None,
+    evidence_status: str,
+    user_goal_basis: str,
     fields: frozenset[str] | None = None,
     occurrence_pre_run: bool = True,
+    workflow_input_basis: bool = True,
+    observed_input: bool = False,
+    owner_actual_only: bool = False,
+    owner_rule_sourced: bool = True,
 ) -> str:
     required_fields = frozenset(
-        {"trigger", "trigger_actor", "trigger_path", "mechanism_family", "recorded_occurrence"}
+        {"trigger", "trigger_actor", "trigger_path", "mechanism_family", "family_basis", "input_evidence", "recorded_occurrence", "evidence_status", "user_goal_basis"}
     )
     if fields is not None and fields != required_fields:
         raise ContractFailure("blocking finding metadata is incomplete")
+    if owner_actual_only and not owner_rule_sourced:
+        raise ContractFailure("owner admission restriction lacks a source")
     if trigger_path not in {"ordinary-operation", "nonstandard-deliberate", "malicious"}:
         raise ContractFailure("invalid trigger path")
-    if basis_shown_false or not (names_goal_term and names_work_evidence):
+    if blocking_force(names_goal_term=names_goal_term, names_work_evidence=names_work_evidence,
+                      basis_shown_false=basis_shown_false, basis_disputed=False,
+                      evidence_status=evidence_status, user_goal_basis=user_goal_basis) != "blocking":
         return "advisory"
-    if trigger_path != "ordinary-operation" and (recorded_occurrence is None or not occurrence_pre_run):
+    occurrence = recorded_occurrence is not None and occurrence_pre_run
+    ordinary = trigger_path == "ordinary-operation" and workflow_input_basis
+    if not (ordinary or occurrence):
+        return "advisory"
+    if owner_actual_only and not (observed_input or occurrence):
         return "advisory"
     return "blocking"
 
@@ -1175,7 +1285,7 @@ class SshxContractTests(unittest.TestCase):
         text = read(SKILL)
         implementation = section(text, "## Implementation Worker", "## Review Triplet")
         repair = section(text, "## Fix Or Done", "## Termination Gate")
-        owner = "Send goal, verifiable acceptance, authorized scope/prohibitions"
+        owner = "Send goal, verifiable acceptance, scope/prohibitions"
         self.assertEqual(text.count(owner), 1)
         self.assertIn(owner, implementation)
         self.assertIn("under `## Implementation Worker` handoff, allowance and evidence rules", repair)
@@ -1205,7 +1315,7 @@ class SshxContractTests(unittest.TestCase):
         text = read(SKILL)
         self.assertIn("`intake` (write `GoalArtifact` and normalize the goal)", text)
         protocol_section = text[heading_index(text, "## InlineConsensusProtocol") : heading_index(text, "## Worker Delegation")]
-        for anchor in ["`visible_inputs`", "`GoalArtifact`", "`harness`", "same-round peer outputs"]:
+        for anchor in ["`visible_inputs`", "`GoalArtifact`", "`harness`", "same-round peer output"]:
             self.assertIn(anchor, protocol_section)
         self.assertIn(
             "`revise` must name the goal gap and a next iteration question; it must not open an unrelated design search",
@@ -1244,7 +1354,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("append-only list", goal_section)
         self.assertIn("missing any one of these sub-items is invalid and fails closed", goal_section)
         self.assertIn("before any worker dispatch", goal_section)
-        self.assertIn("must not ask a startup boundary or harness confirmation question", goal_section)
+        self.assertIn("must not ask a routine startup boundary or harness confirmation question", goal_section)
         self.assertIn("routine missing detail is resolved with the smallest task-relevant assumption", goal_section)
         self.assertNotIn("must ask the boundary owner", goal_section)
         self.assertIn("non-adversarial, not infallible", goal_section)
@@ -1826,32 +1936,32 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn(definition, reasoning)
         for anchor in [
             "Advisory is the default; blocking is the exception",
-            "exactly two conjuncts that the input itself must name",
-            "first, the `normalized_goal` clause, `constraints` item, or `success_criteria` item that the work as built fails",
-            "second, evidence in the work as built that shows the failure",
-            "a current call site or input path, an observed failure, a failing verification command, a wrong result",
-            "against a satisfaction claim, the absence of the evidence the named term demands",
+            "exactly two conjuncts the input itself must name",
+            "the failed `normalized_goal` clause, `constraints` item or `success_criteria` item",
+            "evidence in the work as built",
+            "current call site/input path, observed failure, failing verification, wrong result",
+            "absence of evidence the term demands",
             "A blocking finding must also pass the structured trigger check",
-            "if its `trigger_path` is not `ordinary-operation` and its `recorded_occurrence` is `none`, the finding is advisory",
+            "A tool manual or review fixture alone proves capability/reachability, never ordinary workflow input or occurrence",
+            "future ordinary workflow-produced inputs remain eligible",
             "recorded_occurrence` must have existed before this run and independently of the current review",
-            "a fixture, reproduction, or state deliberately created by a seat, caller, or repair worker during this run is reachability evidence only",
-            "An input that names both is blocking, and stays blocking however expensive, inconvenient, or late the repair is",
-            "a named basis that evidence shows to be false no longer counts as named",
-            "keeps its full blocking force until the dispute is settled against evidence",
-            "no one may call an input advisory because its named basis is unpersuasive",
-            "An input that names fewer than both is advisory",
-            "its downgrade record carries what it named, or that it named none, in its own words and never a paraphrase",
-            "never the sole basis of a `revise`, `reject`, `abstain`, blocking finding, `unsatisfied`, or any element of a concrete plan",
-            "The same two conjuncts admit a plan element",
-            "names the `GoalArtifact` term that demands it or a current consumer (an existing call site)",
-            "a test introduced together with it may corroborate that basis but never creates it",
-            "Failure is objective, not semantic",
-            "asks only whether both conjuncts are named, never how well they are evidenced",
-            "it removes no actual defect",
-            "a reachable failure, a trusted-party mistake, an omission, and a stated uncertainty each name both",
+            "deliberately constructed run fixtures/reproductions/states are reachability evidence only",
+            "After these admission checks, both named conjuncts block regardless of repair cost, inconvenience or lateness",
+            "Evidence showing a basis false removes it",
+            "disputed correctness retains full force until evidence settles it",
+            "never downgrade for being unpersuasive",
+            "Fewer than both, or a failed trigger check, is advisory",
+            "record its original words (including what it named or none) and trigger decision, never paraphrase",
+            "never use it alone for `revise`, `reject`, `abstain`, `unsatisfied`, a blocker or a plan element",
+            "The same two conjuncts and evidence-status/goal-basis checks admit a plan element",
+            "name the demanding `GoalArtifact` term or current consumer (existing call site)",
+            "a co-introduced test corroborates but cannot create that basis",
+            "force asks whether both conjuncts are named",
+            "not how persuasive they are",
+            "workflow grounding and owner-policy compliance remain trigger-check premises",
         ]:
             self.assertIn(anchor, reasoning)
-        self.assertEqual(text.count("The same two conjuncts admit a plan element"), 1)
+        self.assertEqual(text.count("The same two conjuncts and evidence-status/goal-basis checks admit a plan element"), 1)
         for forbidden in [
             "an unverified path has no blocking force",
             "an unverified named basis loses blocking force",
@@ -1879,6 +1989,7 @@ class SshxContractTests(unittest.TestCase):
                     names_work_evidence=evidence,
                     basis_shown_false=shown_false,
                     basis_disputed=disputed,
+                    evidence_status="confirmed", user_goal_basis="current goal / contract source",
                 )
                 for goal_term, evidence, shown_false, disputed in [
                     (True, True, False, False),
@@ -1893,7 +2004,7 @@ class SshxContractTests(unittest.TestCase):
         )
 
     def test_sshx_trigger_metadata_mechanically_downgrades_local_fixtures(self) -> None:
-        fields = frozenset({"trigger", "trigger_actor", "trigger_path", "mechanism_family", "recorded_occurrence"})
+        fields = frozenset({"trigger", "trigger_actor", "trigger_path", "mechanism_family", "family_basis", "input_evidence", "recorded_occurrence", "evidence_status", "user_goal_basis"})
         self.assertEqual(
             (
                 blocking_finding_force(
@@ -1903,6 +2014,7 @@ class SshxContractTests(unittest.TestCase):
                     trigger_path="ordinary-operation",
                     recorded_occurrence=None,
                     fields=fields,
+                    evidence_status="confirmed", user_goal_basis="current goal / contract source",
                 ),
                 blocking_finding_force(
                     names_goal_term=True,
@@ -1911,6 +2023,7 @@ class SshxContractTests(unittest.TestCase):
                     trigger_path="nonstandard-deliberate",
                     recorded_occurrence=None,
                     fields=fields,
+                    evidence_status="confirmed", user_goal_basis="current goal / contract source",
                 ),
                 blocking_finding_force(
                     names_goal_term=True,
@@ -1919,6 +2032,7 @@ class SshxContractTests(unittest.TestCase):
                     trigger_path="nonstandard-deliberate",
                     recorded_occurrence="issue-1058",
                     fields=fields,
+                    evidence_status="confirmed", user_goal_basis="current goal / contract source",
                 ),
             ),
             ("blocking", "advisory", "blocking"),
@@ -1931,6 +2045,7 @@ class SshxContractTests(unittest.TestCase):
                 trigger_path="invented-path",
                 recorded_occurrence=None,
                 fields=fields,
+                evidence_status="confirmed", user_goal_basis="current goal / contract source",
             )
         with self.assertRaises(ContractFailure):
             blocking_finding_force(
@@ -1940,7 +2055,43 @@ class SshxContractTests(unittest.TestCase):
                 trigger_path="ordinary-operation",
                 recorded_occurrence=None,
                 fields=fields - {"trigger_actor"},
+                evidence_status="confirmed", user_goal_basis="current goal / contract source",
             )
+
+    def test_workflow_input_and_sourced_owner_restriction_projection(self) -> None:
+        # Projections of interpreted evidence; real operational review/repair guards are Lean-tested.
+        base = dict(names_goal_term=True, names_work_evidence=True, basis_shown_false=False,
+                    trigger_path="ordinary-operation", recorded_occurrence=None,
+                    evidence_status="confirmed", user_goal_basis="current goal / contract source")
+        cases = (
+            ({"evidence_status": "advisory"}, "advisory"),
+            ({"evidence_status": "conditional"}, "advisory"),
+            ({"evidence_status": "unverified"}, "advisory"),
+            ({"user_goal_basis": ""}, "advisory"),
+            ({"workflow_input_basis": False}, "advisory"),  # manual/fixture alone
+            ({"workflow_input_basis": True}, "blocking"),  # future workflow input, no census hit
+            ({"owner_actual_only": True}, "advisory"),
+            ({"owner_actual_only": True, "observed_input": True}, "blocking"),
+            ({"owner_actual_only": True, "recorded_occurrence": "independent incident"}, "blocking"),
+            ({"owner_actual_only": True, "recorded_occurrence": "review fixture", "occurrence_pre_run": False}, "advisory"),
+        )
+        for changes, expected in cases:
+            with self.subTest(changes=changes):
+                self.assertEqual(blocking_finding_force(**(base | changes)), expected)
+        with self.assertRaisesRegex(ContractFailure, "lacks a source"):
+            blocking_finding_force(**(base | {"owner_actual_only": True, "owner_rule_sourced": False}))
+
+    def test_effective_source_and_current_policy_evidence_have_one_owner(self) -> None:
+        delegation = section(read(SKILL), "## Worker Delegation", "## Result Envelope")
+        for anchor in ("effective path/SHA-256", "manifest/release distinction",
+                       "disk/upstream change proves no adoption", "Explicit user disable overrides host opt-in",
+                       "retry, fallback, repair and resume", "without re-probing"):
+            self.assertIn(anchor, delegation)
+        for name in ("README.md", "README.zh-CN.md"):
+            guide = read(ROOT / name)
+            self.assertIn("shasum -a 256 <effective-skill-root>/SKILL.md", guide)
+            self.assertIn("https://developers.openai.com/codex/skills/", guide)
+            self.assertIn("/reload-plugins", guide)
 
     def test_sshx_issue_1058_controls_are_declared_at_their_owners(self) -> None:
         text = read(SKILL)
@@ -1951,13 +2102,13 @@ class SshxContractTests(unittest.TestCase):
         fix_or_done = section(text, "## Fix Or Done", "## Termination Gate")
         self.assertIn("resolves them from current user input, repository rules", goal)
         self.assertIn("recording sources and explicitly labelling minimal engineering assumptions", goal)
-        self.assertIn("must not ask a startup boundary or harness confirmation question", goal)
-        for field in ["trigger", "trigger_actor", "trigger_path", "mechanism_family", "recorded_occurrence"]:
+        self.assertIn("must not ask a routine startup boundary or harness confirmation question", goal)
+        for field in ["trigger", "trigger_actor", "trigger_path", "mechanism_family", "family_basis", "input_evidence", "recorded_occurrence", "evidence_status", "user_goal_basis"]:
             self.assertIn(f"`{field}`", envelope)
         self.assertIn("fields required by `## Result Envelope`", review_truth)
         self.assertIn("Every review focus in a dispatch brief must name the `GoalArtifact` clause", review)
         self.assertIn("An unbounded request to find any mechanism that could make a result fail is invalid", review)
-        self.assertIn("after two consecutive passes whose blocking findings name the same `GoalArtifact` term and `mechanism_family`", fix_or_done)
+        self.assertIn("after two consecutive passes whose blocking findings name the same `GoalArtifact` term and evidenced family", fix_or_done)
         self.assertIn("member-by-member enumeration leaves the property unsupported", fix_or_done)
         self.assertIn("verified coverage basis under `## Reasoning Discipline`", fix_or_done)
         reasoning = section(text, "## Reasoning Discipline", "## Thinking Panel")
@@ -1971,7 +2122,7 @@ class SshxContractTests(unittest.TestCase):
         formal = SKILL.parent / "formal"
         guards = read(formal / "Sshx" / "Reasoning" / "Guards.lean")
         repair = read(formal / "Sshx" / "Reasoning" / "Repair.lean")
-        self.assertIn("must not ask a startup boundary or harness confirmation question", text)
+        self.assertIn("must not ask a routine startup boundary or harness confirmation question", text)
         self.assertNotIn("IntakeScopeAnswers", guards)
         self.assertNotIn("intakeScopeComplete", guards)
         self.assertNotIn("repeatedFamilyRoute", guards)
@@ -2109,7 +2260,7 @@ class SshxContractTests(unittest.TestCase):
                 ),
                 "no finite listing of cases is escape-free" not in reasoning,
                 "the longer the list grows the likelier" not in reasoning,
-                "when a verified finite construction hypothesis applies, its register cannot be completed, while an open or infinite domain still needs a class-coverage basis" in verification,
+                "verified finite-construction hypotheses defeat register closure; open/infinite domains still need class coverage" in verification,
                 finite_listing_closure_force(
                     fixed_point_free_constructor_verified=True,
                     finite_domain_completeness_proven=False,
@@ -2186,7 +2337,7 @@ class SshxContractTests(unittest.TestCase):
         )
         trigger = section(text, "## Trigger", "## Goal Contract")
         self.assertIn(
-            "whether to run it follows decision risk, not available budget",
+            "Risk informs proportionality, never supplies authorization",
             trigger,
         )
 
@@ -2279,14 +2430,14 @@ class SshxContractTests(unittest.TestCase):
             "the causal prediction recorded in that conclusion is falsifiable rather than a preference;",
             "provided the objection passes `BlockingAuthority`",
             "An advisory objection does not trigger a `FocusedRound`",
-            "checks only whether the seat named both conjuncts and must not assess their persuasiveness",
-            "named a basis whose correctness is disputed still triggers the round because disputed is not absent",
+            "after admission checks, the meta-judge checks only whether both conjuncts are named, never their persuasiveness",
+            "admitted confirmed basis disputed on correctness still triggers: disputed is not absent",
             "records that decline in the existing `finding_downgrades` record under the same own-words requirement that governs downgrades",
         ]:
             self.assertIn(anchor, focused_round)
         for anchor in [
             "An objection that fails `BlockingAuthority` is not an unclosed `GoalArtifact` goal gap and does not by itself hold the exit out of `implement`: the meta-judge records it as advisory in the existing `finding_downgrades` record as `BlockingAuthority` requires.",
-            "Disputed grounding stays blocking",
+            "Admitted confirmed disputed grounding stays blocking",
             "not permission to set aside a reachable defect",
         ]:
             self.assertIn(anchor, design)
@@ -2298,7 +2449,7 @@ class SshxContractTests(unittest.TestCase):
             "never because a finding is inconvenient",
             "never sets aside a reachable defect",
             "Harness gaps and claim authority follow `## Goal Contract`",
-            "without startup confirmation",
+            "material owner-clarification rule",
         ]:
             self.assertIn(anchor, review)
         self.assertIn(
@@ -2309,7 +2460,7 @@ class SshxContractTests(unittest.TestCase):
         self.assertIn("an advisory worry is not a remaining difference", termination_gate)
         for anchor in [
             "Each termination seat applies `BlockingAuthority` itself before returning",
-            "An `unsatisfied` that names both conjuncts keeps its full force and may never be converted into permission by calling it unpersuasive",
+            "An admitted confirmed `unsatisfied` that names both conjuncts keeps its full force and may never be converted into permission by calling it unpersuasive",
             "An `unsatisfied` that names no `GoalArtifact` term is advisory exactly as under `## Review Truth Table`",
             "the meta-judge records it in `finding_downgrades` as `BlockingAuthority` requires",
             "re-dispatches that seat once on the same sealed candidate with that record in its brief as part of the same evaluation",
@@ -2334,12 +2485,12 @@ class SshxContractTests(unittest.TestCase):
 
         for required in [
             "Reference-frame",
-            "applicable mature theory, engineering principle, industry best practice",
-            "mature industry case, mature pattern",
+            "applicable mature theory/principle, industry practice/case/pattern",
+            "industry practice/case/pattern",
             "constraint framework",
             "known-good shape",
             "`no applicable mature theory found`",
-            "root-cause and minimal-path re-check against `GoalArtifact`",
+            "root-cause/minimal-path re-check against `GoalArtifact`",
         ]:
             self.assertIn(required, reasoning_section)
         self.assertEqual(
@@ -2409,7 +2560,7 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(boundary, boundaries)
         self.assertIn(
-            "This does not override `GoalArtifact`, assigned bias or review focus, truth tables, or allowed verdict sets",
+            "This never overrides `GoalArtifact`, bias/focus, truth tables or verdict sets",
             reasoning_section,
         )
         self.assertEqual(len(re.findall(r"^## Reasoning Discipline$", text, flags=re.MULTILINE)), 1)
@@ -2457,15 +2608,15 @@ class SshxContractTests(unittest.TestCase):
             review_section.index("Each reviewer returns one of:"),
         )
         self.assertIn(
-            "applicable mature theory, engineering principle, industry best practice",
+            "applicable mature theory/principle, industry practice/case/pattern",
             reasoning_section,
         )
         self.assertNotIn(
-            "applicable mature theory, engineering principle, industry best practice",
+            "applicable mature theory/principle, industry practice/case/pattern",
             thinking_section.lower(),
         )
         self.assertNotIn(
-            "applicable mature theory, engineering principle, industry best practice",
+            "applicable mature theory/principle, industry practice/case/pattern",
             review_section.lower(),
         )
 
@@ -2499,11 +2650,11 @@ class SshxContractTests(unittest.TestCase):
             thinking_section,
         )
         self.assertIn(
-            "`worth` (值不值) is an independent objective, not the aesthetic lens repeated",
+            "`worth` (值不值) is independent of aesthetics",
             thinking_section,
         )
         self.assertIn(
-            "the panel is not homogenized into every seat re-deriving the same value verdict",
+            "Only its own seat derives this verdict, preserving distinct objectives",
             thinking_section,
         )
         self.assertIn("must state whether it hits `CapabilityOverlap`", thinking_section)
@@ -2523,7 +2674,7 @@ class SshxContractTests(unittest.TestCase):
             (
                 text.count("Protocol policy, not a mathematical consequence:"),
                 "Carrier heterogeneity is this protocol's policy, not a theorem premise or consequence" in text,
-                "Protocol policy, not mathematics, defines these two conjuncts" in text,
+                "Protocol policy, not mathematics, defines these conjuncts" in text,
                 "before the first pass after the initial review triplet, the caller may record one owner-precommitted finite integer `pass_budget`; by default it records no cap" in text,
             ),
             (6, True, True, True),
@@ -2549,12 +2700,12 @@ class SshxContractTests(unittest.TestCase):
             all(
                 anchor in design_section
                 for anchor in [
-                    "An `implement` exit also requires",
+                    "An `implement` exit requires",
                     "unresolved harness overlap",
                     "authority gap",
-                    "missing host/controller execution capability",
-                    "repeat a capability already declared by the harness",
-                    "goal gap to the maintainer",
+                    "missing host/controller execution",
+                    "repeating a provided capability",
+                    "goal gaps to the maintainer",
                 ]
             ),
             "missing Design Truth Table harness/authority implement route",
@@ -2592,7 +2743,7 @@ class SshxContractTests(unittest.TestCase):
                 for anchor in [
                     "Harness gaps and claim authority follow `## Goal Contract`",
                     "claim authority follow `## Goal Contract`",
-                    "without startup confirmation",
+                    "material owner-clarification rule",
                 ]
             ),
             "missing autonomous intake authority guard",
@@ -3474,14 +3625,14 @@ class SshxContractTests(unittest.TestCase):
             "Every canonical `SshxResultEnvelope` recorded from `thinking_panel_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` uses exactly these top-level fields",
             text,
         )
-        self.assertIn("A caller-carried stage record wraps this envelope", text)
+        self.assertIn("Stage records reference envelope `conclusion`/`log_ref`", text)
         self.assertIn("The envelope payload itself stays exactly `conclusion` and `log_ref`", text)
         self.assertIn("is a read-only mirror of its envelope's `conclusion.verdict`", text)
         self.assertIn(
             "`conclusion.verdict` is the sole verdict source for routing, the two must be equal, and any mismatch fails closed",
             text,
         )
-        self.assertIn("`conclusion`: compact structured result consumed by the caller", text)
+        self.assertIn("`conclusion`: compact structured decisions", text)
         self.assertIn("`log_ref`: artifact reference for the non-inline worker", text)
         self.assertIn("treated as an opaque diagnostic pointer", text)
         self.assertIn("must not open, inline, summarize, or otherwise consume its content", text)
@@ -3489,14 +3640,14 @@ class SshxContractTests(unittest.TestCase):
         self.assertNotIn("The caller may open the referenced artifact on demand", text)
         for forbidden_inline in [
             "process logs",
-            "step-by-step reasoning",
-            "raw transcripts",
-            "debug output",
+            "reasoning",
+            "transcripts",
+            "debug",
             "same-round peer output",
         ]:
             self.assertIn(forbidden_inline, text)
-        self.assertIn("Logs are not inline in caller context", text)
-        self.assertIn("Final reports aggregate `conclusion` values only", text)
+        self.assertIn("never inline logs", text)
+        self.assertIn("Final reports aggregate only `conclusion`", text)
         self.assertIn("aggregate and report conclusions only, retaining `log_ref` references", text)
         self.assertIn("opaque `log_ref`", text)
         self.assertIn("without inlining logs", text)
@@ -4098,13 +4249,13 @@ class SshxContractTests(unittest.TestCase):
     def test_sshx_baseline_evidence_is_source_owned(self) -> None:
         text = read(SKILL)
         for failure_mode in [
-            "fake consensus: self-application, pseudo-isolation, missing worker-mode declaration, or caller self-certification",
+            "fake consensus: self-application, pseudo-isolation, undeclared worker mode, self-certification",
             "false grounding: unverified premises, retrospective fit, imagined relevance",
-            "rabbit-holing: blocking by default, peripheral detail, repeated unchanged work, finite case registers, procedural findings against the run's own records",
+            "rabbit-holing: default blocking, peripheral/repeated work, case registers, procedural findings",
             "goal loss: 忘记目标 drift to an unranked target, 因小失大 a part served at the whole's cost, or 买椟还珠 form held above substance",
-            "wrong convergence: beauty without worth, scalarized incomparable candidates",
-            "contaminated adjudication: same-round peer evidence, an out-of-prefix ledger event",
-            "boundary drift: carrier diversity over-claims, improvised worker mechanics",
+            "wrong convergence: beauty without worth, scalarized incomparability",
+            "contaminated adjudication: peer/out-of-prefix/dependency-reaching evidence",
+            "boundary drift: diversity overclaims, improvised mechanics",
         ]:
             self.assertIn(failure_mode, text)
         self.assertIn("source-owned contract or test evidence", text)

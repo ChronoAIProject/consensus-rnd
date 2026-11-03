@@ -114,12 +114,17 @@ structure IntakeEvidence where
   inventedAuthority : Bool
   startupQuestionAsked : Bool
   continuation : ContinuationEntry
+  activation : ActivationAuthority := .absent
+  materialOwnerQuestion : Bool := false
+  ownerClarified : Bool := false
   deriving DecidableEq, Repr
 
+-- SKILL[ref]: "At intake, preserve sourced owner blocking restrictions, scope and meaning in `constraints` and `harness.trust_boundary`, hence every brief/retry/repair/resume; issue proposals and censuses create no owner policy."
 def IntakeEvidence.complete (e : IntakeEvidence) : Prop :=
   e.sources ≠ [] ∧ e.assumptionsLabeled = true ∧
     e.minimalTaskRelevantScope = true ∧ e.explicitBoundariesPreserved = true ∧
-    e.inventedAuthority = false ∧ e.startupQuestionAsked = false
+    e.inventedAuthority = false ∧ e.activation.authorized = true ∧
+    (e.startupQuestionAsked = false ∨ (e.materialOwnerQuestion = true ∧ e.ownerClarified = true))
 
 /-- Current semantic projection of `harness.provided_capabilities`, supplied as evidence.
 The model does not parse English to establish correspondence or owner authority. -/
@@ -151,6 +156,9 @@ structure RevisionEvidence where
   ownerAuthorized : Bool
   sourceSupported : Bool
   continuation : Option ContinuationSource
+  hecaDisableCorrection : Bool := false
+  /-- Interpreted dependency on the corrected scope; unrelated notes leave work usable. -/
+  invalidatesWork : Bool := false
   deriving DecidableEq, Repr
 
 def RevisionEvidence.valid (e : RevisionEvidence) (r : Revision) : Prop :=
@@ -178,11 +186,17 @@ structure HousekeepingRec where
 structure ImplementationPlan where
   obligations : List String
   flightAllowance : Nat
+  repairFindings : List Finding := []
   deriving DecidableEq, Repr
 
 -- SKILL[def]: "Predeclare finite assignments and allowance in the approved plan's conclusion."
 def ImplementationPlan.valid (p : ImplementationPlan) : Prop :=
   p.obligations ≠ [] ∧ 0 < p.flightAllowance
+
+-- SKILL[ref]: "For `fix`, freeze only confirmed current-goal/contract defects admitted by `BlockingAuthority` as a finite repair batch"
+def ImplementationPlan.repairsAdmitted (p : ImplementationPlan) : Bool :=
+  !p.repairFindings.isEmpty && p.repairFindings.all fun f =>
+    downgrade f == .reject && !f.requiresOwnerDecision
 
 /-- Ghost projection of accumulated worker conclusions. `firstFlight` scopes the current
 candidate; it is also reset for an explicitly budgeted repeated review. -/
@@ -204,6 +218,10 @@ structure ProtocolState where
   capabilityChecked : List Carrier
   /-- Once-per-run heca check, including a negative result; a ghost transcript projection. -/
   hecaCheckRecorded : Bool := false
+  /-- Current explicit disable, including an authorized correction; never a new capability probe. -/
+  hecaDisabled : Bool := false
+  /-- Ghost cutoff for flights superseded by a correction, not a new runtime field. -/
+  currentWorkStart : Nat := 0
   flights : List FlightRec
   context : List ContextItem
   passBudget : Option Nat
@@ -285,11 +303,19 @@ def ProtocolState.gate (s : ProtocolState) : Applicability :=
 def ProtocolState.correctedAuthority (s : ProtocolState) (e : RevisionEvidence) :
     ContinuationAuthority :=
   match e.continuation with
-  | none => s.continuationAuthority
+  | none => if e.invalidatesWork then
+      ⟨s.continuationAuthority.source, (s.goal.map (·.revisions.length)).getD 0 + 1⟩
+    else s.continuationAuthority
   | some source => ⟨source, (s.goal.map (·.revisions.length)).getD 0 + 1⟩
 
+/-- Cancelled pending work has no host job; launched work retains protection until
+terminal observation/confirmed teardown, even after its authority is superseded. -/
+def ProtocolState.flightProtected (s : ProtocolState) (f : FlightRec) : Bool :=
+  f.active && (f.launched || decide (s.currentWorkStart ≤ f.id))
+
+-- SKILL[ref]: "Active jobs stay protected until host completion/confirmed teardown"
 def ProtocolState.activeOn (s : ProtocolState) (target : String) : Bool :=
-  s.flights.any fun f => f.target == target && f.active
+  s.flights.any fun f => f.target == target && s.flightProtected f
 
 def ProtocolState.flight (s : ProtocolState) (id : Nat) : Option FlightRec :=
   s.flights.find? fun f => f.id == id
@@ -435,7 +461,8 @@ def guardReviewFlight (s : ProtocolState) (role : Role) (carrier : Carrier) : Pr
 def guardInspect (s : ProtocolState) : Prop := s.stage = .intake
 
 -- SKILL[guard]: "During `intake`, the caller resolves them from current user input, repository rules, existing authorizations, and available execution context, recording sources and explicitly labelling minimal engineering assumptions."
--- SKILL[guard]: "It must not ask a startup boundary or harness confirmation question."
+-- SKILL[guard]: "It must not ask a routine startup boundary or harness confirmation question."
+-- SKILL[ref]: "Ask the declared owner about uncertain material product/architecture/permission semantics before dependent changes"
 -- SKILL[guard]: "Explicit user boundaries and permission decisions remain authoritative; routine missing detail is resolved with the smallest task-relevant assumption."
 -- SKILL[guard]: "The boundary owner may declare a host-provided goal-driven continuation mechanism only in `harness.provided_capabilities`; the skill must not discover or infer an external mechanism."
 -- SKILL[guard]: "`GoalArtifact` is written during `intake` before worker mode selection or any worker dispatch."
@@ -460,9 +487,16 @@ def guardResolveMode (s : ProtocolState) (m : WorkerMode) : Prop :=
     Carrier.codexCli ∈ s.capabilityChecked ∧ s.hecaCheckRecorded = true ∧
     (m = .abstain ∨ ∃ c, m = .carrier c ∧ c ∈ s.capabilityChecked)
 
+/-- All dispatch consumers share current enablement; stale capability exposure cannot
+restore authority after an explicit disable. Existing running-agent recovery is unchanged. -/
+-- SKILL[guard]: "Explicit user disable overrides host opt-in, tools and stale availability on initial/single dispatch, retry, fallback, repair and resume; reuse this rule."
+-- SKILL[ref]: "Record disable corrections in gate evidence/revisions without re-probing."
+def ProtocolState.carrierEnabled (s : ProtocolState) (c : Carrier) : Bool :=
+  s.capabilityChecked.contains c && !(c == .heca && s.hecaDisabled)
+
 -- SKILL[guard]: "`WorkerModeGate` requires resolution before dispatch."
 def guardOpenFlight (s : ProtocolState) (stage : FlightStage) (role : Role) (carrier : Carrier) : Prop :=
-  s.modeResolved ∧ ¬ s.abstained ∧ carrier ∈ s.capabilityChecked ∧
+  s.modeResolved ∧ ¬ s.abstained ∧ s.carrierEnabled carrier = true ∧
     match stage with
     | .implementation => role = .implementation ∧ guardImplementationFlight s
     | .review => guardReviewFlight s role carrier
@@ -476,15 +510,15 @@ def guardOpenFlight (s : ProtocolState) (stage : FlightStage) (role : Role) (car
 
 -- SKILL[guard]: "Use `skills/sshx/scripts/run-codex-worker.sh` for every `codex-cli` launch and `skills/sshx/scripts/run-oracle-worker.py` for every `nyxid-oracle` launch."
 def guardLaunchViaRunner (s : ProtocolState) (id : Nat) : Prop :=
-  ∃ f, s.flight id = some f ∧ f.launched = false ∧
+  ∃ f, s.flight id = some f ∧ f.launched = false ∧ s.currentWorkStart ≤ f.id ∧
     (runnerFor f.carrier).isSome = true
 
 /-- Host tool invocation for heca MCP or isolated subagent; no runner identity or paths.
 Carrier-specific isolation and heca evidence remain interpreted contract premises. -/
 def guardLaunchDelegated (s : ProtocolState) (id : Nat) : Prop :=
-  ∃ f, s.flight id = some f ∧ f.launched = false ∧
+  ∃ f, s.flight id = some f ∧ f.launched = false ∧ s.currentWorkStart ≤ f.id ∧
     s.attemptSettled f = true ∧
-    runnerFor f.carrier = none
+    s.carrierEnabled f.carrier = true ∧ runnerFor f.carrier = none
 
 -- SKILL[guard]: "caller shell `&` is forbidden: detachment risks untracked init-adopted workers without notice."
 def guardNoShellBackground : Prop := False
@@ -526,7 +560,7 @@ def ProtocolState.triedCarriers (s : ProtocolState) (assignment : Nat) : Carrier
 
 /-- Capability availability and the same per-seat restriction used at review admission. -/
 def ProtocolState.eligibleCarriers (s : ProtocolState) (f : FlightRec) : CarrierSet :=
-  let eligible := fun c => s.capabilityChecked.contains c &&
+  let eligible := fun c => s.carrierEnabled c &&
     (f.stage != .review || seatEligible f.role c)
   ⟨eligible .codexCli, eligible .heca, eligible .nyxidOracle, eligible .isolatedTokenSubagent⟩
 
@@ -534,7 +568,7 @@ def ProtocolState.eligibleCarriers (s : ProtocolState) (f : FlightRec) : Carrier
 /-- A replacement uses the existing finite selector for the entire failed assignment.
 An active or successful replacement closes fallback through any earlier flight id. -/
 def guardFallback (s : ProtocolState) (id : Nat) (carrier : Carrier) : Prop :=
-  ∃ f, s.flight id = some f ∧ f.status = .abstained ∧
+  ∃ f, s.flight id = some f ∧ f.status = .abstained ∧ s.currentWorkStart ≤ f.id ∧
     (s.flights.filter fun g => g.assignment == f.assignment).all
       (fun g => g.status == .abstained ∧ s.attemptSettled g = true) = true ∧
     nextCarrier (s.eligibleCarriers f) (s.triedCarriers f.assignment) = some carrier
@@ -567,18 +601,18 @@ def passContinuationAllowed (budget : Option Nat) (directionGate : Bool) : Bool 
   | some remaining => directionGate && remaining > 0
 
 -- SKILL[guard]: "The batch debit includes all bounded assignments and final review even at zero remaining units, with no subsequent pass authority under that finite cap."
--- SKILL[guard]: "For `fix`, freeze admitted repairs as a finite batch under `## Implementation Worker` handoff, allowance and evidence rules;"
+-- SKILL[guard]: "under `## Implementation Worker` handoff, allowance and evidence rules;"
 def guardPass (s : ProtocolState) (t : Transition) (e : Reasoning.FamilyEvidence)
     (plan : Option ImplementationPlan) : Prop :=
   s.stage = .fixOrDone ∧ Reasoning.familyPassAllowed e t = true ∧
     s.reviewComplete = true ∧ t ≠ .initialReviewTriplet ∧
     (t.counted = true → s.passBudget = none ∨ ∃ b, s.passBudget = some b ∧ 0 < b) ∧
-    (if t = .repairWithRerunReview then ∃ p, plan = some p ∧ p.valid else plan = none)
+    (if t = .repairWithRerunReview then ∃ p, plan = some p ∧ p.valid ∧ p.repairsAdmitted = true else plan = none)
 
 def guardAdvanceStage (s : ProtocolState) : Prop :=
   s.stage.next.isSome = true ∧
     (if s.stage = .intake then s.goalWritten else s.modeResolved ∧ ¬ s.abstained) ∧
-    s.flights.all (fun f => !f.active) = true ∧ s.allHecaHousekeepingSettled = true ∧
+    s.flights.all (fun f => !s.flightProtected f) = true ∧ s.allHecaHousekeepingSettled = true ∧
     (s.stage = .implementation → s.reviewReady = true) ∧
     (s.stage = .reviewTriplet → s.reviewComplete = true)
 
@@ -630,6 +664,16 @@ def allowed (s : ProtocolState) : Action → Prop
 
 -- SKILL[ref]: "Include any non-blocking advisory feedback without inlining logs."
 abbrev advisoryWithoutLogs := @ContextItem.permitted
+
+-- SKILL[ref]: "Confirmed means an evidenced current-goal/contract defect, including absent required evidence."
+theorem unadmitted_repairs_cannot_pass (s : ProtocolState) (e : Reasoning.FamilyEvidence)
+    (p : ImplementationPlan) (h : p.repairsAdmitted = false) :
+    ¬ allowed s (.pass .repairWithRerunReview e (some p)) := by
+  intro ha
+  obtain ⟨_, _, _, _, _, q, hq, _, hadmit⟩ := ha
+  have hp : p = q := Option.some.inj hq
+  subst q
+  simp [h] at hadmit
 
 -- SKILL[policy]: "Protocol policy, not a mathematical consequence: before the first pass after the initial review triplet, the caller may record one owner-precommitted finite integer `pass_budget`; by default it records no cap."
 abbrev passBudgetPrecommitment := @guardRecordPassBudget
@@ -704,6 +748,7 @@ def reopenFlight (id : Nat) (carrier : Carrier) (f : FlightRec) : FlightRec :=
   { f with id := id, carrier := carrier, status := .inFlight, attempt := 0,
            envelopeRef := none, sentinelRef := none, launched := false, notified := false }
 
+-- SKILL[ref]: "Corrections immediately supersede dependent pending/active/completed plan/review/repair authority"
 def step (s : ProtocolState) : Action → ProtocolState
   | .inspectReadOnly => s
   | .writeGoal g e =>
@@ -714,11 +759,17 @@ def step (s : ProtocolState) : Action → ProtocolState
   | .appendRevision r e =>
     { s with
       goal := s.goal.map (fun g => g.correct r),
-      continuationAuthority := s.correctedAuthority e }
+      continuationAuthority := s.correctedAuthority e,
+      hecaDisabled := s.hecaDisabled || e.hecaDisableCorrection,
+      currentWorkStart := if e.invalidatesWork then s.freshId else s.currentWorkStart,
+      batch := if e.invalidatesWork then none else s.batch,
+      stage := if e.invalidatesWork then .thinkingPanel else s.stage,
+      claimed := if e.invalidatesWork then false else s.claimed }
   | .capabilityCheck c => { s with capabilityChecked := c :: s.capabilityChecked }
   | .recordHecaCheck facts =>
     { s with
       hecaCheckRecorded := true,
+      hecaDisabled := s.hecaDisabled || facts.explicitlyDisabled,
       capabilityChecked := if facts.detected then .heca :: s.capabilityChecked else s.capabilityChecked }
   | .resolveMode m => { s with mode := some m }
   | .openFlight stage role carrier target retryBudget =>
@@ -808,7 +859,7 @@ theorem archive_non_heca_refused (s : ProtocolState) (id : Nat) (f : FlightRec)
 theorem launch_requires_archive_after_collection (s : ProtocolState) (id : Nat)
     (f : FlightRec) (hf : s.flight id = some f) (_collected : s.attemptCollected f = true)
     (h : allowed s (.launchDelegated id)) : s.attemptSettled f = true := by
-  obtain ⟨g, hg, _, settled, _⟩ := h
+  obtain ⟨g, hg, _, _, settled, _⟩ := h
   have geq : g = f := Option.some.inj (hg.symm.trans hf)
   simpa [geq] using settled
 

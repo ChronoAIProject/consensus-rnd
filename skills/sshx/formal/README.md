@@ -173,8 +173,67 @@ notification before one-shot result collection; a confirmed own-agent stop can i
 record failure without collecting a result. A notification grants collection authority,
 not completion. This adds no runtime interface, host capability, worker-record field or budget.
 The seven stages and per-flight completion predicate are unchanged. Batch progress is a
-formal projection of existing worker conclusions, not a runtime scheduler. Trigger-aware
-downgrade and plan admission retain the existing contextual evidence chain.
+formal projection of existing worker conclusions, not a runtime scheduler.
+
+`DecisionBasis` retains `Input` and `TriggerRecord` together. `completeAdmission`
+combines the named-conjunct/evidence-status/goal-basis force with the existing
+workflow and sourced-owner trigger check. Review downgrade, plan admission,
+generic admissibility/sole-basis questions, focused rounds and decline records,
+goal-gap/convergence scope, blocking-finding well-formedness, residual differences
+and termination-seat settlement all consume that judgment. Downgrade records
+retain the original words and trigger decision. `force` alone remains a partial
+conjunct judgment, never a complete blocking decision.
+
+`failed_trigger_rejected_by_every_consumer` checks the twenty existing decisions
+for every supplied input with a failed trigger, independently of prose labels;
+`admitted_basis_retained_by_every_consumer` retains every admitted basis that
+requires neither trusted malice nor an owner decision.
+Nine constructed evidence classes check the same decisions in both directions:
+manual/fixture-only and sourced owner-restricted bases are refused; confirmed
+ordinary workflow derivations, observed authorized inputs and independent
+occurrences remain admitted. This is semantic model evidence in addition to
+lexical clause traces. Provenance, workflow correspondence, confirmed status
+and owner authority remain supplied premises; fixtures are not host incidents.
+
+The issues #1071–#1074 projections keep source, admission and recurrence at their
+existing owners. `EffectiveSourceEvidence` separates content identity, optional checkout
+facts, manifest/release and session adoption; disk facts alone never prove adoption.
+Current explicit Heca disable flows through existing `carrierEnabled` consumers for
+open, delegated launch (including retry/resume) and fallback; an authorized append-only
+correction preserves that disable over stale exposure/opt-in evidence. Composition
+uses the same current availability. These are interpreted policy/source premises,
+not live Heca probes or a host cache detector.
+
+`TriggerRecord` requires `WorkflowInputEvidence` and `OwnerAdmissionPolicy`.
+`triggerCheck`, the actual `downgrade`/`routeFindings` path and `planElementAdmitted`
+consume observed actual inputs or sourced workflow derivations, independent occurrence
+and any sourced owner restriction. A manual/constructed fixture alone is insufficient;
+a zero census does not exclude future ordinary workflow states without an authorized
+restriction. Observation truth, workflow derivability, source scope, non-fixture status
+and owner authority are hypotheses, not an English classifier or an environment census.
+A nonempty source is required to construct an owner restriction; malformed unsourced
+policy is an evidence/collection gap, never authority to downgrade an ordinary defect.
+Typed required projections do not prove an arbitrary JSON finding is structurally valid.
+
+`FamilyCorrespondence` projects the existing `family_basis` with a typed `FamilyHistory`:
+an evidenced reason new has no predecessor fields, while a prior comparison preserves
+its original label, property/cause judgments and settled-prior premise. Both require
+evidence and peer-free inputs. `classGateActive` and the production `guardPass` consume
+that same correspondence. An evidenced first family can take the initial review's
+ordinary repair without a predecessor or inactive class-coverage obligation; an
+unresolved prior comparison still routes bounded investigation before member repair.
+Verified paraphrase recurrence and earlier unsupported enumeration still require class
+coverage, while distinct causes remain distinct. `FamilyEvidence.recordComplete`
+requires verified input correspondence and reported measurement limits/unavailability.
+The model does not infer causal equivalence or complete domain coverage from a label,
+location or measurement count. The new-family premise is interpreted evidence, not a
+classifier or permission to relabel recurrence. Scenarios compose initial review,
+first paid repair, whole-batch implementation and its included final review at zero
+remaining budget, and distinguish unresolved comparisons at the same paid-pass consumer.
+They also exercise the actual review/plan routes. Source-owned pre-fix compiled evidence
+and the separately scoped real
+Codex receipt-to-terminal proof live in `tests/test_sshx_contract.py`; simulated artifact
+violations do not prove real compliance, timeout cause or filesystem isolation.
 
 The Codex identity adapter in `Clauses/Delegation.lean` pairs the protocol flight with
 pending or bound runner identity. The protocol's zero-based `attempt` counts consumed
@@ -187,6 +246,31 @@ exhaustion abstains with either identity state. These are formal projections, no
 public record fields. Byte-level ID allocation, receipt
 ordering/delivery, path isolation, and batch recovery are behavior-tested in the scripts,
 not claimed as consequences of the abstract model.
+
+The #1075 projections use the existing intake/admission/correction consumers.
+`guardWriteGoal` consumes sourced `ActivationAuthority`: explicit consensus/multi-angle/
+delegated-review request or an applicable host mandate. Risk alone supplies neither.
+Routine questions remain refused; a material owner question can be resolved before
+its dependent intake is admitted. `Input.evidenceStatus` defaults to unverified and
+`userGoalBasis` to empty. `force`, `downgrade`, `planElementAdmitted` and the actual
+`guardPass` repair route require confirmed current-goal/contract evidence; repair plans
+carry their admitted findings. An owner-decision requirement prevents automatic repair,
+including when a confirmed goal gap still needs a product/permission decision.
+Classification, sourced goal correspondence and owner authority remain interpreted
+premises; this is no English classifier, runtime validator or new approval mechanism.
+
+An authorized revision's dependency projection revokes its dependent candidate batch
+immediately and routes that scope back through design. It retains the flight/revision
+history, pass allowance and unrelated evidence. `currentWorkStart` is a ghost cutoff
+from that revision, not a runtime field: superseded pending/retry/fallback work cannot
+launch; old completion cannot restore candidate readiness. Pending unlaunched work has
+no host job to protect. Launched jobs remain protected through actual completion or
+confirmed teardown; invalidation never manufactures terminal evidence. Correction
+scenarios exercise the real consumers before dispatch, during an active job, after
+implementation and after review, alongside unaffected-note preservation. Goal-scope invalidation advances the existing claim-authority ledger position even
+when the host continuation declaration stays identical. Historical verdict/snapshot
+remain recorded; stale evidence cannot be re-evaluated or reused for a later claim. The model does not prove a
+host can cancel a running job or that a new plan's English follows the corrected goal.
 
 ## What the model cannot verify
 

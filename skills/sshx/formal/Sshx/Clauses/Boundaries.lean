@@ -81,14 +81,14 @@ def carrierHasControllerAuthority (_ : Carrier) : Bool := false
 
 /-! ## Baseline failure modes -/
 
--- SKILL[def]: "Without this skill, lightweight high-risk decisions tend to regress to these source-owned classes:"
--- SKILL[def]: "- fake consensus: self-application, pseudo-isolation, missing worker-mode declaration, or caller self-certification in place of the fixed thinking, review, and termination rosters;"
--- SKILL[def]: "- false grounding: unverified premises, retrospective fit, imagined relevance, or a mathematical name whose hypotheses the recorded mechanism state does not instantiate;"
--- SKILL[def]: "- rabbit-holing: blocking by default, peripheral detail, repeated unchanged work, finite case registers, procedural findings against the run's own records, or per-case diagnosis after one declared absorber already determines the goal-visible route;"
+-- SKILL[def]: "Source-owned no-skill failure classes:"
+-- SKILL[def]: "- fake consensus: self-application, pseudo-isolation, undeclared worker mode, self-certification;"
+-- SKILL[def]: "- false grounding: unverified premises, retrospective fit, imagined relevance;"
+-- SKILL[def]: "- rabbit-holing: default blocking, peripheral/repeated work, case registers, procedural findings;"
 -- SKILL[def]: "- goal loss: 忘记目标 drift to an unranked target, 因小失大 a part served at the whole's cost, or 买椟还珠 form held above substance;"
--- SKILL[def]: "- wrong convergence: beauty without worth, scalarized incomparable candidates, path-dependent gain on non-additive coordinates, or spawn acknowledgments, budget and lifecycle milestones presented as completion;"
--- SKILL[def]: "- contaminated adjudication: same-round peer evidence, an out-of-prefix ledger event, or dependency-reaching evidence presented as independent;"
--- SKILL[def]: "- boundary drift: carrier diversity over-claims, improvised worker mechanics, or daemon, GitHub, git, label, and release orchestration for an inline decision."
+-- SKILL[def]: "- wrong convergence: beauty without worth, scalarized incomparability, non-additive path gain, false completion proxies;"
+-- SKILL[def]: "- contaminated adjudication: peer/out-of-prefix/dependency-reaching evidence presented as independent;"
+-- SKILL[def]: "- boundary drift: diversity overclaims, improvised mechanics, unauthorized lifecycle;"
 inductive BaselineFailure
   | fakeConsensus
   | falseGrounding
@@ -98,11 +98,14 @@ inductive BaselineFailure
   | contaminatedAdjudication
   | boundaryDrift
   | forcedIntakeConfirmation
+  | scopeExpansion
   deriving DecidableEq, Repr
 
--- SKILL[def]: "- forced intake confirmation: routine harness or boundary details turned into a startup question instead of a recorded, source-backed engineering assumption."
+-- SKILL[def]: "- forced intake confirmation: routine questions replacing sourced assumptions;"
+-- SKILL[def]: "- scope expansion: risk activation, uncertain repairs, stale obligations after correction."
 /-- The model object that guards each baseline class. -/
 def guardedBy : BaselineFailure → String
+  | .scopeExpansion => "Sshx.Behavior.guardWriteGoal, Sshx.force, Sshx.Behavior.guardAppendRevision"
   | .fakeConsensus => "Sshx.caller_never_consensus, Sshx.fake_roster_rejected"
   | .falseGrounding => "Sshx.Reasoning.analogy_has_no_force, Sshx.Reasoning.explicit_excludes_silent_reliance"
   | .rabbitHoling => "Sshx.force_blocking_iff, Sshx.Reasoning.shallowest_is_the_standard"
@@ -136,7 +139,7 @@ def contractTestFile : String := "skills/sshx/tests/test_sshx_contract.py"
 -- SKILL[ref]: "Before adding or changing this skill, record the no-skill failure mode as source-owned contract or test evidence."
 abbrev noSkillFailureModes := BaselineFailure
 
--- SKILL[ref]: "When a new failure case appears, prefer widening or verifying the absorber that already covers its class to adding another case entry: when a verified finite construction hypothesis applies, its register cannot be completed, while an open or infinite domain still needs a class-coverage basis; every entry added must be held true by every later change."
+-- SKILL[ref]: "For new failures prefer verifying/widening the class absorber over case entries: verified finite-construction hypotheses defeat register closure; open/infinite domains still need class coverage, and every added entry binds later changes."
 abbrev registerCannotBeCompleted := @Semantics.every_register_escaped
 
 /-- What may be tracked as published skill source. -/

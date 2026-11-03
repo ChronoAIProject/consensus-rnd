@@ -23,6 +23,30 @@ namespace Sshx.Clauses
 
 open Sshx
 
+/-- Existing gate evidence, not another runtime record. Hash authenticity, loaded-source
+association, policy sources and revision correspondence are interpreted premises. -/
+-- SKILL[def]: "Before dispatch record effective path/SHA-256, checkout revision/dirty state if available, manifest/release distinction, adoption limits and current Heca policy/source/disable/exposure in gate evidence."
+structure EffectiveSourceEvidence where
+  effectivePath : String
+  contentSha256 : String
+  checkoutRevision : Option String
+  dirty : Option Bool
+  manifestRelease : Option String
+  sessionAdoptionVerified : Bool
+  heca : HecaCapability
+  deriving DecidableEq, Repr
+
+-- SKILL[def]: "Unknown identity/adoption is `ASSUMED-UNVERIFIED`; disk/upstream change proves no adoption."
+def EffectiveSourceEvidence.adoptionClaim (e : EffectiveSourceEvidence) : Bool :=
+  e.effectivePath != "" && e.contentSha256 != "" && e.sessionAdoptionVerified
+
+example (e : EffectiveSourceEvidence) :
+    ({ e with sessionAdoptionVerified := false }).adoptionClaim = false := by
+  simp [EffectiveSourceEvidence.adoptionClaim]
+
+-- SKILL[policy]: "Manual inspection/refresh: README pair; no auto-update/network check/host change."
+def automaticSkillRefreshAllowed : Bool := false
+
 /-! ## Carriers and mode -/
 
 -- SKILL[def]: "`WorkerDelegationContract` owns carrier selection/use."

@@ -1,5 +1,7 @@
 import Sshx.Behavior.Invariant
 import Sshx.Reasoning.Authority
+import Sshx.Reasoning.Review
+import Sshx.Reasoning.Termination
 import Sshx.Clauses.Delegation
 
 /-!
@@ -16,14 +18,20 @@ private def goal : GoalArtifact :=
   ⟨"repair", "correct ordinary use", [], ["verified"], "remaining gap?",
     ⟨["worker execution"], "non-malicious ordinary mistakes", "engineering owner"⟩, []⟩
 private def intake (continuation : ContinuationEntry) : IntakeEvidence :=
-  ⟨goal.harness, ["task", "repository rules"], true, true, true, false, false, continuation⟩
+  ⟨goal.harness, ["task", "repository rules"], true, true, true, false, false, continuation, .hostMandate, false, false⟩
 
 private def readyState : ProtocolState :=
   { ProtocolState.initial with
     stage := .implementation, goal := some goal, mode := some (.carrier .codexCli),
     capabilityChecked := [.codexCli, .isolatedTokenSubagent], hecaCheckRecorded := true }
 
-private def twoParts : ImplementationPlan := ⟨["contract", "verification"], 2⟩
+private def ordinary : Finding :=
+  ⟨.reject, ⟨true, true, false, false, .confirmed, "goal S1 / existing contract source"⟩, false,
+    ⟨"ordinary typo", "user", .ordinaryOperation, "parsing", none, true,
+      ⟨none, "current parser input path", true⟩, .unrestricted,
+      ⟨"correct parsing", "ordinary parser typo", "new cause at initial review"⟩⟩, false⟩
+
+private def twoParts : ImplementationPlan := ⟨["contract", "verification"], 2, [ordinary]⟩
 private def begin := step readyState (.beginImplementation twoParts)
 private def opened := step begin (.openFlight .implementation .implementation .codexCli "target" 0)
 private def successful : Observation := ⟨true, true, true, true, true⟩
@@ -42,13 +50,13 @@ example : ¬ allowed partDone .advanceStage := by
   simp [allowed, guardAdvanceStage, partDone, returned, opened, begin, readyState,
     finish, step, updateFlight, collectEffect, done, successful, twoParts, ImplementationPlan.start,
     ProtocolState.initial, ProtocolState.reviewReady, ProtocolState.batchSettled,
-    ProtocolState.batchFlights, newFlight, ProtocolState.freshId, FlightRec.active,
+    ProtocolState.batchFlights, newFlight, ProtocolState.freshId, ProtocolState.flightProtected, FlightRec.active,
     ProtocolState.flight, ProtocolState.attemptSettled, ProtocolState.housekeepingFor,
     ProtocolState.allHecaHousekeepingSettled]
 
 -- The next approved assignment remains in implementation, with no review flight in between.
 example : allowed partDone (.openFlight .implementation .implementation .codexCli "target" 0) := by
-  simp [allowed, guardOpenFlight, guardImplementationFlight, ProtocolState.modeResolved,
+  simp [allowed, guardOpenFlight, ProtocolState.carrierEnabled, guardImplementationFlight, ProtocolState.modeResolved,
     ProtocolState.abstained, partDone, returned, opened, begin, readyState, finish, step, updateFlight,
     collectEffect, done, successful, twoParts, ImplementationPlan.start, ProtocolState.initial,
     ProtocolState.reviewStarted, ProtocolState.reviewReady, ProtocolState.batchSettled, ProtocolState.batchFlights,
@@ -63,7 +71,7 @@ example : allowed complete .advanceStage := by
     readyState, finish, step, updateFlight, collectEffect, done, successful, twoParts,
     ImplementationPlan.start, ProtocolState.initial, ProtocolState.reviewReady,
     ProtocolState.batchSettled, ProtocolState.batchFlights, newFlight, ProtocolState.freshId,
-    FlightRec.active, Stage.next, ProtocolState.modeResolved, ProtocolState.abstained,
+    ProtocolState.flightProtected, FlightRec.active, Stage.next, ProtocolState.modeResolved, ProtocolState.abstained,
     ProtocolState.flight, ProtocolState.attemptSettled, ProtocolState.housekeepingFor,
     ProtocolState.allHecaHousekeepingSettled]
 
@@ -73,11 +81,11 @@ private def quality := step architecture (.openFlight .review .quality .codexCli
 private def tests := step quality (.openFlight .review .tests .codexCli "target" 0)
 example : architecture.reviewReady = true := by decide
 example : allowed architecture (.openFlight .review .quality .codexCli "target" 0) := by
-  simp only [allowed, guardOpenFlight, guardReviewFlight, seatEligible, ProtocolState.modeResolved,
+  simp only [allowed, guardOpenFlight, ProtocolState.carrierEnabled, guardReviewFlight, seatEligible, ProtocolState.modeResolved,
     ProtocolState.abstained]
   decide
 example : allowed quality (.openFlight .review .tests .codexCli "target" 0) := by
-  simp only [allowed, guardOpenFlight, guardReviewFlight, seatEligible, canRunRepositoryCommands, ProtocolState.modeResolved,
+  simp only [allowed, guardOpenFlight, ProtocolState.carrierEnabled, guardReviewFlight, seatEligible, canRunRepositoryCommands, ProtocolState.modeResolved,
     ProtocolState.abstained]
   decide
 example : (tests.batchFlights.filter (fun f => f.stage == .review)).length = 3 := by decide
@@ -89,9 +97,27 @@ example : reviewed.reviewComplete = true := by decide
 private def fix := step reviewed .advanceStage
 example : fix.stage = .fixOrDone := by decide
 
+-- Initial-review evidence is shared by the review route and first-family repair.
+
+private def approval : Finding := { ordinary with verdict := .approve }
+
 private def family : FamilyEvidence :=
   ⟨"goal", "correct output", "ordinary inputs", "shared mechanism", "worker", "behavior check",
-    true, true, 2, false, .uniformInvariant true, false, false, false, false, none⟩
+    true, ⟨"current paraphrase", "same property/cause evidence", true,
+      .priorComparison "prior label" true true true⟩,
+    2, false, .uniformInvariant true, false, false, false, false, none, true, true⟩
+
+-- The ordinary initial-review repair needs neither a predecessor nor class coverage.
+private def firstFamily : FamilyEvidence :=
+  { family with
+    property := ordinary.trigger.familyBasis.failedProperty
+    mechanismFamily := ordinary.trigger.mechanismFamily
+    sameGoalTerm := false
+    correspondence := ⟨ordinary.trigger.mechanismFamily,
+      ordinary.trigger.familyBasis.causalMechanism, true,
+      .newFamily ordinary.trigger.familyBasis.correspondenceEvidence⟩
+    consecutivePasses := 1
+    coverageBasis := .unknown }
 
 -- The default fix state carries no cap, so a direction-gated pass remains admissible
 -- and leaves the absent cap unchanged.
@@ -101,20 +127,23 @@ example : allowed fix (.pass .repeatedReviewPass family none) := by
   have hr : fix.reviewComplete = true := by decide
   have hb : fix.passBudget = none := by decide
   simp [allowed, guardPass, hs, hr, hb, family, familyPassAllowed, familyRoute,
-    ownerAuthorizedDomainChange, classGateActive, FamilyEvidence.recordComplete,
+    ownerAuthorizedDomainChange, classGateActive, FamilyEvidence.recordComplete, FamilyCorrespondence.verified, FamilyCorrespondence.sameFamily,
     coverageBasisVerified, Transition.counted]
 private def defaultRepeated := step fix (.pass .repeatedReviewPass family none)
 example : defaultRepeated.passBudget = none := by decide
 
 private def funded := step fix (.recordPassBudget 1)
-private def repair := step funded (.pass .repairWithRerunReview family (some twoParts))
-example : allowed funded (.pass .repairWithRerunReview family (some twoParts)) := by
+private def repair := step funded (.pass .repairWithRerunReview firstFamily (some twoParts))
+private theorem firstRepairPassAdmitted :
+    allowed funded (.pass .repairWithRerunReview firstFamily (some twoParts)) := by
   have hs : funded.stage = .fixOrDone := by decide
   have hr : funded.reviewComplete = true := by decide
   have hb : funded.passBudget = some 1 := by decide
-  simp [allowed, guardPass, hs, hr, hb, family, familyPassAllowed, familyRoute,
-    ownerAuthorizedDomainChange, classGateActive, FamilyEvidence.recordComplete,
-    coverageBasisVerified, twoParts, ImplementationPlan.valid, Transition.counted]
+  simp [allowed, guardPass, hs, hr, hb, firstFamily, ordinary, family, familyPassAllowed, familyRoute,
+    ownerAuthorizedDomainChange, classGateActive, FamilyEvidence.recordComplete, FamilyCorrespondence.verified, FamilyCorrespondence.sameFamily,
+    coverageBasisVerified, twoParts, ImplementationPlan.valid, ImplementationPlan.repairsAdmitted, ordinary, downgrade, completeAdmission, eligible, triggerCheck, force,
+    WorkflowInputEvidence.ordinary, WorkflowInputEvidence.observed, occurrenceIsIndependent,
+    OwnerAdmissionPolicy.admits, Transition.counted]
 example : repair.passBudget = some 0 := by decide
 example : repair.stage = .fixOrDone := by decide
 private def repairedFirst := step (finish (step repair
@@ -158,7 +187,7 @@ example : allowed funded (.pass .repeatedReviewPass family none) := by
   have hr : funded.reviewComplete = true := by decide
   have hb : funded.passBudget = some 1 := by decide
   simp [allowed, guardPass, hs, hr, hb, family, familyPassAllowed, familyRoute,
-    ownerAuthorizedDomainChange, classGateActive, FamilyEvidence.recordComplete,
+    ownerAuthorizedDomainChange, classGateActive, FamilyEvidence.recordComplete, FamilyCorrespondence.verified, FamilyCorrespondence.sameFamily,
     coverageBasisVerified, Transition.counted]
 example : repeated.reviewReady = true := by decide
 example : repeated.reviewComplete = false := by decide
@@ -167,8 +196,8 @@ example : ¬ guardImplementationFlight repeated := by
   simp [guardImplementationFlight, hr]
 example : ¬ allowed funded (.pass .repairWithRerunReview
     { family with coverageBasis := .unsupportedMemberEnumeration } (some twoParts)) := by
-  simp [allowed, guardPass, familyPassAllowed, familyRoute, family,
-    classGateActive, ownerAuthorizedDomainChange, coverageBasisVerified]
+  exact unsupported_class_cannot_start_batch funded
+    { family with coverageBasis := .unsupportedMemberEnumeration } (some twoParts) rfl (by decide)
 
 -- Active, terminal-with-failed-checks, and exhausted incomplete assignments never admit review.
 example : opened.reviewReady = false := by decide
@@ -186,7 +215,7 @@ example : ¬ guardImplementationFlight exhausted := by
   simp [guardImplementationFlight, hb]
 -- A single flight still goes directly to its one initial triplet after all checks.
 private def single := step (finish (step (step readyState
-  (.beginImplementation ⟨["all work"], 1⟩))
+  (.beginImplementation ⟨["all work"], 1, []⟩))
   (.openFlight .implementation .implementation .codexCli "target" 0)) 0 successful)
   (.recordImplementation 0 ["all work"] true)
 example : single.reviewReady = true := by decide
@@ -198,6 +227,19 @@ private def admitted (s : ProtocolState) : List Action → Prop
 
 private def run (s : ProtocolState) (actions : List Action) : ProtocolState :=
   actions.foldl step s
+
+private theorem run_append (s : ProtocolState) (xs ys : List Action) :
+    run s (xs ++ ys) = run (run s xs) ys := by
+  simp only [run, List.foldl_append]
+
+private theorem admitted_append (s : ProtocolState) (xs ys : List Action) :
+    admitted s (xs ++ ys) ↔ admitted s xs ∧ admitted (run s xs) ys := by
+  induction xs generalizing s with
+  | nil => simp [admitted, run]
+  | cons a xs ih =>
+    change (allowed s a ∧ admitted (step s a) (xs ++ ys)) ↔
+      (allowed s a ∧ admitted (step s a) xs) ∧ admitted (run (step s a) xs) ys
+    simp only [ih, and_assoc]
 
 private def implementationActions (firstId : Nat) : List Action :=
   [.openFlight .implementation .implementation .codexCli "target" 0,
@@ -219,7 +261,7 @@ example : admitted readyState [.beginImplementation twoParts] := by
   simp [admitted, allowed, guardBeginImplementation, readyState, ProtocolState.initial,
     twoParts, ImplementationPlan.valid]
 example : admitted begin (implementationActions 0) := by
-  simp [admitted, implementationActions, allowed, guardOpenFlight, guardImplementationFlight,
+  simp [admitted, implementationActions, allowed, guardOpenFlight, ProtocolState.carrierEnabled, guardImplementationFlight,
     guardLaunchViaRunner, guardHostNotified, guardCollect, guardRecordImplementation,
     begin, readyState, twoParts, ProtocolState.initial, ProtocolState.modeResolved,
     ProtocolState.abstained, ProtocolState.reviewStarted, ProtocolState.reviewReady,
@@ -227,49 +269,85 @@ example : admitted begin (implementationActions 0) := by
     ProtocolState.freshId, step, ImplementationPlan.start, newFlight, updateFlight,
     collectEffect, done, successful, FlightRec.active]
 example : run begin (implementationActions 0) = complete := rfl
-example : admitted review (reviewActions 2) := by
-  simp [admitted, reviewActions, allowed, guardOpenFlight, guardReviewFlight,
+private theorem initialReviewAdmitted : admitted review (reviewActions 2) := by
+  simp [admitted, reviewActions, allowed, guardOpenFlight, ProtocolState.carrierEnabled, guardReviewFlight,
     guardLaunchViaRunner, guardHostNotified, guardCollect, seatEligible, canRunRepositoryCommands,
     review, complete, second, partDone, returned, opened, begin, readyState, finish, twoParts,
     ProtocolState.initial, ProtocolState.modeResolved, ProtocolState.abstained,
     ProtocolState.reviewReady, ProtocolState.batchSettled, ProtocolState.batchFlights,
     ProtocolState.flight, ProtocolState.freshId, step, ImplementationPlan.start, newFlight,
-    updateFlight, collectEffect, done, successful, FlightRec.active, reviewRoles, Stage.next]
-example : run review (reviewActions 2) = reviewed := rfl
-example : allowed reviewed .advanceStage := by
+    updateFlight, collectEffect, done, successful, ProtocolState.flightProtected, FlightRec.active, reviewRoles, Stage.next]
+private theorem initialReviewRun : run review (reviewActions 2) = reviewed := rfl
+private theorem initialReviewAdvanceAdmitted : allowed reviewed .advanceStage := by
   simp only [allowed, guardAdvanceStage, ProtocolState.goalWritten, ProtocolState.modeResolved,
     ProtocolState.abstained]
   decide
-example : allowed fix (.recordPassBudget 1) := by
+private theorem firstRepairBudgetAdmitted : allowed fix (.recordPassBudget 1) := by
   simp only [allowed, guardRecordPassBudget]
   decide
 
 -- A paid repair uses identical whole-plan admission and still includes its review at zero.
 set_option maxRecDepth 4096 in
-example : admitted repair (implementationActions 5) := by
-  simp [admitted, implementationActions, allowed, guardOpenFlight, guardImplementationFlight,
+private theorem firstRepairImplementationAdmitted : admitted repair (implementationActions 5) := by
+  simp [admitted, implementationActions, allowed, guardOpenFlight, ProtocolState.carrierEnabled, guardImplementationFlight,
     guardLaunchViaRunner, guardHostNotified, guardCollect, guardRecordImplementation,
     repair, funded, fix, reviewed, tests, quality, architecture, review, complete, second,
     partDone, returned, opened, begin, readyState, finish, twoParts, ProtocolState.initial,
     ProtocolState.modeResolved, ProtocolState.abstained, ProtocolState.reviewStarted,
     ProtocolState.reviewReady, ProtocolState.batchSettled, ProtocolState.batchFlights,
     ProtocolState.flight, ProtocolState.freshId, step, ImplementationPlan.start, newFlight,
-    updateFlight, collectEffect, done, successful, FlightRec.active, Stage.next]
-example : run repair (implementationActions 5) = repaired := rfl
+    updateFlight, collectEffect, done, successful, ProtocolState.flightProtected, FlightRec.active, Stage.next]
+private theorem firstRepairImplementationRun : run repair (implementationActions 5) = repaired := rfl
 set_option maxRecDepth 4096 in
-example : admitted repaired (reviewActions 7) := by
-  simp [admitted, reviewActions, allowed, guardOpenFlight, guardReviewFlight,
+private theorem firstRepairReviewAdmitted : admitted repaired (reviewActions 7) := by
+  simp [admitted, reviewActions, allowed, guardOpenFlight, ProtocolState.carrierEnabled, guardReviewFlight,
     guardLaunchViaRunner, guardHostNotified, guardCollect, seatEligible, canRunRepositoryCommands,
     repaired, repairedFirst, repair, funded, fix, reviewed, tests, quality, architecture,
     review, complete, second, partDone, returned, opened, begin, readyState, finish, twoParts,
     ProtocolState.initial, ProtocolState.modeResolved, ProtocolState.abstained,
     ProtocolState.reviewReady, ProtocolState.batchSettled, ProtocolState.batchFlights,
     ProtocolState.flight, ProtocolState.freshId, step, ImplementationPlan.start, newFlight,
-    updateFlight, collectEffect, done, successful, FlightRec.active, reviewRoles, Stage.next]
-example : run repaired (reviewActions 7) = repairReviewed := rfl
+    updateFlight, collectEffect, done, successful, ProtocolState.flightProtected, FlightRec.active, reviewRoles, Stage.next]
+private theorem firstRepairReviewRun : run repaired (reviewActions 7) = repairReviewed := rfl
+
+private def firstRepairActions : List Action :=
+  reviewActions 2 ++ ([.advanceStage, .recordPassBudget 1,
+    .pass .repairWithRerunReview firstFamily (some twoParts)] ++
+    (implementationActions 5 ++ reviewActions 7))
+
+-- Every production guard is checked from initial review through the first finite repair
+-- and its included final triplet. The review route and family projection share evidence.
+private theorem initial_review_new_family_repair :
+    routeFindings ordinary approval approval = .fix ∧
+    classGateActive firstFamily = false ∧ admitted review firstRepairActions := by
+  refine ⟨by decide, by decide, ?_⟩
+  rw [firstRepairActions, admitted_append]
+  refine ⟨initialReviewAdmitted, ?_⟩
+  rw [initialReviewRun]
+  change allowed reviewed .advanceStage ∧ allowed fix (.recordPassBudget 1) ∧
+    allowed funded (.pass .repairWithRerunReview firstFamily (some twoParts)) ∧
+    admitted repair (implementationActions 5 ++ reviewActions 7)
+  refine ⟨initialReviewAdvanceAdmitted, firstRepairBudgetAdmitted, firstRepairPassAdmitted, ?_⟩
+  rw [admitted_append, firstRepairImplementationRun]
+  exact ⟨firstRepairImplementationAdmitted, firstRepairReviewAdmitted⟩
+
+private theorem firstRepairEntryRun :
+    run reviewed [.advanceStage, .recordPassBudget 1,
+      .pass .repairWithRerunReview firstFamily (some twoParts)] = repair := by
+  simp only [run, List.foldl_cons, List.foldl_nil, repair, funded, fix]
+
+private theorem firstRepairRun : run review firstRepairActions = repairReviewed := by
+  rw [firstRepairActions, run_append, initialReviewRun, run_append, firstRepairEntryRun,
+    run_append, firstRepairImplementationRun, firstRepairReviewRun]
+
+set_option maxRecDepth 4096 in
+example : (run review firstRepairActions).reviewComplete = true ∧
+    (run review firstRepairActions).passBudget = some 0 := by
+  rw [firstRepairRun]
+  decide
 
 private def recoveryActions (observation : Observation) : List Action :=
-  [.beginImplementation ⟨["all work"], 1⟩,
+  [.beginImplementation ⟨["all work"], 1, []⟩,
    .openFlight .implementation .implementation .codexCli "target" 0,
    .launchViaRunner 0, .hostNotified 0, .collect 0 { successful with exitZero := false },
    .fallbackFlight 0 .isolatedTokenSubagent,
@@ -279,13 +357,13 @@ private def recoveryActions (observation : Observation) : List Action :=
 private theorem recovery_admitted (observation : Observation) :
     admitted readyState (recoveryActions observation) := by
   simp [admitted, recoveryActions, allowed, guardBeginImplementation, ImplementationPlan.valid,
-    guardOpenFlight, guardImplementationFlight, guardLaunchViaRunner, guardLaunchDelegated,
+    guardOpenFlight, ProtocolState.carrierEnabled, guardImplementationFlight, guardLaunchViaRunner, guardLaunchDelegated, ProtocolState.carrierEnabled,
     guardHostNotified, guardCollect, guardFallback, readyState, ProtocolState.initial,
     ProtocolState.modeResolved, ProtocolState.abstained, ProtocolState.reviewStarted,
     ProtocolState.reviewReady, ProtocolState.batchSettled, ProtocolState.batchFlights,
     ProtocolState.flight, ProtocolState.freshId, ProtocolState.triedCarriers,
-    ProtocolState.eligibleCarriers, step, ImplementationPlan.start, newFlight, reopenFlight,
-    updateFlight, collectEffect, done, successful, FlightRec.active, nextCarrier,
+    ProtocolState.eligibleCarriers, ProtocolState.carrierEnabled, step, ImplementationPlan.start, newFlight, reopenFlight,
+    updateFlight, collectEffect, done, successful, ProtocolState.flightProtected, FlightRec.active, nextCarrier,
     Carrier.univ, CarrierSet.get]
 
 private def recoveryReturned := run readyState (recoveryActions successful)
@@ -309,7 +387,7 @@ private def hecaReady (budget : Option Nat) : ProtocolState :=
 
 private def ownStop : HecaStopEvidence := ⟨true, true, true⟩
 private def hecaInitialActions (retries : Nat) : List Action :=
-  [.beginImplementation ⟨["all work"], 1⟩,
+  [.beginImplementation ⟨["all work"], 1, []⟩,
    .openFlight .implementation .implementation .heca "target" retries,
    .launchDelegated 0]
 private def hecaInFlight (budget : Option Nat) (retries : Nat) :=
@@ -321,7 +399,7 @@ private def archiveFlight : FlightRec :=
 private def archiveNotifiedState : ProtocolState :=
   { ProtocolState.initial with
     stage := .implementation, goal := some goal, mode := some (.carrier .heca),
-    flights := [archiveFlight] }
+    capabilityChecked := [.heca], hecaCheckRecorded := true, flights := [archiveFlight] }
 private def archiveCollectedFlight : FlightRec :=
   { archiveFlight with status := .terminal }
 private def archiveCollectedState : ProtocolState :=
@@ -356,13 +434,13 @@ example : allowed failedCollectedState (.archiveHecaAttempt 0 true .failedReport
     archiveNotifiedState, archiveFlight, ProtocolState.initial, newFlight,
     ProtocolState.pendingHousekeeping, ProtocolState.flight]
 example : ¬ allowed failedCollectedState (.launchDelegated 0) := by
-  simp [allowed, guardLaunchDelegated, failedCollectedState, failedArchiveFlight,
+  simp [allowed, guardLaunchDelegated, ProtocolState.carrierEnabled, failedCollectedState, failedArchiveFlight,
     archiveNotifiedState, archiveFlight, ProtocolState.initial, newFlight,
     ProtocolState.attemptSettled, ProtocolState.pendingHousekeeping,
     ProtocolState.flight]
 example : allowed (step failedCollectedState (.archiveHecaAttempt 0 true .archived))
     (.launchDelegated 0) := by
-  simp [allowed, guardLaunchDelegated, failedCollectedState, failedArchiveFlight,
+  simp [allowed, guardLaunchDelegated, ProtocolState.carrierEnabled, failedCollectedState, failedArchiveFlight,
     archiveNotifiedState, archiveFlight, ProtocolState.initial, newFlight, step,
     ProtocolState.attemptSettled, ProtocolState.pendingHousekeeping,
     ProtocolState.flight, recordPendingArchive]
@@ -381,15 +459,15 @@ example : ¬ allowed
     ProtocolState.batchFlights, ProtocolState.reviewStarted,
     ProtocolState.attemptSettled, ProtocolState.housekeepingFor,
     ProtocolState.allHecaHousekeepingSettled, ProtocolState.modeResolved,
-    ProtocolState.abstained, ProtocolState.flight, FlightRec.active, Stage.next]
+    ProtocolState.abstained, ProtocolState.flight, ProtocolState.flightProtected, FlightRec.active, Stage.next]
 theorem heca_first_implementation_admitted (budget : Option Nat) (retries : Nat) :
     admitted (hecaReady budget) (hecaInitialActions retries) := by
   simp [admitted, hecaInitialActions, hecaReady, allowed, guardBeginImplementation,
-    ImplementationPlan.valid, guardOpenFlight, guardImplementationFlight,
-    guardLaunchDelegated, readyState, ProtocolState.initial, ProtocolState.modeResolved,
+    ImplementationPlan.valid, guardOpenFlight, ProtocolState.carrierEnabled, guardImplementationFlight,
+    guardLaunchDelegated, ProtocolState.carrierEnabled, readyState, ProtocolState.initial, ProtocolState.modeResolved,
     ProtocolState.abstained, ProtocolState.reviewStarted, ProtocolState.reviewReady,
     ProtocolState.batchSettled, ProtocolState.batchFlights, ProtocolState.flight,
-    ProtocolState.freshId, step, ImplementationPlan.start, newFlight, FlightRec.active,
+    ProtocolState.freshId, step, ImplementationPlan.start, newFlight, ProtocolState.flightProtected, FlightRec.active,
     Carrier.univ]
 
 theorem heca_stopped_no_notice_failure_admitted (budget : Option Nat) (retries : Nat) :
@@ -398,7 +476,7 @@ theorem heca_stopped_no_notice_failure_admitted (budget : Option Nat) (retries :
   simp [allowed, guardStoppedHecaFailure, hecaInFlight, run, hecaInitialActions,
     hecaReady, readyState, ProtocolState.initial, ProtocolState.flight,
     ProtocolState.freshId, step, ImplementationPlan.start, newFlight, updateFlight,
-    FlightRec.active, ownStop, HecaStopEvidence.confirmed]
+    ProtocolState.flightProtected, FlightRec.active, ownStop, HecaStopEvidence.confirmed]
 
 theorem heca_unnotified_success_refused (budget : Option Nat) (retries : Nat) :
     ¬ allowed (hecaInFlight budget retries) (.collect 0 successful) := by
@@ -414,7 +492,7 @@ theorem heca_running_unnotified_failure_refused (budget : Option Nat) (retries :
   simp [allowed, guardStoppedHecaFailure, guardCollect, guardMutateTarget,
     hecaInFlight, run, hecaInitialActions, hecaReady, readyState, ProtocolState.initial,
     ProtocolState.flight, ProtocolState.freshId, ProtocolState.activeOn, step,
-    ImplementationPlan.start, newFlight, updateFlight, FlightRec.active,
+    ImplementationPlan.start, newFlight, updateFlight, ProtocolState.flightProtected, FlightRec.active,
     HecaStopEvidence.confirmed]
 
 private def hecaRetried (budget : Option Nat) :=
@@ -429,7 +507,7 @@ theorem heca_stopped_no_notice_retry (budget : Option Nat) :
   simp [hecaRetried, hecaInFlight, run, hecaInitialActions, hecaReady, readyState,
     ProtocolState.initial, ProtocolState.flight, ProtocolState.freshId,
     ProtocolState.activeOn, step, ImplementationPlan.start, newFlight, updateFlight,
-    collectEffect, stoppedHecaFailure, done, FlightRec.active, allowed,
+    collectEffect, stoppedHecaFailure, done, ProtocolState.flightProtected, FlightRec.active, allowed,
     guardStoppedHecaFailure, guardMutateTarget]
 
 private def hecaRecoveryActions : List Action :=
@@ -443,16 +521,16 @@ private def hecaRecoveryActions : List Action :=
 theorem heca_stop_without_notice_recovery_admitted (budget : Option Nat) :
     admitted (hecaReady budget) hecaRecoveryActions := by
   simp [admitted, hecaRecoveryActions, hecaInitialActions, hecaReady, allowed,
-    guardBeginImplementation, ImplementationPlan.valid, guardOpenFlight,
-    guardImplementationFlight, guardLaunchViaRunner, guardLaunchDelegated,
+    guardBeginImplementation, ImplementationPlan.valid, guardOpenFlight, ProtocolState.carrierEnabled,
+    guardImplementationFlight, guardLaunchViaRunner, guardLaunchDelegated, ProtocolState.carrierEnabled,
     guardStoppedHecaFailure, ownStop, HecaStopEvidence.confirmed, guardHostNotified,
     guardCollect, guardFallback, guardRecordImplementation, guardAdvanceStage,
     readyState, ProtocolState.initial, ProtocolState.modeResolved,
     ProtocolState.abstained, ProtocolState.reviewStarted, ProtocolState.reviewReady,
     ProtocolState.batchSettled, ProtocolState.batchFlights, ProtocolState.flight,
-    ProtocolState.freshId, ProtocolState.triedCarriers, ProtocolState.eligibleCarriers,
+    ProtocolState.freshId, ProtocolState.triedCarriers, ProtocolState.eligibleCarriers, ProtocolState.carrierEnabled,
     step, ImplementationPlan.start, newFlight, reopenFlight, updateFlight,
-    collectEffect, stoppedHecaFailure, done, successful, FlightRec.active,
+    collectEffect, stoppedHecaFailure, done, successful, ProtocolState.flightProtected, FlightRec.active,
     nextCarrier, Carrier.univ, CarrierSet.get, Stage.next]
 
 private def hecaRecovered (budget : Option Nat) := run (hecaReady budget) hecaRecoveryActions
@@ -470,7 +548,7 @@ theorem heca_stop_without_notice_recovery_settles (budget : Option Nat) :
     readyState, ProtocolState.initial, step, ImplementationPlan.start, newFlight,
     reopenFlight, updateFlight, collectEffect, stoppedHecaFailure, done, successful,
     ProtocolState.reviewReady, ProtocolState.batchSettled, ProtocolState.batchFlights,
-    ProtocolState.flight, ProtocolState.freshId, FlightRec.active, Stage.next]
+    ProtocolState.flight, ProtocolState.freshId, ProtocolState.flightProtected, FlightRec.active, Stage.next]
 
 example : admitted (hecaReady none) hecaRecoveryActions :=
   heca_stop_without_notice_recovery_admitted none
@@ -496,14 +574,14 @@ theorem heca_notified_unreadable_recovery_admitted (budget : Option Nat)
     (outcome : ArchiveOutcome := .archived) :
     admitted (hecaReady budget) (hecaUnreadableRecoveryActions outcome) := by
   cases outcome <;> simp [admitted, hecaUnreadableRecoveryActions, hecaInitialActions, hecaReady, allowed,
-    guardBeginImplementation, ImplementationPlan.valid, guardOpenFlight,
-    guardImplementationFlight, guardLaunchDelegated, guardHostNotified, guardCollect,
+    guardBeginImplementation, ImplementationPlan.valid, guardOpenFlight, ProtocolState.carrierEnabled,
+    guardImplementationFlight, guardLaunchDelegated, ProtocolState.carrierEnabled, guardHostNotified, guardCollect,
     guardArchiveHeca, guardStoppedHecaFailure, ownStop, HecaStopEvidence.confirmed,
     readyState, ProtocolState.initial, ProtocolState.modeResolved, ProtocolState.abstained,
     ProtocolState.reviewStarted, ProtocolState.reviewReady, ProtocolState.batchSettled,
     ProtocolState.batchFlights, ProtocolState.flight, ProtocolState.freshId,
     step, ImplementationPlan.start, newFlight, updateFlight, recordPendingArchive,
-    collectEffect, stoppedHecaFailure, unreadable, done, FlightRec.active, Carrier.univ]
+    collectEffect, stoppedHecaFailure, unreadable, done, ProtocolState.flightProtected, FlightRec.active, Carrier.univ]
 
 theorem heca_notice_window_archive_and_stop_refused (budget : Option Nat) (retries : Nat) :
     ¬ allowed (hecaNotified budget retries) (.archiveHecaAttempt 0 true .archived) ∧
@@ -531,12 +609,12 @@ theorem heca_unreadable_without_confirmation_refused (budget : Option Nat) (retr
       (.recordStoppedHecaFailure 0 ⟨true, true, false⟩) ∧
     ¬ allowed (hecaUnreadableArchived budget retries outcome) (.mutateTarget "target") ∧
     ¬ allowed (hecaUnreadableArchived budget retries outcome) (.collect 0 successful) := by
-  cases outcome <;> simp [allowed, guardLaunchDelegated, guardFallback, guardStoppedHecaFailure,
+  cases outcome <;> simp [allowed, guardLaunchDelegated, ProtocolState.carrierEnabled, guardFallback, guardStoppedHecaFailure,
     guardMutateTarget, guardCollect, hecaUnreadableArchived, hecaUnreadableCollected,
     hecaNotified, hecaInFlight, run, hecaInitialActions, hecaReady,
     readyState, ProtocolState.initial, step, ProtocolState.flight, ProtocolState.freshId,
     ImplementationPlan.start, newFlight, updateFlight, unreadable, recordPendingArchive,
-    ProtocolState.activeOn, FlightRec.active, HecaStopEvidence.confirmed]
+    ProtocolState.activeOn, ProtocolState.flightProtected, FlightRec.active, HecaStopEvidence.confirmed]
 
 theorem heca_unreadable_requires_archive_before_confirmation (budget : Option Nat)
     (retries : Nat) :
@@ -571,7 +649,7 @@ theorem heca_unreadable_confirmed_exhaustion_admitted (budget : Option Nat)
     readyState, ProtocolState.initial, step, ProtocolState.flight, ProtocolState.freshId,
     ImplementationPlan.start, newFlight, updateFlight,
     unreadable, collectEffect, stoppedHecaFailure, done, recordPendingArchive,
-    ownStop, HecaStopEvidence.confirmed, FlightRec.active, ProtocolState.eligibleCarriers,
+    ownStop, HecaStopEvidence.confirmed, ProtocolState.flightProtected, FlightRec.active, ProtocolState.eligibleCarriers, ProtocolState.carrierEnabled,
     ProtocolState.triedCarriers, nextCarrier, Carrier.univ, CarrierSet.get]
 
 -- Both archive outcomes admit the complete retry trace; failed cleanup remains reported.
@@ -587,15 +665,15 @@ private def hecaUnreadableExhaustionActions : List Action :=
 theorem heca_reported_archive_exhausted_fallback_admitted (budget : Option Nat) :
     admitted (hecaReady budget) hecaUnreadableExhaustionActions := by
   simp [admitted, hecaUnreadableExhaustionActions, hecaInitialActions, hecaReady, allowed,
-    guardBeginImplementation, ImplementationPlan.valid, guardOpenFlight,
-    guardImplementationFlight, guardLaunchDelegated, guardHostNotified, guardCollect,
+    guardBeginImplementation, ImplementationPlan.valid, guardOpenFlight, ProtocolState.carrierEnabled,
+    guardImplementationFlight, guardLaunchDelegated, ProtocolState.carrierEnabled, guardHostNotified, guardCollect,
     guardArchiveHeca, guardStoppedHecaFailure, guardFallback,
     readyState, ProtocolState.initial, ProtocolState.modeResolved, ProtocolState.abstained,
     ProtocolState.reviewStarted, ProtocolState.reviewReady, ProtocolState.batchSettled,
     ProtocolState.batchFlights, ProtocolState.flight, ProtocolState.freshId,
-    ProtocolState.eligibleCarriers, ProtocolState.triedCarriers,
+    ProtocolState.eligibleCarriers, ProtocolState.carrierEnabled, ProtocolState.triedCarriers,
     step, ImplementationPlan.start, newFlight, updateFlight, recordPendingArchive,
-    collectEffect, stoppedHecaFailure, unreadable, done, FlightRec.active,
+    collectEffect, stoppedHecaFailure, unreadable, done, ProtocolState.flightProtected, FlightRec.active,
     nextCarrier, Carrier.univ, CarrierSet.get]
 
 theorem heca_reported_archive_exhaustion_preserves_report (budget : Option Nat) :
@@ -623,12 +701,12 @@ private def hecaSuccessActions (outcome : ArchiveOutcome) : List Action :=
 theorem heca_collection_admitted (budget : Option Nat) (o : Observation) :
     admitted (hecaReady budget) (hecaCollectionActions o) := by
   simp [admitted, hecaCollectionActions, hecaInitialActions, hecaReady, allowed,
-    guardBeginImplementation, ImplementationPlan.valid, guardOpenFlight,
-    guardImplementationFlight, guardLaunchDelegated, guardHostNotified, guardCollect,
+    guardBeginImplementation, ImplementationPlan.valid, guardOpenFlight, ProtocolState.carrierEnabled,
+    guardImplementationFlight, guardLaunchDelegated, ProtocolState.carrierEnabled, guardHostNotified, guardCollect,
     readyState, ProtocolState.initial, ProtocolState.modeResolved, ProtocolState.abstained,
     ProtocolState.reviewStarted, ProtocolState.reviewReady, ProtocolState.batchSettled,
     ProtocolState.batchFlights, ProtocolState.flight, ProtocolState.freshId,
-    step, ImplementationPlan.start, newFlight, updateFlight, FlightRec.active, Carrier.univ]
+    step, ImplementationPlan.start, newFlight, updateFlight, ProtocolState.flightProtected, FlightRec.active, Carrier.univ]
 
 theorem heca_success_collect_record_refused (budget : Option Nat) :
     ¬ allowed (hecaCollected budget successful) (.recordImplementation 0 ["all work"] true) := by
@@ -653,13 +731,13 @@ theorem heca_success_archive_record_advance_admitted (budget : Option Nat)
     admitted (hecaReady budget) (hecaSuccessActions outcome) := by
   cases outcome <;> simp [admitted, hecaSuccessActions, hecaCollectionActions,
     hecaInitialActions, hecaReady, allowed, guardBeginImplementation, ImplementationPlan.valid,
-    guardOpenFlight, guardImplementationFlight, guardLaunchDelegated, guardHostNotified,
+    guardOpenFlight, ProtocolState.carrierEnabled, guardImplementationFlight, guardLaunchDelegated, ProtocolState.carrierEnabled, guardHostNotified,
     guardCollect, guardArchiveHeca, guardRecordImplementation, guardAdvanceStage,
     readyState, ProtocolState.initial, ProtocolState.modeResolved, ProtocolState.abstained,
     ProtocolState.reviewStarted, ProtocolState.reviewReady, ProtocolState.batchSettled,
     ProtocolState.batchFlights, ProtocolState.flight, ProtocolState.freshId,
     step, ImplementationPlan.start, newFlight, updateFlight, recordPendingArchive,
-    collectEffect, successful, done, FlightRec.active, Carrier.univ, Stage.next]
+    collectEffect, successful, done, ProtocolState.flightProtected, FlightRec.active, Carrier.univ, Stage.next]
 
 theorem heca_success_second_archive_refused (budget : Option Nat) :
     ¬ allowed (step (hecaCollected budget successful) (.archiveHecaAttempt 0 true .archived))
@@ -684,7 +762,7 @@ theorem heca_failed_collect_fallback_requires_archive (budget : Option Nat) :
   simp [allowed, guardFallback, hecaCollected, run, hecaCollectionActions,
     hecaInitialActions, hecaReady, readyState, ProtocolState.initial, step,
     ProtocolState.flight, ProtocolState.freshId, ImplementationPlan.start,
-    ProtocolState.eligibleCarriers, ProtocolState.triedCarriers,
+    ProtocolState.eligibleCarriers, ProtocolState.carrierEnabled, ProtocolState.triedCarriers,
     newFlight, updateFlight, collectEffect, successful, done, recordPendingArchive,
     nextCarrier, Carrier.univ, CarrierSet.get]
 
@@ -700,7 +778,7 @@ example (id : Nat) (c : Carrier) : ¬ allowed carrierExhausted (.fallbackFlight 
     ProtocolState.flight, ProtocolState.freshId, newFlight, reopenFlight, updateFlight,
     collectEffect, done, successful] at hf
   rcases hf with ⟨_, rfl⟩ | ⟨_, _, rfl⟩ <;>
-    simp [ProtocolState.eligibleCarriers, ProtocolState.triedCarriers,
+    simp [ProtocolState.eligibleCarriers, ProtocolState.carrierEnabled, ProtocolState.triedCarriers,
     carrierExhausted, run, recoveryActions, readyState, ProtocolState.initial, step,
     ProtocolState.flight, ProtocolState.freshId, newFlight, reopenFlight, updateFlight,
     collectEffect, done, successful, nextCarrier, Carrier.univ, CarrierSet.get] at hn
@@ -718,7 +796,7 @@ example : allowed failed (.fallbackFlight 1 .isolatedTokenSubagent) := by
   simp [allowed, guardFallback, failed, finish, second, partDone, returned, opened, begin,
     readyState, step, updateFlight, collectEffect, done, successful, twoParts,
     ImplementationPlan.start, ProtocolState.initial, ProtocolState.flight,
-    ProtocolState.freshId, ProtocolState.triedCarriers, ProtocolState.eligibleCarriers,
+    ProtocolState.freshId, ProtocolState.triedCarriers, ProtocolState.eligibleCarriers, ProtocolState.carrierEnabled,
     newFlight, nextCarrier, Carrier.univ, CarrierSet.get]
 
 -- Test-seat restriction applies to initial, repeated, and included repair review alike.
@@ -726,7 +804,7 @@ example : ¬ allowed { review with capabilityChecked := Carrier.univ }
     (.openFlight .review .tests .nyxidOracle "target" 0) :=
   tests_dispatch_excludes_oracle _ _ _
 example : allowed review (.openFlight .review .tests .isolatedTokenSubagent "target" 0) := by
-  simp only [allowed, guardOpenFlight, guardReviewFlight, ProtocolState.modeResolved,
+  simp only [allowed, guardOpenFlight, ProtocolState.carrierEnabled, guardReviewFlight, ProtocolState.modeResolved,
     ProtocolState.abstained]
   decide
 example : ¬ allowed repeated (.openFlight .review .tests .nyxidOracle "target" 0) :=
@@ -754,18 +832,18 @@ example : ¬ allowed recoveryReturned (.fallbackFlight 0 .isolatedTokenSubagent)
     newFlight, reopenFlight, updateFlight, collectEffect, done, successful]
 
 example : admitted readyState
-    [.beginImplementation ⟨["all work"], 1⟩,
+    [.beginImplementation ⟨["all work"], 1, []⟩,
      .openFlight .implementation .implementation .codexCli "target" 0,
      .launchViaRunner 0, .hostNotified 0, .collect 0 successful,
      .recordImplementation 0 ["all work"] true, .advanceStage] := by
   simp [admitted, allowed, guardBeginImplementation, ImplementationPlan.valid,
-    guardOpenFlight, guardImplementationFlight, guardLaunchViaRunner, guardHostNotified,
+    guardOpenFlight, ProtocolState.carrierEnabled, guardImplementationFlight, guardLaunchViaRunner, guardHostNotified,
     guardCollect, guardRecordImplementation, guardAdvanceStage, readyState,
     ProtocolState.initial, ProtocolState.modeResolved, ProtocolState.abstained,
     ProtocolState.reviewStarted, ProtocolState.reviewReady, ProtocolState.batchSettled,
     ProtocolState.batchFlights, ProtocolState.flight, ProtocolState.freshId,
     step, ImplementationPlan.start, newFlight, updateFlight, collectEffect, done,
-    successful, FlightRec.active, Stage.next]
+    successful, ProtocolState.flightProtected, FlightRec.active, Stage.next]
 
 private def testsReviewState := { review with capabilityChecked := [.codexCli, .nyxidOracle, .isolatedTokenSubagent] }
 private def testsRecoveryActions (observation : Observation) : List Action :=
@@ -777,13 +855,13 @@ private def testsRecoveryActions (observation : Observation) : List Action :=
 example (observation : Observation) : admitted testsReviewState (testsRecoveryActions observation) := by
   simp [admitted, testsRecoveryActions, testsReviewState, review, complete, second,
     partDone, returned, opened, begin, readyState, finish, twoParts, successful,
-    allowed, guardOpenFlight, guardReviewFlight, seatEligible, canRunRepositoryCommands,
-    guardLaunchViaRunner, guardLaunchDelegated, guardHostNotified, guardCollect, guardFallback,
+    allowed, guardOpenFlight, ProtocolState.carrierEnabled, guardReviewFlight, seatEligible, canRunRepositoryCommands,
+    guardLaunchViaRunner, guardLaunchDelegated, ProtocolState.carrierEnabled, guardHostNotified, guardCollect, guardFallback,
     ProtocolState.initial, ProtocolState.modeResolved, ProtocolState.abstained,
     ProtocolState.reviewReady, ProtocolState.batchSettled, ProtocolState.batchFlights,
     ProtocolState.flight, ProtocolState.freshId, ProtocolState.triedCarriers,
-    ProtocolState.eligibleCarriers, step, ImplementationPlan.start, newFlight, reopenFlight,
-    updateFlight, collectEffect, done, FlightRec.active, nextCarrier, Carrier.univ,
+    ProtocolState.eligibleCarriers, ProtocolState.carrierEnabled, step, ImplementationPlan.start, newFlight, reopenFlight,
+    updateFlight, collectEffect, done, ProtocolState.flightProtected, FlightRec.active, nextCarrier, Carrier.univ,
     CarrierSet.get, reviewRoles, Stage.next]
 private def testsRecovered := run testsReviewState (testsRecoveryActions successful)
 example : (testsRecovered.flight 3).map (·.status) = some .terminal := by decide
@@ -809,7 +887,7 @@ example : allowed oracleReview (.launchViaRunner 2) := by
     ProtocolState.initial, ProtocolState.flight, ProtocolState.freshId, step,
     ImplementationPlan.start, newFlight, updateFlight, collectEffect, done]
 example : ¬ allowed oracleReview (.launchDelegated 2) := by
-  simp [allowed, guardLaunchDelegated, oracleReview, testsReviewState, review, complete, second,
+  simp [allowed, guardLaunchDelegated, ProtocolState.carrierEnabled, oracleReview, testsReviewState, review, complete, second,
     partDone, returned, opened, begin, readyState, finish, twoParts, successful,
     ProtocolState.initial, ProtocolState.flight, ProtocolState.freshId, step,
     ImplementationPlan.start, newFlight, updateFlight, collectEffect, done]
@@ -817,12 +895,12 @@ example : ¬ allowed oracleReview (.launchDelegated 2) := by
 private def scopeNote : Revision :=
   ⟨"engineering scope note", "existing user authorization", "none"⟩
 private def authorizedRevision (r : Revision) (source : Option ContinuationSource) : RevisionEvidence :=
-  ⟨r, true, true, source⟩
+  ⟨r, true, true, source, false, false⟩
 
 private def startupActions (c : ContinuationEntry) : List Action :=
   [.writeGoal goal (intake c),
    .appendRevision scopeNote (authorizedRevision scopeNote none),
-   .advanceStage, .capabilityCheck .codexCli, .recordHecaCheck ⟨false, .disabled⟩, .resolveMode (.carrier .codexCli), .advanceStage]
+   .advanceStage, .capabilityCheck .codexCli, .recordHecaCheck ⟨false, .disabled, false⟩, .resolveMode (.carrier .codexCli), .advanceStage]
 -- Every opt-in/exposure combination passes through the production check and consumers.
 -- Opt-in source is supplied evidence; these cases do not detect authority from English.
 private def optInCheckState : ProtocolState :=
@@ -831,7 +909,7 @@ private def optInCheckState : ProtocolState :=
     hecaCheckRecorded := false, capabilityChecked := [.codexCli, .isolatedTokenSubagent] }
 
 private def optInState (source : HecaOptIn) (exposed : Bool) : ProtocolState :=
-  { step optInCheckState (.recordHecaCheck ⟨exposed, source⟩) with
+  { step optInCheckState (.recordHecaCheck ⟨exposed, source, false⟩) with
     stage := .implementation, mode := some (.carrier .codexCli) }
 
 example (facts : HecaCapability) : allowed optInCheckState (.recordHecaCheck facts) := by
@@ -841,7 +919,7 @@ example (facts : HecaCapability) : allowed optInCheckState (.recordHecaCheck fac
 
 private def optInFailed (source : HecaOptIn) (exposed : Bool) : ProtocolState :=
   finish (step (step (optInState source exposed)
-    (.beginImplementation ⟨["all work"], 1⟩))
+    (.beginImplementation ⟨["all work"], 1, []⟩))
     (.openFlight .implementation .implementation .codexCli "target" 0)) 0
     { successful with exitZero := false }
 
@@ -854,18 +932,18 @@ theorem heca_opt_in_consumer_matrix :
       available = (source != .disabled && exposed) ∧
       (Clauses.stageComposition 3 available).contains .heca = available ∧
       (Clauses.stageComposition 1 available).contains .heca = available ∧
-      (allowed (step s (.beginImplementation ⟨["all work"], 1⟩))
+      (allowed (step s (.beginImplementation ⟨["all work"], 1, []⟩))
         (.openFlight .implementation .implementation .heca "target" 0) ↔ available = true) ∧
       (allowed (optInFailed source exposed) (.fallbackFlight 0 .heca) ↔ available = true) := by
   intro source _ exposed _
   cases source <;> cases exposed <;>
     simp [optInState, optInCheckState, optInFailed, readyState, ProtocolState.initial,
-      finish, allowed, guardOpenFlight, guardImplementationFlight, guardFallback,
+      finish, allowed, guardOpenFlight, ProtocolState.carrierEnabled, guardImplementationFlight, guardFallback,
       guardBeginImplementation, ImplementationPlan.valid, admitted,
       guardLaunchViaRunner, guardHostNotified, guardCollect,
       ProtocolState.modeResolved, ProtocolState.abstained, step, ImplementationPlan.start,
       newFlight, ProtocolState.freshId, ProtocolState.flight, updateFlight, collectEffect,
-      done, successful, FlightRec.active, ProtocolState.eligibleCarriers,
+      done, successful, ProtocolState.flightProtected, FlightRec.active, ProtocolState.eligibleCarriers, ProtocolState.carrierEnabled,
       ProtocolState.triedCarriers, nextCarrier, Carrier.univ, CarrierSet.get,
       HecaCapability.detected, Clauses.stageComposition,
       ProtocolState.reviewStarted, ProtocolState.reviewReady, ProtocolState.batchSettled,
@@ -876,18 +954,18 @@ theorem heca_opt_in_consumer_matrix :
 theorem opt_in_codex_failure_admitted :
     ∀ source ∈ [HecaOptIn.disabled, .user, .host], ∀ exposed ∈ [false, true],
       admitted (optInState source exposed)
-        [.beginImplementation ⟨["all work"], 1⟩,
+        [.beginImplementation ⟨["all work"], 1, []⟩,
          .openFlight .implementation .implementation .codexCli "target" 0,
          .launchViaRunner 0, .hostNotified 0, .collect 0 { successful with exitZero := false }] := by
   intro source _ exposed _
   cases source <;> cases exposed <;>
     simp [optInState, optInCheckState, optInFailed, readyState, ProtocolState.initial,
-      finish, allowed, guardOpenFlight, guardImplementationFlight, guardFallback,
+      finish, allowed, guardOpenFlight, ProtocolState.carrierEnabled, guardImplementationFlight, guardFallback,
       guardBeginImplementation, ImplementationPlan.valid, admitted,
       guardLaunchViaRunner, guardHostNotified, guardCollect,
       ProtocolState.modeResolved, ProtocolState.abstained, step, ImplementationPlan.start,
       newFlight, ProtocolState.freshId, ProtocolState.flight, updateFlight, collectEffect,
-      done, successful, FlightRec.active, ProtocolState.eligibleCarriers,
+      done, successful, ProtocolState.flightProtected, FlightRec.active, ProtocolState.eligibleCarriers, ProtocolState.carrierEnabled,
       ProtocolState.triedCarriers, nextCarrier, Carrier.univ, CarrierSet.get,
       HecaCapability.detected, Clauses.stageComposition,
       ProtocolState.reviewStarted, ProtocolState.reviewReady, ProtocolState.batchSettled,
@@ -902,12 +980,12 @@ theorem opt_in_unavailable_fallback :
   intro source _ exposed _
   cases source <;> cases exposed <;>
     simp [optInState, optInCheckState, optInFailed, readyState, ProtocolState.initial,
-      finish, allowed, guardOpenFlight, guardImplementationFlight, guardFallback,
+      finish, allowed, guardOpenFlight, ProtocolState.carrierEnabled, guardImplementationFlight, guardFallback,
       guardBeginImplementation, ImplementationPlan.valid, admitted,
       guardLaunchViaRunner, guardHostNotified, guardCollect,
       ProtocolState.modeResolved, ProtocolState.abstained, step, ImplementationPlan.start,
       newFlight, ProtocolState.freshId, ProtocolState.flight, updateFlight, collectEffect,
-      done, successful, FlightRec.active, ProtocolState.eligibleCarriers,
+      done, successful, ProtocolState.flightProtected, FlightRec.active, ProtocolState.eligibleCarriers, ProtocolState.carrierEnabled,
       ProtocolState.triedCarriers, nextCarrier, Carrier.univ, CarrierSet.get,
       HecaCapability.detected, Clauses.stageComposition,
       ProtocolState.reviewStarted, ProtocolState.reviewReady, ProtocolState.batchSettled,
@@ -918,9 +996,36 @@ theorem opt_in_unavailable_fallback :
 theorem opt_in_preserves_heca_lifecycle_fixture :
     ∀ source ∈ [HecaOptIn.user, .host], ∀ c ∈ Carrier.univ,
       c ∈ (step { readyState with capabilityChecked := [.codexCli, .nyxidOracle, .isolatedTokenSubagent] }
-        (.recordHecaCheck ⟨true, source⟩)).capabilityChecked ↔
+        (.recordHecaCheck ⟨true, source, false⟩)).capabilityChecked ↔
       c ∈ (hecaReady none).capabilityChecked := by
   decide
+
+-- Explicit disable overrides even sourced opt-in and exposed tools.
+example (source : HecaOptIn) (exposed : Bool) :
+    HecaCapability.detected ⟨exposed, source, true⟩ = false := by
+  simp [HecaCapability.detected]
+
+-- A source-supported correction reaches every dispatch consumer through existing enablement.
+private def disableEvidence : RevisionEvidence :=
+  { authorizedRevision scopeNote none with hecaDisableCorrection := true }
+private def disabledAfterOptIn := step (optInState .host true) (.appendRevision scopeNote disableEvidence)
+example : allowed (optInState .host true) (.appendRevision scopeNote disableEvidence) := by
+  simp [allowed, guardAppendRevision, RevisionEvidence.valid, disableEvidence, authorizedRevision,
+    ProtocolState.goalWritten, optInState, optInCheckState, readyState, ProtocolState.initial, step]
+example : disabledAfterOptIn.carrierEnabled .heca = false := by decide
+example : (Clauses.stageComposition 6 (disabledAfterOptIn.carrierEnabled .heca)).contains .heca = false := by decide
+example : ¬ allowed (step disabledAfterOptIn (.beginImplementation ⟨["work"], 1, []⟩))
+    (.openFlight .implementation .implementation .heca "target" 0) := by
+  simp [allowed, guardOpenFlight, disabledAfterOptIn, ProtocolState.carrierEnabled, step,
+    disableEvidence]
+example : ¬ allowed (step (optInFailed .host true) (.appendRevision scopeNote disableEvidence))
+    (.fallbackFlight 0 .heca) := by
+  exact disabled_heca_cannot_fallback _ _ (by simp [step, disableEvidence])
+-- Retry/resume cannot launch an existing Heca flight using stale capability records.
+example (s : ProtocolState) (id : Nat) (f : FlightRec)
+    (hf : s.flight id = some f) (hc : f.carrier = .heca) (hd : s.hecaDisabled = true) :
+    ¬ allowed s (.launchDelegated id) := by
+  simp [allowed, guardLaunchDelegated, hf, hc, ProtocolState.carrierEnabled, hd]
 
 -- Heca records even an absent check once; it cannot redraw availability later.
 example (s : ProtocolState) (first second : HecaCapability) :
@@ -928,15 +1033,15 @@ example (s : ProtocolState) (first second : HecaCapability) :
   simp [allowed, guardHecaCheck, step]
 
 example (s : ProtocolState) :
-    (step s (.recordHecaCheck ⟨false, .disabled⟩)).capabilityChecked = s.capabilityChecked := rfl
+    (step s (.recordHecaCheck ⟨false, .disabled, false⟩)).capabilityChecked = s.capabilityChecked := rfl
 
 example (s : ProtocolState) :
-    Carrier.heca ∈ (step s (.recordHecaCheck ⟨true, .user⟩)).capabilityChecked := by
+    Carrier.heca ∈ (step s (.recordHecaCheck ⟨true, .user, false⟩)).capabilityChecked := by
   simp [step, HecaCapability.detected]
 
 example : allowed { review with capabilityChecked := Carrier.univ }
     (.openFlight .review .tests .heca "target" 0) := by
-  simp only [allowed, guardOpenFlight, guardReviewFlight, ProtocolState.modeResolved,
+  simp only [allowed, guardOpenFlight, ProtocolState.carrierEnabled, guardReviewFlight, ProtocolState.modeResolved,
     ProtocolState.abstained]
   decide
 
@@ -945,7 +1050,7 @@ example (c : ContinuationEntry) : admitted ProtocolState.initial (startupActions
   simp [admitted, startupActions, allowed, guardWriteGoal, guardAppendRevision,
     guardAdvanceStage, guardCapabilityCheck, guardHecaCheck, guardResolveMode, HecaCapability.detected, Harness.complete,
     authorizedRevision, RevisionEvidence.valid,
-    IntakeEvidence.complete, goal, intake, ProtocolState.initial, ProtocolState.goalWritten,
+    IntakeEvidence.complete, ActivationAuthority.authorized, goal, intake, ProtocolState.initial, ProtocolState.goalWritten,
     ProtocolState.modeResolved, ProtocolState.abstained, step, GoalArtifact.correct, Stage.next]
 example (c : ContinuationEntry) :
     (run ProtocolState.initial (startupActions c)).gate = applicability c := by rfl
@@ -1044,8 +1149,8 @@ theorem heca_termination_collection_admitted :
     admitted (hecaReady none) hecaTerminationCollectionActions := by
   simp [admitted, hecaTerminationCollectionActions, hecaSuccessActions, hecaCollectionActions,
     reviewActions, hecaInitialActions, hecaReady, allowed, guardBeginImplementation,
-    ImplementationPlan.valid, guardOpenFlight, guardImplementationFlight, guardReviewFlight,
-    guardLaunchViaRunner, guardLaunchDelegated, guardHostNotified, guardCollect,
+    ImplementationPlan.valid, guardOpenFlight, ProtocolState.carrierEnabled, guardImplementationFlight, guardReviewFlight,
+    guardLaunchViaRunner, guardLaunchDelegated, ProtocolState.carrierEnabled, guardHostNotified, guardCollect,
     guardArchiveHeca, guardRecordImplementation, guardAdvanceStage, guardAppendRevision,
     guardRecordPassBudget, correctionAction, correctionEvidence, authorizedRevision,
     continuationRevision, RevisionEvidence.valid, ProtocolState.goalWritten,
@@ -1054,7 +1159,7 @@ theorem heca_termination_collection_admitted :
     ProtocolState.batchSettled, ProtocolState.batchFlights, ProtocolState.flight,
     ProtocolState.freshId, reviewRoles, seatEligible, canRunRepositoryCommands,
     step, ImplementationPlan.start, newFlight, updateFlight, recordPendingArchive,
-    collectEffect, successful, done, FlightRec.active, Carrier.univ, Stage.next,
+    collectEffect, successful, done, ProtocolState.flightProtected, FlightRec.active, Carrier.univ, Stage.next,
     FlightStage.protocolStage]
 
 set_option maxRecDepth 4096 in
@@ -1190,10 +1295,6 @@ example : admitted settled [.appendRevision scopeNote (authorizedRevision scopeN
   decide
 
 -- Actual review table retains ordinary defects (including deliberate test reproductions).
-private def ordinary : Finding :=
-  ⟨.reject, ⟨true, true, false, false⟩, false,
-    ⟨"ordinary typo", "user", .ordinaryOperation, "parsing", none, true⟩⟩
-private def approval : Finding := { ordinary with verdict := .approve }
 example : routeFindings ordinary approval approval = .fix := by decide
 private def invented := { ordinary with trigger := { ordinary.trigger with triggerPath := .nonstandardDeliberate } }
 example : routeFindings invented approval approval = .doneWithAdvisory := by decide
@@ -1222,19 +1323,343 @@ example : familyPassAllowed { family with
     revision := some ⟨"scope", "owner authorization", "none"⟩ } .repairWithRerunReview = true := by decide
 example : familyRoute { family with noSupportedPath := true } = .honestStop := by decide
 
+-- Workflow provenance is consumed by the actual review and plan-admission routes.
+private def manualOnly := { ordinary with trigger := { ordinary.trigger with
+  inputEvidence := ⟨none, "tool manual describes an optional operation", false⟩ } }
+example : routeFindings manualOnly approval approval = .doneWithAdvisory := by decide
+example : planElementAdmitted ⟨"manual-only defense", manualOnly, false, true⟩ = false := by decide
+private def fixtureOnly := { manualOnly with trigger := { manualOnly.trigger with
+  inputEvidence := ⟨some ⟨"fixture command", "outside target fixture", 1, false⟩, "", false⟩ } }
+example : routeFindings fixtureOnly approval approval = .doneWithAdvisory := by decide
+-- A census of zero is not a new restriction on future ordinary workflow states.
+private def futureOrdinary := { ordinary with trigger := { ordinary.trigger with
+  inputEvidence := ⟨some ⟨"read-only census", "target", 0, true⟩, "workflow update path", true⟩ } }
+example : routeFindings futureOrdinary approval approval = .fix := by decide
+private def ownerRestricted := { futureOrdinary with trigger := { futureOrdinary.trigger with
+  ownerPolicy := .actualInputOrOccurrence ⟨"owner rule preserved in goal/harness", by decide⟩ } }
+example : routeFindings ownerRestricted approval approval = .doneWithAdvisory := by decide
+example : routeFindings { ownerRestricted with trigger := { ownerRestricted.trigger with
+    inputEvidence := ⟨some ⟨"read-only census", "target workflow inputs", 1, true⟩, "", false⟩ } }
+    approval approval = .fix := by decide
+example : routeFindings { ownerRestricted with trigger := { ownerRestricted.trigger with
+    recordedOccurrence := some "independent incident", createdDuringRun := false } }
+    approval approval = .fix := by decide
+-- A missing source cannot be interpreted as an owner restriction and downgrade a defect.
+example : ¬ ∃ source : { s : String // s ≠ "" }, source.val = "" := by
+  rintro ⟨source, h⟩
+  exact source.property h
+
+-- Every generic blocking route carries the same trigger-aware admission basis.
+private def ordinaryBasis : DecisionBasis := ⟨ordinary.input, ordinary.trigger⟩
+private def manualBasis : DecisionBasis := ⟨manualOnly.input, manualOnly.trigger⟩
+example : completeAdmission ordinaryBasis = true := by decide
+example : completeAdmission manualBasis = false := by decide
+example : downgradeRecord manualBasis "manual-only trigger" =
+    some (.namedInOwnWords "manual-only trigger" false) := by decide
+example : goalGapOf [manualBasis] = [] := by decide
+example : goalGapOf [ordinaryBasis] = [ordinaryBasis] := by decide
+
+private def ordinaryObjection : Objection :=
+  ⟨.parsimony, true, true, false, ordinary.input, ordinary.trigger, "ordinary objection"⟩
+private def manualObjection : Objection :=
+  { ordinaryObjection with trigger := manualOnly.trigger }
+example : focusedRoundRequired ordinaryObjection = true := by decide
+example : focusedRoundRequired manualObjection = false := by decide
+
+private def ordinaryDifference : RemainingDifference :=
+  ⟨"ordinary residual", "engineering", ordinary.input, ordinary.trigger, false⟩
+private def manualDifference : RemainingDifference :=
+  ⟨"manual residual", "engineering", manualOnly.input, manualOnly.trigger, false⟩
+example : ordinaryDifference.counts = true := by decide
+example : manualDifference.counts = false := by decide
+
+/-- Exercise existing consumers, not a second admission implementation. -/
+private def blockingConsumerDecisions (f : Finding) : List Bool :=
+  let b : DecisionBasis := ⟨f.input, f.trigger⟩
+  let objection : Objection :=
+    ⟨.parsimony, true, true, false, f.input, f.trigger, "basis in its own words"⟩
+  let difference : RemainingDifference :=
+    ⟨"remaining goal gap", "engineering", f.input, f.trigger, false⟩
+  ([.planObjection, .reviewFinding, .terminationDifference] : List DecisionInputKind).map
+      (fun k => admissibility k b) ++
+    ([.revise, .reject, .abstain, .blockingFinding, .unsatisfied, .concretePlanElement] :
+      List SoleBasisDecision).map (fun d => mayBeSoleBasis b d) ++
+    [routeFindings { f with verdict := .reject } approval approval == .fix,
+     planElementAdmitted ⟨"goal-required element", f, false, true⟩,
+     asksMayBlock b, focusedRoundRequired objection,
+     !(goalGapOf [b]).isEmpty, !(convergencePassScope [b]).isEmpty,
+     (downgradeRecord b "basis in its own words").isNone,
+     (declineRecord objection).isNone,
+     @decide (BlockingFinding.wellFormed ⟨f.input, f.trigger, "S3", .omission⟩)
+       (by unfold BlockingFinding.wellFormed; infer_instance),
+     difference.counts, seatAppliesAuthority .unsatisfied b true == .unsatisfied]
+
+-- A parametric statement covers every failed trigger, independent of label, input
+-- conjuncts, owner policy, provenance and incident spelling supplied to the model.
+theorem failed_trigger_rejected_by_every_consumer (f : Finding)
+    (h : triggerCheck f.trigger = false) :
+    blockingConsumerDecisions f = List.replicate 20 false := by
+  cases hg : f.input.namesGoalTerm <;> cases he : f.input.namesWorkEvidence <;>
+    simp [blockingConsumerDecisions, admissibility, mayBeSoleBasis, asksMayBlock,
+    routeFindings, reviewRoute, downgrade, completeAdmission, h, planElementAdmitted,
+    focusedRoundRequired, threeConditions, goalGapOf, convergencePassScope,
+    downgradeRecord, declineRecord, BlockingFinding.wellFormed, RemainingDifference.counts,
+    seatAppliesAuthority, settleSeat, approval, hg, he]
+
+theorem admitted_basis_retained_by_every_consumer (f : Finding)
+    (ha : completeAdmission ⟨f.input, f.trigger⟩ = true)
+    (hm : f.requiresTrustedMalice = false) (ho : f.requiresOwnerDecision = false) :
+    blockingConsumerDecisions f = List.replicate 20 true := by
+  have hf := completeAdmission_requires_force ⟨f.input, f.trigger⟩ ha
+  have ht : triggerCheck f.trigger = true := by
+    have hparts := ha
+    simp [completeAdmission] at hparts
+    exact hparts.2
+  simp [blockingConsumerDecisions, admissibility, mayBeSoleBasis, asksMayBlock,
+    routeFindings, reviewRoute, downgrade, completeAdmission, hf, ht, hm, ho,
+    planElementAdmitted, focusedRoundRequired, threeConditions, goalGapOf,
+    convergencePassScope, downgradeRecord, declineRecord, BlockingFinding.wellFormed,
+    RemainingDifference.counts, seatAppliesAuthority, settleSeat, approval, threatEligible]
+
+private def observedRestricted : Finding :=
+  { ownerRestricted with trigger := { ownerRestricted.trigger with
+    inputEvidence := ⟨some ⟨"read-only census", "target workflow inputs", 1, true⟩, "", false⟩ } }
+private def independentRestricted : Finding :=
+  { ownerRestricted with trigger := { ownerRestricted.trigger with
+    recordedOccurrence := some "independent incident", createdDuringRun := false } }
+
+-- Nine constructed evidence classes, each checked at all twenty decisions. These
+-- fixtures establish model behavior, never observed host occurrence or provenance.
+example : ([manualOnly, fixtureOnly, invented, ownerRestricted,
+    { invented with trigger := { invented.trigger with
+      recordedOccurrence := some "fixture made during this run" } }] : List Finding).all
+    (fun f => blockingConsumerDecisions f == List.replicate 20 false) = true := by decide
+example : ([ordinary, futureOrdinary, observedRestricted, independentRestricted] : List Finding).all
+    (fun f => blockingConsumerDecisions f == List.replicate 20 true) = true := by decide
+
+-- Paraphrase reaches the production paid-pass guard, not a separate classifier.
+private theorem fundedRepairAdmission (e : FamilyEvidence) :
+    allowed funded (.pass .repairWithRerunReview e (some twoParts)) ↔
+      familyPassAllowed e .repairWithRerunReview = true := by
+  have hs : funded.stage = .fixOrDone := by decide
+  have hr : funded.reviewComplete = true := by decide
+  have hb : funded.passBudget = some 1 := by decide
+  simp [allowed, guardPass, hs, hr, hb, twoParts, ImplementationPlan.valid, ImplementationPlan.repairsAdmitted, ordinary, downgrade, completeAdmission, eligible, triggerCheck, force,
+    WorkflowInputEvidence.ordinary, WorkflowInputEvidence.observed, occurrenceIsIndependent,
+    OwnerAdmissionPolicy.admits, Transition.counted]
+
+-- Inactive recurrence alone cannot make an unresolved comparison a new family.
+private def unresolvedComparison := { firstFamily with correspondence :=
+  { firstFamily.correspondence with history := .priorComparison "candidate prior label" true true false } }
+example : classGateActive unresolvedComparison = false ∧
+    familyRoute unresolvedComparison = .reviseOrInvestigate := by decide
+example : ¬ allowed funded (.pass .repairWithRerunReview unresolvedComparison (some twoParts)) := by
+  rw [fundedRepairAdmission]
+  decide
+example : allowed funded (.pass .metaLayerConvergence unresolvedComparison none) := by
+  have hs : funded.stage = .fixOrDone := by decide
+  have hr : funded.reviewComplete = true := by decide
+  have hb : funded.passBudget = some 1 := by decide
+  simp [allowed, guardPass, hs, hr, hb, familyPassAllowed, familyRoute,
+    unresolvedComparison, firstFamily, ordinary, family, FamilyCorrespondence.verified,
+    ownerAuthorizedDomainChange, Transition.counted]
+
+-- Evidence for a genuinely new family is still required at the same repair consumer.
+example : ¬ allowed funded (.pass .repairWithRerunReview
+    { firstFamily with correspondence := { firstFamily.correspondence with history := .newFamily "" } }
+    (some twoParts)) := by
+  rw [fundedRepairAdmission]
+  decide
+example : ¬ allowed funded (.pass .repairWithRerunReview
+    { firstFamily with correspondence := { firstFamily.correspondence with evidence := "" } }
+    (some twoParts)) := by
+  rw [fundedRepairAdmission]
+  decide
+example : ¬ allowed funded (.pass .repairWithRerunReview
+    { firstFamily with correspondence := { firstFamily.correspondence with peerFree := false } }
+    (some twoParts)) := by
+  rw [fundedRepairAdmission]
+  decide
+
+-- Earlier unsupported enumeration activates the existing gate even for a new family.
+private def firstFamilyUnsupported := { firstFamily with earlierUnsupportedEnumeration := true }
+example : classGateActive firstFamilyUnsupported = true := by decide
+example : ¬ allowed funded (.pass .repairWithRerunReview firstFamilyUnsupported (some twoParts)) := by
+  rw [fundedRepairAdmission]
+  decide
+example : allowed funded (.pass .repairWithRerunReview
+    { firstFamilyUnsupported with coverageBasis := .soundAbstraction true } (some twoParts)) := by
+  rw [fundedRepairAdmission]
+  decide
+example : ¬ allowed funded (.pass .repairWithRerunReview
+    { firstFamily with changesDomainOrCriterion := true } (some twoParts)) := by
+  rw [fundedRepairAdmission]
+  decide
+
+private def paraphrasedFamily := { family with coverageBasis := .unsupportedMemberEnumeration }
+example : paraphrasedFamily.correspondence.history = .priorComparison "prior label" true true true ∧
+    paraphrasedFamily.correspondence.currentLabel = "current paraphrase" := by decide
+example : classGateActive paraphrasedFamily = true := by decide
+example : allowed funded (.pass .repairWithRerunReview family (some twoParts)) := by
+  rw [fundedRepairAdmission]
+  decide
+example : ¬ allowed funded (.pass .repairWithRerunReview paraphrasedFamily (some twoParts)) := by
+  exact unsupported_class_cannot_start_batch funded paraphrasedFamily (some twoParts) rfl (by decide)
+-- Supplied incident labels are evidence inputs, not independently replayed host events.
+private def incidentLabels : List String :=
+  ["lake_manifest_exemption_discards_dependency_local_state",
+   "nested-git-boundary bypass leaves dependency-owned submodule/worktree metadata outside local-history coverage",
+   "lake_dependency_recovery_roots_omit_reflogs", "unversioned_git_metadata",
+   "lake_dependency_metadata_content_outside_git_object_graph"]
+example : ∀ label ∈ incidentLabels,
+    familyPassAllowed { paraphrasedFamily with correspondence :=
+      { paraphrasedFamily.correspondence with currentLabel := label } }
+      .repairWithRerunReview = false := by decide
+
+-- Same location is immaterial; a different cause remains distinct.
+private def distinctCause := { paraphrasedFamily with correspondence :=
+  { paraphrasedFamily.correspondence with history := .priorComparison "prior label" true false true } }
+example : classGateActive distinctCause = false := by decide
+example : allowed funded (.pass .repairWithRerunReview distinctCause (some twoParts)) := by
+  have hs : funded.stage = .fixOrDone := by decide
+  have hr : funded.reviewComplete = true := by decide
+  have hb : funded.passBudget = some 1 := by decide
+  simp [allowed, guardPass, hs, hr, hb, distinctCause, paraphrasedFamily, family,
+    familyPassAllowed, familyRoute, ownerAuthorizedDomainChange, classGateActive,
+    FamilyCorrespondence.verified, FamilyCorrespondence.sameFamily, twoParts,
+    ImplementationPlan.valid, ImplementationPlan.repairsAdmitted, ordinary, downgrade, completeAdmission, eligible, triggerCheck, force,
+    WorkflowInputEvidence.ordinary, WorkflowInputEvidence.observed, occurrenceIsIndependent,
+    OwnerAdmissionPolicy.admits, Transition.counted]
+example : familyPassAllowed { family with correspondence :=
+    { family.correspondence with history := .priorComparison "prior label" true true false } }
+    .repairWithRerunReview = false := by decide
+example : familyPassAllowed { family with correspondence :=
+    { family.correspondence with peerFree := false } } .repairWithRerunReview = false := by decide
+
+example : familyPassAllowed { family with inputCorrespondenceVerified := false }
+    .repairWithRerunReview = false := by decide
+example : familyPassAllowed { family with measurementLimitsReported := false }
+    .repairWithRerunReview = false := by decide
+example : ¬ allowed funded (.pass .repairWithRerunReview
+    { family with inputCorrespondenceVerified := false } (some twoParts)) := by
+  rw [fundedRepairAdmission]
+  decide
+example : ¬ allowed funded (.pass .repairWithRerunReview
+    { family with measurementLimitsReported := false } (some twoParts)) := by
+  rw [fundedRepairAdmission]
+  decide
+
 -- Autonomous intake proceeds from honest sources even when continuation is silent/ambiguous.
 example : allowed ProtocolState.initial (.writeGoal goal (intake .silent)) := by
-  simp [allowed, guardWriteGoal, IntakeEvidence.complete, Harness.complete, ProtocolState.initial, intake, goal]
+  simp [allowed, guardWriteGoal, IntakeEvidence.complete, ActivationAuthority.authorized, Harness.complete, ProtocolState.initial, intake, goal]
 example : allowed ProtocolState.initial (.writeGoal goal (intake .ambiguous)) := by
-  simp [allowed, guardWriteGoal, IntakeEvidence.complete, Harness.complete, ProtocolState.initial, intake, goal]
+  simp [allowed, guardWriteGoal, IntakeEvidence.complete, ActivationAuthority.authorized, Harness.complete, ProtocolState.initial, intake, goal]
 example : ¬ allowed ProtocolState.initial (.writeGoal goal
     { intake .silent with startupQuestionAsked := true }) := by
-  simp [allowed, guardWriteGoal, IntakeEvidence.complete]
+  simp [allowed, guardWriteGoal, IntakeEvidence.complete, intake]
 example : ¬ allowed ProtocolState.initial (.writeGoal goal
     { intake .silent with explicitBoundariesPreserved := false }) := by
-  simp [allowed, guardWriteGoal, IntakeEvidence.complete]
+  simp [allowed, guardWriteGoal, IntakeEvidence.complete, intake]
 example : (step ProtocolState.initial (.writeGoal goal (intake .silent))).gate = .inapplicable := by decide
 example : (step ProtocolState.initial (.writeGoal goal (intake .ambiguous))).gate = .withholdClaim := by decide
 example : (step ProtocolState.initial (.writeGoal goal (intake .present))).gate = .applies := by decide
+
+-- #1075: authority is consumed by actual intake; risk/importance alone supplies none.
+example : ¬ allowed ProtocolState.initial (.writeGoal goal
+    { intake .silent with activation := .absent }) := by
+  simp [allowed, guardWriteGoal, IntakeEvidence.complete, ActivationAuthority.authorized]
+example : allowed ProtocolState.initial (.writeGoal goal
+    { intake .silent with activation := .explicitRequest }) := by
+  simp [allowed, guardWriteGoal, IntakeEvidence.complete, ActivationAuthority.authorized,
+    Harness.complete, ProtocolState.initial, intake, goal]
+-- A material owner question is permitted; dependent intake waits for its answer.
+example : ¬ allowed ProtocolState.initial (.writeGoal goal
+    { intake .silent with startupQuestionAsked := true, materialOwnerQuestion := true }) := by
+  simp [allowed, guardWriteGoal, IntakeEvidence.complete, intake]
+example : allowed ProtocolState.initial (.writeGoal goal
+    { intake .silent with
+      startupQuestionAsked := true
+      materialOwnerQuestion := true
+      ownerClarified := true }) := by
+  simp [allowed, guardWriteGoal, IntakeEvidence.complete, ActivationAuthority.authorized,
+    Harness.complete, ProtocolState.initial, intake, goal]
+
+private def uncertain (status : EvidenceStatus) : Finding :=
+  { ordinary with input := { ordinary.input with evidenceStatus := status } }
+example : ([.advisory, .conditional, .unverified] : List EvidenceStatus).all (fun status =>
+    routeFindings (uncertain status) approval approval == .doneWithAdvisory &&
+    !planElementAdmitted ⟨"new approval layer", uncertain status, true, true⟩) = true := by decide
+example (status : EvidenceStatus) (h : status ≠ .confirmed) :
+    ¬ allowed funded (.pass .repairWithRerunReview firstFamily
+      (some { twoParts with repairFindings := [uncertain status] })) := by
+  apply unadmitted_repairs_cannot_pass
+  simp [ImplementationPlan.repairsAdmitted, uncertain, downgrade, completeAdmission, force, h, ordinary]
+example : routeFindings { ordinary with input := { ordinary.input with userGoalBasis := "" } }
+    approval approval = .doneWithAdvisory := by decide
+example : ¬ allowed funded (.pass .repairWithRerunReview firstFamily
+    (some { twoParts with repairFindings := [{ ordinary with requiresOwnerDecision := true }] })) := by
+  apply unadmitted_repairs_cannot_pass
+  decide
+-- Confirmed ordinary defects, confirmed missing required evidence and confirmed disputed
+-- interpretations retain the real review/repair path. A fixture alone still does not.
+example : routeFindings { ordinary with input := { ordinary.input with basisDisputed := true } }
+    approval approval = .fix := by decide
+example : allowed funded (.pass .repairWithRerunReview firstFamily (some twoParts)) :=
+  (fundedRepairAdmission firstFamily).mpr (by decide)
+
+private def scopeCorrection : Revision :=
+  ⟨"compose existing grants only; cancel dependent approval-system work", "current user", "dependent plan/reviews/repairs"⟩
+private def scopeCorrectionEvidence : RevisionEvidence :=
+  { authorizedRevision scopeCorrection none with invalidatesWork := true }
+private def scopeCorrected (s : ProtocolState) :=
+  step s (.appendRevision scopeCorrection scopeCorrectionEvidence)
+example : allowed funded (.appendRevision scopeCorrection scopeCorrectionEvidence) := by
+  refine ⟨?_, rfl, rfl, rfl⟩
+  change funded.goal.isSome = true
+  decide
+example (s : ProtocolState) : (scopeCorrected s).flights = s.flights ∧
+    (scopeCorrected s).passBudget = s.passBudget ∧ (scopeCorrected s).batch = none := ⟨rfl, rfl, rfl⟩
+example : (scopeCorrected funded).reviewComplete = false := by decide
+example : ¬ allowed (scopeCorrected funded) .claimSatisfied := by
+  simp [allowed, guardClaimSatisfied, scopeCorrected, step, scopeCorrectionEvidence]
+example : ¬ allowed (scopeCorrected funded) (.pass .repairWithRerunReview firstFamily (some twoParts)) := by
+  simp [allowed, guardPass, scopeCorrected, step, scopeCorrectionEvidence]
+example : ¬ allowed (scopeCorrected complete) (.openFlight .review .architecture .codexCli "target" 0) := by
+  simp [allowed, guardOpenFlight, guardReviewFlight, scopeCorrected, step, scopeCorrectionEvidence]
+-- A pending old assignment cannot launch; an already launched job remains protected.
+example : ¬ allowed (scopeCorrected opened) (.launchViaRunner 0) := by
+  simp [allowed, guardLaunchViaRunner, scopeCorrected, step, scopeCorrectionEvidence,
+    opened, begin, readyState, ProtocolState.initial, ProtocolState.freshId,
+    ProtocolState.flight, newFlight]
+example : (scopeCorrected opened).activeOn "target" = false := by decide
+private def activeOld := step opened (.launchViaRunner 0)
+example : (scopeCorrected activeOld).activeOn "target" = true := by decide
+example : ¬ allowed (scopeCorrected activeOld) (.mutateTarget "target") := by
+  simp only [allowed, guardMutateTarget]
+  decide
+example : (scopeCorrected activeOld).stage = .thinkingPanel := rfl
+example : ¬ allowed (scopeCorrected activeOld) .advanceStage := by
+  have protectionObserved : ((scopeCorrected activeOld).flights.all fun f =>
+    !(scopeCorrected activeOld).flightProtected f) = false := by decide
+  simp [allowed, guardAdvanceStage, protectionObserved]
+example : (scopeCorrected (finish opened 0 successful)).activeOn "target" = false := by decide
+-- An unrelated sourced revision preserves valid candidate evidence and readiness.
+example : (step complete (.appendRevision scopeNote (authorizedRevision scopeNote none))).reviewReady = true := by decide
+
+-- Goal corrections invalidate claim evidence even without changing the host declaration.
+example : (scopeCorrected settled).gate = settled.gate := by decide
+example : (scopeCorrected settled).terminationExit = settled.terminationExit ∧
+    (scopeCorrected settled).terminationAuthority = settled.terminationAuthority := by
+  simpa only [scopeCorrected] using
+    correction_keeps_settlement settled scopeCorrection scopeCorrectionEvidence
+example : (scopeCorrected settled).continuationAuthority ≠ settled.continuationAuthority := by decide
+example (source : ClaimSource) (e : TerminationEvidence)
+    (old : e.authority = settled.continuationAuthority) :
+    ¬ allowed (scopeCorrected settled) (.evaluateTermination source e) := by
+  apply stale_evidence_cannot_evaluate
+  rw [old]
+  decide
+example : ¬ allowed (scopeCorrected settled) (.recordImplementation 0 ["contract"] true) := by
+  simp [allowed, guardRecordImplementation, scopeCorrected, step, scopeCorrectionEvidence]
 
 end Sshx.Behavior.Scenarios
