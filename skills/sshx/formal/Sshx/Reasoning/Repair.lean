@@ -63,7 +63,36 @@ inductive FamilyRoute
   | ownerDecision
   deriving DecidableEq, Repr
 
--- SKILL[def]: "A uniform invariant, a verified complete finite treatment, or an already-authorized enforced boundary may establish class coverage; otherwise the class gate routes bounded revise or investigation, and unresolved coverage is reported honestly."
+/-- A reason new is evidence in its own right, not an unresolved prior comparison.
+This projects existing conclusion evidence and introduces no runtime record or gate. -/
+-- SKILL[ref]: "`family_basis` (property, cause, evidenced prior match or reason new)"
+inductive FamilyHistory
+  | newFamily (reason : String)
+  | priorComparison (priorLabel : String) (sameProperty sameCause settledPrior : Bool)
+  deriving DecidableEq, Repr
+
+/-- Evidence interpreting a new family or settled prior summaries. Label and location
+equality have no authority; evidence truth and the peer boundary remain premises. -/
+structure FamilyCorrespondence where
+  currentLabel : String
+  evidence : String
+  peerFree : Bool
+  history : FamilyHistory
+  deriving DecidableEq, Repr
+
+-- SKILL[def]: "After collection meta-judge records labels, property/cause, evidenced prior match/distinct cause; same location/predicate is insufficient and paraphrase creates no new family."
+-- SKILL[ref]: "Later briefs/`visible_inputs` carry settled prior summaries/coverage limits, never same-round output; findings address correspondence."
+def FamilyCorrespondence.verified (c : FamilyCorrespondence) : Bool :=
+  c.currentLabel != "" && c.evidence != "" && c.peerFree &&
+    match c.history with
+    | .newFamily reason => reason != ""
+    | .priorComparison priorLabel _ _ settledPrior => priorLabel != "" && settledPrior
+
+def FamilyCorrespondence.sameFamily (c : FamilyCorrespondence) : Bool :=
+  c.verified &&
+    match c.history with
+    | .newFamily _ => false
+    | .priorComparison _ sameProperty sameCause _ => sameProperty && sameCause
 
 -- SKILL[def]: "Record the goal/property, authorized domain, family, coverage basis, action/owner and falsifiable validation in the existing conclusion."
 structure FamilyEvidence where
@@ -74,7 +103,7 @@ structure FamilyEvidence where
   actionOwner : String
   falsifiableValidation : String
   sameGoalTerm : Bool
-  sameMechanismFamily : Bool
+  correspondence : FamilyCorrespondence
   consecutivePasses : Nat
   earlierUnsupportedEnumeration : Bool
   coverageBasis : ClassCoverageBasis
@@ -83,40 +112,48 @@ structure FamilyEvidence where
   changesDomainOrCriterion : Bool
   ownerAuthorized : Bool
   revision : Option Revision
+  inputCorrespondenceVerified : Bool
+  measurementLimitsReported : Bool
   deriving DecidableEq, Repr
 
 -- SKILL[ref]: "Domain or criterion changes require the existing owner authorization and append-only revision."
 def ownerAuthorizedDomainChange (e : FamilyEvidence) : Bool :=
   !e.changesDomainOrCriterion || (e.ownerAuthorized && e.revision.isSome)
 
+-- SKILL[def]: "State-space coverage reports actual workflow-domain measurements (command/scope/counts), limits/unavailability and future-input derivations."
+-- SKILL[ref]: "Census alone proves no coverage/restriction; apply sourced owner policy, changing it only with owner authorization/revision."
 def FamilyEvidence.recordComplete (e : FamilyEvidence) : Bool :=
   e.goalTerm != "" && e.property != "" && e.authorizedInputDomain != "" &&
-    e.mechanismFamily != "" && e.actionOwner != "" && e.falsifiableValidation != ""
+    e.mechanismFamily != "" && e.actionOwner != "" && e.falsifiableValidation != "" &&
+    e.inputCorrespondenceVerified && e.measurementLimitsReported
 
--- SKILL[def]: "Before dispatching a repair after two consecutive passes whose blocking findings name the same `GoalArtifact` term and `mechanism_family`, or after earlier recorded evidence shows that member-by-member enumeration leaves the property unsupported, the existing gate makes one class-level decision."
+-- SKILL[def]: "Before dispatching a repair after two consecutive passes whose blocking findings name the same `GoalArtifact` term and evidenced family (the same failed property and causal mechanism, even with different `mechanism_family` wording), or after earlier recorded evidence shows that member-by-member enumeration leaves the property unsupported, the existing gate makes one class-level decision."
 def classGateActive (e : FamilyEvidence) : Bool :=
-  (e.sameGoalTerm && e.sameMechanismFamily && decide (2 ≤ e.consecutivePasses)) ||
+  (e.sameGoalTerm && e.correspondence.sameFamily && decide (2 ≤ e.consecutivePasses)) ||
     e.earlierUnsupportedEnumeration
 
 -- SKILL[def]: "Repair dispatch requires the recorded family and a verified coverage basis under `## Reasoning Discipline`."
 -- The formal basis additionally admits a verified sound abstraction over an open or infinite
 -- domain when its admissible-input correspondence and falsifier are recorded.
 -- SKILL[def]: "A sound abstraction may cover an infinite domain with recorded admissible-input correspondence and a falsifiable invariant."
+-- SKILL[def]: "A uniform invariant, a verified complete finite treatment, or an already-authorized enforced boundary may establish class coverage; otherwise the class gate routes bounded revise or investigation, and unresolved coverage is reported honestly."
 def coverageBasisVerified : ClassCoverageBasis → Bool
   | .uniformInvariant verified | .soundAbstraction verified | .completeFiniteTreatment verified => verified
   | .authorizedBoundary enforced authorized => enforced && authorized
   | .unsupportedMemberEnumeration | .unknown => false
 
 -- SKILL[def]: "Unknown family or coverage routes bounded investigation under the intake scope; no supported path means honest unresolved stop, with only actual product, governance, boundary or permission decisions routed to their owner."
+-- SKILL[ref]: "Unresolved correspondence routes bounded class investigation before member repair."
 def familyRoute (e : FamilyEvidence) : FamilyRoute :=
   if e.ownerDecisionRequired || (e.changesDomainOrCriterion && !e.ownerAuthorized) then .ownerDecision
   else if !ownerAuthorizedDomainChange e then .reviseOrInvestigate
+  else if !e.correspondence.verified then .reviseOrInvestigate
   else if !classGateActive e then .continue
   else if e.noSupportedPath then .honestStop
   else if e.recordComplete && coverageBasisVerified e.coverageBasis then .continue
   else .reviseOrInvestigate
 
--- SKILL[def]: "A new fixture, recurrence, zero usage, or exhausted budget cannot authorize a member patch or narrow the domain."
+-- SKILL[def]: "A new fixture, recurrence, zero usage, or exhausted budget alone cannot authorize a member patch or narrow the domain."
 /-- The actual caller pass guard consumes this route. Unsupported class coverage permits
 only a bounded investigation/convergence or review, never another member repair. -/
 def familyPassAllowed (e : FamilyEvidence) (t : Transition) : Bool :=
@@ -133,7 +170,8 @@ theorem unsupported_class_never_dispatches (e : FamilyEvidence)
   simp only [familyPassAllowed, familyRoute, ha, h, coverageBasisVerified]
   unfold ownerAuthorizedDomainChange
   cases e.ownerDecisionRequired <;> cases e.changesDomainOrCriterion <;>
-    cases e.ownerAuthorized <;> cases e.noSupportedPath <;> cases e.revision <;> simp_all
+    cases e.ownerAuthorized <;> cases e.noSupportedPath <;> cases e.revision <;>
+    cases e.correspondence.verified <;> simp_all
 
 /-- Where a blocking gap sits in `GoalArtifact`; lower ranks are repaired first. -/
 inductive GapRank

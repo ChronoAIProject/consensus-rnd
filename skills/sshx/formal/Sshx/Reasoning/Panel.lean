@@ -31,7 +31,7 @@ structure Charter where
   attacks : List String
   deriving DecidableEq, Repr
 
--- SKILL[policy]: "Protocol policy, not a mathematical consequence: run six whole-picture philosopher seats before choosing a plan — the same universal judgment lenses the consensus engine debates with."
+-- SKILL[policy]: "Protocol policy, not a mathematical consequence: run six whole-picture philosopher seats before choosing a plan, with distinct objectives and independent, isolated context."
 def seatCount : Nat := 6
 
 -- SKILL[def]: "- `teleology`: purpose and inevitability. What is this for, and is the form forced by that purpose? Attacks skipped-purpose and missing-inevitability."
@@ -99,7 +99,7 @@ def WorthJudgment.wellFormed (w : WorthJudgment) : Prop :=
 
 def worthVerdict (w : WorthJudgment) : Bool := w.incrementalBenefitClearsCost
 
--- SKILL[def]: "Each seat is one independent, context-isolated perspective that attacks from its own objective; the seats can and do disagree, and the meta-judge converges them:"
+-- SKILL[def]: "They may disagree; meta-judge converges their judgments:"
 def panel : List Charter :=
   [teleology, parsimony, fidelity, naturalOwnership, proportionalContainment, worth]
 
@@ -120,11 +120,11 @@ structure DyadExchange where
   highestLayerImaginable : Nat
   deriving DecidableEq, Repr
 
--- SKILL[def]: "`natural-ownership` and `proportional-containment` are a coupled **must-clash locus dyad**: they run together, each must answer the other pole's claim, and they converge on the natural owner layer — not the highest layer imaginable."
+-- SKILL[def]: "`natural-ownership` and `proportional-containment` are a coupled **must-clash locus dyad**: run together, each answers the other pole, converging on the natural owner layer, not the highest imaginable."
 def DyadExchange.mustClash (d : DyadExchange) : Prop :=
   d.ownershipAnsweredContainment = true ∧ d.containmentAnsweredOwnership = true
 
--- SKILL[def]: "Ownership pulls the fix toward the layer that owns the invariant; containment resists over-reaching past it."
+-- SKILL[def]: "Ownership pulls toward the invariant owner; containment resists overreach"
 /-- The converged layer is the owner layer capped by containment, never the highest. -/
 def dyadConverge (d : DyadExchange) : Nat := min d.ownershipClaimsLayer d.containmentAllowsUpTo
 
@@ -138,12 +138,12 @@ theorem dyad_converges_to_owner_not_highest (d : DyadExchange)
   unfold dyadConverge
   omega
 
--- SKILL[prose]: "This is the "go upstream to the root, but not past the natural owner" balance expressed as two adversarial seats the meta-judge converges, rather than a single balanced checklist."
+-- SKILL[prose]: ""go upstream to the root, but not past the natural owner" is two adversarial seats for meta-judge convergence, not one balanced checklist."
 -- why: names the design intent of the dyad; the balance itself is `dyadConverge` and the two charters above.
 
 /-! ## Worth is its own seat -/
 
--- SKILL[thm]: "`worth` (值不值) is an independent objective, not the aesthetic lens repeated: `parsimony` asks how much mechanism, `proportional-containment` asks where and how far it binds, and `worth` asks whether to pay for this at all, at this cost, now, versus the best alternative."
+-- SKILL[thm]: "`worth` (值不值) is independent of aesthetics: `parsimony` asks how much mechanism, `proportional-containment` where/how far, `worth` whether to pay this cost now versus the best alternative."
 /-- The three questions read different inputs: a mechanism count, a binding, and a
 benefit–cost pair; none is a function of another. -/
 theorem worth_is_not_parsimony_or_containment :
@@ -152,7 +152,7 @@ theorem worth_is_not_parsimony_or_containment :
         asksWhetherToPay benefit cost = false :=
   ⟨1, ⟨1, 1, 1⟩, 0, 1, rfl, rfl, by decide⟩
 
--- SKILL[thm]: "A candidate can be minimal, beautiful, and properly contained yet still not worth doing, and a less minimal candidate can still be worth doing when the avoided downside justifies it."
+-- SKILL[thm]: "Minimal, beautiful, contained work may be unworthy; less minimal work may justify its cost."
 theorem minimal_beautiful_contained_yet_not_worth :
     ∃ f : Form, ∃ w : WorthJudgment, f.beautiful = true ∧ f.size = 1 ∧ worthVerdict w = false :=
   ⟨⟨1, true, false, true, true, true, true⟩, ⟨.doNothing, "no benefit", false, false, false⟩,
@@ -163,7 +163,7 @@ theorem less_minimal_yet_worth :
   ⟨⟨2, true, false, true, true, true, true⟩,
     ⟨.cheapestSufficientAlternative, "avoided downside", true, false, false⟩, rfl, rfl⟩
 
--- SKILL[thm]: "Because it is a seat rather than a cross-cutting lens, `worth` is judged once by its own perspective, so the panel is not homogenized into every seat re-deriving the same value verdict."
+-- SKILL[thm]: "Only its own seat derives this verdict, preserving distinct objectives."
 theorem worth_judged_once : (panel.filter fun c => c.lens == .worth).length = 1 := by decide
 
 /-! ## What every seat does before returning -/
@@ -184,7 +184,7 @@ structure SeatConclusion where
   rootCause : String
   answer : RootCauseAnswer
   capabilityOverlapHit : Bool
-  bases : List Input
+  bases : List DecisionBasis
   planElements : List PlanElement
   reviseGoalGap : Option String
   reviseNextIterationQuestion : Option String
@@ -203,15 +203,16 @@ theorem overlap_never_implements (c : SeatConclusion) (h : c.capabilityOverlapHi
 
 -- SKILL[def]: "Each seat applies `BlockingAuthority` to every proposed plan element and every `propose`, `revise`, `reject`, or `abstain` basis, and states the `GoalArtifact` term and evidence that make each basis blocking, or the `GoalArtifact` term or current consumer that admits each plan element."
 def SeatConclusion.basesStated (c : SeatConclusion) : Prop :=
-  (∀ i ∈ c.bases, force i = .blocking ∨ force i = .advisory) ∧
+  (∀ b ∈ c.bases, completeAdmission b = true ∨ completeAdmission b = false) ∧
     (∀ e ∈ c.planElements, planElementAdmitted e = true)
 
 -- SKILL[thm]: "An advisory basis is not a goal gap, must not by itself hold a candidate out of `implement`, and machinery that only defends against one must not enter a proposed plan."
 /-- A goal gap is a blocking basis; an advisory basis is never one. -/
-def goalGapOf (bases : List Input) : List Input := bases.filter fun i => force i == .blocking
+def goalGapOf (bases : List DecisionBasis) : List DecisionBasis :=
+  bases.filter fun b => completeAdmission b
 
-theorem advisory_is_not_a_goal_gap (bases : List Input) (i : Input) (h : force i = .advisory) :
-    i ∉ goalGapOf bases := by
+theorem advisory_is_not_a_goal_gap (bases : List DecisionBasis) (b : DecisionBasis)
+    (h : completeAdmission b = false) : b ∉ goalGapOf bases := by
   simp [goalGapOf, h]
 
 -- SKILL[def]: "Every seat must first identify the problem essence or root cause implied by `GoalArtifact`, then frame `propose`, `revise`, `reject`, or `abstain` as an answer to it: what satisfies it, what still differs from it, or why it cannot be satisfied."

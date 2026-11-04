@@ -23,10 +23,11 @@ inductive HecaOptIn
 structure HecaCapability where
   callerToolsExposed : Bool
   optIn : HecaOptIn := .disabled
+  explicitlyDisabled : Bool := false
   deriving DecidableEq, Repr
 
 def HecaCapability.detected (facts : HecaCapability) : Bool :=
-  facts.optIn != .disabled && facts.callerToolsExposed
+  !facts.explicitlyDisabled && facts.optIn != .disabled && facts.callerToolsExposed
 
 /-- The closed carrier set of `## Boundaries`. -/
 inductive Carrier

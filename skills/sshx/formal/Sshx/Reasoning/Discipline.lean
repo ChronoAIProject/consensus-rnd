@@ -52,7 +52,7 @@ inductive Alignment
   | revision
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Reference-frame: each thinking, review, or termination perspective identifies the applicable mature theory, engineering principle, industry best practice, mature industry case, mature pattern, or constraint framework governing this class of problem or implementation; surfaces the known-good shape; then re-checks each candidate conclusion, implementation interpretation, repair candidate, or termination judgment against it before settling the verdict."
+-- SKILL[def]: "Reference-frame: each thinking, review or termination seat identifies the applicable mature theory/principle, industry practice/case/pattern or constraint framework and known-good shape; re-check every candidate, implementation interpretation, repair or termination judgment against it."
 structure ReferenceFrame where
   kind : FrameKind
   name : String
@@ -60,7 +60,7 @@ structure ReferenceFrame where
   alignment : Alignment
   deriving DecidableEq, Repr
 
--- SKILL[def]: "`no applicable mature theory found` is an acceptable explicit fallback; in that case the note says so and still records the root-cause and minimal-path re-check against `GoalArtifact`."
+-- SKILL[def]: "If `no applicable mature theory found`, say so and still record root-cause/minimal-path re-check against `GoalArtifact`."
 /-- Either a frame or the explicit fallback, which still carries the two re-checks. -/
 inductive FrameRecord
   | frame (f : ReferenceFrame)
@@ -518,7 +518,7 @@ theorem valid_note_has_no_silent_reliance (n : DisciplineNote) (weighed : List C
     (h : n.valid weighed) (m : MarkedPremise) (hm : m ∈ n.premises) : ¬ silentReliance m :=
   h.2.2 m hm
 
--- SKILL[prose]: "This does not override `GoalArtifact`, assigned bias or review focus, truth tables, or allowed verdict sets."
+-- SKILL[prose]: "This never overrides `GoalArtifact`, bias/focus, truth tables or verdict sets."
 -- why: a precedence statement; the note is a component of a conclusion and the verdict alphabets and tables are separate definitions it cannot alter.
 
 end Sshx.Reasoning

@@ -35,27 +35,15 @@ def sshxShape : SkillShape := ⟨true, true, true, true, true, false, false⟩
 
 /-! ## Trigger -/
 
--- SKILL[def]: "Use this skill when:"
--- SKILL[def]: "- a decision has meaningful product, architecture, correctness, safety, or cost risk;"
--- SKILL[def]: "- the user asks for multi-angle thinking, consensus, or review without starting a long-running work-unit loop;"
--- SKILL[def]: "- a concrete plan should be tested against independent perspectives before implementation;"
--- SKILL[def]: "- a finished change should pass a same-shape review gate before declaring done."
-inductive TriggerCondition
-  | meaningfulRisk
-  | multiAngleRequest
-  | planNeedsIndependentTest
-  | changeNeedsReviewGate
-  deriving DecidableEq, Repr
+-- SKILL[def]: "Risk, importance, tools, budget or generic implementation/architecture review alone never activate sshx; use ordinary work."
+-- SKILL[def]: "Within authorization, require perspectives that can change the outcome and stakes that justify cost."
+-- SKILL[ref]: "Risk informs proportionality, never supplies authorization."
+def shouldRun (authority : ActivationAuthority) (perspectivesChangeOutcome : Bool)
+    (stakesJustifyCost : Bool) : Bool :=
+  authority.authorized && perspectivesChangeOutcome && stakesJustifyCost
 
--- SKILL[def]: "Do not use this skill for routine one-step answers where no separate perspectives would change the outcome, and do not run it when the decision's stakes cannot justify the protocol's cost: whether to run it follows decision risk, not available budget."
-/-- Whether to run follows decision risk and whether perspectives change the outcome; the
-available budget is not an input. -/
-def shouldRun (triggered : Bool) (perspectivesChangeOutcome : Bool) (stakesJustifyCost : Bool) :
-    Bool :=
-  triggered && perspectivesChangeOutcome && stakesJustifyCost
-
-theorem run_follows_risk_not_budget (t p s : Bool) (budget : Nat) :
-    shouldRun t p s = shouldRun t p s ∧ budget = budget := ⟨rfl, rfl⟩
+theorem risk_alone_never_activates (p s : Bool) : shouldRun .absent p s = false := by
+  simp [shouldRun, ActivationAuthority.authorized]
 
 /-! ## Goal contract: harness, gate entry, goal source, iteration question -/
 
@@ -134,7 +122,7 @@ inductive CallerDuty
 -- SKILL[def]: "The caller context may intake, choose worker mode, dispatch workers, meta-judge returned `SshxResultEnvelope.conclusion` values, and aggregate and report conclusions only, retaining `log_ref` references."
 def callerMay (_ : CallerDuty) : Bool := true
 
--- SKILL[ref]: "Each `visible_inputs` value must include the complete `GoalArtifact` (including `harness`) and must not include same-round peer outputs."
+-- SKILL[ref]: "Each `visible_inputs` includes complete `GoalArtifact`/`harness`, never same-round peer output."
 abbrev visibleInputsRule := @visible
 
 /-! ## Implementation worker -/
@@ -153,14 +141,14 @@ structure ImplementationRequirement where
   framing : String
   deriving DecidableEq, Repr
 
--- SKILL[def]: "No caller recipes (steps, code/pseudocode, structures or algorithms), even as consensus, acceptance or prohibitions."
--- SKILL[def]: "Preserve user/host technical requirements with their sources."
+-- SKILL[def]: "No caller recipes (steps, code/pseudocode, structures/algorithms), even as consensus/acceptance/prohibitions."
+-- SKILL[def]: "Preserve sourced user/host requirements"
 def ImplementationRequirement.binding (r : ImplementationRequirement) : Bool :=
   r.source != .callerMechanics && r.sourceRef != ""
 
 /-- Semantic judgments supplied by evidence and independent review, not runtime fields. -/
--- SKILL[def]: "Send goal, verifiable acceptance, authorized scope/prohibitions and grounded context/evidence."
--- SKILL[def]: "Workers inspect the target and choose mechanics;"
+-- SKILL[def]: "Send goal, verifiable acceptance, scope/prohibitions and grounded evidence."
+-- SKILL[def]: "Workers inspect and choose mechanics;"
 structure ImplementationBrief where
   planApprovedByThinkingGate : Bool
   goalAndAcceptancePassed : Bool
@@ -171,7 +159,7 @@ structure ImplementationBrief where
   boundaryNarrow : Bool
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Thinking-gate approval binds outcomes, scope and requirements before implementation."
+-- SKILL[def]: "Thinking approval binds outcomes/scope/requirements."
 def implementationAllowed (b : ImplementationBrief) : Bool := b.planApprovedByThinkingGate
 
 def implementationConforming (b : ImplementationBrief) : Bool :=
@@ -187,11 +175,11 @@ structure ImplementationChange where
   internalApproachChanged : Bool
   deriving DecidableEq, Repr
 
--- SKILL[def]: "Report goal, authority or constraint changes before acting via existing correction, direction and class gates."
+-- SKILL[def]: "report goal/authority/constraint changes before acting through existing correction/direction/class gates."
 def ImplementationChange.needsExistingGates (c : ImplementationChange) : Bool :=
   c.goalsChanged || c.authorityChanged || c.constraintsChanged
 
--- SKILL[thm]: "compliant alternatives alone are not deviations."
+-- SKILL[thm]: "compliant alternatives are not deviations."
 theorem compliant_alternative_needs_no_new_gate (differentMechanics : Bool) :
     ImplementationChange.needsExistingGates ⟨false, false, false, differentMechanics⟩ = false := rfl
 
@@ -203,7 +191,7 @@ theorem relabelling_preserves_requirement_authority (r : ImplementationRequireme
     { r with framing := label }.binding = r.binding := rfl
 
 -- SKILL[ref]: "Implementation must be delegated to a worker using the stage's default carrier under `WorkerDelegationContract`."
--- SKILL[ref]: "Delegate the smallest changes for what still differs from `GoalArtifact`; open a `SshxWorkerFlightRecord` per assignment and stay orchestration-only for the repair."
+-- SKILL[ref]: "Delegate the smallest changes for what still differs from `GoalArtifact`; do not add a permission, approval, transaction or execution system from an advisory/conditional concern; open a `SshxWorkerFlightRecord` per assignment and stay orchestration-only for the repair."
 abbrev implementationIsAFlight := @Behavior.guardOpenFlight
 
 /-- What crosses between caller and implementation worker. -/
@@ -267,7 +255,7 @@ inductive ConclusionContent
   | sameRoundPeerOutput
   deriving DecidableEq, Repr
 
--- SKILL[def]: "- `conclusion`: compact structured result consumed by the caller. It may include verdicts, decisions, blocking goal gaps, final decision points, changed-file evidence, and test evidence when applicable. It must not include process logs, step-by-step reasoning, raw transcripts, debug output, or same-round peer output."
+-- SKILL[def]: "- `conclusion`: compact structured decisions, goal gaps and applicable change/test evidence; no process logs, step-by-step reasoning, raw transcripts, debug output or same-round peer output."
 def ConclusionContent.permitted : ConclusionContent → Bool
   | .verdicts | .decisions | .blockingGoalGaps | .finalDecisionPoints | .changedFileEvidence
   | .testEvidence => true
@@ -309,7 +297,7 @@ inductive StageMetadata
   | nextIterationQuestion
   deriving DecidableEq, Repr
 
--- SKILL[def]: "A caller-carried stage record wraps this envelope: it references the envelope's `conclusion` and `log_ref` and may add only the stage metadata named by `InlineConsensusProtocol` and the `## Transcript Template` (such as `role`, `bias`, `visible_inputs`, `worker_mode`, `worker_carrier`, `worker_flight_ref`, `verdict`, and the `meta_judge` and `fix_or_done` `exit`, `concrete_plan`, `goal_gap`, and `next_iteration_question`)."
+-- SKILL[def]: "Stage records reference envelope `conclusion`/`log_ref` and add only `InlineConsensusProtocol`/`## Transcript Template` metadata."
 def stageMetadataAllowed (_ : StageMetadata) : Bool := true
 
 -- SKILL[ref]: "`conclusion.verdict` is the sole verdict source for routing, the two must be equal, and any mismatch fails closed."

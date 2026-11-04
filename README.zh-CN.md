@@ -2,9 +2,9 @@
 
 中文公开文档。英文 canonical：[README.md](./README.md)。
 
-`consensus-rnd` 为 Claude Code、Codex、Cursor 和 Gemini 发布 Agent Skills。`sshx` 用隔离的 worker 视角处理高风险决策或实现任务，收敛出具体方案，再由独立 review 检查产物。交付物是 prompt 合同及其配套文件，由各平台清单共享。
+`consensus-rnd` 为 Claude Code、Codex、Cursor 和 Gemini 发布 Agent Skills。`sshx` 用隔离的 worker 视角处理获授权的决策或实现任务，收敛出具体方案，再由独立 review 检查产物。交付物是 prompt 合同及其配套文件，由各平台清单共享。
 
-当产品、架构、正确性、安全或成本风险值得投入多个视角时使用。若常规一步式回答不会因增加视角而改变结果，就不值得承担协议成本。详见[触发条件与排除项](./skills/sshx/SKILL.md#trigger)。
+仅在用户明确要求共识、多角度思考或委派 review，或适用的 host/仓库规则要求该流程时激活。风险或一般架构 review 请求本身不构成授权；获得授权后，再判断多个视角是否值得其成本。详见[触发条件与排除项](./skills/sshx/SKILL.md#trigger)。
 
 ## 提供什么
 
@@ -57,6 +57,8 @@
 
 只有 host 在[目标合同](./skills/sshx/SKILL.md#goal-contract)中明确声明了目标驱动的继续执行机制，且 caller 正准备肯定目标已满足时，最后阶段内部才适用[终止闸门](./skills/sshx/SKILL.md#termination-gate)。它不是第八阶段，也不授予控制 host 机制的权限。
 
+只有违反当前目标或既有合同的已确认缺陷进入自动修复。发现项保留 `evidence_status` 与 `user_goal_basis`；涉及产品或权限语义的不确定改动向 owner 澄清。用户纠正立即撤销依赖旧方案的 plan、review 与 repair 权限，同时保留历史及 active job 保护。详见[目标纠正](./skills/sshx/SKILL.md#goal-contract)与[准入](./skills/sshx/SKILL.md#reasoning-discipline)。
+
 ## 风险与限制
 
 - **宽执行权限：** Codex runner 默认使用 `danger-full-access`。提供工作目标前，请阅读[调用合同](./skills/sshx/CODEX_WORKER_SPEC.md#invocation)和[威胁模型](./skills/sshx/CODEX_WORKER_SPEC.md#threat-model)。
@@ -105,6 +107,24 @@ Host 必须为 runner 派发提供带完成通知的后台执行、超时和整�
 ### Codex / Cursor
 
 [Codex](./.codex-plugin/plugin.json) 与 [Cursor](./.cursor-plugin/plugin.json) 清单都声明 `"skills": "./skills/"`。通过平台插件支持加载仓库并阅读 [skill 合同](./skills/sshx/SKILL.md)；安装与调用细节取决于 host。
+
+### 核对有效副本与手动刷新
+
+派发前，[worker delegation](./skills/sshx/SKILL.md#worker-delegation) 在已有 gate 证据中记录实际读取的 skill 路径、SHA-256、可用的 checkout 修订/脏状态与本轮 Heca 政策。清单版本或上游 release 不能标识复制或本地修改的副本，也不能证明当前会话已经采用。用户明确禁用优先于 opt-in，覆盖重试、fallback、修复与恢复；仅工具暴露永不构成 opt-in。
+
+检查 host 报告的路径并跟随符号链接，不预设安装目录。对于 checkout，可用以下只读命令区分内容、修订与清单元数据：
+
+```bash
+shasum -a 256 <effective-skill-root>/SKILL.md
+git -C <source-checkout> rev-parse HEAD
+git -C <source-checkout> status --short
+```
+
+用 `diff` 将有效文件与目标 checkout 的 `skills/sshx/SKILL.md` 比较，同时核对配套文件：整个 skill 目录才是分发单位。复制安装可能没有 Git 修订，应报告此限制并保留内容 hash。这些观察均不能证明当前会话已采用；下一次运行须确认新读取的路径/hash 和政策。host 无法提供这一关联时，采用状态标为 `ASSUMED-UNVERIFIED`。
+
+手动刷新由 owner 执行，不是 sshx 自动行为。直接目录安装应通过 host 支持的 skill 安装流程，从已核对的 checkout 刷新整个已解析目录，然后重新比较。[Codex 官方 skills 文档](https://developers.openai.com/codex/skills/) 说明发现位置、符号链接支持与自动检测变更；更新未出现时重启 Codex。存在多个副本时，须确认选中的路径；这不意味着旧 `~/.codex/skills` 副本就是有效来源，也不证明已有会话已重载。
+
+上述 Claude marketplace 安装的[官方 plugin 文档](https://code.claude.com/docs/en/discover-plugins#update-plugins-now) 给出 `claude plugin update consensus-rnd@consensus-rnd`，再用 `/reload-plugins` 将磁盘更新应用到会话；所装 host 无此命令时使用其支持的 UI。Cursor 与 Gemini 使用已安装的 plugin/extension manager，再核对有效来源；此处不声明其重载命令或采用行为。上述官方 owner 流程未在本 host 实测，本地刷新/重载仍为 `ASSUMED-UNVERIFIED`；skill 不执行刷新命令，不修改 host/全局设置。
 
 ### Gemini CLI
 

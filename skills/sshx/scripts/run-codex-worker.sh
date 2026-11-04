@@ -317,8 +317,12 @@ The envelope must be strict JSON whose top-level value is an object containing e
 For the "thinking", "review", and "termination" stages, "conclusion.verdict" must be a JSON string and one of the values on the allowed verdict line above. The "implementation" stage does not require a verdict.
 Minimum structurally accepted envelope shape: $skeleton_json
 This example is only the minimum structurally accepted shape; the worker must populate "conclusion" with the complete structured result required by its task brief and must not submit this skeletal example unchanged.
-The example uses this attempt's worker stdout log for "log_ref"; the worker may replace it with another non-empty reference.
-Publish result.json.tmp then atomically rename it to result.json, then do the same for completion.sentinel.
+Worker-owned: only result.json, completion.sentinel and their same-directory temporary publication files.
+Runner-owned: brief.md, worker.stdout.log, worker.stderr.log, last-message.txt, status.json, carrier.exit and their temporary files. Do not create, overwrite, append to, repair, normalize or forge any runner-owned artifact. Do not read diagnostic log bodies for this task.
+Copy the example's "log_ref" as an opaque diagnostic reference; it needs no creation, repair or narrative log. Another existing non-empty diagnostic reference is allowed only when the task explicitly supplies it.
+Complete all work and verification BEFORE publication. Your LAST tool action must write result.json.tmp and atomically rename it to result.json, then write completion.sentinel.tmp and atomically rename it to completion.sentinel.
+After publishing, immediately return your compact final reply. Do not run further tools, inspect artifacts or rewrite result/sentinel after publication.
+These are worker obligations, not filesystem isolation; runner validation still requires successful carrier termination and never treats the sentinel alone as success.
 EOF
   : > "$stdout_ref" && : > "$stderr_ref" && : > "$last_message_ref" || return 1
   if started_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null); then :; else started_at=; fi

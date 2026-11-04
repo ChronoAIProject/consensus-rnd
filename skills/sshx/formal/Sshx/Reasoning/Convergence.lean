@@ -72,7 +72,7 @@ def elegancePremiumChallenged (beautifulCost cheapestCost : Nat) : Bool :=
 theorem no_premium_no_clash (c : Nat) : elegancePremiumChallenged c c = false := by
   simp [elegancePremiumChallenged]
 
--- SKILL[thm]: "An `implement` exit also requires no unresolved harness overlap or authority gap."
+-- SKILL[thm]: "An `implement` exit requires no unresolved harness overlap/authority gap"
 theorem harness_gap_blocks_implement (d : DesignInputs)
     (h : d.harnessOverlapOrAuthorityGap = true) : designRoute d ≠ .implement :=
   no_implement_with_harness_gap d h
@@ -84,7 +84,7 @@ structure GoalHarnessFit where
   usesOwnJudgmentResponsibilities : Bool
   deriving DecidableEq, Repr
 
--- SKILL[def]: "A goal and its harness mismatch when it presupposes missing host/controller execution capability or asks the skill to repeat a capability already declared by the harness; the skill's own judgment responsibilities are not a mismatch."
+-- SKILL[def]: "missing host/controller execution or repeating a provided capability is a mismatch; skill judgment duties are not."
 def harnessMismatch (g : GoalHarnessFit) : Bool :=
   g.presupposesMissingHostCapability || g.repeatsDeclaredCapability
 
@@ -93,7 +93,7 @@ theorem judgment_is_not_mismatch (g : GoalHarnessFit)
     harnessMismatch g = false := by
   simp [harnessMismatch, h1, h2]
 
--- SKILL[def]: "Route a mismatch as a goal gap to the maintainer rather than implementing it."
+-- SKILL[def]: "Route mismatches as goal gaps to the maintainer."
 inductive MismatchRoute
   | goalGapToMaintainer
   deriving DecidableEq, Repr
@@ -139,6 +139,7 @@ structure Objection where
   causalPredictionFalsifiable : Bool
   convergenceAnsweredChain : Bool
   input : Input
+  trigger : TriggerRecord
   ownWords : String
   deriving DecidableEq, Repr
 
@@ -148,22 +149,31 @@ def threeConditions (o : Objection) : Bool :=
 
 -- SKILL[def]: "When a seat's `SshxResultEnvelope.conclusion` records both a dedicated-domain objection and its falsifiable causal prediction, and the meta-judge's proposed convergence has not refuted that causal chain, the meta-judge must run a `FocusedRound` before converging, provided the objection passes `BlockingAuthority`."
 def focusedRoundRequired (o : Objection) : Bool :=
-  threeConditions o && (force o.input == .blocking)
+  threeConditions o && completeAdmission ⟨o.input, o.trigger⟩
 
--- SKILL[thm]: "An advisory objection does not trigger a `FocusedRound`; for this prerequisite, the meta-judge checks only whether the seat named both conjuncts and must not assess their persuasiveness."
+-- SKILL[thm]: "An advisory objection does not trigger a `FocusedRound`; after admission checks, the meta-judge checks only whether both conjuncts are named, never their persuasiveness."
 theorem advisory_never_triggers (o : Objection) (h : force o.input = .advisory) :
     focusedRoundRequired o = false := by
-  simp [focusedRoundRequired, h]
+  have ha : completeAdmission ⟨o.input, o.trigger⟩ = false := by
+    simp [completeAdmission, h]
+  simp [focusedRoundRequired, ha]
 
--- SKILL[thm]: "An objection that named a basis whose correctness is disputed still triggers the round because disputed is not absent."
+theorem failed_trigger_never_triggers (o : Objection)
+    (h : triggerCheck o.trigger = false) : focusedRoundRequired o = false := by
+  have ha : completeAdmission ⟨o.input, o.trigger⟩ = false := by
+    simp [completeAdmission, h]
+  simp [focusedRoundRequired, ha]
+
+-- SKILL[thm]: "An admitted confirmed basis disputed on correctness still triggers: disputed is not absent."
 theorem disputed_still_triggers (o : Objection) (b : Bool) :
     focusedRoundRequired { o with input := { o.input with basisDisputed := b } } =
       focusedRoundRequired o := by
-  simp [focusedRoundRequired, threeConditions, force]
+  simp only [focusedRoundRequired, threeConditions, completeAdmission]
+  rw [force_ignores_dispute]
 
 -- SKILL[def]: "When the meta-judge declines a round on this ground, it records that decline in the existing `finding_downgrades` record under the same own-words requirement that governs downgrades."
 def declineRecord (o : Objection) : Option DowngradeRecord :=
-  if focusedRoundRequired o then none else downgradeRecord o.input o.ownWords
+  if focusedRoundRequired o then none else downgradeRecord ⟨o.input, o.trigger⟩ o.ownWords
 
 -- SKILL[def]: "In the focused round, all seats independently answer one question: "Does this causal chain hold, and if it does, how should the plan change?" The round preserves `## No Context Pollution`."
 def focusedRoundQuestion : String :=
@@ -236,7 +246,7 @@ theorem only_unresolved_conflict_blocks (d : DesignInputs) (conflicts : List Gro
 -- SKILL[ref]: "An objection that fails `BlockingAuthority` is not an unclosed `GoalArtifact` goal gap and does not by itself hold the exit out of `implement`: the meta-judge records it as advisory in the existing `finding_downgrades` record as `BlockingAuthority` requires."
 abbrev advisoryObjectionRecord := @downgradeRecord
 
--- SKILL[ref]: "Disputed grounding stays blocking."
+-- SKILL[ref]: "Admitted confirmed disputed grounding stays blocking."
 abbrev disputedStaysBlocking := @force_ignores_dispute
 
 -- SKILL[ref]: "This is not permission to set aside a reachable defect."
@@ -249,9 +259,9 @@ def convergenceQuestion : String := "what still differs from GoalArtifact?"
 
 -- SKILL[def]: "Do not generalize the convergence pass beyond that goal gap."
 /-- The convergence pass ranges over the goal gap only. -/
-def convergencePassScope (bases : List Input) : List Input := goalGapOf bases
+def convergencePassScope (bases : List DecisionBasis) : List DecisionBasis := goalGapOf bases
 
-theorem convergence_scope_is_the_goal_gap (bases : List Input) :
+theorem convergence_scope_is_the_goal_gap (bases : List DecisionBasis) :
     convergencePassScope bases = goalGapOf bases := rfl
 
 /-- Whether an owner-sourced, versioned, scoped orientation is recorded. -/

@@ -7,6 +7,17 @@ and the stage record mirror rule.
 
 namespace Sshx
 
+/-- Sourced activation authority interpreted at intake, not a risk classifier. -/
+-- SKILL[def]: "Activate only for explicit user consensus, multi-angle thinking or delegated review, or a sourced applicable host/repository mandate."
+inductive ActivationAuthority
+  | absent
+  | explicitRequest
+  | hostMandate
+  deriving DecidableEq, Repr
+
+-- SKILL[def]: "Record that authority at intake."
+def ActivationAuthority.authorized (a : ActivationAuthority) : Bool := a != .absent
+
 -- SKILL[def]: "`harness` is a prompt-level record containing exactly these three sub-items:"
 -- SKILL[def]: "- `provided_capabilities`: capabilities already supplied by the execution environment that the skill must not implement again;"
 -- SKILL[def]: "- `trust_boundary`: which roles are trusted and which are untrusted. The trusted declaration is **non-adversarial, not infallible**: failures, omissions, and uncertainty by a trusted party remain fully in review scope;"

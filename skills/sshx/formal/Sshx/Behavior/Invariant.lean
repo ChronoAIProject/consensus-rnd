@@ -25,7 +25,7 @@ theorem never_poll (s : ProtocolState) (id : Nat) : ¬ allowed s (.pollArtifacts
 theorem never_lifecycle (s : ProtocolState) (op : LifecycleOp) : ¬ allowed s (.lifecycle op) :=
   fun h => h
 
--- SKILL[inv]: "Logs are not inline in caller context."
+-- SKILL[inv]: "never inline logs"
 theorem never_carry_full_log (s : ProtocolState) (id : Nat) : ¬ allowed s (.carry (.fullLog id)) := by
   simp [allowed, guardCarry, ContextItem.permitted]
 
@@ -325,7 +325,7 @@ theorem attempt_le_retry_budget {s : ProtocolState} (h : Reachable s) (f : Fligh
     (hf : f ∈ s.flights) : f.attempt ≤ f.retryBudget :=
   (safe_of_reachable h).attemptLeBudget f hf
 
--- SKILL[inv]: "Final reports aggregate `conclusion` values only and retain `log_ref` references for optional inspection."
+-- SKILL[inv]: "Final reports aggregate only `conclusion` and opaque `log_ref`"
 theorem context_only_permitted {s : ProtocolState} (h : Reachable s) (item : ContextItem)
     (hi : item ∈ s.context) : item.permitted = true :=
   (safe_of_reachable h).contextPermitted item hi
@@ -379,9 +379,11 @@ def Stage.index : Stage → Nat
   | .fixOrDone => 6
 
 -- SKILL[inv]: "A thinking-stage exhaustion in particular skips `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done`."
-theorem stage_never_regresses (s : ProtocolState) (a : Action) :
+theorem stage_monotone_without_scope_correction (s : ProtocolState) (a : Action)
+    (hcorrection : ∀ r e, a = .appendRevision r e → e.invalidatesWork = false) :
     Stage.index s.stage ≤ Stage.index (step s a).stage := by
   cases a
+  case appendRevision r e => simp [step, hcorrection r e rfl]
   case advanceStage =>
     simp only [step]
     cases s.stage <;> simp [Stage.next, Stage.index]
@@ -435,15 +437,19 @@ of applicability values. -/
 theorem authority_change_requires_correction (s : ProtocolState) (a : Action)
     (hg : s.goalWritten) (ha : allowed s a)
     (hc : (step s a).continuationAuthority ≠ s.continuationAuthority) :
-    ∃ r e source, a = .appendRevision r e ∧ e.valid r ∧ e.continuation = some source := by
+    ∃ r e, a = .appendRevision r e ∧ e.valid r ∧
+      (e.continuation.isSome = true ∨ e.invalidatesWork = true) := by
   cases a
   case writeGoal g e =>
     have hn : s.goal = none := ha.2.1
     simp [ProtocolState.goalWritten, hn] at hg
   case appendRevision r e =>
     cases he : e.continuation with
-    | none => simp [step, ProtocolState.correctedAuthority, he] at hc
-    | some source => exact ⟨r, e, source, rfl, ha.2, he⟩
+    | none =>
+      have changed : e.invalidatesWork = true := by
+        cases hw : e.invalidatesWork <;> simp_all [step, ProtocolState.correctedAuthority]
+      exact ⟨r, e, rfl, ha.2, Or.inr changed⟩
+    | some source => exact ⟨r, e, rfl, ha.2, Or.inl (by simp [he])⟩
   case fallbackFlight id carrier =>
     simp only [step] at hc
     split at hc <;> exact (hc rfl).elim
@@ -476,8 +482,10 @@ theorem authority_revision_in_ledger {s : ProtocolState} (h : Reachable s) :
         have hi := ih g hg
         cases he : e.continuation with
         | none =>
-          simpa [step, ProtocolState.correctedAuthority, he, hg, GoalArtifact.correct]
-            using Nat.le_succ_of_le hi
+          cases hw : e.invalidatesWork
+          · simpa [step, ProtocolState.correctedAuthority, he, hw, hg, GoalArtifact.correct]
+              using Nat.le_succ_of_le hi
+          · simp [step, ProtocolState.correctedAuthority, he, hw, hg, GoalArtifact.correct]
         | some source =>
           simp [step, ProtocolState.correctedAuthority, he, hg, GoalArtifact.correct]
     case fallbackFlight id carrier =>
@@ -561,11 +569,11 @@ theorem correction_rejects_prior_evidence {s : ProtocolState} (h : Reachable s)
 /-- An unrelated revision keeps the same admission rule, so usable evidence is not
 invalidated merely because the overall revision ledger grew. -/
 theorem unrelated_revision_preserves_evaluation (s : ProtocolState) (r : Revision)
-    (re : RevisionEvidence) (hn : re.continuation = none)
+    (re : RevisionEvidence) (hn : re.continuation = none) (hw : re.invalidatesWork = false)
     (source : ClaimSource) (e : TerminationEvidence) :
     allowed (step s (.appendRevision r re)) (.evaluateTermination source e) ↔
       allowed s (.evaluateTermination source e) := by
-  simp [allowed, guardEvaluateTermination, step, ProtocolState.correctedAuthority, hn,
+  simp [allowed, guardEvaluateTermination, step, ProtocolState.correctedAuthority, hn, hw,
     ProtocolState.gate, ProtocolState.reviewComplete, ProtocolState.reviewReady,
     ProtocolState.batchSettled, ProtocolState.batchFlights, ProtocolState.attemptSettled,
     ProtocolState.housekeepingFor, ProtocolState.allHecaHousekeepingSettled]
@@ -632,12 +640,27 @@ theorem fallback_decreases_remaining (s : ProtocolState) (id : Nat) (c : Carrier
     ∃ f, s.flight id = some f ∧
       ((step s (.fallbackFlight id c)).triedCarriers f.assignment).remaining <
         (s.triedCarriers f.assignment).remaining := by
-  obtain ⟨f, hf, _, _, hn⟩ := ha
+  obtain ⟨f, hf, _, _, _, hn⟩ := ha
   refine ⟨f, hf, ?_⟩
   rw [fallback_records_tried s id c f hf]
   exact remaining_insert_lt _ (CarrierSet.mem_univ _) c (Carrier.mem_univ c)
     (nextCarrier_untried _ (CarrierSet.mem_univ _) _ (CarrierSet.mem_univ _)
       c (Carrier.mem_univ c) hn)
+
+/-- Current disable is consumed even if old capability records still contain Heca. -/
+theorem disabled_heca_cannot_open (s : ProtocolState) (stage : FlightStage) (role : Role)
+    (target : String) (retries : Nat) (hd : s.hecaDisabled = true) :
+    ¬ allowed s (.openFlight stage role .heca target retries) := by
+  simp [allowed, guardOpenFlight, ProtocolState.carrierEnabled, hd]
+
+theorem disabled_heca_cannot_fallback (s : ProtocolState) (id : Nat)
+    (hd : s.hecaDisabled = true) : ¬ allowed s (.fallbackFlight id .heca) := by
+  intro h
+  obtain ⟨f, _, _, _, _, hn⟩ := h
+  have eligible := nextCarrier_eligible _ (CarrierSet.mem_univ _) _ (CarrierSet.mem_univ _)
+    .heca (Carrier.mem_univ .heca) hn
+  simpa [ProtocolState.eligibleCarriers, ProtocolState.carrierEnabled, CarrierSet.get, hd]
+    using eligible
 
 /-- Review dispatch and fallback both apply the existing executable-carrier restriction. -/
 theorem tests_dispatch_excludes_oracle (s : ProtocolState) (target : String) (retries : Nat) :
@@ -648,7 +671,7 @@ theorem tests_fallback_excludes_oracle (s : ProtocolState) (id : Nat) (f : Fligh
     (hf : s.flight id = some f) (hs : f.stage = .review) (hr : f.role = .tests) :
     ¬ allowed s (.fallbackFlight id .nyxidOracle) := by
   intro ha
-  obtain ⟨g, hg, _, _, hn⟩ := ha
+  obtain ⟨g, hg, _, _, _, hn⟩ := ha
   have heq : g = f := Option.some.inj (hg.symm.trans hf)
   subst g
   have eligible := nextCarrier_eligible _ (CarrierSet.mem_univ _) _ (CarrierSet.mem_univ _)

@@ -102,39 +102,48 @@ theorem reject_blocks_done (a b c : ReviewVerdict) (h : a = .reject ∨ b = .rej
     reviewRoute a b c = .fix := by
   simp [reviewRoute, h]
 
--- SKILL[def]: "Harness gaps and claim authority follow `## Goal Contract` without startup confirmation."
+-- SKILL[def]: "Harness gaps and claim authority follow `## Goal Contract`, including its material owner-clarification rule."
 abbrev routineHarnessGapRecord := @Behavior.IntakeEvidence.complete
 
 /-- The only conversion of a reject into an advisory is the downgrade. -/
 theorem conversion_is_downgrade (f : Finding) (h : f.verdict = .reject)
-    (hc : downgrade f = .comment) : eligible f = false ∨ force f.input = .advisory := by
-  by_contra hcontra
-  push_neg at hcontra
-  have hb : force f.input = .blocking := by
-    cases hf : force f.input
-    · rfl
-    · exact absurd hf hcontra.2
-  have : downgrade f = .reject :=
-    (downgrade_reject_iff f).mpr ⟨h, by simpa using hcontra.1, hb⟩
-  simp [this] at hc
+    (hc : downgrade f = .comment) : eligible f = false ∨
+      completeAdmission ⟨f.input, f.trigger⟩ = false := by
+  by_cases he : eligible f = false
+  · exact Or.inl he
+  by_cases ha : completeAdmission ⟨f.input, f.trigger⟩ = false
+  · exact Or.inr ha
+  exfalso
+  have he' : eligible f = true := by
+    cases h' : eligible f <;> simp_all
+  have ha' : completeAdmission ⟨f.input, f.trigger⟩ = true := by
+    cases h' : completeAdmission ⟨f.input, f.trigger⟩ <;> simp_all
+  have hb : force f.input = .blocking :=
+    completeAdmission_requires_force ⟨f.input, f.trigger⟩ ha'
+  have hd : downgrade f = .reject :=
+    (downgrade_reject_iff f).mpr ⟨h, he', hb⟩
+  exact (by simpa [hd] using hc)
 
 /-- A blocking finding as the contract requires it to be stated. -/
 structure BlockingFinding where
   input : Input
+  trigger : TriggerRecord
   goalTerm : String
   conduct : TrustedPartyConduct
   deriving DecidableEq, Repr
 
 -- SKILL[def]: "Every blocking finding must name both `BlockingAuthority` conjuncts under `## Reasoning Discipline` and its failure, omission or uncertainty class within the trust boundary."
 def BlockingFinding.wellFormed (b : BlockingFinding) : Prop :=
-  force b.input = .blocking ∧ b.goalTerm ≠ "" ∧ threatEligible b.conduct = true
+  completeAdmission ⟨b.input, b.trigger⟩ = true ∧ b.goalTerm ≠ "" ∧
+    threatEligible b.conduct = true
 
 -- SKILL[ref]: "Downgrade records and disputed grounding follow `BlockingAuthority`."
 abbrev objectiveDowngrade := @downgradeRecord
 
 -- SKILL[thm]: "Downgrade is allowed only for threat-model ineligibility or an advisory input, never because a finding is inconvenient, expensive, or late, and never sets aside a reachable defect."
 theorem downgrade_only_for_ineligible_or_advisory (f : Finding) (h : f.verdict = .reject)
-    (hc : downgrade f = .comment) : eligible f = false ∨ force f.input = .advisory :=
+    (hc : downgrade f = .comment) : eligible f = false ∨
+      completeAdmission ⟨f.input, f.trigger⟩ = false :=
   conversion_is_downgrade f h hc
 
 end Sshx.Reasoning
