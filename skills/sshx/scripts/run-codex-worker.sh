@@ -9,11 +9,43 @@ run_dir=
 run_dir_owned=0
 result_valid=0; jq_path=
 verdict=
+execution_failure=null
 
 regular_or_absent() { [ ! -e "$1" ] && [ ! -L "$1" ] || { [ -f "$1" ] && [ ! -L "$1" ]; }; }
 log_time() { log_timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null) || log_timestamp=; case "$log_timestamp" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) printf '%s\n' "$log_timestamp" ;; *) printf '%s\n' '1970-01-01T00:00:00Z' ;; esac; }
 log_field() { log_timestamp=$(log_time); (printf '%s  %-13s %s\n' "$log_timestamp" "$1" "$2" >&2) || :; }
 log_event() { log_timestamp=$(log_time); (printf '%s  %s\n' "$log_timestamp" "$1" >&2) || :; }
+
+project_execution_failure() {
+  execution_failure='{"category":"UNCLASSIFIED","terminal_event":null,"error_events":null,"invalid_records":null,"scan":"unavailable"}'
+  if [ -f "$stdout_ref" ] && [ ! -L "$stdout_ref" ] && projected_failure=$(
+    set -o pipefail
+    tail -c 65537 "$stdout_ref" 2>/dev/null | "$jq_path" -Rsc '
+      def native_message:
+        (if .type == "error" then .message
+         elif .type == "turn.failed" and (.error | type) == "object" then .error.message
+         else null end) | if type == "string" then . else null end;
+      (utf8bytelength > 65536) as $truncated |
+      split("\n") | (if $truncated then .[1:] else . end) |
+      map(select(length > 0) | (try fromjson catch null) |
+          if type == "object" then . else null end) as $events |
+      ($events[-1] // {}) as $last |
+      (if $last.type == "turn.failed" then ($last | native_message) else null end) as $message |
+      {category:(if $message == "stream disconnected before completion: Our servers are currently overloaded. Please try again later."
+                    or $message == "Our servers are currently overloaded. Please try again later."
+                 then "UPSTREAM_OVERLOADED" else "UNCLASSIFIED" end),
+       terminal_event:(if $message != null then "turn.failed" else null end),
+       error_events:([$events[] | select(. != null) | select(.type == "error") |
+                       select(native_message != null)] | length | [.,255] | min),
+       invalid_records:([$events[] | select(. == null)] | length | [.,255] | min),
+       scan:(if $truncated then "tail" else "complete" end)}
+    ' 2>/dev/null
+  ) && [ -n "$projected_failure" ]; then
+    execution_failure=$projected_failure
+  else
+    log_event 'execution failure projection unavailable'
+  fi
+}
 
 finish() {
   trap - EXIT
@@ -31,16 +63,16 @@ finish() {
       printf '%s\n' 'run-codex-worker: INTERNAL_ERROR: invalid status target' >&2
       status_target_valid=0
     elif [ "$result_valid" -eq 1 ]; then
-      "$jq_path" -n --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg stage "$stage" --arg status "$terminal_status" --arg reason_code "$reason" --arg carrier_exit "$carrier_exit" --arg run_dir "$run_dir" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" --arg started_at "$started_at" --arg finished_at "$finished_at" --arg duration_seconds "$duration_seconds" --arg work_target "$work_target" --arg sandbox "$sandbox" --arg brief_ref "$brief_ref" --slurpfile result "$result_ref" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,stage:$stage,status:$status,reason_code:$reason_code,carrier_exit:(if $carrier_exit=="null" then null else ($carrier_exit|tonumber) end),run_dir:$run_dir,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref},verdict:$result[0].conclusion.verdict,started_at:(if $started_at=="" then null else $started_at end),finished_at:(if $finished_at=="" then null else $finished_at end),duration_seconds:(if $duration_seconds=="" then null else ($duration_seconds|tonumber) end),work_target:$work_target,sandbox:$sandbox,brief_ref:$brief_ref}' > "$status_tmp"
+      "$jq_path" -n --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg stage "$stage" --arg status "$terminal_status" --arg reason_code "$reason" --argjson execution_failure "$execution_failure" --arg carrier_exit "$carrier_exit" --arg run_dir "$run_dir" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" --arg started_at "$started_at" --arg finished_at "$finished_at" --arg duration_seconds "$duration_seconds" --arg work_target "$work_target" --arg sandbox "$sandbox" --arg brief_ref "$brief_ref" --slurpfile result "$result_ref" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,stage:$stage,status:$status,reason_code:$reason_code,execution_failure:$execution_failure,carrier_exit:(if $carrier_exit=="null" then null else ($carrier_exit|tonumber) end),run_dir:$run_dir,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref},verdict:$result[0].conclusion.verdict,started_at:(if $started_at=="" then null else $started_at end),finished_at:(if $finished_at=="" then null else $finished_at end),duration_seconds:(if $duration_seconds=="" then null else ($duration_seconds|tonumber) end),work_target:$work_target,sandbox:$sandbox,brief_ref:$brief_ref}' > "$status_tmp"
     else
-      "$jq_path" -n --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg stage "$stage" --arg status "$terminal_status" --arg reason_code "$reason" --arg carrier_exit "$carrier_exit" --arg run_dir "$run_dir" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" --arg started_at "$started_at" --arg finished_at "$finished_at" --arg duration_seconds "$duration_seconds" --arg work_target "$work_target" --arg sandbox "$sandbox" --arg brief_ref "$brief_ref" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,stage:$stage,status:$status,reason_code:$reason_code,carrier_exit:(if $carrier_exit=="null" then null else ($carrier_exit|tonumber) end),run_dir:$run_dir,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref},started_at:(if $started_at=="" then null else $started_at end),finished_at:(if $finished_at=="" then null else $finished_at end),duration_seconds:(if $duration_seconds=="" then null else ($duration_seconds|tonumber) end),work_target:$work_target,sandbox:$sandbox,brief_ref:$brief_ref}' > "$status_tmp"
+      "$jq_path" -n --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg stage "$stage" --arg status "$terminal_status" --arg reason_code "$reason" --argjson execution_failure "$execution_failure" --arg carrier_exit "$carrier_exit" --arg run_dir "$run_dir" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" --arg started_at "$started_at" --arg finished_at "$finished_at" --arg duration_seconds "$duration_seconds" --arg work_target "$work_target" --arg sandbox "$sandbox" --arg brief_ref "$brief_ref" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,stage:$stage,status:$status,reason_code:$reason_code,execution_failure:$execution_failure,carrier_exit:(if $carrier_exit=="null" then null else ($carrier_exit|tonumber) end),run_dir:$run_dir,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref},started_at:(if $started_at=="" then null else $started_at end),finished_at:(if $finished_at=="" then null else $finished_at end),duration_seconds:(if $duration_seconds=="" then null else ($duration_seconds|tonumber) end),work_target:$work_target,sandbox:$sandbox,brief_ref:$brief_ref}' > "$status_tmp"
     fi
     render_rc=$?; render_ok=0; mv_rc=0
     [ "$render_rc" -eq 0 ] && [ -s "$status_tmp" ] && render_ok=1
     if [ "$status_target_valid" -eq 1 ] && [ "$render_ok" -eq 0 ]; then
       reason=INTERNAL_ERROR; code=1
       printf '%s\n' 'run-codex-worker: INTERNAL_ERROR: cannot render status' >&2
-      "$jq_path" -n --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg stage "$stage" --arg reason_code INTERNAL_ERROR --arg carrier_exit "$carrier_exit" --arg run_dir "$run_dir" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" --arg started_at "$started_at" --arg finished_at "$finished_at" --arg duration_seconds "$duration_seconds" --arg work_target "$work_target" --arg sandbox "$sandbox" --arg brief_ref "$brief_ref" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,stage:$stage,status:"NOT_COMPLETE",reason_code:$reason_code,carrier_exit:(if $carrier_exit=="null" then null else ($carrier_exit|tonumber) end),run_dir:$run_dir,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref},started_at:(if $started_at=="" then null else $started_at end),finished_at:(if $finished_at=="" then null else $finished_at end),duration_seconds:(if $duration_seconds=="" then null else ($duration_seconds|tonumber) end),work_target:$work_target,sandbox:$sandbox,brief_ref:$brief_ref}' > "$status_tmp"
+      "$jq_path" -n --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg stage "$stage" --arg reason_code INTERNAL_ERROR --argjson execution_failure "$execution_failure" --arg carrier_exit "$carrier_exit" --arg run_dir "$run_dir" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" --arg started_at "$started_at" --arg finished_at "$finished_at" --arg duration_seconds "$duration_seconds" --arg work_target "$work_target" --arg sandbox "$sandbox" --arg brief_ref "$brief_ref" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,stage:$stage,status:"NOT_COMPLETE",reason_code:$reason_code,execution_failure:$execution_failure,carrier_exit:(if $carrier_exit=="null" then null else ($carrier_exit|tonumber) end),run_dir:$run_dir,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref},started_at:(if $started_at=="" then null else $started_at end),finished_at:(if $finished_at=="" then null else $finished_at end),duration_seconds:(if $duration_seconds=="" then null else ($duration_seconds|tonumber) end),work_target:$work_target,sandbox:$sandbox,brief_ref:$brief_ref}' > "$status_tmp"
       fallback_rc=$?
       if [ "$fallback_rc" -eq 0 ] && [ -s "$status_tmp" ]; then render_ok=1; else
         printf '%s\n' 'run-codex-worker: INTERNAL_ERROR: cannot render failure status' >&2
@@ -339,7 +371,7 @@ EOF
   log_event "carrier exited rc=$carrier_exit"
   regular_or_absent "$carrier_exit_ref" && regular_or_absent "$carrier_exit_ref.tmp" || return 1
   printf '%s\n' "$carrier_exit" > "$carrier_exit_ref.tmp" && mv -f "$carrier_exit_ref.tmp" "$carrier_exit_ref" && [ -f "$carrier_exit_ref" ] && [ ! -L "$carrier_exit_ref" ] || return 1
-  [ "$carrier_exit" -eq 0 ] || { reason=CARRIER_EXIT_NONZERO; return 1; }
+  [ "$carrier_exit" -eq 0 ] || { reason=CARRIER_EXIT_NONZERO; project_execution_failure; return 1; }
   [ -f "$result_ref" ] && [ ! -L "$result_ref" ] || { reason=RESULT_MISSING; return 1; }
   if ! "$jq_path" -e -s --arg stage "$stage" '
     . as $doc | if length != 1 or ($doc[0]|type) != "object" or ($doc[0]|keys) != ["conclusion","log_ref"] or ($doc[0].conclusion|type) != "object" or ($doc[0].log_ref|type) != "string" or ($doc[0].log_ref|length) == 0 or ($stage != "implementation" and ($doc[0].conclusion.verdict|type) != "string") then error("invalid envelope") else true end

@@ -539,6 +539,87 @@ references, `started_at`, `finished_at`, `duration_seconds`, `work_target`,
 both lookups succeed. A failed time lookup writes `null` and does not fail the
 flight.
 
+### Informational Execution Failure
+
+`execution_failure` is a runner-owned field of the same atomically published
+terminal status, not a new artifact. It is `null` unless collection reaches an
+invoked nonzero carrier. `reason_code=CARRIER_EXIT_NONZERO`, runner exit 1,
+worker-artifact ownership and the completion checks remain unchanged. No result
+or verdict is collected from that carrier, even if its worker artifacts exist.
+This diagnostic may explain an unavailable execution after host completion; it
+must never select retry/fallback, salvage a partial result, count as completion
+evidence, or enter worker briefs or consensus decision inputs. The finite
+caller retry/fallback path remains independent of failure category.
+
+The non-null object has exactly these fields; no source strings are copied:
+
+| Field | Values and meaning |
+|---|---|
+| `category` | `UPSTREAM_OVERLOADED` or `UNCLASSIFIED`; a recognized native report, not a worker verdict or a claim about account-wide availability |
+| `terminal_event` | `turn.failed` when the final nonempty sampled line has that native shape with a string `error.message`; otherwise `null` |
+| `error_events` | Number of sampled top-level `error` objects with a string `message`, saturated at 255; not a reconnect/retry count; `null` if scanning fails |
+| `invalid_records` | Number of sampled nonempty lines that fail JSON parsing or are not objects, saturated at 255; unknown object types are ignored; `null` if scanning fails |
+| `scan` | `complete`, `tail`, or `unavailable`; scope of this bounded observation, never event compliance or authenticity |
+
+After carrier termination and atomic `carrier.exit` publication, the runner
+reads at most the last 65,537 bytes of its regular, non-symbolic-link stdout
+log once through `tail`, then parses this bounded sample with `jq`. If the
+decoded sample exceeds 65,536 UTF-8 bytes, it marks `tail` and discards the first
+sampled line, which may be partial. Invalid UTF-8 replacement can conservatively
+mark a smaller sample as `tail`. Empty LF lines are ignored. Malformed or
+unknown final input prevents classification of any earlier failure. Parse
+errors and non-object records count as invalid; malformed native shapes and
+unknown objects are unclassified. Nested item contents are never searched.
+Earlier transient `error` events cannot classify a final turn, and `error`
+without a final `turn.failed` remains unclassified. A scan read/parser failure
+uses `UNCLASSIFIED`, null event/counts and `scan: unavailable`, with a fixed
+progress diagnostic; it cannot change the carrier outcome. Zero-exit carriers
+are not scanned, so native events cannot bypass or invalidate artifact checks.
+
+The recognition allowlist is exactly `Our servers are currently overloaded.
+Please try again later.` and the same string prefixed with `stream disconnected
+before completion: `. Matching is exact and case-sensitive against the final
+`turn.failed.error.message`. Other wording, structured codes or future shapes
+remain `UNCLASSIFIED`. There is no raw error text, item, reasoning, prompt,
+thread identifier, path, HTTP status, Retry-After, retry advice or timing
+estimate in this object. Full stdout/stderr/last-message logs and `log_ref`
+remain opaque; projection reads never modify them. This is mechanical
+sanitization, not same-user filesystem tamper resistance or universal native
+event compliance.
+
+Source grounding: Codex CLI [non-interactive JSONL documentation](https://developers.openai.com/codex/noninteractive/)
+lists `error`, `turn.failed` and item events; the pinned
+[0.164.0 native event definitions](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/exec/src/exec_events.rs)
+define top-level `error.message` and nested `turn.failed.error.message`.
+The overload wording is the caller-supplied #1077 observation, not a measured
+HTTP response or server-internal cause. `tests/test_run_codex_worker.py` records
+the pre-edit baseline and tests these shapes with synthetic carriers, including
+unknown/malformed input, bounded scanning, opaque-log preservation, unavailable
+projection and unchanged completion semantics. No live upstream replay is claimed.
+
+### Caller-Owned Time Boundary
+
+The [Codex configuration reference](https://developers.openai.com/codex/config-reference/)
+documents provider `stream_max_retries` (SSE interruption count),
+`stream_idle_timeout_ms` (SSE idle time), and `request_max_retries` (HTTP request
+count). These are not a documented total reconnect or whole-invocation deadline;
+an idle limit is not an elapsed-time limit, and retry counts do not bound the
+duration of each request, backoff, or every transport. No supported total native
+reconnect deadline is established by these sources. The runner adds no timeout
+option, provider/config override, supervisor, signal propagation or early event
+notification. A caller needing a finite observable allowance must set a
+whole-job harness limit and verify that harness's process-tree teardown; runner
+PID termination alone does not establish teardown (see `## Teardown Prerequisite`).
+
+Only after termination, existing `carrier_exit`, `started_at`, `finished_at`
+and `duration_seconds` report observed terminal facts. Duration is wall-clock
+integer-second pre-call-to-cleanup time, includes collection, may be null, and
+is neither reconnect latency nor a future bound. No HTTP status, retry timing or
+timeout causality is inferred. The gated-carrier behavior test verifies there
+is no status/exit publication while a carrier remains blocked, even when it has
+already emitted a native failure and worker artifacts; its watchdog belongs
+solely to the test harness.
+
 Exit code is the sole authority: `0` means complete, `1` means not complete,
 and `64` means usage error. `status.json` is a terminal, machine-readable
 projection for callers that need structured data. stdout contains only the
@@ -580,7 +661,8 @@ contains invocation identity, `status` (`COMPLETE` or
 `NOT_COMPLETE`), `reason_code`, `carrier_exit` (or `null`), derived artifact
 references, diagnostic log references, the six fields `started_at`,
 `finished_at`, `duration_seconds`, `work_target`, `sandbox`, and `brief_ref`,
-and a verdict only when the stage has a verdict mapping. Before either
+the informational `execution_failure`, and a verdict only when the stage has a
+verdict mapping. Before either
 runner-owned projection is written, its temporary
 and final target must be absent or a non-symbolic-link regular file. After each
 rename, the fixed `carrier.exit` or `status.json` path must be a non-symbolic-link
