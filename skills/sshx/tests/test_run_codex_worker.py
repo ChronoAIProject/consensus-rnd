@@ -11,6 +11,18 @@ invocation with the existing fake codex fixture and SSHX_HOME=relative returned
 runnerAttempt nevertheless projected protocol retries + 1 without a bound-ID
 premise. The composed test below exercises the pending-to-bound recovery; Lean
 checks that both retry paths consume the same finite allowance without reset.
+
+Issue #1077 no-skill baseline (2026-11-04, recorded before diagnostic edits):
+source inspection of run-codex-worker.sh shows every invoked nonzero carrier
+returns CARRIER_EXIT_NONZERO, with carrier_exit and opaque log references but
+no native-event failure projection. CODEX_WORKER_SPEC.md explicitly has no
+runner timeout/supervisor; the caller harness owns whole-job limits/teardown.
+Existing fake-carrier tests cover exit/envelope/sentinel and diagnostic
+non-authority, but not Codex JSONL failure classification. The supplied incident
+reports 1567.738 seconds and a terminal overload message on CLI 0.164.0; this
+is caller evidence, not a live-carrier observation or log read by this worker.
+The added tests use synthetic native event shapes and make no real-service,
+filesystem-isolation, universal-event-compliance or reconnect-deadline claim.
 """
 
 import json
@@ -53,6 +65,8 @@ verdict=${FAKE_VERDICT:-propose}
 write_result() { printf '{"conclusion":{"verdict":"%s"},"log_ref":"fake-log"}\n' "$verdict" > "$result_ref.tmp"; mv "$result_ref.tmp" "$result_ref"; }
 write_sentinel() { printf '%s\n' complete > "$sentinel_ref.tmp"; mv "$sentinel_ref.tmp" "$sentinel_ref"; }
 printf '%s\n' 'fake last message' > "$last_message"
+[ -z "${FAKE_NATIVE_STDOUT:-}" ] || command cat "$FAKE_NATIVE_STDOUT"
+[ -z "${FAKE_NATIVE_STDERR:-}" ] || command cat "$FAKE_NATIVE_STDERR" >&2
 case "${FAKE_MODE:-success}" in
   success) write_result; write_sentinel ;;
   sleep_success) sleep "${FAKE_SLEEP_SECONDS:-1}"; write_result; write_sentinel ;;
@@ -100,6 +114,8 @@ case "${FAKE_MODE:-success}" in
   carrier_exit_write_failure) write_result; write_sentinel; mkdir "$run_dir/carrier.exit.tmp" ;;
   artifacts_then_wait) write_result; write_sentinel; printf '%s\n' ready > "$FAKE_READY"; command cat "$FAKE_RELEASE" >/dev/null; printf '%s\n' exited > "$FAKE_EXITED" ;;
   interrupt_wait) printf '%s\n' "$$" > "$FAKE_CARRIER_PID"; printf '%s\n' ready > "$FAKE_READY"; command cat "$FAKE_RELEASE" >/dev/null ;;
+  native_failure_wait) write_result; write_sentinel; printf '%s\n' ready > "$FAKE_READY"; command cat "$FAKE_RELEASE" >/dev/null; exit 9 ;;
+  native_stdout_fifo) rm "$run_dir/worker.stdout.log"; mkfifo "$run_dir/worker.stdout.log"; exit 9 ;;
   invalid_verdict_missing_sentinel) verdict=unexpected; write_result ;;
   exit_127) exit 127 ;;
   projection_collision)
@@ -429,6 +445,142 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.assertRegex(result.status["started_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
         self.assertRegex(result.status["finished_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
         self.assertIsInstance(result.status["duration_seconds"], int)
+
+    def run_native_events(self, payload: bytes, *, mode: str = "nonzero_with_artifacts",
+                          extra_env: dict[str, str] | None = None) -> RunResult:
+        fixture = self.temp_dir / "native-events.jsonl"
+        fixture.write_bytes(payload)
+        return self.run_worker(mode, extra_env={"FAKE_NATIVE_STDOUT": str(fixture), **(extra_env or {})})
+
+    def native_failure(self, message: str) -> bytes:
+        return (json.dumps({"type": "turn.failed", "error": {"message": message}}) + "\n").encode()
+
+    def test_native_overload_projection_is_bounded_sanitized_and_informational(self) -> None:
+        message = "stream disconnected before completion: Our servers are currently overloaded. Please try again later."
+        secret = "PRIVATE_PROMPT_REASONING_/private/secret_TOKEN"
+        payload = b'{"type":"thread.started","thread_id":"private-thread"}\n{"type":"turn.started"}\n'
+        payload += (json.dumps({"type": "item.completed", "item": {"type": "reasoning", "text": secret}}) + "\n").encode()
+        payload += b'{"type":"error","message":"Reconnecting..."}\n' * 5
+        payload += (json.dumps({"type": "error", "message": message}) + "\n").encode()
+        payload += self.native_failure(message)
+        result = self.run_native_events(payload, extra_env={"FAKE_NATIVE_STDERR": str(self.temp_dir / "native-events.jsonl")})
+        self.assert_terminal(result, "CARRIER_EXIT_NONZERO")
+        diagnostic = result.status["execution_failure"]
+        self.assertEqual(diagnostic, {"category": "UPSTREAM_OVERLOADED", "terminal_event": "turn.failed",
+                                      "error_events": 6, "invalid_records": 0, "scan": "complete"})
+        self.assertLess(len(json.dumps(diagnostic)), 200)
+        projected = json.dumps(result.status) + result.process.stdout + result.process.stderr
+        for private in (secret, message, "private-thread", "Reconnecting"):
+            self.assertNotIn(private, projected)
+        # Only these synthetic fixture logs are inspected; no real worker logs.
+        for name in ("worker.stdout.log", "worker.stderr.log"):
+            self.assertEqual((result.run_dir / name).read_bytes(), payload)
+        self.assertEqual(json.loads((result.run_dir / "result.json").read_text()),
+                         {"conclusion": {"verdict": "propose"}, "log_ref": "fake-log"})
+        self.assertEqual((result.run_dir / "completion.sentinel").read_text(), "complete\n")
+        self.assertNotIn("verdict", result.status)
+
+    def test_unclassified_native_failures_do_not_expose_arbitrary_messages(self) -> None:
+        message = "Our servers are currently overloaded. Please try again later."
+        cases = [
+            b"", b"not JSON: private\n", b'{"type":\n', b'null\n[]\n42\n"private"\n',
+            b'{"type":"turn.failed","error":false}\n',
+            b'{"type":"turn.failed","error":{"message":7}}\n',
+            self.native_failure("private unknown error"),
+            self.native_failure(message + " private suffix"),
+            b'{"type":"future.failed","message":"private"}\n',
+            (json.dumps({"type": "error", "message": message}) + "\n").encode(),
+            self.native_failure(message) + b'{"type":"turn.completed"}\n',
+            self.native_failure(message) + b'{"type":"turn.started"}\n',
+            self.native_failure(message) + b"malformed trailing private\n",
+            self.native_failure(message) + self.native_failure("private final failure"),
+            b'{"type":"item.completed","item":{"type":"reasoning","text":' + json.dumps(message).encode() + b'}}\n',
+            b'{"type":"turn.failed","error":{"message":"private\xff"}}\n',
+            b"[" * 1000 + b"]" * 1000 + b"\n",
+        ]
+        for payload in cases:
+            with self.subTest(payload=payload[:80]):
+                result = self.run_native_events(payload)
+                self.assert_terminal(result, "CARRIER_EXIT_NONZERO")
+                self.assertEqual(result.status["execution_failure"]["category"], "UNCLASSIFIED")
+                self.assertNotIn("private", json.dumps(result.status["execution_failure"]))
+                self.assertNotIn("private", result.process.stdout + result.process.stderr)
+        malformed = self.run_native_events(b'not json\n[]\n{"type":"future.event"}\n')
+        self.assertEqual(malformed.status["execution_failure"]["invalid_records"], 2)
+
+    def test_native_projection_uses_only_bounded_tail_and_saturates_counts(self) -> None:
+        message = "Our servers are currently overloaded. Please try again later."
+        result = self.run_native_events(
+            b'{"type":"item.completed","item":{"text":"' + b"x" * 131072 + b'"}}\n'
+            + b'{"type":"error","message":"Reconnecting..."}\n' * 300
+            + b"invalid\n" * 300 + self.native_failure(message))
+        self.assert_terminal(result, "CARRIER_EXIT_NONZERO")
+        self.assertEqual(result.status["execution_failure"], {
+            "category": "UPSTREAM_OVERLOADED", "terminal_event": "turn.failed",
+            "error_events": 255, "invalid_records": 255, "scan": "tail"})
+        # An old overload outside the retained suffix cannot classify the failure.
+        result = self.run_native_events(self.native_failure(message) + b"x" * 131072)
+        self.assertEqual(result.status["execution_failure"]["category"], "UNCLASSIFIED")
+
+    def test_native_projection_does_not_change_zero_exit_completion_checks(self) -> None:
+        payload = self.native_failure("Our servers are currently overloaded. Please try again later.")
+        for mode, reason in [("success", "COMPLETE"), ("nothing", "RESULT_MISSING"),
+                             ("invalid_json", "ENVELOPE_INVALID"), ("missing_sentinel", "SENTINEL_MISSING")]:
+            with self.subTest(mode=mode):
+                result = self.run_native_events(payload, mode=mode)
+                self.assert_terminal(result, reason)
+                self.assertIsNone(result.status["execution_failure"])
+
+    def test_native_projection_io_or_parser_failure_preserves_carrier_outcome(self) -> None:
+        payload = self.native_failure("Our servers are currently overloaded. Please try again later.")
+        expected = {"category": "UNCLASSIFIED", "terminal_event": None,
+                    "error_events": None, "invalid_records": None, "scan": "unavailable"}
+        result = self.run_native_events(payload, mode="native_stdout_fifo")
+        self.assert_terminal(result, "CARRIER_EXIT_NONZERO")
+        self.assertEqual(result.status["execution_failure"], expected)
+        for tool in ("tail", "jq"):
+            with self.subTest(tool=tool):
+                wrapper = self.bin_dir / tool
+                if wrapper.is_symlink():
+                    wrapper.unlink()
+                real_tool = str(self.real_jq) if tool == "jq" else "/usr/bin/tail"
+                wrapper.write_text('#!/bin/bash\n' + ('[ "${1:-}" != "-Rsc" ] || exit 71\n' if tool == "jq" else 'exit 71\n')
+                                   + f'exec "{real_tool}" "$@"\n')
+                wrapper.chmod(0o755)
+                result = self.run_native_events(payload)
+                self.assert_terminal(result, "CARRIER_EXIT_NONZERO")
+                self.assertEqual(result.status["execution_failure"], expected)
+                self.assertIn("execution failure projection unavailable", result.process.stderr)
+                wrapper.unlink()
+                if tool == "jq":
+                    wrapper.symlink_to(self.real_jq)
+
+    def test_native_failure_wait_keeps_time_boundary_with_caller(self) -> None:
+        flight = self.next_flight()
+        fixture = self.temp_dir / "native-failure.jsonl"
+        fixture.write_bytes(self.native_failure("Our servers are currently overloaded. Please try again later."))
+        ready, release = self.temp_dir / "native-ready", self.temp_dir / "native-release"
+        os.mkfifo(ready)
+        os.mkfifo(release)
+        process = subprocess.Popen(self.command(flight), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True,
+                                   env=self.environment("native_failure_wait", FAKE_NATIVE_STDOUT=str(fixture),
+                                                        FAKE_READY=str(ready), FAKE_RELEASE=str(release)))
+        with ready.open() as signal_file:
+            self.assertEqual(signal_file.read().strip(), "ready")
+        run_dir = self.expected_run_dir(flight)
+        returned_early = process.poll() is not None
+        status_early = (run_dir / "status.json").exists()
+        exit_early = (run_dir / "carrier.exit").exists()
+        with release.open("w") as signal_file:
+            signal_file.write("caller releases carrier\n")
+        stdout, stderr = process.communicate(timeout=10)  # Test harness watchdog, never a runner deadline.
+        self.assertFalse(returned_early)
+        self.assertFalse(status_early)
+        self.assertFalse(exit_early)
+        result = RunResult(subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr), run_dir)
+        self.assert_terminal(result, "CARRIER_EXIT_NONZERO")
+        self.assertEqual(result.status["execution_failure"]["category"], "UPSTREAM_OVERLOADED")
 
     def test_started_carrier_exit_127_is_nonzero_not_launch_failure(self) -> None:
         result = self.run_worker("exit_127")
