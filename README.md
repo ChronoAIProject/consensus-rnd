@@ -57,7 +57,7 @@ The [review triplet](./skills/sshx/SKILL.md#review-triplet) applies the [review 
 
 A [termination gate](./skills/sshx/SKILL.md#termination-gate) applies inside the final stage only when the host has positively declared a goal-driven continuation mechanism in the [goal contract](./skills/sshx/SKILL.md#goal-contract), and an affirmative satisfaction claim is being considered. It is not an eighth stage and grants no control over the host mechanism.
 
-Only confirmed defects against the current goal or an existing contract enter automatic repairs. Findings retain `evidence_status` and `user_goal_basis`; uncertain changes to product or permission semantics go to their owner for clarification. A user correction cancels dependent stale plan, review and repair authority while preserving history and active-job protection. See [goal corrections](./skills/sshx/SKILL.md#goal-contract) and [admission](./skills/sshx/SKILL.md#reasoning-discipline).
+Only confirmed defects against the current goal or an existing contract enter automatic repairs. Unverified objections alone authorize no repair or blocking goal-gap/abstention; bounded checks investigate unknowns only when the decision depends on them. Findings retain `evidence_status` and `user_goal_basis`; uncertain changes to product or permission semantics go to their owner for clarification. A user correction cancels dependent stale plan, review and repair authority while preserving history and active-job protection. See [goal corrections](./skills/sshx/SKILL.md#goal-contract) and [admission](./skills/sshx/SKILL.md#reasoning-discipline).
 
 ## Risks and Limits
 
