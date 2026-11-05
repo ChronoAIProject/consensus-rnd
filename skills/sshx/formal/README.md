@@ -184,6 +184,15 @@ and termination-seat settlement all consume that judgment. Downgrade records
 retain the original words and trigger decision. `force` alone remains a partial
 conjunct judgment, never a complete blocking decision.
 
+`MarkedPremise.explicit` also qualifies uncertainty dispositions: an irrelevant
+premise needs no disposition; bounded verification requires decision relevance
+and an available bounded check. Goal-gap and abstention dispositions require a
+separate `completeAdmission` basis; abstention additionally requires that no bounded
+check is available. The theorems reject unsupported goal gaps and abstentions,
+exclude irrelevant investigation, and preserve independently admitted missing
+requirements. These are source/model correspondence checks, not live evidence of
+an operational repair bypass or proof that a confirmed label is truthful.
+
 `failed_trigger_rejected_by_every_consumer` checks the twenty existing decisions
 for every supplied input with a failed trigger, independently of prose labels;
 `admitted_basis_retained_by_every_consumer` retains every admitted basis that

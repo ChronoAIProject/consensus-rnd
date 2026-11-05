@@ -152,7 +152,7 @@ theorem beauty_ignores_cost_and_necessity (f : Form) (cost necessity : Nat) :
 
 /-! ## Seek truth from facts -/
 
--- SKILL[def]: "Evidence examples include source artifact or line, current file contents, command result, test assertion, visible input, implementation-worker conclusion, or declared `GoalArtifact` constraint."
+-- SKILL[def]: "source artifact or line, command result, test assertion"
 inductive Evidence
   | sourceArtifactOrLine (ref : String)
   | currentFileContents (path : String)
@@ -163,7 +163,7 @@ inductive Evidence
   | declaredGoalConstraint (item : String)
   deriving DecidableEq, Repr
 
--- SKILL[def]: "seek truth from facts: verify every factual premise against actual evidence before relying on it."
+-- SKILL[def]: "seek truth from facts: verify every factual premise against actual evidence before relying on it (source artifact or line, command result, test assertion)."
 structure Premise where
   claim : String
   evidence : Option Evidence
@@ -181,21 +181,118 @@ def Premise.status (p : Premise) : PremiseStatus :=
   | some e => .verified e
   | none => .assumedUnverified
 
--- SKILL[def]: "Any assumed-not-verified premise must be explicitly marked `ASSUMED-UNVERIFIED` in `SshxResultEnvelope.conclusion` and either verified before routing, treated as a `GoalArtifact` goal gap, or used as an abstain trigger."
+-- SKILL[def]: "Mark decision-relevant unknowns `ASSUMED-UNVERIFIED` in `SshxResultEnvelope.conclusion`: verified before routing or bounded checks; a `GoalArtifact` goal gap or abstain trigger needs a separate admitted `BlockingAuthority` basis; abstain only if no bounded check is available."
 inductive UnverifiedDisposition
   | verifiedBeforeRouting (e : Evidence)
+  | boundedVerification (question : String)
   | treatedAsGoalGap
   | abstainTrigger
   deriving DecidableEq, Repr
 
-/-- A marked premise carries its disposition; a verified premise needs none. -/
+/-- A confirmed `BlockingAuthority` basis is required before an unverified premise
+can block as a goal gap or abstention. Bounded investigation and abstention require that the
+verdict actually depends on the premise; a non-empty question names the bounded check. -/
 structure MarkedPremise where
   premise : Premise
   disposition : Option UnverifiedDisposition
+  blockingBasis : Option DecisionBasis
+  boundedCheckAvailable : Bool
   deriving DecidableEq, Repr
 
+def MarkedPremise.dispositionAdmitted (m : MarkedPremise) : Bool :=
+  match m.disposition with
+  | none => false
+  | some (.verifiedBeforeRouting _) => true
+  | some (.boundedVerification question) =>
+      m.premise.verdictDependsOnIt && question != "" && m.boundedCheckAvailable
+  | some .treatedAsGoalGap =>
+      m.premise.verdictDependsOnIt && m.blockingBasis.any completeAdmission
+  | some .abstainTrigger =>
+      m.premise.verdictDependsOnIt && !m.boundedCheckAvailable &&
+        m.blockingBasis.any completeAdmission
+
 def MarkedPremise.explicit (m : MarkedPremise) : Prop :=
-  m.premise.status = .assumedUnverified → m.disposition.isSome = true
+  m.premise.status = .assumedUnverified →
+    match m.disposition with
+    | none => m.premise.verdictDependsOnIt = false
+    | some _ => m.dispositionAdmitted = true
+
+-- SKILL[thm]: "Irrelevant premises warrant no investigation; unsupported premises warrant no repair."
+theorem decision_irrelevant_unverified_needs_no_disposition (m : MarkedPremise)
+    (h : m.premise.verdictDependsOnIt = false) (hnone : m.disposition = none) :
+    m.explicit := by
+  intro _
+  simp [hnone, h]
+
+theorem decision_irrelevant_cannot_investigate (m : MarkedPremise) (question : String)
+    (h : m.premise.verdictDependsOnIt = false)
+    (hd : m.disposition = some (.boundedVerification question)) :
+    m.dispositionAdmitted = false := by
+  simp [MarkedPremise.dispositionAdmitted, hd, h]
+
+theorem unverified_goal_gap_requires_admitted_basis (m : MarkedPremise)
+    (hstatus : m.premise.status = .assumedUnverified)
+    (hdisposition : m.disposition = some .treatedAsGoalGap)
+    (hexplicit : m.explicit) :
+    m.premise.verdictDependsOnIt = true ∧
+      ∃ b, m.blockingBasis = some b ∧ completeAdmission b = true := by
+  have ha : m.dispositionAdmitted = true := by
+    simpa only [hdisposition] using hexplicit hstatus
+  have hb : m.premise.verdictDependsOnIt = true ∧
+      m.blockingBasis.any completeAdmission = true := by
+    simpa only [MarkedPremise.dispositionAdmitted, hdisposition, Bool.and_eq_true] using ha
+  exact ⟨hb.1, (Option.any_eq_true _ _).mp hb.2⟩
+
+def unsupportedGoalGap : MarkedPremise :=
+  { premise := { claim := "unconfirmed premise", evidence := none, verdictDependsOnIt := true }
+    disposition := some .treatedAsGoalGap
+    blockingBasis := none
+    boundedCheckAvailable := false }
+
+theorem unsupported_goal_gap_is_not_explicit : ¬ unsupportedGoalGap.explicit := by
+  intro h
+  have hadmitted := h (by simp [unsupportedGoalGap, Premise.status])
+  simp [unsupportedGoalGap, MarkedPremise.dispositionAdmitted] at hadmitted
+
+def boundedUnknown : MarkedPremise :=
+  { premise := { claim := "unknown premise", evidence := none, verdictDependsOnIt := true }
+    disposition := some (.boundedVerification "check the decision-relevant workflow input")
+    blockingBasis := none
+    boundedCheckAvailable := true }
+
+theorem bounded_unknown_is_explicit : boundedUnknown.explicit := by
+  intro _
+  simp [boundedUnknown, MarkedPremise.dispositionAdmitted]
+
+def unresolvableUnknown : MarkedPremise :=
+  { premise := { claim := "unresolvable premise", evidence := none, verdictDependsOnIt := true }
+    disposition := some .abstainTrigger
+    blockingBasis := none
+    boundedCheckAvailable := false }
+
+theorem unsupported_abstention_is_not_explicit : ¬ unresolvableUnknown.explicit := by
+  intro h
+  have hadmitted := h (by simp [unresolvableUnknown, Premise.status])
+  simp [unresolvableUnknown, MarkedPremise.dispositionAdmitted] at hadmitted
+
+theorem admitted_unresolvable_unknown_is_explicit (p : Premise) (b : DecisionBasis)
+    (hrelevant : p.verdictDependsOnIt = true) (hadmitted : completeAdmission b = true) :
+    (MarkedPremise.mk p (some .abstainTrigger) (some b) false).explicit := by
+  intro _
+  simp [MarkedPremise.dispositionAdmitted, hrelevant, hadmitted]
+
+theorem available_check_prevents_abstention (m : MarkedPremise)
+    (h : m.boundedCheckAvailable = true) (hd : m.disposition = some .abstainTrigger) :
+    m.dispositionAdmitted = false := by
+  simp [MarkedPremise.dispositionAdmitted, hd, h]
+
+/-- An independently evidenced missing requirement retains the same admission, even
+when another premise is unknown. No majority or observed-occurrence condition is added. -/
+theorem admitted_goal_gap_is_explicit (p : Premise) (b : DecisionBasis)
+    (hrelevant : p.verdictDependsOnIt = true) (hadmitted : completeAdmission b = true) :
+    (MarkedPremise.mk p (some .treatedAsGoalGap) (some b) false).explicit := by
+  intro _
+  simp [MarkedPremise.dispositionAdmitted, hrelevant, hadmitted]
 
 -- SKILL[thm]: "A perspective must never silently rely on an assumed premise."
 /-- A premise the verdict depends on, assumed and carrying no disposition, is silent reliance
@@ -206,9 +303,9 @@ def silentReliance (m : MarkedPremise) : Prop :=
 
 theorem explicit_excludes_silent_reliance (m : MarkedPremise) (h : m.explicit) :
     ¬ silentReliance m := by
-  rintro ⟨-, hstatus, hnone⟩
+  rintro ⟨hdepends, hstatus, hnone⟩
   have := h hstatus
-  simp [hnone] at this
+  simp [hnone, hdepends] at this
 
 /-! ## Mathematical applicability -/
 

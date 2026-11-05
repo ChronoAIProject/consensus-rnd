@@ -381,6 +381,23 @@ temporary distribution files; source hashes cannot establish session adoption.
 The earlier #1071-#1074 baseline and caller-reported carrier evidence retain their
 original scope and timing; they are not observations by this assignment.
 
+Extra-work-admission no-skill baseline (2026-11-05, before this assignment's
+source/model edits): the published `seek truth from facts` sentence permits every
+`ASSUMED-UNVERIFIED` premise to be treated as a `GoalArtifact` goal gap or an
+abstain trigger without saying that either disposition must be decision-relevant or
+pass `BlockingAuthority`. The unchanged formal projection `MarkedPremise.explicit`
+accepts a premise with no evidence, `verdictDependsOnIt=true`, and either
+`some .treatedAsGoalGap` or `some .abstainTrigger` because it checks only that a
+disposition is present. This is a local contract/model ambiguity: the existing
+`force`, `completeAdmission`, and operational consumers already require confirmed
+evidence, a sourced goal basis, both named conjuncts, and trigger grounding, so no
+live repair bypass is claimed. A source-level witness was established from the
+HEAD source and rechecked independently during recovery; this pre-edit baseline
+makes no compiled-model claim. Later compiled regressions are forward model evidence,
+not a live observation of a repair bypass. The forward check must qualify the
+dispositions while preserving confirmed actual defects and bounded checks for
+decision-relevant unknowns.
+
 ARCH-001 / TEST-1073-01 frozen repair baseline (2026-11-04): before this batch,
 the delegating caller supplied two independent compiled counterexamples against
 the dirty candidate. A confirmed, goal-sourced input with a failed trigger was
@@ -697,7 +714,7 @@ DEMONSTRATED_POST_RESULT_BUDGET_TOP_UP_EXCEPTION = (
     "When a repair consumes the reserved capacity, the caller may add evaluation units after seeing "
     "the repair result so the mandatory rerun review and termination roster remain reachable."
 )
-CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "f590f8a8529b03053cbcd63a2d9478ede828a1261af3d9976ddc57fd93a2f6f2"
+CANONICAL_NORMATIVE_DOCUMENT_SHA256 = "ca846cc828331f2d74e9563667a4022031f80b8f9d84fc87d41c2702087c8c9e"
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 GapOwnerAssignment: TypeAlias = tuple[JsonValue, JsonValue]
@@ -4268,6 +4285,14 @@ class SshxContractTests(unittest.TestCase):
             check=True,
         ).stdout.strip()
         self.assertEqual(tracked, "")
+
+    def test_extra_work_admission_baseline_is_source_owned(self) -> None:
+        baseline = __doc__ or ""
+        marker = "Extra-work-admission no-skill baseline (2026-11-05, before this assignment's"
+        self.assertIn(marker, baseline)
+        self.assertIn("`MarkedPremise.explicit`", baseline)
+        self.assertIn("no compiled-model claim", baseline)
+        self.assertIn("no\nlive repair bypass is claimed", baseline)
 
     def test_sshx_has_no_scientific_source_coupling(self) -> None:
         text = read(SKILL)

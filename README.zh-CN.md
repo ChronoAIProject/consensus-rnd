@@ -57,7 +57,7 @@
 
 只有 host 在[目标合同](./skills/sshx/SKILL.md#goal-contract)中明确声明了目标驱动的继续执行机制，且 caller 正准备肯定目标已满足时，最后阶段内部才适用[终止闸门](./skills/sshx/SKILL.md#termination-gate)。它不是第八阶段，也不授予控制 host 机制的权限。
 
-只有违反当前目标或既有合同的已确认缺陷进入自动修复。发现项保留 `evidence_status` 与 `user_goal_basis`；涉及产品或权限语义的不确定改动向 owner 澄清。用户纠正立即撤销依赖旧方案的 plan、review 与 repair 权限，同时保留历史及 active job 保护。详见[目标纠正](./skills/sshx/SKILL.md#goal-contract)与[准入](./skills/sshx/SKILL.md#reasoning-discipline)。
+只有违反当前目标或既有合同的已确认缺陷进入自动修复。未验证的异议本身不授权修复或阻断性的 goal gap/abstain；只有决策依赖的未知项才值得进行有界核实。发现项保留 `evidence_status` 与 `user_goal_basis`；涉及产品或权限语义的不确定改动向 owner 澄清。用户纠正立即撤销依赖旧方案的 plan、review 与 repair 权限，同时保留历史及 active job 保护。详见[目标纠正](./skills/sshx/SKILL.md#goal-contract)与[准入](./skills/sshx/SKILL.md#reasoning-discipline)。
 
 ## 风险与限制
 
