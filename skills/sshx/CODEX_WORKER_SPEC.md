@@ -23,6 +23,9 @@ not restate it. Caller-side dispatch and collection are governed solely by
 bash <skill-root>/scripts/run-codex-worker.sh \
   --stage <thinking|implementation|review|termination> \
   --work-target <absolute-path> [--sandbox <danger-full-access|workspace-write>] \
+  [--retry-provider-id <native-bare-key>] \
+  [--request-max-retries <nonnegative-integer>] \
+  [--stream-max-retries <nonnegative-integer>] \
   [--flight-id <returned-id> --attempt <positive-integer>]
 ```
 
@@ -49,8 +52,25 @@ absolute and contains neither LF (`0x0A`) nor CR (`0x0D`). This is a
 locale-independent POSIX text-line boundary: stdout lines are LF-separated,
 not Unicode logical lines. Other characters, including TAB, C1 controls,
 zero-width joiners/non-joiners, and U+2028/U+2029, are accepted in path values.
-The brief is read from stdin;
-artifact paths and extra Codex flags are never caller-supplied.
+The brief is read from stdin; artifact paths and arbitrary Codex flags are never
+caller-supplied.
+
+The optional retry controls are run-mode-only and form one narrow native bridge.
+`--retry-provider-id` must be a non-empty TOML bare-key component containing only
+ASCII letters, digits, `_`, or `-`; dots, quotes, whitespace, and other syntax are
+rejected so the runner cannot silently address a different key path. At least one
+of the two count options must accompany the provider ID, and every supplied count
+must contain only decimal digits (including `0`). A count without the provider ID,
+or a provider ID without a count, is `USAGE_ERROR` before any directory, stdin, or
+carrier side effect. Each supplied count becomes exactly one native override:
+`model_providers.<id>.request_max_retries=<value>` or
+`model_providers.<id>.stream_max_retries=<value>`, passed as a `-c` argument to the
+existing `codex exec` entrance. An omitted count remains inherited from the native
+provider configuration; the runner supplies no retry default or algorithm. Native
+provider lookup and numeric-range validation remain native behavior, so a native
+rejection retains the ordinary nonzero carrier outcome. This key encoding was
+verified against native CLI 0.165.0 for provider IDs `custom` and `loop`; support
+for other native versions or provider namespaces remains caller verification.
 
 The runner also has three mutually exclusive pure query invocations:
 
@@ -175,6 +195,8 @@ bash <skill-root>/scripts/run-codex-worker-batch.sh \
 The manifest is exactly one strict JSON object with `schema_version: 1` and a
 non-empty `workers` array. Each worker has exactly `stage`, `work_target`, and
 `brief_ref`, plus optional `sandbox` and a paired `flight_id`/`attempt` for bound retries.
+Batch dispatch intentionally has no retry-provider or retry-count fields; the
+single-runner controls above do not change its manifest or fanout surface.
 Fresh rows and retries whose records still lack a valid receipt omit both identity
 fields under the same pending/bound rule as a single launch. Identity,
 stage, target, and sandbox values obey the runner's run-mode rules. For the
