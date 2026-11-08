@@ -8,6 +8,7 @@ started_at=; started_epoch=; finished_at=; finished_epoch=; duration_seconds=
 run_dir=
 run_dir_owned=0
 result_valid=0; jq_path=
+retry_provider_id=; request_max_retries=; stream_max_retries=
 verdict=
 execution_failure=null
 
@@ -106,6 +107,14 @@ positive_integer() {
   case "$integer_value" in ''|*[!0-9]*) return 1 ;; esac
   while [ "${integer_value#0}" != "$integer_value" ]; do integer_value=${integer_value#0}; done
   [ -n "$integer_value" ]
+}
+nonnegative_integer() {
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  return 0
+}
+valid_provider_id() {
+  case "$1" in ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*) return 1 ;; esac
+  return 0
 }
 strip_trailing_slashes() { stripped_path=$1; while [ "$stripped_path" != / ] && [ "${stripped_path%/}" != "$stripped_path" ]; do stripped_path=${stripped_path%/}; done; }
 normalize_run_root() {
@@ -209,6 +218,7 @@ emit_project_flight() {
 }
 main() {
   flight_id= attempt= stage= work_target= sandbox=; project_paths=0; project_flight=0; project_root=0; seen_options='|'
+  retry_provider_id=; request_max_retries=; stream_max_retries=
   while [ "$#" -gt 0 ]; do
     option=$1
     case "$option" in
@@ -226,6 +236,9 @@ main() {
         ;;
       --flight-id) target=flight_id ;; --attempt) target=attempt ;; --stage) target=stage ;;
       --work-target) target=work_target ;; --sandbox) target=sandbox ;;
+      --retry-provider-id) target=retry_provider_id ;;
+      --request-max-retries) target=request_max_retries ;;
+      --stream-max-retries) target=stream_max_retries ;;
       --*) usage_error "unknown option $option"; return 1 ;; *) usage_error "unexpected positional argument $option"; return 1 ;;
     esac
     require_value "$option" "$#" || return 1
@@ -237,7 +250,7 @@ main() {
   [ "$query_mode" -le 1 ] || { usage_error "query modes are mutually exclusive"; return 1; }
   if [ "$project_root" -eq 1 ]; then
     query_name=--project-root
-    for other_option in --flight-id --attempt --stage --work-target --sandbox; do
+    for other_option in --flight-id --attempt --stage --work-target --sandbox --retry-provider-id --request-max-retries --stream-max-retries; do
       case "$seen_options" in *"$other_option"*) usage_error "$query_name cannot be combined with $other_option"; return 1 ;; esac
     done
   elif [ "$query_mode" -eq 1 ] || [[ "$seen_options" = *--flight-id* || "$seen_options" = *--attempt* ]]; then
@@ -252,11 +265,11 @@ main() {
     fi
   fi
   if [ "$project_paths" -eq 1 ]; then
-    for run_option in --stage --work-target --sandbox; do
+    for run_option in --stage --work-target --sandbox --retry-provider-id --request-max-retries --stream-max-retries; do
       case "$seen_options" in *"$run_option"*) usage_error "--project-paths cannot be combined with $run_option"; return 1 ;; esac
     done
   elif [ "$project_flight" -eq 1 ]; then
-    for other_option in --attempt --stage --work-target --sandbox; do
+    for other_option in --attempt --stage --work-target --sandbox --retry-provider-id --request-max-retries --stream-max-retries; do
       case "$seen_options" in *"$other_option"*) usage_error "--project-flight cannot be combined with $other_option"; return 1 ;; esac
     done
   elif [ "$query_mode" -eq 0 ]; then
@@ -270,6 +283,23 @@ main() {
     case "$work_target" in /*) ;; *) usage_error "--work-target must be an absolute path"; return 1 ;; esac
     case "$work_target" in *$'\n'*|*$'\r'*) usage_error "--work-target must not contain LF or CR"; return 1 ;; esac
     case "$sandbox" in danger-full-access|workspace-write) ;; *) usage_error "invalid --sandbox"; return 1 ;; esac
+    retry_control_seen=0
+    case "$seen_options" in
+      *'--retry-provider-id'*|*'--request-max-retries'*|*'--stream-max-retries'*) retry_control_seen=1 ;;
+    esac
+    if [ "$retry_control_seen" -eq 1 ]; then
+      [ -n "$retry_provider_id" ] || { usage_error "retry controls require --retry-provider-id"; return 1; }
+      valid_provider_id "$retry_provider_id" || { usage_error "--retry-provider-id must be a non-empty native bare key"; return 1; }
+      if [[ "$seen_options" = *'--request-max-retries'* ]]; then
+        nonnegative_integer "$request_max_retries" || { usage_error "--request-max-retries must be a nonnegative integer"; return 1; }
+      fi
+      if [[ "$seen_options" = *'--stream-max-retries'* ]]; then
+        nonnegative_integer "$stream_max_retries" || { usage_error "--stream-max-retries must be a nonnegative integer"; return 1; }
+      fi
+    fi
+    if [ -n "$retry_provider_id" ] && [ -z "$request_max_retries" ] && [ -z "$stream_max_retries" ]; then
+      usage_error "--retry-provider-id requires a retry count"; return 1
+    fi
   fi
   if ! jq_path=$(command -v jq 2>/dev/null) || [ ! -x "$jq_path" ]; then reason=PARSER_UNAVAILABLE; return 1; fi
   if [ "$query_mode" -eq 0 ]; then
@@ -365,7 +395,13 @@ EOF
   log_field last_message "$last_message_ref"; log_field result "$result_ref"; log_field sentinel "$sentinel_ref"
   log_field carrier_exit "$carrier_exit_ref"; log_field status_file "$status_ref"
   log_event 'carrier starting'
-  "$codex_path" exec --json -C "$work_target" --sandbox "$sandbox" --skip-git-repo-check -o "$last_message_ref" - \
+  codex_args=(exec --json -C "$work_target" --sandbox "$sandbox" --skip-git-repo-check)
+  if [ -n "$retry_provider_id" ]; then
+    [ -n "$request_max_retries" ] && codex_args+=( -c "model_providers.${retry_provider_id}.request_max_retries=${request_max_retries}" )
+    [ -n "$stream_max_retries" ] && codex_args+=( -c "model_providers.${retry_provider_id}.stream_max_retries=${stream_max_retries}" )
+  fi
+  codex_args+=( -o "$last_message_ref" - )
+  "$codex_path" "${codex_args[@]}" \
     < "$brief_ref" > "$stdout_ref" 2> "$stderr_ref"
   carrier_exit=$?
   log_event "carrier exited rc=$carrier_exit"

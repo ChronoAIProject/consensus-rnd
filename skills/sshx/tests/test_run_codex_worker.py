@@ -48,11 +48,17 @@ TIMESTAMPED_LINE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z  \S")
 
 FAKE_CODEX = r'''#!/bin/bash
 set -u
+[ -z "${FAKE_LAUNCH_MARKER:-}" ] || printf '%s\n' launched > "$FAKE_LAUNCH_MARKER"
 last_message=
 while [ "$#" -gt 0 ]; do
+  if [ -n "${FAKE_ARGV_LOG:-}" ]; then
+    printf '%s\n' "$1" >> "$FAKE_ARGV_LOG"
+    case "$1" in -o|-C|--sandbox|-c) printf '%s\n' "$2" >> "$FAKE_ARGV_LOG" ;; esac
+  fi
   case "$1" in
     -o) last_message=$2; shift 2 ;;
     -C|--sandbox) shift 2 ;;
+    -c) shift 2 ;;
     exec|--json|--skip-git-repo-check|-) shift ;;
     *) exit 97 ;;
   esac
@@ -165,11 +171,15 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         self.counter += 1
         return f"{int(time.time()):08x}{self.counter:016x}"
 
-    def command(self, flight_id: str, *, attempt: str = "1", stage: str = "thinking", work_target: str | None = None, sandbox: str = "workspace-write") -> list[str]:
-        return self.command_for_runner(RUNNER, flight_id, attempt=attempt, stage=stage, work_target=work_target, sandbox=sandbox)
+    def command(self, flight_id: str, *, attempt: str = "1", stage: str = "thinking", work_target: str | None = None, sandbox: str = "workspace-write", retry_provider_id: str | None = None, request_max_retries: str | None = None, stream_max_retries: str | None = None) -> list[str]:
+        return self.command_for_runner(RUNNER, flight_id, attempt=attempt, stage=stage, work_target=work_target, sandbox=sandbox, retry_provider_id=retry_provider_id, request_max_retries=request_max_retries, stream_max_retries=stream_max_retries)
 
-    def command_for_runner(self, runner: Path, flight_id: str, *, attempt: str = "1", stage: str = "thinking", work_target: str | None = None, sandbox: str = "workspace-write") -> list[str]:
-        return ["/bin/bash", str(runner), "--flight-id", flight_id, "--attempt", attempt, "--stage", stage, "--work-target", work_target or str(ROOT), "--sandbox", sandbox]
+    def command_for_runner(self, runner: Path, flight_id: str, *, attempt: str = "1", stage: str = "thinking", work_target: str | None = None, sandbox: str = "workspace-write", retry_provider_id: str | None = None, request_max_retries: str | None = None, stream_max_retries: str | None = None) -> list[str]:
+        command = ["/bin/bash", str(runner), "--flight-id", flight_id, "--attempt", attempt, "--stage", stage, "--work-target", work_target or str(ROOT), "--sandbox", sandbox]
+        for option, value in (("--retry-provider-id", retry_provider_id), ("--request-max-retries", request_max_retries), ("--stream-max-retries", stream_max_retries)):
+            if value is not None:
+                command.extend([option, value])
+        return command
 
     def environment(self, mode: str = "success", **extra: str) -> dict[str, str]:
         env = os.environ.copy()
@@ -180,9 +190,9 @@ class CodexWorkerRunnerTests(unittest.TestCase):
     def expected_run_dir(self, flight_id: str, attempt: str = "1", base: Path | None = None) -> Path:
         return (base or self.temp_dir / "sshx") / flight_id / f"attempt-{attempt}"
 
-    def run_worker(self, mode: str = "success", *, flight_id: str | None = None, attempt: str = "1", stage: str = "thinking", extra_env: dict[str, str] | None = None, env: dict[str, str] | None = None) -> RunResult:
+    def run_worker(self, mode: str = "success", *, flight_id: str | None = None, attempt: str = "1", stage: str = "thinking", retry_provider_id: str | None = None, request_max_retries: str | None = None, stream_max_retries: str | None = None, extra_env: dict[str, str] | None = None, env: dict[str, str] | None = None) -> RunResult:
         selected = flight_id or self.next_flight()
-        process = subprocess.run(self.command(selected, attempt=attempt, stage=stage), input="Perform the assigned worker task.\n", capture_output=True, text=True, env=env or self.environment(mode, **(extra_env or {})), timeout=10)
+        process = subprocess.run(self.command(selected, attempt=attempt, stage=stage, retry_provider_id=retry_provider_id, request_max_retries=request_max_retries, stream_max_retries=stream_max_retries), input="Perform the assigned worker task.\n", capture_output=True, text=True, env=env or self.environment(mode, **(extra_env or {})), timeout=10)
         return RunResult(process, self.expected_run_dir(selected, attempt))
 
     def install_jq_wrapper(self) -> None:
@@ -287,6 +297,68 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         assert result.status is not None
         self.assertEqual(result.status["sandbox"], "danger-full-access")
 
+    def test_retry_controls_forward_only_supported_native_provider_keys(self) -> None:
+        argv_log = self.temp_dir / "codex-argv"
+        result = self.run_worker(
+            retry_provider_id="custom", request_max_retries="1", stream_max_retries="0",
+            extra_env={"FAKE_ARGV_LOG": str(argv_log)},
+        )
+        self.assert_terminal(result, "COMPLETE")
+        argv = argv_log.read_text().splitlines()
+        self.assertEqual(argv.count("-c"), 2)
+        self.assertIn("model_providers.custom.request_max_retries=1", argv)
+        self.assertIn("model_providers.custom.stream_max_retries=0", argv)
+        self.assertNotIn("--retry-provider-id", argv)
+        self.assertNotIn("--request-max-retries", argv)
+        self.assertNotIn("--stream-max-retries", argv)
+
+    def test_retry_control_omission_preserves_native_defaults(self) -> None:
+        argv_log = self.temp_dir / "codex-argv-omitted"
+        result = self.run_worker(extra_env={"FAKE_ARGV_LOG": str(argv_log)})
+        self.assert_terminal(result, "COMPLETE")
+        self.assertNotIn("-c", argv_log.read_text().splitlines())
+
+    def test_retry_controls_allow_independent_count_omission(self) -> None:
+        argv_log = self.temp_dir / "codex-argv-single"
+        result = self.run_worker(
+            retry_provider_id="loop", request_max_retries="2",
+            extra_env={"FAKE_ARGV_LOG": str(argv_log)},
+        )
+        self.assert_terminal(result, "COMPLETE")
+        argv = argv_log.read_text().splitlines()
+        self.assertEqual(argv.count("-c"), 1)
+        self.assertIn("model_providers.loop.request_max_retries=2", argv)
+        self.assertNotIn("stream_max_retries", "\n".join(argv))
+
+    def test_retry_controls_reject_unsupported_input_before_carrier_launch(self) -> None:
+        invalid = [
+            {"request_max_retries": "1"},
+            {"retry_provider_id": "custom"},
+            {"retry_provider_id": ""},
+            {"request_max_retries": ""},
+            {"stream_max_retries": ""},
+            {"retry_provider_id": "custom", "request_max_retries": ""},
+            {"retry_provider_id": "custom", "stream_max_retries": ""},
+            {"retry_provider_id": "custom", "request_max_retries": "1", "stream_max_retries": ""},
+            {"retry_provider_id": "custom", "request_max_retries": "", "stream_max_retries": "0"},
+            {"retry_provider_id": "custom.gateway", "request_max_retries": "1"},
+            {"retry_provider_id": "custom", "request_max_retries": "-1"},
+            {"retry_provider_id": "custom", "stream_max_retries": "1.0"},
+        ]
+        for index, controls in enumerate(invalid):
+            with self.subTest(controls=controls):
+                flight = self.next_flight()
+                marker = self.temp_dir / f"retry-launch-{index}"
+                env = self.environment(FAKE_LAUNCH_MARKER=str(marker))
+                process = subprocess.run(
+                    self.command(flight, **controls), input="brief\n", capture_output=True,
+                    text=True, env=env, timeout=10,
+                )
+                self.assertEqual(process.returncode, 64, process.stderr)
+                self.assertEqual(process.stdout, "")
+                self.assertIn("USAGE_ERROR", process.stderr)
+                self.assertFalse(marker.exists())
+                self.assertFalse((self.temp_dir / "sshx").exists())
     def test_status_contract_source_regression(self) -> None:
         spec = re.sub(r"\s+", " ", SPEC.read_text())
         self.assertNotIn('status: "RUNNING"', spec)
