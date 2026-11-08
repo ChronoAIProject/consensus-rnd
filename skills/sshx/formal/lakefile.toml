@@ -9,7 +9,7 @@ autoImplicit = false
 [[require]]
 name = "trureturing"
 git = "https://github.com/the-omega-institute/trureturing.git"
-rev = "a2961ff74009447eeafc23a049d5137727b8b716"
+rev = "9438a484f754d4f2231909a77dbc73c0e569b9b0"
 
 [[lean_lib]]
 name = "Sshx"

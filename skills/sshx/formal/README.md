@@ -304,10 +304,15 @@ model and is the first candidate for deletion from the contract.
 cd skills/sshx/formal && lake build
 ```
 
-`lakefile.toml` pins `trureturing` by commit; Lake resolves it and Mathlib through it. A fresh
-clone downloads Mathlib's build cache and compiles the imported `D5` modules. To reuse an
-already built `trureturing` checkout instead, place symbolic links in the untracked
-`.lake/packages/` directory before building: one named `trureturing` pointing at the checkout
-whose `HEAD` is the pinned commit, and one per entry of that checkout's own
-`.lake/packages/`. Lake verifies the revisions and reuses the existing build outputs without
-touching the linked checkout.
+`lean-toolchain` selects Lean, `lakefile.toml` pins `trureturing` by commit, and
+`lake-manifest.json` records Lake's complete resolved dependency closure, including Mathlib.
+A fresh clone needs dependency sources and build outputs; Mathlib's cache can supply its
+precompiled modules, while the imported `D5` modules may need compilation.
+
+To reuse an already built `trureturing` checkout, first verify its exact `HEAD`, toolchain,
+source state and dependency revisions against the pinned inputs. Coordinate access through
+the donor project's existing native reader/writer guards. Before building, place symbolic
+links in the untracked `.lake/packages/` directory: one named `trureturing` pointing at that
+compatible checkout, and one per resolved dependency pointing at its matching package.
+Symlinks share writable build products: Lake may rebuild or update files in the linked
+trees, so reuse requires compatible inputs and the donor's normal build coordination.
