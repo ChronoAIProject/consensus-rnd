@@ -628,8 +628,9 @@ count). These are not a documented total reconnect or whole-invocation deadline;
 an idle limit is not an elapsed-time limit, and retry counts do not bound the
 duration of each request, backoff, or every transport. No supported total native
 reconnect deadline is established by these sources. The runner adds no timeout
-option, provider/config override, supervisor, signal propagation or early event
-notification. A caller needing a finite observable allowance must set a
+option, provider/config override (except the optional per-invocation native retry
+controls documented in `## Invocation`), supervisor, signal propagation or early
+event notification. A caller needing a finite observable allowance must set a
 whole-job harness limit and verify that harness's process-tree teardown; runner
 PID termination alone does not establish teardown (see `## Teardown Prerequisite`).
 
