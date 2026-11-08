@@ -284,16 +284,16 @@ main() {
     case "$work_target" in *$'\n'*|*$'\r'*) usage_error "--work-target must not contain LF or CR"; return 1 ;; esac
     case "$sandbox" in danger-full-access|workspace-write) ;; *) usage_error "invalid --sandbox"; return 1 ;; esac
     retry_control_seen=0
-    if [ -n "$retry_provider_id" ] || [ -n "$request_max_retries" ] || [ -n "$stream_max_retries" ]; then
-      retry_control_seen=1
-    fi
+    case "$seen_options" in
+      *'--retry-provider-id'*|*'--request-max-retries'*|*'--stream-max-retries'*) retry_control_seen=1 ;;
+    esac
     if [ "$retry_control_seen" -eq 1 ]; then
       [ -n "$retry_provider_id" ] || { usage_error "retry controls require --retry-provider-id"; return 1; }
       valid_provider_id "$retry_provider_id" || { usage_error "--retry-provider-id must be a non-empty native bare key"; return 1; }
-      if [ -n "$request_max_retries" ]; then
+      if [[ "$seen_options" = *'--request-max-retries'* ]]; then
         nonnegative_integer "$request_max_retries" || { usage_error "--request-max-retries must be a nonnegative integer"; return 1; }
       fi
-      if [ -n "$stream_max_retries" ]; then
+      if [[ "$seen_options" = *'--stream-max-retries'* ]]; then
         nonnegative_integer "$stream_max_retries" || { usage_error "--stream-max-retries must be a nonnegative integer"; return 1; }
       fi
     fi

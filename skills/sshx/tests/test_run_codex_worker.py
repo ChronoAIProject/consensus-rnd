@@ -334,6 +334,13 @@ class CodexWorkerRunnerTests(unittest.TestCase):
         invalid = [
             {"request_max_retries": "1"},
             {"retry_provider_id": "custom"},
+            {"retry_provider_id": ""},
+            {"request_max_retries": ""},
+            {"stream_max_retries": ""},
+            {"retry_provider_id": "custom", "request_max_retries": ""},
+            {"retry_provider_id": "custom", "stream_max_retries": ""},
+            {"retry_provider_id": "custom", "request_max_retries": "1", "stream_max_retries": ""},
+            {"retry_provider_id": "custom", "request_max_retries": "", "stream_max_retries": "0"},
             {"retry_provider_id": "custom.gateway", "request_max_retries": "1"},
             {"retry_provider_id": "custom", "request_max_retries": "-1"},
             {"retry_provider_id": "custom", "stream_max_retries": "1.0"},
