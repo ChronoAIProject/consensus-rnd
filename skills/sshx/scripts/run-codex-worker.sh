@@ -1,16 +1,40 @@
 #!/bin/bash
-set -u
-umask 077
-reason=INTERNAL_ERROR
-code=1
-carrier_exit=null
-started_at=; started_epoch=; finished_at=; finished_epoch=; duration_seconds=
-run_dir=
-run_dir_owned=0
-result_valid=0; jq_path=
-retry_provider_id=; request_max_retries=; stream_max_retries=
-verdict=
-execution_failure=null
+
+# Shared with the two maintenance scripts, which source this file without
+# running the worker entry point.
+flight_id_pattern='^[0-9a-f]{24}$'
+attempt_prefix=attempt-
+status_filename=status.json
+
+lock_run_root() {
+  # Lock the directory itself so path aliases share one lock. The calling
+  # shell and its mutating children retain the open file description.
+  exec 9< "$1" || return 1
+  python3 -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX)'
+}
+
+strip_trailing_slashes() { stripped_path=$1; while [ "$stripped_path" != / ] && [ "${stripped_path%/}" != "$stripped_path" ]; do stripped_path=${stripped_path%/}; done; }
+normalize_run_root() {
+  if [ -n "${SSHX_HOME:-}" ]; then
+    run_root_source=SSHX_HOME; run_root=$SSHX_HOME
+  elif [ -n "${HOME:-}" ]; then
+    run_root_source=HOME; strip_trailing_slashes "$HOME"
+    case "$stripped_path" in /) run_root=/.sshx ;; *) run_root="$stripped_path/.sshx" ;; esac
+  else
+    reason=RUN_DIR_UNAVAILABLE
+    printf '%s\n' 'run-codex-worker: RUN_DIR_UNAVAILABLE: neither SSHX_HOME nor HOME is set' >&2
+    return 1
+  fi
+  strip_trailing_slashes "$run_root"; run_root=$stripped_path
+  case "$run_root" in /*) ;; *) reason=RUN_DIR_UNAVAILABLE; printf '%s\n' "run-codex-worker: RUN_DIR_UNAVAILABLE: run root from $run_root_source must be absolute" >&2; return 1 ;; esac
+  case "$run_root" in *$'\n'*|*$'\r'*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
+}
+valid_flight_id() {
+  local LC_ALL=C
+  [[ "$1" =~ $flight_id_pattern ]]
+}
+
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then return 0; fi
 
 regular_or_absent() { [ ! -e "$1" ] && [ ! -L "$1" ] || { [ -f "$1" ] && [ ! -L "$1" ]; }; }
 log_time() { log_timestamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null) || log_timestamp=; case "$log_timestamp" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) printf '%s\n' "$log_timestamp" ;; *) printf '%s\n' '1970-01-01T00:00:00Z' ;; esac; }
@@ -51,6 +75,7 @@ project_execution_failure() {
 finish() {
   trap - EXIT
   trap '' INT TERM
+  exec 9<&-
   if [ "$run_dir_owned" -eq 1 ]; then
     if finished_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null); then :; else finished_at=; fi
     if finished_epoch=$(date -u '+%s' 2>/dev/null); then case "$finished_epoch" in ''|*[!0-9]*) finished_epoch= ;; esac; else finished_epoch=; fi
@@ -82,7 +107,18 @@ finish() {
     [ "$status_target_valid" -eq 1 ] && [ "$render_ok" -eq 1 ] && { mv -f "$status_tmp" "$status_ref" || mv_rc=1; }
     [ "$status_target_valid" -eq 0 ] && [ -f "$status_ref" ] && [ ! -L "$status_ref" ] && rm -f "$status_ref"
     if [ "$status_target_valid" -eq 1 ]; then
-      if [ "$render_ok" -eq 0 ] || [ "$mv_rc" -ne 0 ] || [ ! -f "$status_ref" ] || [ -L "$status_ref" ]; then reason=INTERNAL_ERROR; code=1; printf '%s\n' 'run-codex-worker: INTERNAL_ERROR: cannot commit status' >&2; [ -f "$status_ref" ] && [ ! -L "$status_ref" ] && rm -f "$status_ref"; else rm -f "$status_tmp"; fi
+      if [ "$render_ok" -eq 0 ] || [ "$mv_rc" -ne 0 ] || [ ! -f "$status_ref" ] || [ -L "$status_ref" ]; then
+        reason=INTERNAL_ERROR; code=1
+        printf '%s\n' 'run-codex-worker: INTERNAL_ERROR: cannot commit status' >&2
+        [ -f "$status_ref" ] && [ ! -L "$status_ref" ] && rm -f "$status_ref"
+      else
+        rm -f "$status_tmp"
+        # Keep the published outcome while allowing the host to signal maintenance children.
+        trap ':' INT TERM
+        if ! /bin/bash "$runner_dir/prune-inactive-codex-worker-runs.sh" --on-completion "$flight_id" </dev/null >/dev/null; then
+          log_event 'MAINTENANCE_FAILED: completion sweep failed'
+        fi
+      fi
     fi
     final_status=NOT_COMPLETE; [ "$reason" = COMPLETE ] && final_status=COMPLETE
     verdict_log=${verdict:-unknown}; [ "$stage" = implementation ] && verdict_log=n/a
@@ -96,10 +132,7 @@ finish() {
   fi
   exit "$code"
 }
-trap finish EXIT
-
 interrupt() { reason=INTERRUPTED; code=1; finish; }
-trap interrupt INT TERM
 usage_error() { reason=USAGE_ERROR; code=64; printf '%s\n' "run-codex-worker: USAGE_ERROR: $1" >&2; return 1; }
 require_value() { [ "$2" -ge 2 ] || usage_error "missing value for $1"; }
 positive_integer() {
@@ -116,34 +149,13 @@ valid_provider_id() {
   case "$1" in ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*) return 1 ;; esac
   return 0
 }
-strip_trailing_slashes() { stripped_path=$1; while [ "$stripped_path" != / ] && [ "${stripped_path%/}" != "$stripped_path" ]; do stripped_path=${stripped_path%/}; done; }
-normalize_run_root() {
-  if [ -n "${SSHX_HOME:-}" ]; then
-    run_root_source=SSHX_HOME; run_root=$SSHX_HOME
-  elif [ -n "${HOME:-}" ]; then
-    run_root_source=HOME; strip_trailing_slashes "$HOME"
-    case "$stripped_path" in /) run_root=/.sshx ;; *) run_root="$stripped_path/.sshx" ;; esac
-  else
-    reason=RUN_DIR_UNAVAILABLE
-    printf '%s\n' 'run-codex-worker: RUN_DIR_UNAVAILABLE: neither SSHX_HOME nor HOME is set' >&2
-    return 1
-  fi
-  strip_trailing_slashes "$run_root"; run_root=$stripped_path
-  case "$run_root" in /*) ;; *) reason=RUN_DIR_UNAVAILABLE; printf '%s\n' "run-codex-worker: RUN_DIR_UNAVAILABLE: run root from $run_root_source must be absolute" >&2; return 1 ;; esac
-  case "$run_root" in *$'\n'*|*$'\r'*) reason=RUN_DIR_UNAVAILABLE; return 1 ;; esac
-}
-valid_flight_id() {
-  [ "${#1}" -eq 24 ] || return 1
-  case "$1" in *[!0123456789abcdef]*) return 1 ;; esac
-  return 0
-}
 derive_project_paths() {
   sshx_root=$run_root
   run_parent="$sshx_root/$flight_id"
-  run_dir="$run_parent/attempt-$attempt"
+  run_dir="$run_parent/$attempt_prefix$attempt"
   brief_ref="$run_dir/brief.md"; stdout_ref="$run_dir/worker.stdout.log"; stderr_ref="$run_dir/worker.stderr.log"
   last_message_ref="$run_dir/last-message.txt"; result_ref="$run_dir/result.json"; sentinel_ref="$run_dir/completion.sentinel"
-  carrier_exit_ref="$run_dir/carrier.exit"; status_ref="$run_dir/status.json"
+  carrier_exit_ref="$run_dir/carrier.exit"; status_ref="$run_dir/$status_filename"
 }
 emit_project_paths() {
   if ! projection_json=$("$jq_path" --compact-output --null-input --argjson schema_version 1 --arg flight_id "$flight_id" --argjson attempt "$attempt" --arg run_dir "$run_dir" --arg brief_ref "$brief_ref" --arg result_ref "$result_ref" --arg sentinel_ref "$sentinel_ref" --arg carrier_exit_ref "$carrier_exit_ref" --arg status_ref "$status_ref" --arg stdout_ref "$stdout_ref" --arg stderr_ref "$stderr_ref" --arg last_message_ref "$last_message_ref" '{schema_version:$schema_version,flight_id:$flight_id,attempt:$attempt,run_dir:$run_dir,brief_ref:$brief_ref,result_ref:$result_ref,completion_sentinel_ref:$sentinel_ref,carrier_exit_ref:$carrier_exit_ref,status_ref:$status_ref,log_refs:{stdout:$stdout_ref,stderr:$stderr_ref,last_message:$last_message_ref}}'); then
@@ -196,9 +208,9 @@ emit_project_root() {
 emit_project_flight() {
   attempts_json='[]'
   shopt -s nullglob
-  for projected_run_dir in "$run_parent"/attempt-*; do
+  for projected_run_dir in "$run_parent"/"$attempt_prefix"*; do
     attempt_name=${projected_run_dir##*/}
-    projected_attempt=${attempt_name#attempt-}
+    projected_attempt=${attempt_name#"$attempt_prefix"}
     projected_attempt_json=null
     case "$projected_attempt" in ''|0|0*|*[!0-9]*) ;; *) projected_attempt_json=$projected_attempt ;; esac
     attempt=$projected_attempt
@@ -339,6 +351,11 @@ main() {
     printf '%s\n' "run-codex-worker: RUN_DIR_UNAVAILABLE: run root from $run_root_source must be a non-symlink writable directory or be created inside an existing writable parent" >&2
     return 1
   }
+  lock_run_root "$run_root" || {
+    reason=RUN_DIR_UNAVAILABLE
+    printf '%s\n' 'run-codex-worker: RUN_DIR_UNAVAILABLE: cannot lock the run root' >&2
+    return 1
+  }
   ensure_dir() {
     ensure_path=$1
     [ ! -L "$ensure_path" ] || return 1
@@ -351,6 +368,7 @@ main() {
     return 1
   fi
   run_dir_owned=1
+  exec 9<&-
   cat > "$brief_ref" || return 1
   stage_verdict_specs='thinking=propose|revise|reject|abstain;review=approve|comment|reject;termination=abstain|satisfied|unsatisfied;implementation='
   allowed_verdict_spec=${stage_verdict_specs#*"$stage="}; allowed_verdict_spec=${allowed_verdict_spec%%;*}
@@ -418,4 +436,18 @@ EOF
   reason=COMPLETE
   code=0
 }
-  main "$@"
+set -u
+umask 077
+runner_dir=${0%/*}
+[ "$runner_dir" != "$0" ] || runner_dir=.
+reason=INTERNAL_ERROR
+code=1
+carrier_exit=null
+started_at=; started_epoch=; finished_at=; finished_epoch=; duration_seconds=
+run_dir_owned=0
+result_valid=0; jq_path=
+verdict=
+execution_failure=null
+trap finish EXIT
+trap interrupt INT TERM
+main "$@"

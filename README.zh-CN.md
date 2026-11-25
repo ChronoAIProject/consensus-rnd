@@ -65,7 +65,7 @@
 - **Heca 执行：** 席位使用无人值守的完整权限；agent 由 heca 拥有，host 任务超时与 teardown 无法触及。普通路径先收集每次尝试的成功或失败结果，再归档该尝试自己的 agent。停止失败路径中，已确认的停止归档就是该归档，并且先于记录失败。既未收集也未停止的尝试（例如 caller 在收集前中断）保持未归档；收集后归档调用失败时，caller 将其报告为未解决的 housekeeping。归档后的历史在 heca 中仍可读取。支持范围限于已记录的证据。详见 [worker 委派](./skills/sshx/SKILL.md#worker-delegation)。
 - **成本与时长：** 完整的初始运行至少派发 10 个 worker turn，每个 turn 都可能包含多次模型调用：六个思考席、一个实现 worker、三个 reviewer。修复、聚焦轮、重复 review 及适用的终止检查会增加工作。**默认不设置 `pass_budget` 上限**；详见[协议](./skills/sshx/SKILL.md#inlineconsensusprotocol)、[思考面板](./skills/sshx/SKILL.md#thinking-panel)、[评审](./skills/sshx/SKILL.md#review-triplet)和[轮次计费规则](./skills/sshx/SKILL.md#fix-or-done)。
 - **内容外发：** oracle 席将内联 brief 经 NyxID 发送到外部 ChatGPT Pro 账号。派发前应考虑 brief 中的内容；详见[worker 委派](./skills/sshx/SKILL.md#worker-delegation)和 oracle 的[请求合同](./skills/sshx/ORACLE_WORKER_SPEC.md#request)。
-- **产物留存：** runner 的 brief、日志和结果会积累在 `${SSHX_HOME:-$HOME/.sshx}/<flight-id>/attempt-<n>`，直到清理或裁剪。详见[运行目录](./skills/sshx/CODEX_WORKER_SPEC.md#run-directory)与[不活跃 flight 清理](./skills/sshx/CODEX_WORKER_SPEC.md#inactive-flight-sweep)；过短的保留窗口可能删除仍在静默运行的 flight。
+- **产物留存。** 每次 Codex 或 Oracle 尝试发布终态后，都会在 `${SSHX_HOME:-$HOME/.sshx}` 下触发清理。清理保留触发它的 flight，只删除不活跃超过一天且所有尝试均有终态记录的整个 flight。后续完成事件会重试部分删除的 flight。手动清理也可能删除仍在静默运行的 flight。[完成时触发清理](./skills/sshx/CODEX_WORKER_SPEC.md#completion-triggered-retention) · [手动清理](./skills/sshx/CODEX_WORKER_SPEC.md#inactive-flight-sweep)
 - **Host 责任：** runner 的超时与整个任务进程树的终止由 host harness 负责。[终止前提](./skills/sshx/CODEX_WORKER_SPEC.md#teardown-prerequisite)尚未验证 Codex、Cursor 和 Gemini host 的 teardown 行为；另见[委派合同](./skills/sshx/SKILL.md#worker-delegation)。
 - **合同变化：** [包元数据](./package.json)表明当前处于预发布阶段。合同可能变化，更新时请检查 [skill](./skills/sshx/SKILL.md) 与[贡献指南](./CONTRIBUTING.md)。
 - **产物不可信：** 共识仍是需要独立验证的 AI 产物（[仓库不动点 FI-001](./CLAUDE.md#共识研发不动点)）。上下文隔离不能证明先验独立或结果更好（[委派限制](./skills/sshx/SKILL.md#worker-delegation)）。[Lean 模型](./skills/sshx/formal/README.md#what-the-model-cannot-verify)检查形式对象，不能证明证据真实或实际运行合规；模型与文字是否对应仍需人工判断。
@@ -78,9 +78,9 @@ Host 必须为 runner 派发提供带完成通知的后台执行、超时和整�
 
 | Carrier | 前提与职责 |
 |---|---|
-| `codex-cli` | Bash、`jq`、可执行且可用的 Codex CLI，以及可写的运行根目录和提供的工作目标。heca 不可用时的初始席与 heca 内的回退席都经过 [Codex runner](./skills/sshx/CODEX_WORKER_SPEC.md#carrier)。 |
+| `codex-cli` | Bash、`jq`、Python 3、可执行且可用的 Codex CLI，以及可写且支持目录 `flock` 的运行根目录。派发时需提供工作目标。heca 不可用时的初始席与 heca 内的回退席都经过 [Codex runner](./skills/sshx/CODEX_WORKER_SPEC.md#carrier)。 |
 | `heca` | 用户或 host 须对本次 sshx 运行显式开启，当前会话须暴露 heca 的 MCP agent tools，工作目标须匹配已有 placement。默认关闭；可用时接管全部初始 Codex 席，包括实现和修复。详见[使用 Heca Worker](#使用-heca-worker)与 [worker 委派](./skills/sshx/SKILL.md#worker-delegation)。 |
-| `nyxid-oracle` | Python 3、路径投影所需的 Bash 与 `jq`，以及可用的 NyxID CLI；broker 须有包含在线 worker 的 active pool。[Oracle runner](./skills/sshx/ORACLE_WORKER_SPEC.md#invocation)负责派发；另见 [pool 选择](./skills/sshx/ORACLE_WORKER_SPEC.md#pool-choice)与[登录诊断](./skills/sshx/ORACLE_WORKER_SPEC.md#broker-diagnostics)。 |
+| `nyxid-oracle` | Python 3、Bash、`jq`、可写且支持目录 `flock` 的运行根目录，以及可用的 NyxID CLI 和包含在线 worker 的 active pool。[Oracle runner](./skills/sshx/ORACLE_WORKER_SPEC.md#invocation) · [pool 选择](./skills/sshx/ORACLE_WORKER_SPEC.md#pool-choice) · [登录诊断](./skills/sshx/ORACLE_WORKER_SPEC.md#broker-diagnostics) |
 | `isolated-token-subagent` | Host 提供隔离 token 上下文的 subagent 能力；同轮席位返回各自 verdict 前不得读取彼此输出。 |
 | `abstain` | 无 carrier 可用，或必需 flight 耗尽重试与 fallback 时诚实停止；它是结果，不是执行 carrier。 |
 

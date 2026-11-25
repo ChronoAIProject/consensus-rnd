@@ -10,7 +10,129 @@ internal_error() {
 }
 require_value() { [ "$2" -ge 2 ] || usage_error "missing value for $1"; }
 
-older_than=1d dry_run=0 seen_options='|'
+load_layout() {
+  script_dir=${0%/*}
+  [ "$script_dir" != "$0" ] || script_dir=.
+  runner="$script_dir/run-codex-worker.sh"
+  [ -f "$runner" ] && [ ! -L "$runner" ] || internal_error "runner is unavailable"
+  # shellcheck source=skills/sshx/scripts/run-codex-worker.sh
+  . "$runner" || internal_error "cannot load the run layout"
+  normalize_run_root || internal_error "cannot project the run root"
+}
+
+completion_sweep() {
+  load_layout
+  valid_flight_id "$1" || usage_error "invalid completion flight"
+  exec 9< "$run_root" || internal_error "cannot open the run root"
+  exec python3 - "$run_root" "$1" "$flight_id_pattern" "$attempt_prefix" "$status_filename" "$2" <<'PYTHON'
+import fcntl
+import os
+import re
+import stat
+import subprocess
+import sys
+import time
+
+
+RETIRING_PREFIX = ".sshx-retiring-"
+
+
+def retiring_name(flight_id: str, entry: os.stat_result) -> str:
+    return f"{RETIRING_PREFIX}{flight_id}-{entry.st_dev}-{entry.st_ino}"
+
+
+def has_terminal_attempts(path: str, prefix: str, status_name: str) -> bool:
+    seen = False
+    with os.scandir(path) as entries:
+        for entry in entries:
+            if not entry.name.startswith(prefix):
+                continue
+            if not re.fullmatch(r"[1-9][0-9]*", entry.name[len(prefix):]):
+                return False
+            if not entry.is_dir(follow_symlinks=False):
+                return False
+            try:
+                status = os.lstat(os.path.join(entry.path, status_name))
+            except FileNotFoundError:
+                return False
+            if not stat.S_ISREG(status.st_mode):
+                return False
+            seen = True
+    return seen
+
+
+def sweep(root: str, emitting_flight: str, flight_pattern: str, prefix: str,
+          status_name: str, minutes: str) -> int:
+    cutoff = time.time() - int(minutes) * 60
+    flight_id = re.compile(flight_pattern)
+    failures = 0
+    first_failure = None
+    with os.scandir(root) as entries:
+        flights = [
+            flight for flight in entries
+            if flight.name.startswith(RETIRING_PREFIX) or flight_id.fullmatch(flight.name)
+        ]
+    for flight in flights:
+        retiring = flight.name.startswith(RETIRING_PREFIX)
+        identity = flight.name[len(RETIRING_PREFIX):].partition("-")[0] if retiring else flight.name
+        if identity == emitting_flight or not flight_id.fullmatch(identity):
+            continue
+        try:
+            entry = flight.stat(follow_symlinks=False)
+            if not stat.S_ISDIR(entry.st_mode):
+                continue
+            name = retiring_name(identity, entry)
+            if retiring:
+                if flight.name != name:
+                    continue
+                target = flight.path
+            else:
+                if entry.st_mtime > cutoff or not has_terminal_attempts(flight.path, prefix, status_name):
+                    continue
+                activity = subprocess.run(
+                    ["find", flight.path, "-mmin", "-" + minutes, "-print", "-quit"],
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True,
+                )
+                if activity.stdout:
+                    continue
+                # Commit eligibility outside the claim namespace before rm can erase it.
+                target = os.path.join(root, name)
+                if os.path.lexists(target):
+                    raise FileExistsError(f"retirement destination already exists: {target}")
+                os.rename(flight.path, target)
+            # A live rm keeps the lock even if this maintainer is killed.
+            subprocess.run(
+                ["rm", "-rf", "--", target],
+                stderr=subprocess.DEVNULL, pass_fds=(9,), check=True,
+            )
+            if os.path.lexists(target):
+                raise OSError("flight remains after removal")
+        except (OSError, subprocess.CalledProcessError) as error:
+            failures += 1
+            if first_failure is None:
+                first_failure = f"{flight.name}: {error}"
+    if failures:
+        print(f"prune-inactive-codex-worker-runs: completion sweep failed for "
+              f"{failures} flight(s); first failure: {first_failure}", file=sys.stderr)
+    return int(failures != 0)
+
+
+try:
+    fcntl.flock(9, fcntl.LOCK_EX)
+    sys.exit(sweep(*sys.argv[1:]))
+except OSError as error:
+    sys.exit(f"prune-inactive-codex-worker-runs: cannot lock or scan the run root: {error}")
+PYTHON
+}
+
+default_days=1
+if [ "${1:-}" = --on-completion ]; then
+  [ "$#" -eq 2 ] || usage_error "expected one completion flight"
+  completion_sweep "$2" "$((default_days * 1440))"
+  exit 1
+fi
+
+older_than=${default_days}d dry_run=0 seen_options='|'
 while [ "$#" -gt 0 ]; do
   option=$1
   case "$option" in
@@ -41,18 +163,21 @@ case "$duration_unit" in
 esac
 
 if ! jq_path=$(command -v jq 2>/dev/null) || [ ! -x "$jq_path" ]; then internal_error "jq is unavailable"; fi
-script_dir=${0%/*}
-case "$script_dir" in "$0") script_dir=. ;; esac
-runner="$script_dir/run-codex-worker.sh"
-[ -f "$runner" ] && [ ! -L "$runner" ] || internal_error "runner is unavailable"
+load_layout
 
-root_projection=$(bash "$runner" --project-root) || internal_error "cannot project the run root"
-sshx_root=$("$jq_path" -r '.sshx_root' <<<"$root_projection") || internal_error "cannot read sshx_root"
-root_present=$("$jq_path" -r '.root_present' <<<"$root_projection") || internal_error "cannot read root_present"
-case "$root_present" in true|false) ;; *) internal_error "invalid root_present" ;; esac
-flight_count=$("$jq_path" -r '.flights | length' <<<"$root_projection") || internal_error "cannot count flights"
-case "$flight_count" in ''|*[!0-9]*) internal_error "invalid flight count" ;; esac
-unrecognized_json=$("$jq_path" --compact-output '.unrecognized' <<<"$root_projection") || internal_error "cannot read unrecognized entries"
+sshx_root=$run_root root_present=false flight_count=0 unrecognized_json='[]'
+if [ "$dry_run" -eq 1 ] || [ -d "$run_root" ]; then
+  if [ "$dry_run" -eq 0 ]; then
+    lock_run_root "$run_root" || internal_error "cannot lock the run root"
+  fi
+  root_projection=$(bash "$runner" --project-root) || internal_error "cannot project the run root"
+  sshx_root=$("$jq_path" -r '.sshx_root' <<<"$root_projection") || internal_error "cannot read sshx_root"
+  root_present=$("$jq_path" -r '.root_present' <<<"$root_projection") || internal_error "cannot read root_present"
+  case "$root_present" in true|false) ;; *) internal_error "invalid root_present" ;; esac
+  flight_count=$("$jq_path" -r '.flights | length' <<<"$root_projection") || internal_error "cannot count flights"
+  case "$flight_count" in ''|*[!0-9]*) internal_error "invalid flight count" ;; esac
+  unrecognized_json=$("$jq_path" --compact-output '.unrecognized' <<<"$root_projection") || internal_error "cannot read unrecognized entries"
+fi
 
 mode=delete; [ "$dry_run" -eq 0 ] || mode=dry-run
 flights_json='[]' removed_json='[]' failed_json='[]' interrupted=false failure_seen=0

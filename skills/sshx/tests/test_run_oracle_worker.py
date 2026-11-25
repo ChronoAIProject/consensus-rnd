@@ -6,6 +6,7 @@ the runner may call. The broker stream fixture is a real response captured on 20
 with only ``chatgpt_url`` replaced.
 """
 
+import fcntl
 import json
 import os
 import select
@@ -455,10 +456,10 @@ class OracleRunnerTests(unittest.TestCase):
         self.assertEqual(run.process.stdout, b"")
         self.assertEqual(self.nyxid_calls(), [])
 
-    def launch(self, **extra: str) -> subprocess.Popen[bytes]:
+    def launch(self, *arguments: str, chat_exit: int = 0, **extra: str) -> subprocess.Popen[bytes]:
         return subprocess.Popen(
-            [sys.executable, str(ORACLE_RUNNER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, env=self.environment(FAKE_CHAT_EXIT="0", **extra),
+            [sys.executable, str(ORACLE_RUNNER), *arguments], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, env=self.environment(FAKE_CHAT_EXIT=str(chat_exit), **extra),
             preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
         )
 
@@ -515,6 +516,78 @@ class OracleRunnerTests(unittest.TestCase):
                 self.assertEqual(raw_response.read_text(), COMPLETE_STREAM)
                 self.assertFalse(Path(str(receipt["status_ref"])).exists())
 
+    def test_post_publication_signals_preserve_exit_during_lock_contention(self) -> None:
+        self.stream.write_text(COMPLETE_STREAM)
+        stale = self.next_flight_id()
+        self.run_codex(stale)
+        self.age_flight(self.sshx_home / stale)
+        waiting = self.temp_dir / "maintenance-waiting"
+        os.mkfifo(waiting)
+        waiting_fd = os.open(waiting, os.O_RDWR | os.O_NONBLOCK)
+        self.addCleanup(os.close, waiting_fd)
+        python = self.bin_dir / "python3"
+        python.write_text(
+            f"#!{sys.executable}\n" + '''
+import fcntl
+import os
+import sys
+
+flock = fcntl.flock
+
+def observe_contention(fd, operation):
+    try:
+        flock(fd, operation | fcntl.LOCK_NB)
+    except BlockingIOError:
+        with open(os.environ["MAINTENANCE_WAITING"], "w") as waiting:
+            waiting.write("waiting\\n")
+        flock(fd, operation)
+
+if "MAINTENANCE_WAITING" in os.environ:
+    fcntl.flock = observe_contention
+if sys.argv[1] == "-c":
+    exec(sys.argv[2])
+else:
+    del sys.argv[0]
+    exec(sys.stdin.read())
+'''
+        )
+        python.chmod(0o755)
+
+        for signum, chat_exit, status, code in (
+            (signal.SIGTERM, 0, "COMPLETE", 0),
+            (signal.SIGINT, 9, "NOT_COMPLETE", 1),
+        ):
+            with self.subTest(signal=signum.name, status=status):
+                flight = self.next_flight_id()
+                gate, ready_fd, release_fd = self.gate_fifos()
+                with self.launch("--flight-id", flight, "--attempt", "1", chat_exit=chat_exit,
+                                 FAKE_CHAT_GATE=str(gate), MAINTENANCE_WAITING=str(waiting)) as process:
+                    receipt = self.launch_until_broker_call(process, ready_fd)
+                    process.stdin = None  # The brief helper closed it.
+                    descriptor = os.open(self.sshx_home, os.O_RDONLY)
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX)
+                        os.write(release_fd, b"release\n")
+                        readable, _, _ = select.select([waiting_fd], [], [], WATCHDOG_SECONDS)
+                        self.assertTrue(readable, "the post-publication maintainer must reach the lock")
+                        self.assertEqual(os.read(waiting_fd, 64), b"waiting\n")
+                        published = Path(str(receipt["status_ref"])).read_bytes()
+                        self.assertEqual(json.loads(published)["status"], status)
+                        self.assertIsNone(process.poll())
+                        process.send_signal(signum)
+                        stdout, stderr = process.communicate(timeout=WATCHDOG_SECONDS)
+                        self.assertEqual(process.returncode, code, stderr)
+                        self.assertEqual(stdout, b"", "the launch receipt must be the only stdout")
+                        self.assertEqual(receipt, json.loads(self.project_paths(flight, 1)))
+                        self.assertEqual(Path(str(receipt["status_ref"])).read_bytes(), published)
+                        self.assertTrue((self.sshx_home / stale).exists())
+                    finally:
+                        os.close(descriptor)
+
+        recovered = self.run_oracle()
+        self.assert_complete(recovered)
+        self.assertFalse((self.sshx_home / stale).exists())
+
     def mutated_runner(self, anchor: str, replacement: str) -> Path:
         source = ORACLE_RUNNER.read_text(encoding="utf-8")
         self.assertEqual(source.count(anchor), 1, f"mutation anchor must appear exactly once: {anchor}")
@@ -522,6 +595,7 @@ class OracleRunnerTests(unittest.TestCase):
         self.counter += 1
         directory.mkdir()
         shutil.copy2(CODEX_RUNNER, directory / CODEX_RUNNER.name)
+        shutil.copy2(PRUNE, directory / PRUNE.name)
         mutated = directory / ORACLE_RUNNER.name
         mutated.write_text(source.replace(anchor, replacement), encoding="utf-8")
         return mutated
@@ -572,6 +646,57 @@ class OracleRunnerTests(unittest.TestCase):
         path.write_text(json.dumps({"schema_version": 1, "workers": workers}))
         return path
 
+    def age_flight(self, flight: Path) -> None:
+        stamp = time.time() - 2 * DAY_SECONDS
+        for entry in [*flight.rglob("*"), flight]:
+            os.utime(entry, (stamp, stamp), follow_symlinks=False)
+
+    def test_terminal_oracle_failure_sweeps_old_codex_flights_and_preserves_receipt(self) -> None:
+        old = self.next_flight_id()
+        self.run_codex(old)
+        self.age_flight(self.sshx_home / old)
+        collision = self.run_oracle(arguments=("--flight-id", old, "--attempt", "1"))
+        self.assertIn("RUN_DIR_COLLISION", collision.stderr)
+        self.assertTrue((self.sshx_home / old).is_dir())
+        failed = self.run_oracle(chat_exit=9)
+        self.assert_not_complete(failed, "CARRIER_EXIT_NONZERO")
+        self.assertEqual(failed.process.stdout, self.project_paths(failed.run_dir.parent.name, 1))
+        self.assertFalse((self.sshx_home / old).exists())
+
+    def test_oracle_retry_claim_waits_for_root_lock_and_protects_an_aged_active_flight(self) -> None:
+        flight_id = self.next_flight_id()
+        self.run_codex(flight_id)
+        self.stream.write_text(COMPLETE_STREAM)
+        gate, ready_fd, release_fd = self.gate_fifos()
+        descriptor = os.open(self.sshx_home, os.O_RDONLY)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        with self.launch("--flight-id", flight_id, "--attempt", "2", FAKE_CHAT_GATE=str(gate)) as retry:
+            try:
+                assert retry.stdout is not None and retry.stdin is not None
+                readable, _, _ = select.select([retry.stdout], [], [], WATCHDOG_SECONDS)
+                self.assertTrue(readable, "retry must publish a receipt before claiming the attempt")
+                receipt = json.loads(retry.stdout.readline())
+                retry.stdin.write(b"brief\n")
+                retry.stdin.flush()
+                retry.stdin.close()
+                run_dir = Path(receipt["run_dir"])
+                self.assertFalse(run_dir.exists())
+            finally:
+                os.close(descriptor)
+            try:
+                readable, _, _ = select.select([ready_fd], [], [], WATCHDOG_SECONDS)
+                self.assertTrue(readable, "the broker call must start after the lock releases")
+                self.age_flight(run_dir.parent)
+                self.run_codex(self.next_flight_id())
+                self.assertTrue((run_dir.parent / "attempt-1").is_dir())
+                self.assertTrue(run_dir.is_dir())
+                self.assertFalse(Path(receipt["status_ref"]).exists())
+            finally:
+                os.write(release_fd, b"release\n")
+            retry.wait(timeout=WATCHDOG_SECONDS)
+            self.assertEqual(retry.returncode, 0)
+            self.assertEqual(json.loads(Path(receipt["status_ref"]).read_text())["status"], "COMPLETE")
+
     def test_clean_and_prune_share_the_run_root_with_codex_and_oracle_flights(self) -> None:
         codex_flight = self.next_flight_id()
         self.run_codex(codex_flight)
@@ -595,9 +720,7 @@ class OracleRunnerTests(unittest.TestCase):
 
         for path in self.sshx_home.iterdir():
             if path.name != codex_flight:
-                for entry in [*path.rglob("*"), path]:
-                    stamp = time.time() - 2 * DAY_SECONDS
-                    os.utime(entry, (stamp, stamp), follow_symlinks=False)
+                self.age_flight(path)
         pruned = subprocess.run(
             ["bash", str(PRUNE)], capture_output=True, text=True, env=self.environment(), timeout=WATCHDOG_SECONDS,
             check=False,
