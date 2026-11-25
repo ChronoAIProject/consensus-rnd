@@ -1,11 +1,14 @@
+import fcntl
 import json
 import os
 import select
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 
 
@@ -186,24 +189,22 @@ class CodexWorkerToolTests(unittest.TestCase):
         )
         return json.loads(process.stdout)
 
-    def run_worker(self, flight_id: str, attempt: int = 1, marker: str = "worker") -> subprocess.CompletedProcess[str]:
+    def worker_command(self, flight_id: str, attempt: int = 1) -> list[str]:
+        return [
+            "/bin/bash", str(RUNNER), "--flight-id", flight_id, "--attempt", str(attempt),
+            "--stage", "implementation", "--work-target", str(ROOT),
+        ]
+
+    def run_worker(
+        self, flight_id: str, attempt: int = 1, marker: str = "worker", *,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [
-                "/bin/bash",
-                str(RUNNER),
-                "--flight-id",
-                flight_id,
-                "--attempt",
-                str(attempt),
-                "--stage",
-                "implementation",
-                "--work-target",
-                str(ROOT),
-            ],
+            self.worker_command(flight_id, attempt),
             input=f"MARKER={marker}\n",
             capture_output=True,
             text=True,
-            env=self.environment(),
+            env=env or self.environment(),
             timeout=WATCHDOG_SECONDS,
         )
 
@@ -1841,6 +1842,264 @@ class CodexWorkerToolTests(unittest.TestCase):
                 )
                 self.assertEqual(process.returncode, 64, process.stderr)
 
+    def test_completion_sweep_deletes_only_old_whole_terminal_flights(self) -> None:
+        """Baseline da1de24: one receipt from each successful producer left a two-day-old
+        terminal Oracle flight intact. Only the manual sweep removed it.
+        """
+        old, nested_recent, pending, bad_status, emitter = (self.next_flight_id() for _ in range(5))
+        for flight_id, attempt in ((old, 1), (old, 2), (nested_recent, 1), (pending, 1), (bad_status, 1)):
+            run = self.run_worker(flight_id, attempt)
+            self.assertEqual(run.returncode, 0, run.stderr)
+        self.run_dir(pending, 2).mkdir()
+        status_link = self.run_dir(bad_status) / "status.json"
+        status_link.unlink()
+        status_link.symlink_to(self.run_dir(old) / "status.json")
+        for flight_id in (old, nested_recent, pending, bad_status):
+            self.age_tree(self.sshx_home / flight_id, 2 * DAY_SECONDS)
+        (self.run_dir(nested_recent) / "brief.md").touch()
+        outside = self.temp_dir / "outside"
+        outside.mkdir()
+        (outside / "keep").touch()
+        linked_flight = self.sshx_home / self.next_flight_id()
+        linked_flight.symlink_to(outside, target_is_directory=True)
+
+        completion = self.run_worker(emitter, marker="FAIL")
+        self.assertEqual(completion.returncode, 1, completion.stderr)
+        self.assertEqual(json.loads(completion.stdout), self.project(emitter))
+        self.assertEqual(json.loads((self.run_dir(emitter) / "status.json").read_text())["reason_code"],
+                         "CARRIER_EXIT_NONZERO")
+        self.assertFalse(self.run_dir(old).parent.exists())
+        for flight_id in (nested_recent, pending, bad_status, emitter):
+            self.assertTrue(self.run_dir(flight_id).is_dir())
+        self.assertTrue(linked_flight.is_symlink())
+        self.assertTrue((outside / "keep").is_file())
+
+        # Simulate delayed delivery after the emitter aged, and make another flight eligible.
+        for flight_id in (emitter, nested_recent):
+            self.age_tree(self.sshx_home / flight_id, 2 * DAY_SECONDS)
+        sweep = self.prune("--on-completion", emitter)
+        self.assertEqual((sweep.returncode, sweep.stdout, sweep.stderr), (0, "", ""))
+        for name in ("result.json", "completion.sentinel", "status.json", "carrier.exit"):
+            self.assertTrue((self.run_dir(emitter) / name).is_file())
+        self.assertFalse(self.run_dir(nested_recent).parent.exists())
+
+    def test_completion_sweep_failure_preserves_outcome_and_retries_next_event(self) -> None:
+        failed, removed, emitter, next_emitter = (self.next_flight_id() for _ in range(4))
+        for flight_id in (failed, removed):
+            self.assertEqual(self.run_worker(flight_id).returncode, 0)
+        for flight_id in (failed, removed):
+            self.age_tree(self.run_dir(flight_id).parent, 2 * DAY_SECONDS)
+        fake_rm = self.bin_dir / "rm"
+        fake_rm.write_text(
+            '#!/bin/bash\n'
+            'case "$3" in */.sshx-retiring-"${FAIL_FLIGHT:-}"-*) exit 9 ;; esac\n'
+            'exec /bin/rm "$@"\n'
+        )
+        fake_rm.chmod(0o755)
+        run = self.run_worker(emitter, env=self.environment() | {"FAIL_FLIGHT": failed})
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), self.project(emitter))
+        self.assertIn("MAINTENANCE_FAILED", run.stderr)
+        self.assertIn(failed, run.stderr)
+        self.assertEqual(json.loads((self.run_dir(emitter) / "status.json").read_text())["status"], "COMPLETE")
+        remnant, = self.sshx_home.glob(f".sshx-retiring-{failed}-*")
+        self.assertTrue((remnant / "attempt-1" / "status.json").is_file())
+        self.assertFalse(self.run_dir(removed).parent.exists())
+        recovered = self.run_worker(next_emitter)
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertFalse(remnant.exists())
+
+    def test_next_completion_resumes_a_real_partial_removal(self) -> None:
+        old, emitter, next_emitter = (self.next_flight_id() for _ in range(3))
+        self.assertEqual(self.run_worker(old).returncode, 0)
+        protected = self.run_dir(old) / "protected"
+        protected.mkdir()
+        (protected / "file").touch()
+        protected.chmod(0o500)
+        if os.access(protected, os.W_OK):
+            self.skipTest("real rm must run without privilege to bypass directory permissions")
+        flight = self.run_dir(old).parent
+        info = flight.stat()
+        remnant = self.sshx_home / f".sshx-retiring-{old}-{info.st_dev}-{info.st_ino}"
+        lookalike = self.sshx_home / f".sshx-retiring-{old}-{info.st_dev}-0"
+        lookalike.mkdir()
+        (lookalike / "keep").touch()
+        self.age_tree(flight, 2 * DAY_SECONDS)
+        remaining_directory = remnant / "attempt-1" / protected.name
+        try:
+            run = self.run_worker(emitter)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(json.loads(run.stdout), self.project(emitter))
+            self.assertIn("MAINTENANCE_FAILED", run.stderr)
+            self.assertFalse(flight.exists())
+            self.assertTrue((remaining_directory / "file").is_file())
+            self.assertFalse((remaining_directory.parent / "status.json").exists())
+        finally:
+            for directory in (remaining_directory, protected):
+                if directory.is_dir():
+                    directory.chmod(0o700)
+
+        retry = self.run_worker(old, 2)
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        self.assertTrue(remaining_directory.exists())
+        recovered = self.run_worker(next_emitter)
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertFalse(remnant.exists())
+        self.assertTrue((lookalike / "keep").is_file())
+        for status in (self.run_dir(old, 2), self.run_dir(emitter), self.run_dir(next_emitter)):
+            self.assertEqual(json.loads((status / "status.json").read_text())["status"], "COMPLETE")
+
+    def test_completion_sweep_lock_survives_parent_crash_and_serializes_aliases(self) -> None:
+        stale, retire, emitter, other = (self.next_flight_id() for _ in range(4))
+        for flight_id in (stale, retire):
+            self.assertEqual(self.run_worker(flight_id).returncode, 0)
+        self.age_tree(self.run_dir(stale).parent, 2 * DAY_SECONDS)
+        alias = self.temp_dir / "alias"
+        alias.symlink_to(self.temp_dir, target_is_directory=True)
+        aliased_root = alias / self.sshx_home.name
+        self.make_carrier_gates(["second"])
+        ready = self.make_gate("completion-rm.ready")
+        release = self.make_gate("completion-rm.release")
+        fake_rm = self.bin_dir / "rm"
+        fake_rm.write_text(
+            '#!/bin/bash\n'
+            'case "$3" in */.sshx-retiring-"${BLOCK_FLIGHT:-}"-*)\n'
+            '  printf "%s\\n" "$PPID" > "$RM_READY"\n'
+            '  IFS= read -r _ < "$RM_RELEASE"\n'
+            ';; esac\n'
+            'exec /bin/rm "$@"\n'
+        )
+        fake_rm.chmod(0o755)
+        manifest = self.write_manifest([self.worker(retire, 1, self.make_brief("retire"))])
+        lock_waiting = self.make_gate("lock.waiting")
+        fake_python = self.bin_dir / "python3"
+        fake_python.write_text(
+            '#!/bin/bash\n'
+            'if { [ "$1" = -c ] || [ "$1" = - ]; } && [ -n "${LOCK_WAITER:-}" ]; then\n'
+            '  printf "%s\\n" "$LOCK_WAITER" > "$LOCK_WAITING"\n'
+            'fi\n'
+            f'exec "{sys.executable}" "$@"\n'
+        )
+        fake_python.chmod(0o755)
+
+        def launch(
+            stack: ExitStack, command: list[str], env: dict[str, str], brief: Path | None = None,
+        ) -> subprocess.Popen[str]:
+            stdin = subprocess.DEVNULL if brief is None else stack.enter_context(brief.open())
+            return stack.enter_context(subprocess.Popen(
+                command, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, env=env, start_new_session=True,
+            ))
+
+        env = self.environment(sshx_home=aliased_root) | {"LOCK_WAITING": str(lock_waiting)}
+        with ExitStack() as stack:
+            second = launch(stack, self.worker_command(other), env | {"LOCK_WAITER": "second"},
+                            self.make_brief("second", "BLOCK"))
+            try:
+                self.await_gate(lock_waiting, "second")  # launch-time claim
+                self.await_carrier("second")
+                first = launch(stack, self.worker_command(emitter), self.environment() | {
+                    "BLOCK_FLIGHT": stale,
+                    "RM_READY": str(ready), "RM_RELEASE": str(release),
+                }, self.make_brief("first"))
+                readable, _, _ = select.select([self.gate_fds[ready]], [], [], WATCHDOG_SECONDS)
+                self.assertTrue(readable)
+                maintainer_pid = int(os.read(self.gate_fds[ready], 4096))
+                self.release_carrier("second")
+                self.await_gate(lock_waiting, "second")  # terminal publication reached its sweep
+                os.kill(maintainer_pid, signal.SIGKILL)
+                stdout, stderr = first.communicate(timeout=WATCHDOG_SECONDS)
+                self.assertEqual(first.returncode, 0, stderr)
+                self.assertEqual(json.loads(stdout), self.project(emitter))
+                self.assertIn("MAINTENANCE_FAILED", stderr)
+                retry = launch(stack, self.worker_command(stale, 2), env | {"LOCK_WAITER": "retry"},
+                               self.make_brief("retry"))
+                self.await_gate(lock_waiting, "retry")
+                explicit = launch(stack, ["/bin/bash", str(CLEANUP), "--manifest", str(manifest), "--delete"],
+                                  env | {"LOCK_WAITER": "explicit"})
+                self.await_gate(lock_waiting, "explicit")
+                manual = launch(stack, ["/bin/bash", str(PRUNE)], env | {"LOCK_WAITER": "manual"})
+                self.await_gate(lock_waiting, "manual")
+                fd = os.open(aliased_root, os.O_RDONLY)
+                try:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(fd)
+                self.assertFalse(self.run_dir(stale, 2).exists())
+                self.assertTrue(self.run_dir(retire).exists())
+                for waiter in (second, retry, explicit, manual):
+                    self.assertIsNone(waiter.poll())
+            finally:
+                self.release_carrier("second")
+                self.release_gate(release)
+            for waiter in (second, retry, explicit, manual):
+                stdout, stderr = waiter.communicate(timeout=WATCHDOG_SECONDS)
+                self.assertEqual(waiter.returncode, 0, stderr)
+                self.assertIsInstance(json.loads(stdout), dict)
+        self.assertFalse(self.run_dir(retire).parent.exists())
+        self.assertFalse(self.run_dir(stale).exists())
+        self.assertTrue((self.run_dir(stale, 2) / "status.json").is_file())
+        self.assertTrue((self.run_dir(other) / "status.json").is_file())
+
+    def test_host_group_term_interrupts_codex_maintenance_and_preserves_completion(self) -> None:
+        stale, emitter = (self.next_flight_id() for _ in range(2))
+        self.assertEqual(self.run_worker(stale).returncode, 0)
+        self.age_tree(self.run_dir(stale).parent, 2 * DAY_SECONDS)
+        self.make_carrier_gates(["emitter"])
+        waiting = self.make_gate("maintenance.waiting")
+        python = self.bin_dir / "python3"
+        python.write_text(
+            '#!/bin/bash\n'
+            '[ "$1" != - ] || printf "waiting\\n" > "$MAINTENANCE_WAITING"\n'
+            f'exec "{sys.executable}" "$@"\n'
+        )
+        python.chmod(0o755)
+        with self.make_brief("emitter", "BLOCK").open() as brief, subprocess.Popen(
+            self.worker_command(emitter), stdin=brief, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=self.environment() | {"MAINTENANCE_WAITING": str(waiting)},
+            start_new_session=True,
+        ) as process:
+            self.await_carrier("emitter")
+            descriptor = os.open(self.sshx_home, os.O_RDONLY)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                self.release_carrier("emitter")
+                self.await_gate(waiting, "waiting")
+                status = self.run_dir(emitter) / "status.json"
+                published = status.read_bytes()
+                os.killpg(process.pid, signal.SIGTERM)
+                stdout, stderr = process.communicate(timeout=WATCHDOG_SECONDS)
+                self.assertEqual(process.returncode, 0, stderr)
+                self.assertEqual(json.loads(stdout), self.project(emitter))
+                self.assertEqual(status.read_bytes(), published)
+                self.assertEqual(json.loads(published)["status"], "COMPLETE")
+                self.assertTrue(self.run_dir(stale).exists())
+            finally:
+                os.close(descriptor)
+                self.release_carrier("emitter")
+
+    def test_batch_activates_completion_sweep_for_each_terminal_child(self) -> None:
+        old = self.next_flight_id()
+        self.assertEqual(self.run_worker(old).returncode, 0)
+        self.age_tree(self.run_dir(old).parent, 2 * DAY_SECONDS)
+        events = self.temp_dir / "sweep-events"
+        fake_python = self.bin_dir / "python3"
+        fake_python.write_text(
+            '#!/bin/bash\n[ "$1" != - ] || printf "%s\\n" "$3" >> "$SWEEP_EVENTS"\n'
+            f'exec "{sys.executable}" "$@"\n'
+        )
+        fake_python.chmod(0o755)
+        report = self.temp_dir / "batch-report.json"
+        manifest = self.write_manifest([self.fresh_worker(self.make_brief("batch-pass")),
+                                        self.fresh_worker(self.make_brief("batch-fail", "FAIL"))])
+        batch = self.dispatch(manifest, report, env=self.environment() | {"SWEEP_EVENTS": str(events)})
+        self.assertEqual(batch.returncode, 1, batch.stderr)
+        rows = json.loads(report.read_text())["resolved_manifest"]["workers"]
+        self.assertEqual(len(rows), 2)
+        self.assertCountEqual(events.read_text().splitlines(), [row["flight_id"] for row in rows])
+        self.assertFalse(self.run_dir(old).parent.exists())
+
     def test_prune_removes_only_flights_inactive_beyond_the_window(self) -> None:
         stale, fresh, touched, recent = (self.next_flight_id() for _ in range(4))
         for flight_id in (stale, fresh, touched, recent):
@@ -1952,6 +2211,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         for flight_id in (first, second):
             run = self.run_worker(flight_id)
             self.assertEqual(run.returncode, 0, run.stderr)
+        for flight_id in (first, second):
             self.age_tree(self.sshx_home / flight_id, 2 * DAY_SECONDS)
         fake_rm = self.bin_dir / "rm"
         fake_rm.write_text(
@@ -1984,6 +2244,7 @@ class CodexWorkerToolTests(unittest.TestCase):
         for flight_id in (first, second):
             run = self.run_worker(flight_id)
             self.assertEqual(run.returncode, 0, run.stderr)
+        for flight_id in (first, second):
             self.age_tree(self.sshx_home / flight_id, 2 * DAY_SECONDS)
         ready = self.make_gate("prune-rm.ready")
         release = self.make_gate("prune-rm.release")

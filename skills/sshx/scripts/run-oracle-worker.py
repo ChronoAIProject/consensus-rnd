@@ -8,6 +8,7 @@ attempt path and the identity-shape check used here.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import secrets
@@ -18,6 +19,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
 
 
 PROGRAM = "run-oracle-worker"
@@ -25,6 +27,7 @@ EXIT_COMPLETE = 0
 EXIT_NOT_COMPLETE = 1
 EXIT_USAGE = 64
 LAYOUT_OWNER = Path(__file__).resolve().with_name("run-codex-worker.sh")
+COMPLETION_SWEEP = LAYOUT_OWNER.with_name("prune-inactive-codex-worker-runs.sh")
 REQUEST_NAME = "request.json"
 POOL_LISTING_ROUTE = ("proxy", "request", "oracle", "api/v1/oracle/pools", "--output", "json")
 CHAT_COMPLETION_ROUTE = (
@@ -40,6 +43,7 @@ CHAT_COMPLETION_ROUTE = (
 DONE_VALUE = "[DONE]"
 MODEL_IDENTITY_FIELDS = ("model_label", "observed_model_switcher", "observed_model_effort")
 COMPLETION_EVIDENCE_PREFIX = "broker-task:"
+COMPLETION_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 
 
 class UsageError(Exception):
@@ -221,14 +225,22 @@ def deliver_receipt(paths: AttemptPaths) -> None:
 
 def claim_attempt_directory(paths: AttemptPaths) -> None:
     """Create the attempt directory atomically; an existing entry is never reused."""
+    flight = paths.run_dir.parent
+    root = flight.parent
     try:
-        os.makedirs(paths.run_dir.parent, exist_ok=True)
-    except OSError as error:
-        raise Failure("RUN_DIR_UNAVAILABLE", str(error)) from error
-    try:
-        os.mkdir(paths.run_dir)
-    except FileExistsError as error:
-        raise Failure("RUN_DIR_COLLISION", f"{paths.run_dir} already exists") from error
+        root.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            flight.mkdir(exist_ok=True)
+            if flight.is_symlink():
+                raise NotADirectoryError(f"{flight} is a symlink")
+            try:
+                paths.run_dir.mkdir()
+            except FileExistsError as error:
+                raise Failure("RUN_DIR_COLLISION", f"{paths.run_dir} already exists") from error
+        finally:
+            os.close(descriptor)
     except OSError as error:
         raise Failure("RUN_DIR_UNAVAILABLE", str(error)) from error
 
@@ -428,7 +440,20 @@ def run_owned_attempt(record: AttemptRecord) -> None:
         log(f"INTERNAL_ERROR: {error}")
 
 
-def publish_status(record: AttemptRecord) -> None:
+@dataclass
+class CompletionSignal:
+    exit_code: int
+    launching: bool = False
+    received: int | None = None
+
+    def handle(self, signum: int, _frame: FrameType | None) -> None:
+        if self.received is None:
+            self.received = signum
+            if not self.launching:
+                raise SystemExit(self.exit_code)
+
+
+def publish_status(record: AttemptRecord, interruption: CompletionSignal) -> None:
     """Write the terminal status atomically; it appears only after the broker call has exited."""
     status = record.paths.status
     temporary = status.with_name(status.name + ".tmp")
@@ -436,7 +461,15 @@ def publish_status(record: AttemptRecord) -> None:
     try:
         with temporary.open("x", encoding="utf-8") as handle:
             handle.write(text)
-        os.replace(temporary, status)
+        # A host signal must observe either pre-commit handling or the committed exit.
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, COMPLETION_SIGNALS)
+        try:
+            os.replace(temporary, status)
+            for signum in COMPLETION_SIGNALS:
+                if signal.getsignal(signum) != signal.SIG_IGN:
+                    signal.signal(signum, interruption.handle)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
     except OSError:
         temporary.unlink(missing_ok=True)
         raise
@@ -448,6 +481,30 @@ def log(message: str) -> None:
         print(f"{PROGRAM}: {message}", file=sys.stderr, flush=True)
     except OSError:
         return
+
+
+def emit_completion(flight_id: str, interruption: CompletionSignal) -> None:
+    try:
+        # Defer a signal during Popen until the child can be signalled and reaped.
+        interruption.launching = True
+        with subprocess.Popen(
+            ["/bin/bash", str(COMPLETION_SWEEP), "--on-completion", flight_id],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+        ) as sweep:
+            try:
+                interruption.launching = False
+                if interruption.received is not None:
+                    raise SystemExit(interruption.exit_code)
+                returncode = sweep.wait()
+            except SystemExit:
+                assert interruption.received is not None
+                sweep.send_signal(interruption.received)
+                raise
+        if returncode:
+            log(f"MAINTENANCE_FAILED: completion sweep exited {returncode}")
+    except OSError as error:
+        log(f"MAINTENANCE_FAILED: {error}")
 
 
 def main(argv: list[str]) -> int:
@@ -476,13 +533,15 @@ def main(argv: list[str]) -> int:
         return EXIT_NOT_COMPLETE
     record = AttemptRecord(paths)
     run_owned_attempt(record)
+    interruption = CompletionSignal(EXIT_COMPLETE if record.complete else EXIT_NOT_COMPLETE)
     try:
-        publish_status(record)
+        publish_status(record, interruption)
     except OSError as error:
         log(f"INTERNAL_ERROR: cannot publish the terminal status: {error}")
         return EXIT_NOT_COMPLETE
+    emit_completion(paths.flight_id, interruption)
     log(f"{record.status_document()['status']} {record.reason_code}")
-    return EXIT_COMPLETE if record.complete else EXIT_NOT_COMPLETE
+    return interruption.exit_code
 
 
 if __name__ == "__main__":

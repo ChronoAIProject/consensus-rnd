@@ -154,6 +154,17 @@ closed on its consistency checks and the sweep prunes that other root, but a
 status read there reports every artifact absent and exits zero, which is
 indistinguishable from a pre-terminal flight.
 
+Attempt claims by both runners and destructive maintenance lock the physical
+run-root directory with an exclusive `flock`. Path aliases to the same
+directory share the lock. A claim holds it through the attempt directory's
+atomic creation. Each destructive pass holds it from before target selection
+through removal. A retry that claims first is visible to maintenance. A retry
+that waits for removal can claim a new attempt directory afterwards. The lock
+is released when the last holder closes it, including an in-progress deletion
+subprocess if its parent exits. The lock creates no files in the root.
+These operations require `python3` with the standard Unix `fcntl` module
+and a filesystem that supports directory `flock`.
+
 The runner owns `brief.md`, the three diagnostic logs, `carrier.exit`, and
 `status.json`. The worker alone owns `result.json` and `completion.sentinel`.
 The runner never creates, repairs, copies, normalizes, touches, or substitutes
@@ -480,7 +491,7 @@ bash <skill-root>/scripts/prune-inactive-codex-worker-runs.sh \
   [--older-than <positive-integer><m|h|d>] [--dry-run]
 ```
 
-The sweep is the retention tool for the whole run root: it removes every
+The manual sweep is the retention tool for the whole run root: it removes every
 flight directory whose last change is older than the window. The window
 defaults to `1d`; the value is a positive integer with a unit of minutes,
 hours, or days, and `0`, a missing unit, any other unit, or a duplicate,
@@ -528,6 +539,43 @@ never silently ignored), `removed` (the exact removed paths), and `failed`
 report with no failed flight and no interruption, and 1 otherwise. Usage and
 internal failures before publication emit no JSON; an internal failure after
 deletion began lists the already removed paths on stderr.
+
+### Completion-triggered retention
+
+On normal exit, each Codex or Oracle attempt that successfully publishes its
+runner-owned terminal status sends one completion event to the sweep script.
+This includes handled failures and each terminal child of a Codex batch. The runner invokes
+maintenance in the same foreground host job after the status rename. Concurrent
+events wait for the shared lock. The sweep excludes the emitting flight and
+considers only whole flights past the default one-day inactivity window
+with at least one attempt and a regular, non-symlink terminal status for every
+attempt. An attempt entry with an invalid name or type makes the flight
+ineligible. The scan checks directory modification times before probing cold
+flights for terminal evidence and activity in their descendants.
+
+Under the lock, the sweep atomically renames each eligible directory to
+`.sshx-retiring-<flight-id>-<device>-<inode>` in the same run root before
+removal. This name records the eligibility decision outside the claim layout.
+Later events retry removal only when the retirement name matches the directory's
+identity, even if partial removal erased its terminal status or changed its
+modification time. A retry can claim the original flight path without sharing
+the retired directory. Manual root reports list any remaining retirement
+entries as unrecognized.
+
+The event is a private runner-to-sweep invocation. Attempts that exit without
+publishing a status provide no event. Maintenance writes no receipt or
+per-flight report, and failed sweep invocations that return to the runner
+are reported on stderr with `MAINTENANCE_FAILED`. The original terminal
+status, exit decision, and one launch receipt are preserved. After publication,
+a host signal to the Codex job tree can interrupt maintenance while the
+runner returns its original exit code. A signal sent just to the Bash runner
+may wait for its foreground command. Oracle handles direct signals as described
+in its [status contract](./ORACLE_WORKER_SPEC.md#status). An interruption may
+cancel dispatch or stop a sweep while it is waiting or running. The host owns deadlines
+and descendant teardown. Inherited ignored signals stay ignored, and abrupt
+runner termination can prevent it from returning the recorded exit decision.
+Manual sweep and explicit manifest retirement keep their own eligibility
+rules and report formats.
 
 ## Carrier
 
@@ -729,8 +777,9 @@ The carrier is an internally dispatched Codex worker: trusted is
 non-adversarial, not infallible. The runner rejects normal malformed output,
 missing artifacts, and accidental projection-path type collisions, but it is
 not a sandbox against a hostile carrier. This design does not defend TOCTOU
-races, including caller-brief replacement after the dispatcher's readability
-probe or flight changes after cleanup's repeated eligibility check; those checks
+races with processes outside the shared run-root lock, including caller-brief
+replacement after the dispatcher's readability probe or external flight changes
+after cleanup's repeated eligibility check; those checks
 narrow their respective windows but do not make object identity immutable. It
 also does not defend an active `setsid` escape, forged runner artifact paths, or
 deliberate replacement of files inside the owned attempt directory. An
@@ -739,14 +788,15 @@ review rather than more checks in this runner.
 
 ## Boundaries
 
-The runner has no git, GitHub, label, release, host lifecycle, cleanup, or
-global-state authority. Time limits and whole-job teardown belong to the
+The runner has no git, GitHub, label, release, host lifecycle, or
+global-state authority. It signals artifact maintenance after terminal publication.
+Time limits and whole-job teardown belong to the
 caller harness. Power-loss durability is not guaranteed. Deletion authority
 lives only in `clean-codex-worker-runs.sh`, bounded to terminal-only,
 manifest-named, whole-flight artifact retirement with dry-run default and no
 force override, and in `prune-inactive-codex-worker-runs.sh`, bounded to
-whole-flight removal under one inactivity window over the runner-projected
-root.
+whole-flight removal within its manual or completion-triggered retention
+rules over the runner-projected root.
 
 No other skill may depend on these mechanisms. To reverse the exception
 completely, use this one recipe:

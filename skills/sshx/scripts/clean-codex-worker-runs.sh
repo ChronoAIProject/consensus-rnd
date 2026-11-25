@@ -62,6 +62,17 @@ case "$script_dir" in "$0") script_dir=. ;; esac
 runner="$script_dir/run-codex-worker.sh"
 [ -f "$runner" ] && [ ! -L "$runner" ] || internal_error "runner is unavailable"
 
+root_available=true
+if [ "$delete_mode" -eq 1 ]; then
+  # shellcheck source=skills/sshx/scripts/run-codex-worker.sh
+  . "$runner" || internal_error "cannot load the run layout"
+  if ! normalize_run_root || [ ! -d "$run_root" ]; then
+    root_available=false
+  else
+    lock_run_root "$run_root" || internal_error "cannot lock the run root"
+  fi
+fi
+
 count_flight_entries() {
   if ! flight_entry_count=$(
     set -o pipefail
@@ -91,7 +102,7 @@ check_flight_eligibility() {
   if ! checked_sshx_root=$("$jq_path" -r '.sshx_root' <<<"$checked_projection"); then checked_internal_error="cannot read sshx_root"; return 1; fi
 
   case "$checked_flight_dir" in "$checked_sshx_root"/*) ;; *) checked_eligible=false; checked_reason=OWNER_PROJECTION_INCONSISTENT ;; esac
-  if [ "$checked_eligible" = true ] && { [ ! -d "$checked_sshx_root" ] || [ -L "$checked_sshx_root" ]; }; then checked_eligible=false; checked_reason=SSHX_ROOT_UNAVAILABLE; fi
+  if [ "$checked_eligible" = true ] && { [ "$root_available" = false ] || [ ! -d "$checked_sshx_root" ] || [ -L "$checked_sshx_root" ]; }; then checked_eligible=false; checked_reason=SSHX_ROOT_UNAVAILABLE; fi
   if [ "$checked_eligible" = true ] && { [ ! -d "$checked_flight_dir" ] || [ -L "$checked_flight_dir" ]; }; then checked_eligible=false; checked_reason=FLIGHT_DIRECTORY_UNAVAILABLE; fi
   if [ "$checked_eligible" = true ]; then
     canonical_root=$(cd "$checked_sshx_root" 2>/dev/null && pwd -P) || { checked_eligible=false; checked_reason=SSHX_ROOT_UNAVAILABLE; }

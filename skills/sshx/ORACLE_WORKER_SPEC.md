@@ -39,8 +39,11 @@ for its identity as its first and only stdout line. That receipt is byte-identic
 Codex runner's `--project-paths` output for the same identity and environment. A receipt
 that cannot be delivered ends the invocation with exit 1 and creates nothing.
 
-The runner then creates the projected attempt directory with one atomic `mkdir`, creating
-missing parent directories with the same private mode. An existing attempt directory is
+The runner then claims the projected attempt directory under the shared run-root lock
+described in the [run directory contract](./CODEX_WORKER_SPEC.md#run-directory).
+It uses one atomic `mkdir` for the attempt after creating any missing parent
+directories with the same private mode. The run-root and flight directory themselves
+must be real directories. An existing attempt directory is
 `RUN_DIR_COLLISION`: exit 1, no broker call, and nothing written into it. Failures before
 the runner owns the attempt directory (`PROJECTION_FAILED`, `RUN_DIR_UNAVAILABLE`,
 `RUN_DIR_COLLISION`, `INTERNAL_ERROR`) are reported on stderr only.
@@ -122,10 +125,16 @@ byte for byte as UTF-8 and kept separate from the raw stream.
 The status file at the projected `status_ref` appears only once the attempt is terminal:
 after the broker call has exited, or when no call was started, it is written to a
 temporary file in the attempt directory and renamed into place. Its existence is the
-terminal fact that `clean-codex-worker-runs.sh` relies on. A runner ended by a signal
-publishes no status: `TERM` and `INT` end it at once, except that an `INT` the host started
-it with ignored stays ignored. Cleanup then refuses that flight and the inactivity sweep
-retires it; tearing down a broker call that outlives the runner belongs to the host.
+terminal fact that `clean-codex-worker-runs.sh` relies on. After successful publication,
+the runner signals [completion-triggered retention](./CODEX_WORKER_SPEC.md#completion-triggered-retention)
+in the foreground. Before the status commit, `TERM` and `INT` end the runner
+without a terminal status. During the atomic rename and signal-handler transition,
+the runner defers these signals until the commit outcome is known. After a successful
+commit, a handled signal ends the runner with its original exit code. If the sweep
+was launched, the runner passes the signal to the sweep and reaps it. A signal
+inherited as ignored stays ignored. The manual inactivity sweep can retire flights
+without terminal status after the window elapses. The host owns teardown of any
+remaining descendants.
 
 The status is a JSON object with `schema_version`, `flight_id`, `attempt`, `status`
 (`COMPLETE` or `NOT_COMPLETE`), `reason_code`, `run_dir`, `brief_ref`, and these fields,
@@ -178,9 +187,10 @@ inlines the content a worker needs.
 
 ## Boundaries
 
-The runner has no git, GitHub, label, release, host lifecycle, cleanup, or NyxID account
-authority. It reads the Codex runner only through the read-only `--project-paths` query
-and never launches it. No other skill may depend on this mechanism. To reverse the
+The runner has no git, GitHub, label, release, host lifecycle, or NyxID account
+authority. It uses the Codex runner's read-only `--project-paths` query for layout
+and signals the shared sweep after terminal publication. No other skill may depend
+on this mechanism. To reverse the
 exception completely, use this one recipe:
 
 1. Delete `scripts/run-oracle-worker.py`, this specification,
